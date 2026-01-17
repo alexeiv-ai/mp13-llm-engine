@@ -1073,7 +1073,7 @@ async def main_logic():
     parser.add_argument("--lora-alpha", type=int, default=None, help="LoRA alpha value for training (64 is for small training datasets)")
     parser.add_argument("--lora-dropout", type=float, default=None, help="LoRA dropout value for training")
     parser.add_argument("--lora-target-modules", nargs='+', default=None, help="LoRA target modules for training. If not set, modules are inferred from model architecture.")    
-    parser.add_argument("--use-cache", type=str_to_bool, default=True, help="Enable KV caching for generation (True|False).")
+    parser.add_argument("--use-cache", type=str_to_bool, default=None, help="Enable KV caching for generation (True|False). Defaults to config when omitted.")
     parser.add_argument("--attn-implementation", type=str, default="auto", choices=["auto", "flash_attention_2", "sdpa", "eager"], help="Attention implementation for the model. Default: 'auto'.") # noqa
     parser.add_argument("--no-torch-compile", action="store_true", help="Disable torch.compile() globally for inference.")
     parser.add_argument("--no-tools-parse", action="store_true", help="If present, disables tool block parsing for all inference requests.")
@@ -1082,11 +1082,11 @@ async def main_logic():
     parser.add_argument("--adapter-name", type=str, default="test_mp13_adapter", help="Logical adapter name to create/train/use.")
     parser.add_argument("--skip-verification", action="store_true", help="Skip verification step")
     parser.add_argument("--interactive", action="store_true", help="Run interactive mode after workflow")
-    parser.add_argument("--static-kv-cache", type=str_to_bool, default=True, help="Enable static GPU KV cache for inference (True|False).")
+    parser.add_argument("--static-kv-cache", type=str_to_bool, default=None, help="Enable static GPU KV cache for inference (True|False). Defaults to config when omitted.")
     parser.add_argument("--default-ctx", type=str, default="auto", help="Default context size for the engine (e.g., '2K', '4096', 'auto'). 'auto' derives from model. Default: auto.")
     parser.add_argument("--train-override-ctx", type=str, default=None, help="Override context size specifically for training (e.g., '512', '1K', 'auto'). 'auto' uses engine's default. Default: auto.")
     parser.add_argument("--device-map", type=str, default="auto", help="Device map for model loading (e.g., 'auto', 'cpu', or a JSON string like '{\"\":0}'). Default: 'auto'.")
-    parser.add_argument("--concurrent-generate", type=int, default=1, help="Number of concurrent generation requests to allow. Default: 1.")
+    parser.add_argument("--concurrent-generate", type=int, default=None, help="Number of concurrent generation requests to allow. Defaults to config when omitted.")
     
     parser.add_argument("--log", type=str, default="warning", choices=["error", "warning", "info", "debug", "all", "none"], help="Set console logging level. Log file is always at DEBUG level. 'none' disables console output.")
     args = parser.parse_args()
@@ -1254,6 +1254,7 @@ async def main_logic():
     parsed_default_ctx = parse_k_notation(args.default_ctx) # For GlobalEngineConfig.default_context_size
     parsed_train_override_ctx = parse_k_notation(effective_train_override_ctx) # For TrainingConfig.max_sequence_length
 
+    engine_params = resolved_config.get("engine_params") or {}
     global_engine_config_dict = {
         "base_model_name_or_path": abs_base_model_path,
         "device_map": parsed_device_map,
@@ -1266,12 +1267,21 @@ async def main_logic():
         "hqq_group_size": args.hqq_group_size,
         "hqq_axis": args.hqq_axis,
         "default_context_size": parsed_default_ctx, # Engine will derive from model if this is None ("auto")
-        "use_cache": args.use_cache,
         "attn_implementation": args.attn_implementation,
         "use_torch_compile": not args.no_torch_compile,
-        "static_kv_cache": args.static_kv_cache,
-        "concurrent_generate": args.concurrent_generate,
     }
+    if args.use_cache is not None:
+        global_engine_config_dict["use_cache"] = args.use_cache
+    elif "use_cache" in engine_params:
+        global_engine_config_dict["use_cache"] = engine_params.get("use_cache")
+    if args.static_kv_cache is not None:
+        global_engine_config_dict["static_kv_cache"] = args.static_kv_cache
+    elif "static_kv_cache" in engine_params:
+        global_engine_config_dict["static_kv_cache"] = engine_params.get("static_kv_cache")
+    if args.concurrent_generate is not None:
+        global_engine_config_dict["concurrent_generate"] = args.concurrent_generate
+    elif "concurrent_generate" in engine_params:
+        global_engine_config_dict["concurrent_generate"] = engine_params.get("concurrent_generate")
     if args.no_tools_parse:
         global_engine_config_dict['no_tools_parse'] = True
     if args.disable_custom_pad_ids:
