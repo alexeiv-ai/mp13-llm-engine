@@ -136,6 +136,12 @@ def adapter_health_AB(logger, model, adapter_name, max_print=3):
     for s in samples:
         logger.debug(f"   {s}")
 
+def _has_meta_params(model) -> bool:
+    try:
+        return any(getattr(p, "is_meta", False) for p in model.parameters())
+    except Exception:
+        return False
+
 def _safetensors_lora_B_norms(logger, ckpt_dir):
     import os
     from safetensors.torch import load_file
@@ -1962,13 +1968,19 @@ class AdaptersControl:
                             f"Loading adapter '{effective_adapter_name}' from path: {actual_checkpoint_path_to_load}",
                         )
 
-                    # TRAIN mode -> load as trainable; INFERENCE → load frozen
+                    # TRAIN mode -> load as trainable; INFERENCE -> load frozen
                     #is_trainable_for_load = self.state.engine_mode == EngineModeState.TRAIN
+                    low_mem_load = _has_meta_params(target_model)
+                    if low_mem_load:
+                        self.state.logger.warning(
+                            "Adapter load: detected meta parameters in model; enabling low_cpu_mem_usage (assign=True)."
+                        )
                     await asyncio.to_thread(
                         target_model.load_adapter,
                         str(actual_checkpoint_path_to_load),
                         effective_adapter_name,
-                        is_trainable=False #is_trainable_for_load, #TBD trainer should take care ot this
+                        is_trainable=False, #is_trainable_for_load, #TBD trainer should take care ot this
+                        low_cpu_mem_usage=low_mem_load,
                     )
 
                     loaded_peft_config_on_model = target_model.peft_config[effective_adapter_name] # Should exist now

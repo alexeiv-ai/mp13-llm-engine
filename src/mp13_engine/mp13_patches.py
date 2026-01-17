@@ -346,6 +346,23 @@ def _patch_peft_for_quantized_models(logger):
         MixedModel._replace_module = _safe_replace_module
         logger.info("Applied HQQ-aware _replace_module patch to PeftMixedModel.")
 
+        def _peft_get_base_model(self):
+            base = getattr(self, "base_model", None)
+            if base is None:
+                return self
+            if hasattr(base, "get_base_model"):
+                return base.get_base_model()
+            if hasattr(base, "model"):
+                return base.model
+            return base
+
+        if not hasattr(PeftMixedModel, "get_base_model"):
+            PeftMixedModel.get_base_model = _peft_get_base_model
+            logger.info("Patched PeftMixedModel.get_base_model for PEFT 0.15 compatibility.")
+        if not hasattr(MixedModel, "get_base_model"):
+            MixedModel.get_base_model = _peft_get_base_model
+            logger.info("Patched MixedModel.get_base_model for PEFT 0.15 compatibility.")
+
         # --- Patch 1.2: Training side (does not work yet) make LoRA skip empty-parameter modules (e.g. HQQ-wrapped kernels)
         import peft.tuners.lora.model as _lora_model
 
