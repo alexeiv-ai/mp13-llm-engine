@@ -245,6 +245,12 @@ This is intentional, as many power users and applied researchers may wear a deve
 
 ---
 
+## Community & Support
+
+- 🐞 Bugs & concrete issues: https://github.com/alexeiv-ai/mp13-llm-engine/issues
+- 💡 Ideas, questions, and design discussions: https://github.com/alexeiv-ai/mp13-llm-engine/discussions
+
+
 ## License
 
 * Core engine (`mp13_engine/`): **Apache-2.0**
