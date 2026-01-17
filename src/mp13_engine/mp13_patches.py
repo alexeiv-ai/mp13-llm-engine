@@ -425,9 +425,18 @@ def _patch_peft_for_quantized_models(logger):
 
             dev = _device_for_module(self.base_layer)
 
-            # move Linear LoRA matrices – re‑assign!
-            self.lora_A[adapter_name] = self.lora_A[adapter_name].to(dev, non_blocking=True)
-            self.lora_B[adapter_name] = self.lora_B[adapter_name].to(dev, non_blocking=True)
+            def _move_module(mod):
+                try:
+                    has_meta = any(getattr(p, "is_meta", False) for p in mod.parameters())
+                except Exception:
+                    has_meta = False
+                if has_meta and hasattr(mod, "to_empty"):
+                    return mod.to_empty(device=dev)
+                return mod.to(dev, non_blocking=True)
+
+            # move Linear LoRA matrices - re-assign!
+            self.lora_A[adapter_name] = _move_module(self.lora_A[adapter_name])
+            self.lora_B[adapter_name] = _move_module(self.lora_B[adapter_name])
 
             # move optional embedding deltas
             if hasattr(self, "lora_embedding_A") and adapter_name in self.lora_embedding_A:
