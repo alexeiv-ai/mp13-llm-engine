@@ -437,12 +437,18 @@ def _run_generate_with_patches(
         try:
             _ids = gen_kwargs.get("input_ids", None)
             if isinstance(_ids, torch.Tensor):
-                _min_id = int(_ids.min().item())
-                _max_id = int(_ids.max().item())
+                req_stream = gen_kwargs.get("mp13_cuda_stream")
+                if req_stream is not None and _ids.device.type == "cuda":
+                    with torch.cuda.stream(req_stream):
+                        _min_id = int(_ids.min().item())
+                        _max_id = int(_ids.max().item())
+                else:
+                    _min_id = int(_ids.min().item())
+                    _max_id = int(_ids.max().item())
                 _vsz = int(getattr(getattr(model, "config", None), "vocab_size", 0) or getattr(model, "vocab_size", 0) or 0)
                 if _vsz > 0 and (_min_id < 0 or _max_id >= _vsz):
                     raise RuntimeError(f"Invalid token id in input_ids: min={_min_id}, max={_max_id}, vocab_size={_vsz}. Check padding/collator.")
-        except Exception as _e:
+        except Exception:
             # Re-raise with context so the caller sees a clean error instead of a late device-side assert.
             raise
 
