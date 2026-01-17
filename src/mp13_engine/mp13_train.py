@@ -509,6 +509,12 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
             if ".lora_A." in n:
                 return n.split(".lora_A.")[1].split(".")[0]
         return "<none>"
+
+    def _is_meta_tensor(t) -> bool:
+        try:
+            return bool(getattr(t, "is_meta", False)) or (getattr(t, "device", None) is not None and t.device.type == "meta")
+        except Exception:
+            return False
     
     def _adapter_targets_summary(peft_model, adapter_name) -> tuple[defaultdict, int, int, int]:
         """
@@ -794,6 +800,8 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
 
         for pname, p in peft_model.named_parameters():
             if f".lora_A.{name}.weight" in pname or f".lora_B.{name}.weight" in pname:
+                if _is_meta_tensor(p):
+                    continue
                 with torch.no_grad():
                     n = p.norm().item()
                 if ".lora_A." in pname: sum_normA += n
@@ -934,6 +942,8 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
         sum_normB = 0.0
         for _, pA, pB, *_ in sites:
             try:
+                if _is_meta_tensor(pA) or _is_meta_tensor(pB):
+                    continue
                 sum_normA += pA.norm().item()
                 sum_normB += pB.norm().item()
             except Exception:
@@ -947,6 +957,8 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
             tot = 0.0
             for _, pA, pB, *_ in picked:
                 try:
+                    if _is_meta_tensor(pA) or _is_meta_tensor(pB):
+                        continue
                     A_cpu = pA.detach().to("cpu")
                     B_cpu = pB.detach().to("cpu")
                     BA = B_cpu @ A_cpu
