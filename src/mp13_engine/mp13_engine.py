@@ -727,7 +727,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 # 2. Compile the model (if enabled)
                 compiled_model = peft_model
                 if use_torch_compile:
-                    import torch
+                    import torch as _torch
                     from torch._inductor import config as ic
                     ic.triton.cudagraphs = True
                     ic.triton.cudagraph_trees = True
@@ -736,22 +736,22 @@ class MP13Engine(metaclass=EngineLogContextMeta):
 
                     logger.info("Applying torch.compile() to persistent PeftMixedModel for inference...")
                     try:
-                        compiled_model = torch.compile(peft_model, mode="reduce-overhead")
+                        compiled_model = _torch.compile(peft_model, mode="reduce-overhead")
                         logger.info("torch.compile() applied successfully to PeftMixedModel.")
 
                         # run once per process (or per device) before the very first compiled call
                         # This is to avoid backgound cache warn up crashes doeu to  Cuda graph captures conflict
                         def _prime_blas(device):
-                            torch.cuda.set_device(device)
-                            a = torch.empty((32, 32), device=device, dtype=torch.bfloat16)
-                            b = torch.empty((32, 32), device=device, dtype=torch.bfloat16)
+                            _torch.cuda.set_device(device)
+                            a = _torch.empty((32, 32), device=device, dtype=_torch.bfloat16)
+                            b = _torch.empty((32, 32), device=device, dtype=_torch.bfloat16)
                             # cublasLt path is captureable; this first matmul initializes handle/workspace
                             _ = a @ b
 
                         # 1) make sure this thread is on the model’s device
                         dev = next(compiled_model.parameters()).device
                         if dev.type == "cuda":
-                            torch.cuda.set_device(dev)
+                            _torch.cuda.set_device(dev)
                             _prime_blas(dev)
 
                     except Exception as e:
