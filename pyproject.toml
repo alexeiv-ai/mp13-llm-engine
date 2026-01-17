@@ -1,0 +1,105 @@
+[tool.poetry]
+name = "mp13-engine"
+version = "0.9.0"
+description = "HF-based Local LLM engine and tools"
+authors = ["alexeiv-ai <88820640+alexeiv-ai@users.noreply.github.com>"]
+readme = "README.md"
+packages = [
+    { include = "src" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+
+python-dotenv = ">=0.19.0"
+click = ">=8.0.0"
+requests = ">=2.26.0"
+pydantic = ">=2.4.2"
+
+# Torch/CUDA anchor (Windows + Linux): keep pinned to avoid heavy dependency re-solving.
+torch = { version = "==2.9.1+cu126", source = "pytorch-cuda" }
+
+# HF stack anchor (transformers/peft/accelerate should be kept compatible)
+transformers = { version = ">=5.0.0.rc2,<5.1.0", allow-prereleases = true }
+peft = ">=0.18.0,<0.19.0"
+datasets = "^4.4.2"
+accelerate = ">=1.12.0,<1.13.0"
+
+# Optional perf/attention libs (torch/CUDA-locked)
+xformers = { version = "*", optional = true }
+
+# Torch-locked quantization utilities
+torchao = "^0.15.0"
+hqq = "^0.2.7"
+
+# Loosely coupled utilities
+numpy = ">=1.26.0"
+tiktoken = "^0.9.0"
+
+# Misc
+matplotlib = "^3.10.1"
+einops = "^0.8.1"
+numexpr = "^2.11.0"
+prompt-toolkit = "^3.0.51"
+
+[tool.poetry.extras]
+xformers = ["xformers"]
+
+# Triton is required for some features (e.g., mistral3 kernels, HQQ quantization).
+# If you enable `--with flashattn`, Triton is included automatically—no need to also enable `--with triton`.
+[tool.poetry.group.triton]
+optional = true
+
+[tool.poetry.group.triton.dependencies]
+# Linux / WSL / macOS (where official triton wheels apply)
+triton = { version = "*", markers = "sys_platform != 'win32'" }
+# Native Windows (community build). Triton 3.5.x is intended for torch >=2.9.
+triton-windows = { version = ">=3.5,<3.6", markers = "sys_platform == 'win32'" }
+
+# Mistral3 / Ministral3 support (adds mistral-common; uses Triton via markers)
+[tool.poetry.group.mistral3]
+optional = true
+
+[tool.poetry.group.mistral3.dependencies]
+mistral-common = ">=1.8.6"
+# Same Triton selection as above, so `--with mistral3` brings Triton on the current platform.
+
+# Optional FlashAttention 2 support (opt-in via `poetry install --with flashattn`)
+# Includes the appropriate Triton package automatically
+# (triton on Linux, triton-windows on Windows).
+[tool.poetry.group.flashattn]
+optional = true
+
+[tool.poetry.group.flashattn.dependencies]
+# FlashAttention 2
+# - Non-Windows: install from PyPI
+# - Windows (Python 3.12): install a community prebuilt wheel (PyTorch 2.9, CUDA 12.8 runtime)
+flash-attn = [
+  { version = "*", markers = "sys_platform != 'win32'" },
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.6/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-win_amd64.whl", markers = "sys_platform == 'win32' and python_version == '3.12'" }
+]
+
+# Triton selection (FlashAttention backends depend on Triton)
+triton = { version = "*", markers = "sys_platform != 'win32'" }
+triton-windows = { version = ">=3.5,<3.6", markers = "sys_platform == 'win32'" }
+
+[[tool.poetry.source]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu126"
+priority = "explicit"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=6.2.5"
+pytest-asyncio = ">=0.21.0"
+pylint = "^3.3.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

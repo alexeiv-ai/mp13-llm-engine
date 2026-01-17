@@ -1,0 +1,37 @@
+{
+  "tools": {
+    "SimpleCalc": {
+      "type": "function",
+      "function": {
+        "name": "SimpleCalc",
+        "description": "A simple calculator that evaluates a Python numerical expression string.\n\nArgs:\n    expr (str): The mathematical expression to evaluate. Example: '2 + 2 * 10'. It does NOT support 'import' statements\n\nReturns:\n    The numerical result of the expression or an error message.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "expr": {
+              "type": "string",
+              "description": "The mathematical expression to evaluate. Example: '2 + 2 * 10'. It does NOT support 'import' statements"
+            }
+          },
+          "required": []
+        }
+      },
+      "_type": "callable",
+      "_accepts_kwargs": true,
+      "_required_args": []
+    }
+  },
+  "intrinsic_overrides": {},
+  "active_tools": [
+    "SimpleCalc"
+  ],
+  "hidden_tools": [],
+  "active_intrinsic_tools": [
+    "symbolic_algebra",
+    "symbolic_algebra_guide",
+    "scriptable_calculator",
+    "scriptable_calculator_guide"
+  ],
+  "hidden_intrinsic_tools": [],
+  "global_tools_mode": "advertised"
+}
