@@ -120,11 +120,15 @@ def adapter_health_AB(logger, model, adapter_name, max_print=3):
     total_A = 0.0
     total_B = 0.0
     samples = []
+    skipped_meta = False
     for modname, mod in m.named_modules():
         if isinstance(mod, BaseTunerLayer):
             A = getattr(getattr(mod, "lora_A", {}), adapter_name, None)
             B = getattr(getattr(mod, "lora_B", {}), adapter_name, None)
             if A is not None and B is not None:
+                if _has_meta_params(A) or _has_meta_params(B):
+                    skipped_meta = True
+                    continue
                 found += 1
                 a = A.weight.data.norm().item()
                 b = B.weight.data.norm().item()
@@ -133,6 +137,8 @@ def adapter_health_AB(logger, model, adapter_name, max_print=3):
                 if len(samples) < max_print:
                     samples.append((modname, tuple(A.weight.shape), tuple(B.weight.shape), a, b))
     logger.debug(f"[PEFT-DEBUG] [healthAB] adapter={adapter_name} layers={found} total_A_norm={total_A:.6f} total_B_norm={total_B:.6f}")
+    if skipped_meta:
+        logger.debug("!!! [PEFT-DEBUG] [healthAB] skipped meta LoRA tensors (offloaded model); totals are partial.")
     for s in samples:
         logger.debug(f"   {s}")
 
