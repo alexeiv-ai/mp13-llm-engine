@@ -6,8 +6,11 @@
 # SPDX-License-Identifier: MIT
 """App-layer APIs and CLI helpers for MP13."""
 
+import warnings
 import sys
 from pathlib import Path
+
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 
 # Allow `python -m src.app.*` without an install by exposing `src/` on sys.path.

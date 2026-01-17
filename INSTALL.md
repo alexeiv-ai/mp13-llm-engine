@@ -9,9 +9,26 @@ It also supports optional, platform-dependent performance groups (Triton, FlashA
 ## Prerequisites
 
 ### Required
-- **Python** (match the repo’s supported version; commonly 3.12)
+- **Python** (match the repo's supported version; commonly 3.12)
 - **Poetry** installed and available on PATH
 - A working C/C++ build toolchain can be helpful for optional packages on some platforms
+
+### Installing Poetry
+Pick one of the official methods:
+
+```bash
+# Windows (PowerShell)
+py -m pip install --user "poetry>=1.8"
+
+# macOS / Linux
+python3 -m pip install --user "poetry>=1.8"
+```
+
+Verify:
+
+```bash
+poetry --version
+```
 
 ### GPU (optional)
 If you plan to run on NVIDIA GPUs:

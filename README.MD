@@ -104,6 +104,13 @@ Known to work with any of the below models, subject to compatibility with settin
 
 This repository uses **Poetry** and supports two pinned dependency stacks (mainline and legacy).
 
+Clone the repo:
+
+```bash
+git clone https://github.com/alexeiv-ai/mp13-llm-engine
+cd mp13-llm-engine
+```
+
 **Prerequisites (recommended):**
 - Python 3.12+
 - Poetry installed
@@ -118,12 +125,22 @@ poetry sync
 Activate the virtual environment before running any commands:
 
 ```bash
+# Windows (CMD)
+.\.venv\Scripts\activate.bat
+
 # Windows (PowerShell)
 .\.venv\Scripts\Activate.ps1
 
 # macOS / Linux
 source .venv/bin/activate
 ```
+
+> If you do not see a `.venv` folder, Poetry is likely using its global cache location. To force a per-project venv:
+>
+> ```bash
+> poetry config virtualenvs.in-project true --local
+> poetry sync
+> ```
 
 Optional extras (platform-dependent):
 

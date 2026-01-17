@@ -6,8 +6,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """MP13 server package - Unified training and inference server."""
 
+import warnings
 import logging as _logging
 _logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(_logging.ERROR)
+
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 from .mp13_config import (
     APIStatus, GlobalEngineConfig, TrainingConfig, InferenceConfig, InferenceRequest, 
