@@ -55,6 +55,19 @@ def _build_template_config() -> dict:
     return json.loads(json.dumps(DEFAULT_CHAT_CONFIG))
 
 
+def _ensure_category_dirs(config: dict) -> None:
+    category_dirs = config.get("category_dirs")
+    if not isinstance(category_dirs, dict):
+        return
+    for value in category_dirs.values():
+        if not value:
+            continue
+        try:
+            Path(value).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+
 def _print_intro() -> None:
     print("MP13 config interactive setup")
     print("- Empty input keeps the current value.")
@@ -450,6 +463,8 @@ def main() -> int:
         )
         if wizard_config:
             save_json_config(wizard_config, final_path)
+            resolved, _ = resolve_config_paths(wizard_config, cwd=Path.cwd(), config_path=final_path)
+            _ensure_category_dirs(resolved)
             print(f"Config written to {final_path}")
         return 0
 
@@ -468,10 +483,14 @@ def main() -> int:
                     custom_config_path=source_path,
                 )[0]
             save_json_config(source_cfg, target_path)
+            resolved, _ = resolve_config_paths(source_cfg, cwd=Path.cwd(), config_path=target_path)
+            _ensure_category_dirs(resolved)
             print(f"Config written to {target_path}")
             return 0
         template = defaults
         save_json_config(template, target_path)
+        resolved, _ = resolve_config_paths(template, cwd=Path.cwd(), config_path=target_path)
+        _ensure_category_dirs(resolved)
         print(f"Config written to {target_path}")
         return 0
 
