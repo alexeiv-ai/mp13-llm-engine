@@ -1,84 +1,66 @@
-name: Log clone traffic (JSONL)
+name: Log clone traffic to private stats repo (JSONL)
 
 on:
   schedule:
-    # Runs daily. (GitHub schedules are best-effort; exact timing can vary.)
-    - cron: "15 10 * * *"
+    - cron: "15 10 * * *"   # daily at 10:15 UTC
   workflow_dispatch:
-
-# Needed so the workflow can commit back to the repo
-permissions:
-  contents: write
 
 jobs:
   log-clones:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      # Checkout the PUBLIC repo (this one) so we can call its traffic API easily
+      - name: Checkout public repo
         uses: actions/checkout@v4
 
-      - name: Append clone traffic snapshot to JSONL
+      # Fetch clone traffic for THIS repo (last 14 days)
+      - name: Fetch clone traffic JSON
+        id: traffic
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-
-          mkdir -p stats
-          HISTORY="stats/clone-traffic-history.jsonl"
-          TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-          # GitHub REST API: Get repository clones (last 14 days)
           RESP="$(curl -sS \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$REPO/traffic/clones")"
+          # Put JSON into step output (avoid printing it)
+          echo "resp<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$RESP" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
-          # Append a single JSON record per run (JSONL)
-          python3 - <<PY >> "$HISTORY"
-import json, os
-resp = json.loads(os.environ["RESP"])
-record = {
-  "captured_at": os.environ["TS"],
-  "count": resp.get("count"),
-  "uniques": resp.get("uniques"),
-  "clones": resp.get("clones", []),  # daily breakdown
-}
-print(json.dumps(record, separators=(",", ":")))
-PY
+      # Checkout the PRIVATE stats repo into ./stats-repo
+      - name: Checkout private stats repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.STATS_REPO }}     # e.g. YOURUSERNAME/MP13-stats
+          token: ${{ secrets.STATS_REPO_TOKEN }}   # PAT with contents:write
+          path: stats-repo
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add "$HISTORY"
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Update clone traffic history"
-          git push
-      - name: Append clone traffic snapshot to JSONL
+      # Append one JSONL snapshot and push to the private repo
+      - name: Append snapshot + commit + push (private repo)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
+          RESP: ${{ steps.traffic.outputs.resp }}
+          SOURCE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
+          cd stats-repo
           mkdir -p stats
-          HISTORY="stats/clone-traffic-history.jsonl"
+
+          # One file per source repo keeps things tidy if you track multiple repos later
+          SAFE_NAME="$(echo "$SOURCE_REPO" | tr '/' '__')"
+          HISTORY="stats/${SAFE_NAME}__clone-traffic-history.jsonl"
+
           TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          RESP="$(curl -sS \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/traffic/clones")"
-
-          TS="$TS" RESP="$RESP" python3 - <<'PY' >> "$HISTORY"
+          TS="$TS" RESP="$RESP" SOURCE_REPO="$SOURCE_REPO" python3 - <<'PY' >> "$HISTORY"
 import json, os
 resp = json.loads(os.environ["RESP"])
 record = {
   "captured_at": os.environ["TS"],
+  "source_repo": os.environ["SOURCE_REPO"],
   "count": resp.get("count"),
   "uniques": resp.get("uniques"),
   "clones": resp.get("clones", []),
@@ -95,6 +77,5 @@ PY
             exit 0
           fi
 
-          git commit -m "Update clone traffic history"
+          git commit -m "Update clone traffic: $SOURCE_REPO"
           git push
-          
