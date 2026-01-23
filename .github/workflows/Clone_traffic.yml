@@ -2,18 +2,16 @@ name: Log clone traffic to private stats repo (JSONL)
 
 on:
   schedule:
-    - cron: "15 10 * * *"   # daily at 10:15 UTC
+    - cron: "15 10 * * *" # daily at 10:15 UTC
   workflow_dispatch:
 
 jobs:
   log-clones:
     runs-on: ubuntu-latest
     steps:
-      # Checkout the PUBLIC repo (this one) so we can call its traffic API easily
       - name: Checkout public repo
         uses: actions/checkout@v4
 
-      # Fetch clone traffic for THIS repo (last 14 days)
       - name: Fetch clone traffic JSON
         id: traffic
         env:
@@ -25,20 +23,17 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$REPO/traffic/clones")"
-          # Put JSON into step output (avoid printing it)
           echo "resp<<EOF" >> "$GITHUB_OUTPUT"
           echo "$RESP" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-      # Checkout the PRIVATE stats repo into ./stats-repo
       - name: Checkout private stats repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ secrets.STATS_REPO }}     # e.g. YOURUSERNAME/MP13-stats
-          token: ${{ secrets.STATS_REPO_TOKEN }}   # PAT with contents:write
+          repository: ${{ secrets.STATS_REPO }}      # e.g. YOURUSERNAME/MP13-stats
+          token: ${{ secrets.STATS_REPO_TOKEN }}     # PAT with Contents: read/write
           path: stats-repo
 
-      # Append one JSONL snapshot and push to the private
       - name: Append snapshot + commit + push (private repo)
         env:
           RESP: ${{ steps.traffic.outputs.resp }}
@@ -51,21 +46,23 @@ jobs:
 
           SAFE_NAME="$(echo "$SOURCE_REPO" | tr '/' '__')"
           HISTORY="stats/${SAFE_NAME}__clone-traffic-history.jsonl"
-
           TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          python3 -c '
+          cat > /tmp/append_clone_stats.py <<'PY'
 import json, os
+
 resp = json.loads(os.environ["RESP"])
 record = {
-  "captured_at": os.environ["TS"],
-  "source_repo": os.environ["SOURCE_REPO"],
-  "count": resp.get("count"),
-  "uniques": resp.get("uniques"),
-  "clones": resp.get("clones", []),
+    "captured_at": os.environ["TS"],
+    "source_repo": os.environ["SOURCE_REPO"],
+    "count": resp.get("count"),
+    "uniques": resp.get("uniques"),
+    "clones": resp.get("clones", []),
 }
 print(json.dumps(record, separators=(",", ":")))
-' >> "$HISTORY"
+PY
+
+          TS="$TS" python3 /tmp/append_clone_stats.py >> "$HISTORY"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
