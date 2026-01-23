@@ -1,0 +1,100 @@
+name: Log clone traffic (JSONL)
+
+on:
+  schedule:
+    # Runs daily. (GitHub schedules are best-effort; exact timing can vary.)
+    - cron: "15 10 * * *"
+  workflow_dispatch:
+
+# Needed so the workflow can commit back to the repo
+permissions:
+  contents: write
+
+jobs:
+  log-clones:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Append clone traffic snapshot to JSONL
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p stats
+          HISTORY="stats/clone-traffic-history.jsonl"
+          TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          # GitHub REST API: Get repository clones (last 14 days)
+          RESP="$(curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/traffic/clones")"
+
+          # Append a single JSON record per run (JSONL)
+          python3 - <<PY >> "$HISTORY"
+import json, os
+resp = json.loads(os.environ["RESP"])
+record = {
+  "captured_at": os.environ["TS"],
+  "count": resp.get("count"),
+  "uniques": resp.get("uniques"),
+  "clones": resp.get("clones", []),  # daily breakdown
+}
+print(json.dumps(record, separators=(",", ":")))
+PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "$HISTORY"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update clone traffic history"
+          git push
+      - name: Append clone traffic snapshot to JSONL
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p stats
+          HISTORY="stats/clone-traffic-history.jsonl"
+          TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          RESP="$(curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/traffic/clones")"
+
+          TS="$TS" RESP="$RESP" python3 - <<'PY' >> "$HISTORY"
+import json, os
+resp = json.loads(os.environ["RESP"])
+record = {
+  "captured_at": os.environ["TS"],
+  "count": resp.get("count"),
+  "uniques": resp.get("uniques"),
+  "clones": resp.get("clones", []),
+}
+print(json.dumps(record, separators=(",", ":")))
+PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "$HISTORY"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update clone traffic history"
+          git push
+          
