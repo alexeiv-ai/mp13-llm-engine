@@ -38,7 +38,7 @@ jobs:
           token: ${{ secrets.STATS_REPO_TOKEN }}   # PAT with contents:write
           path: stats-repo
 
-      # Append one JSONL snapshot and push to the private repo
+      # Append one JSONL snapshot and push to the private
       - name: Append snapshot + commit + push (private repo)
         env:
           RESP: ${{ steps.traffic.outputs.resp }}
@@ -49,13 +49,12 @@ jobs:
           cd stats-repo
           mkdir -p stats
 
-          # One file per source repo keeps things tidy if you track multiple repos later
           SAFE_NAME="$(echo "$SOURCE_REPO" | tr '/' '__')"
           HISTORY="stats/${SAFE_NAME}__clone-traffic-history.jsonl"
 
           TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          TS="$TS" RESP="$RESP" SOURCE_REPO="$SOURCE_REPO" python3 - <<'PY' >> "$HISTORY"
+          python3 -c '
 import json, os
 resp = json.loads(os.environ["RESP"])
 record = {
@@ -66,7 +65,7 @@ record = {
   "clones": resp.get("clones", []),
 }
 print(json.dumps(record, separators=(",", ":")))
-PY
+' >> "$HISTORY"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
