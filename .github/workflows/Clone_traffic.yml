@@ -48,21 +48,7 @@ jobs:
           HISTORY="stats/${SAFE_NAME}__clone-traffic-history.jsonl"
           TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          cat > /tmp/append_clone_stats.py <<'PY'
-import json, os
-
-resp = json.loads(os.environ["RESP"])
-record = {
-    "captured_at": os.environ["TS"],
-    "source_repo": os.environ["SOURCE_REPO"],
-    "count": resp.get("count"),
-    "uniques": resp.get("uniques"),
-    "clones": resp.get("clones", []),
-}
-print(json.dumps(record, separators=(",", ":")))
-PY
-
-          TS="$TS" python3 /tmp/append_clone_stats.py >> "$HISTORY"
+          TS="$TS" python3 -c "import json,os; resp=json.loads(os.environ['RESP']); record={'captured_at':os.environ['TS'],'source_repo':os.environ['SOURCE_REPO'],'count':resp.get('count'),'uniques':resp.get('uniques'),'clones':resp.get('clones',[])}; print(json.dumps(record,separators=(',',':')))" >> "$HISTORY"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
