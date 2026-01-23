@@ -30,14 +30,15 @@ jobs:
       - name: Checkout private stats repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ secrets.STATS_REPO }}      # e.g. YOURUSERNAME/MP13-stats
-          token: ${{ secrets.STATS_REPO_TOKEN }}     # PAT with Contents: read/write
+          repository: ${{ secrets.STATS_REPO }}      # alexeiv-ai/MP13-stats
+          token: ${{ secrets.STATS_REPO_TOKEN }}
           path: stats-repo
-
       - name: Append snapshot + commit + push (private repo)
         env:
           RESP: ${{ steps.traffic.outputs.resp }}
           SOURCE_REPO: ${{ github.repository }}
+          STATS_REPO: ${{ secrets.STATS_REPO }}          # alexeiv-ai/MP13-stats
+          STATS_REPO_TOKEN: ${{ secrets.STATS_REPO_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -48,6 +49,7 @@ jobs:
           HISTORY="stats/${SAFE_NAME}__clone-traffic-history.jsonl"
           TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+          # Append one JSONL line (no heredoc weirdness)
           TS="$TS" python3 -c "import json,os; resp=json.loads(os.environ['RESP']); record={'captured_at':os.environ['TS'],'source_repo':os.environ['SOURCE_REPO'],'count':resp.get('count'),'uniques':resp.get('uniques'),'clones':resp.get('clones',[])}; print(json.dumps(record,separators=(',',':')))" >> "$HISTORY"
 
           git config user.name "github-actions[bot]"
@@ -60,4 +62,11 @@ jobs:
           fi
 
           git commit -m "Update clone traffic: $SOURCE_REPO"
-          git push
+
+          # Force the remote to the PRIVATE repo and authenticate with PAT
+          git remote set-url origin "https://x-access-token:${STATS_REPO_TOKEN}@github.com/${STATS_REPO}.git"
+
+          # Push to the checked-out branch of MP13-stats
+          BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+          git push origin "HEAD:$BRANCH"
+          
