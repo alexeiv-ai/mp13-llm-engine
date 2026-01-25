@@ -1,0 +1,72 @@
+name: Log clone traffic to private stats repo (JSONL)
+
+on:
+  schedule:
+    - cron: "15 10 * * *" # daily at 10:15 UTC
+  workflow_dispatch:
+
+jobs:
+  log-clones:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+
+      - name: Fetch clone traffic JSON
+        id: traffic
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          RESP="$(curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/traffic/clones")"
+          echo "resp<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$RESP" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout private stats repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.STATS_REPO }}      # alexeiv-ai/MP13-stats
+          token: ${{ secrets.STATS_REPO_TOKEN }}
+          path: stats-repo
+      - name: Append snapshot + commit + push (private repo)
+        env:
+          RESP: ${{ steps.traffic.outputs.resp }}
+          SOURCE_REPO: ${{ github.repository }}
+          STATS_REPO: ${{ secrets.STATS_REPO }}          # alexeiv-ai/MP13-stats
+          STATS_REPO_TOKEN: ${{ secrets.STATS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          cd stats-repo
+          mkdir -p stats
+
+          SAFE_NAME="$(echo "$SOURCE_REPO" | tr '/' '__')"
+          HISTORY="stats/${SAFE_NAME}__clone-traffic-history.jsonl"
+          TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          # Append one JSONL line (no heredoc weirdness)
+          TS="$TS" python3 -c "import json,os; resp=json.loads(os.environ['RESP']); record={'captured_at':os.environ['TS'],'source_repo':os.environ['SOURCE_REPO'],'count':resp.get('count'),'uniques':resp.get('uniques'),'clones':resp.get('clones',[])}; print(json.dumps(record,separators=(',',':')))" >> "$HISTORY"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "$HISTORY"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update clone traffic: $SOURCE_REPO"
+
+          # Force the remote to the PRIVATE repo and authenticate with PAT
+          git remote set-url origin "https://x-access-token:${STATS_REPO_TOKEN}@github.com/${STATS_REPO}.git"
+
+          # Push to the checked-out branch of MP13-stats
+          BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+          git push origin "HEAD:$BRANCH"
+          
