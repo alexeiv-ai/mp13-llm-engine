@@ -75,7 +75,7 @@ triton-windows = { version = "==3.2.0.post18", markers = "sys_platform == 'win32
 
 [[tool.poetry.source]]
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu126"
+url = "https://download.pytorch.org/whl/cu124"
 priority = "explicit"
 
 
