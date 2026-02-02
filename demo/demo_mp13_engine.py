@@ -45,6 +45,8 @@ from mp13_engine.mp13_config_paths import (
     resolve_config_paths,
     resolve_custom_config_path,
     resolve_engine_inputs,
+    extract_engine_params,
+    build_engine_init_payload,
 )
 from mp13_engine.mp13_config import (
     APIStatus, GlobalEngineConfig, TrainingConfig, InferenceRequest, AdapterConfig, AdapterType, ChunkType, MP13Response,
@@ -1087,9 +1089,15 @@ async def main_logic():
     parser.add_argument("--train-override-ctx", type=str, default=None, help="Override context size specifically for training (e.g., '512', '1K', 'auto'). 'auto' uses engine's default. Default: auto.")
     parser.add_argument("--device-map", type=str, default="auto", help="Device map for model loading (e.g., 'auto', 'cpu', or a JSON string like '{\"\":0}'). Default: 'auto'.")
     parser.add_argument("--concurrent-generate", type=int, default=None, help="Number of concurrent generation requests to allow. Defaults to config when omitted.")
+    parser.add_argument("--use-separate-stream", type=str_to_bool, default=None, help="Use a separate CUDA stream per request (True|False). Defaults to config when omitted.")
+    parser.add_argument("--trust-remote-code", type=str_to_bool, default=None, help="Trust remote code for model/tokenizer loading (True|False). Defaults to config when omitted.")
+    parser.add_argument("--default-max-new-tokens", type=int, default=None, help="Default max_new_tokens for inference requests. Defaults to config when omitted.")
     
     parser.add_argument("--log", type=str, default="warning", choices=["error", "warning", "info", "debug", "all", "none"], help="Set console logging level. Log file is always at DEBUG level. 'none' disables console output.")
     args = parser.parse_args()
+
+    def _cli_provided(flag: str) -> bool:
+        return any(arg == flag or arg.startswith(flag + "=") for arg in sys.argv[1:])
 
     custom_config_path = resolve_custom_config_path(
         args.config,
@@ -1112,6 +1120,8 @@ async def main_logic():
     if not ok or resolved_config is None or resolver is None:
         print(f"[DEMO] Error: Could not load config from {default_config_source_path}.")
         return
+
+    engine_params = extract_engine_params(resolved_config)
 
     base_model_input = args.base_model or resolved_config.get("base_model_path")
     if not base_model_input:
@@ -1147,6 +1157,14 @@ async def main_logic():
     if not Path(training_dataset_path).exists():
         print(f"[DEMO] Error: Training data file '{training_dataset_path}' not found.")
         return
+
+    tools_config_path = None
+    tools_config_input = engine_params.get("tools_config_path")
+    if tools_config_input:
+        runtime_inputs = resolve_engine_inputs({"tools_config_path": tools_config_input}, resolver)
+        tools_config_path = runtime_inputs["tools_config_path"]
+        if not Path(tools_config_path).exists():
+            print(f"[DEMO] Warning: Tools config file '{tools_config_path}' not found.")
 
     training_defaults = resolved_config.get("training_params") or {}
     effective_training_steps = args.training_steps if args.training_steps is not None else training_defaults.get("training_steps", 100)
@@ -1196,7 +1214,12 @@ async def main_logic():
         "error": logging.ERROR, "warning": logging.WARNING, "info": logging.INFO,
         "debug": logging.DEBUG, "all": logging.DEBUG, "none": None,
     }
-    console_log_level = log_level_map.get(args.log.lower(), logging.WARNING)
+    log_choice = args.log.lower()
+    if not _cli_provided("--log"):
+        cfg_console_level = engine_params.get("console_log_level")
+        if isinstance(cfg_console_level, str):
+            log_choice = cfg_console_level.lower()
+    console_log_level = log_level_map.get(log_choice, logging.WARNING)
 
     # Create a temporary file for logging
     temp_log_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".log", prefix="mp13_demo_")
@@ -1210,9 +1233,13 @@ async def main_logic():
     # Formatter strings
     log_format_string = '%(asctime)s - %(levelname)-8s - %(message)s'
 
-    # File handler (always DEBUG)
+    # File handler (level from config if provided, else DEBUG)
     file_handler = logging.FileHandler(log_file_path, mode='w')
-    file_handler.setLevel(logging.DEBUG)
+    file_level_choice = engine_params.get("file_log_level")
+    if isinstance(file_level_choice, str):
+        file_handler.setLevel(log_level_map.get(file_level_choice.lower(), logging.DEBUG))
+    else:
+        file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(log_format_string))
 
     # Add handlers to the logger
@@ -1234,42 +1261,105 @@ async def main_logic():
 
     print(f"[DEMO] Adapters Root Directory: {adapters_root_dir}")
     print(f"[DEMO] Adapter Logical Name: {adapter_logical_name_for_inference}")
+    if tools_config_path:
+        print(f"[DEMO] Tools config path: {tools_config_path}")
 
     
     # Parse device_map argument
-    device_map_arg = args.device_map
+    device_map_arg: Union[str, Dict[str, Any]] = args.device_map
+    if not _cli_provided("--device-map") and "device_map" in engine_params:
+        device_map_arg = engine_params.get("device_map", device_map_arg)
     parsed_device_map: Union[str, Dict[str, Any]]
-    if device_map_arg.strip().startswith('{'):
-        try:
-            parsed_device_map = json.loads(device_map_arg)
-        except json.JSONDecodeError:
-            print(f"[DEMO] Warning: Invalid JSON for --device-map argument: '{device_map_arg}'. Treating as a string.")
-            parsed_device_map = device_map_arg
-    else:
+    if isinstance(device_map_arg, dict):
         parsed_device_map = device_map_arg
+    else:
+        if device_map_arg.strip().startswith('{'):
+            try:
+                parsed_device_map = json.loads(device_map_arg)
+            except json.JSONDecodeError:
+                print(f"[DEMO] Warning: Invalid JSON for --device-map argument: '{device_map_arg}'. Treating as a string.")
+                parsed_device_map = device_map_arg
+        else:
+            parsed_device_map = device_map_arg
 
     print(f"[DEMO] Using device_map: {parsed_device_map} for global engine.")
 
     # Parse context size arguments for engine and training config
-    parsed_default_ctx = parse_k_notation(args.default_ctx) # For GlobalEngineConfig.default_context_size
+    default_ctx_raw: Optional[Union[str, int]] = args.default_ctx
+    if not _cli_provided("--default-ctx") and "default_context_size" in engine_params:
+        default_ctx_raw = engine_params.get("default_context_size")
+    if isinstance(default_ctx_raw, int):
+        parsed_default_ctx = default_ctx_raw
+    else:
+        parsed_default_ctx = parse_k_notation(default_ctx_raw) # For GlobalEngineConfig.default_context_size
     parsed_train_override_ctx = parse_k_notation(effective_train_override_ctx) # For TrainingConfig.max_sequence_length
 
-    engine_params = resolved_config.get("engine_params") or {}
-    global_engine_config_dict = {
+    base_model_dtype = args.base_model_dtype
+    if not _cli_provided("--base-model-dtype"):
+        base_model_dtype = engine_params.get("base_model_dtype", base_model_dtype)
+
+    quantize_bits = args.quantize_bits
+    if not _cli_provided("--quantize-bits"):
+        quantize_bits = engine_params.get("quantize_bits", quantize_bits)
+
+    hqq_bits = args.hqq_bits
+    if not _cli_provided("--hqq-bits"):
+        hqq_bits = engine_params.get("hqq_bits", hqq_bits)
+    hqq_group_size = args.hqq_group_size
+    if not _cli_provided("--hqq-group-size"):
+        hqq_group_size = engine_params.get("hqq_group_size", hqq_group_size)
+    hqq_axis = args.hqq_axis
+    if not _cli_provided("--hqq-axis"):
+        hqq_axis = engine_params.get("hqq_axis", hqq_axis)
+
+    hqq_quant_zero = engine_params.get("hqq_quant_zero")
+    hqq_quant_scale = engine_params.get("hqq_quant_scale")
+
+    attn_implementation = args.attn_implementation
+    if not _cli_provided("--attn-implementation"):
+        attn_implementation = engine_params.get("attn_implementation", attn_implementation)
+
+    trust_remote_code = True
+    if args.trust_remote_code is not None:
+        trust_remote_code = args.trust_remote_code
+    elif "trust_remote_code" in engine_params:
+        trust_remote_code = engine_params.get("trust_remote_code", True)
+
+    use_torch_compile = not args.no_torch_compile
+    if not _cli_provided("--no-torch-compile") and "use_torch_compile" in engine_params:
+        use_torch_compile = engine_params.get("use_torch_compile", use_torch_compile)
+
+    default_max_new_tokens = args.default_max_new_tokens
+    if default_max_new_tokens is None and "default_max_new_tokens" in engine_params:
+        default_max_new_tokens = engine_params.get("default_max_new_tokens")
+
+    use_separate_stream = args.use_separate_stream
+    if use_separate_stream is None and "use_separate_stream" in engine_params:
+        use_separate_stream = engine_params.get("use_separate_stream")
+
+    global_engine_config_dict = build_engine_init_payload(resolved_config)
+    global_engine_config_dict.update({
         "base_model_name_or_path": abs_base_model_path,
         "device_map": parsed_device_map,
         "initial_engine_mode": EngineMode.INFERENCE, # Start in inference, switch as needed
-        "trust_remote_code": True,
-        "base_model_torch_dtype": args.base_model_dtype,
-        # New quantization parameters
-        "quantize_bits": args.quantize_bits,
-        "hqq_bits": args.hqq_bits,
-        "hqq_group_size": args.hqq_group_size,
-        "hqq_axis": args.hqq_axis,
+        "trust_remote_code": trust_remote_code,
+        "base_model_torch_dtype": base_model_dtype,
+        "quantize_bits": quantize_bits,
+        "hqq_bits": hqq_bits,
+        "hqq_group_size": hqq_group_size,
+        "hqq_axis": hqq_axis,
         "default_context_size": parsed_default_ctx, # Engine will derive from model if this is None ("auto")
-        "attn_implementation": args.attn_implementation,
-        "use_torch_compile": not args.no_torch_compile,
-    }
+        "attn_implementation": attn_implementation,
+        "use_torch_compile": use_torch_compile,
+    })
+    if default_max_new_tokens is not None:
+        global_engine_config_dict["default_max_new_tokens"] = default_max_new_tokens
+    if hqq_quant_zero is not None:
+        global_engine_config_dict["hqq_quant_zero"] = hqq_quant_zero
+    if hqq_quant_scale is not None:
+        global_engine_config_dict["hqq_quant_scale"] = hqq_quant_scale
+    if use_separate_stream is not None:
+        global_engine_config_dict["use_separate_stream"] = use_separate_stream
     if args.use_cache is not None:
         global_engine_config_dict["use_cache"] = args.use_cache
     elif "use_cache" in engine_params:
@@ -1532,12 +1622,16 @@ async def main_logic():
             print("[DEMO] Failed to configure engine for interactive inference. Shutting down engine.")
         else:
             print("\nType 'exit' to quit.")
+            default_system_message = engine_params.get("default_system_message", "")
             while True:
                 system_message = input("System Message (optional): ")
                 user_instruction = input("User Instruction (optional): ")
 
                 if user_instruction.lower() == "exit":
                     break
+
+                if not system_message and default_system_message:
+                    system_message = default_system_message
 
                 # Create the message list based on inputs
                 messages = []

@@ -154,6 +154,13 @@ class GlobalEngineConfig(BaseModel):
         False,
         description="Enable static GPU KV cache for inference. If False, only dynamic and offloaded caches will be used."
     )
+    use_separate_stream: bool = Field(
+        True,
+        description=(
+            "Use a dedicated CUDA stream per inference request to overlap H2D copies and compute. "
+            "Set False if you observe unstable outputs or device-specific issues (e.g., some laptop GPU drivers)."
+        ),
+    )
     concurrent_generate: int = Field(4, description="Number of allowed concurrent user requests. Default is 1, if more than one then static cache will be forced to off.")
     log_with_instance_id: bool = Field(False, description="If true, reconfigures the logger to include the instance_id in all messages.")
     log_instance_id_width: int = Field(8, description="The fixed width for the instance_id column in logs, if enabled.")

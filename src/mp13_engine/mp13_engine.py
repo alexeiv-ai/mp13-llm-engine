@@ -354,6 +354,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
         use_torch_compile = config.use_torch_compile
         no_tools_parse = config.no_tools_parse
         disable_custom_pad_ids = config.disable_custom_pad_ids
+        use_separate_stream = config.use_separate_stream
 
         # New optional configs
         instance_id_override = config.instance_id
@@ -553,6 +554,10 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 model_load_kwargs["attn_implementation"] = attn_implementation
 
             logger.info(f"Device Map: {device_map}, dtype: {actual_torch_dtype}, attn: {model_load_kwargs.get('attn_implementation', 'auto')}, use_cache: {requested_use_cache}")
+            stream_status = "enabled" if (use_separate_stream and cuda_is_available) else "disabled"
+            if use_separate_stream and not cuda_is_available:
+                stream_status = "disabled (cuda unavailable)"
+            logger.info(f"Separate CUDA stream per request: {stream_status}")
 
             #logger.debug(f"Loading tokenizer for {base_model_name_or_path}...")
             tokenizer_kwargs = {
@@ -1107,7 +1112,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
             effective_global_config_dump["tool_templates"] = tool_template_names
             effective_global_config_dump["tool_parser_profile"] = asdict(tool_parser_profile) if tool_parser_profile else None
             effective_global_config_dump["empty_system_prompt_template"] = empty_system_prompt_template
-            effective_global_config_dump["use_separate_stream"] = True # for concurrent Cuda streams
+            effective_global_config_dump["use_separate_stream"] = bool(use_separate_stream)
             # --- End of config assembly ---
 
             await self.state.set_global_resources(
@@ -1179,6 +1184,10 @@ class MP13Engine(metaclass=EngineLogContextMeta):
 
         try:
             resource = None
+            use_separate_stream = False
+            if self.state.global_config:
+                is_enabled_in_config = self.state.global_config.get("use_separate_stream", False)
+                use_separate_stream = is_enabled_in_config and torch.cuda.is_available()
             # Check the pool first. This is fast.
             async with self.state._resource_pool_lock:
                 if self.state._resource_pool:
@@ -1193,10 +1202,6 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 
                 # Create stream
                 new_stream = None
-                use_separate_stream = False
-                if self.state.global_config:
-                    is_enabled_in_config = self.state.global_config.get("use_separate_stream", False)
-                    use_separate_stream = is_enabled_in_config and torch.cuda.is_available()
                 
                 if use_separate_stream:
                     target_device = first_module_device(self.state.peft_model)
@@ -1213,6 +1218,20 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                     else:
                         self.state.logger.debug(f"Cannot create CUDA stream for device type: {target_device.type}. Skipping stream creation.")
                 resource = RequestResource(tokenizer=new_tokenizer, stream=new_stream)
+            else:
+                if not use_separate_stream and resource.stream is not None:
+                    resource = RequestResource(tokenizer=resource.tokenizer, stream=None)
+                elif use_separate_stream and resource.stream is None:
+                    target_device = first_module_device(self.state.peft_model)
+                    if target_device.type == "cuda":
+                        new_stream = torch.cuda.Stream(device=target_device, priority=0)
+                        try:
+                            new_stream.mp13_pinned_buffers = {}
+                            new_stream.mp13_pinned_bytes_cap = 2 * 1024 * 1024  # 2 MiB cap for all cached pinned buffers
+                            new_stream.mp13_pinned_bytes = 0
+                        except Exception:
+                            pass
+                        resource = RequestResource(tokenizer=resource.tokenizer, stream=new_stream)
 
             # Register the instance as in-use.
             async with self.state._resource_pool_lock:

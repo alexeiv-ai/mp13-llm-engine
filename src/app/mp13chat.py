@@ -89,6 +89,8 @@ from mp13_engine.mp13_config_paths import (
     resolve_custom_config_path,
     resolve_engine_inputs,
     save_json_config,
+    extract_engine_params,
+    build_engine_init_payload,
 )
 from .engine_session import EngineSession, Turn, Command, ChatSession, InferenceParams, Colors
 from .context_cursor import ChatCursor, ChatContext, ChatContextScope, StreamDisplayContext, StreamDisplayPlan, ChatForks
@@ -1992,6 +1994,7 @@ def _apply_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     base = json.loads(json.dumps(DEFAULT_CHAT_CONFIG))
     merged = dict(base)
     merged.update(config)
+    merged["engine_params"] = extract_engine_params(merged)
     merged["inference_params"] = _normalize_chat_params(merged.get("inference_params"))
     return merged
 
@@ -2215,27 +2218,7 @@ async def initialize_mp13_engine(config: Dict[str, Any]) -> Optional[Dict[str, A
     """Initializes the engine and prints status based on the --dump-init flag. Returns the init response on success."""
     global ENGINE_INITIALIZED_SUCCESSFULLY
     print(f"{Colors.SYSTEM}Initializing MP13 Engine...{Colors.RESET}")
-    engine_config_payload = {
-        "base_model_name_or_path": config["base_model_path"],
-        "device_map": config.get("device_map", "auto"),
-        "trust_remote_code": config.get("trust_remote_code", True),
-        "base_model_torch_dtype": config["base_model_dtype"],
-        # New quantization parameters
-        "quantize_bits": config.get("quantize_bits", "none"),
-        "hqq_bits": config.get("hqq_bits", 4),
-        "hqq_group_size": config.get("hqq_group_size", 64),
-        "hqq_quant_zero": config.get("hqq_quant_zero", True),
-        "hqq_quant_scale": config.get("hqq_quant_scale", False),
-        "hqq_axis": config.get("hqq_axis", 1),
-        "initial_engine_mode": EngineMode.INFERENCE.value,
-        "default_context_size": config.get("default_context_size"),
-        "default_max_new_tokens": config.get("default_max_new_tokens", 8192),
-        "use_cache": config.get("use_cache", True),
-        "use_torch_compile": config.get("use_torch_compile", True),
-        "attn_implementation": config.get("attn_implementation", "auto"),
-        "static_kv_cache": config.get("static_kv_cache", True),
-        "concurrent_generate": config.get("concurrent_generate", 1),
-    }
+    engine_config_payload = build_engine_init_payload(config)
     
     init_resp = await call_api("initialize-engine", engine_config_payload)
     if init_resp.get("status") != "success":

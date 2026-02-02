@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from mp13_engine.mp13_config import EngineMode
 
 
 APP_DIR_NAME = ".mp13-llm"
@@ -73,6 +74,7 @@ DEFAULT_CHAT_CONFIG = {
         "trust_remote_code": True,
         "use_torch_compile": True,
         "static_kv_cache": False,
+        "use_separate_stream": True,
         "concurrent_generate": 4,
         "tools_config_path": "mp13tools.json",
         "console_log_level": "warning",
@@ -81,6 +83,8 @@ DEFAULT_CHAT_CONFIG = {
     "inference_params": DEFAULT_INFERENCE_PARAMS,
     "training_params": DEFAULT_TRAINING_PARAMS,
 }
+
+ENGINE_PARAM_KEYS = tuple((DEFAULT_CHAT_CONFIG.get("engine_params") or {}).keys())
 
 CATEGORY_DIRS_KEY = "category_dirs"
 
@@ -311,6 +315,71 @@ def resolve_engine_inputs(config: Dict[str, Any], resolver: PathResolver) -> Dic
         dataset_copy["dataset_path"] = resolver.resolve(dataset_copy["dataset_path"], category="data")
         resolved["dataset"] = dataset_copy
     return resolved
+
+
+def extract_engine_params(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return a normalized engine_params dict that respects top-level overrides.
+    Useful when configs have been flattened by resolve_engine_inputs().
+    """
+    params: Dict[str, Any] = {}
+    engine_params = config.get("engine_params")
+    if isinstance(engine_params, dict):
+        params.update(engine_params)
+    for key in ENGINE_PARAM_KEYS:
+        if key in config:
+            params[key] = config[key]
+    return params
+
+
+def build_engine_init_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build the engine initialization payload from a resolved config.
+
+    Suggested flow:
+      1) load_effective_config(...) -> resolve_engine_inputs(...) -> _apply_config_defaults(...)
+      2) pass that merged config here to produce a GlobalEngineConfig-compatible dict
+      3) send the payload to initialize-engine
+
+    This keeps app code free of per-key wiring and ensures a single source of truth
+    for engine init fields derived from config/engine_params.
+    """
+    params = extract_engine_params(config)
+    payload = {
+        "base_model_name_or_path": params.get("base_model_path") or config.get("base_model_path"),
+        "device_map": params.get("device_map", "auto"),
+        "trust_remote_code": params.get("trust_remote_code", True),
+        "base_model_torch_dtype": params.get("base_model_dtype", "auto"),
+        "quantize_bits": params.get("quantize_bits", "none"),
+        "hqq_bits": params.get("hqq_bits", 4),
+        "hqq_group_size": params.get("hqq_group_size", 64),
+        "hqq_quant_zero": params.get("hqq_quant_zero", True),
+        "hqq_quant_scale": params.get("hqq_quant_scale", False),
+        "hqq_axis": params.get("hqq_axis", 1),
+        "initial_engine_mode": params.get("initial_engine_mode", EngineMode.INFERENCE.value),
+        "default_context_size": params.get("default_context_size"),
+        "default_max_new_tokens": params.get("default_max_new_tokens", 8192),
+        "use_cache": params.get("use_cache", True),
+        "use_torch_compile": params.get("use_torch_compile", True),
+        "attn_implementation": params.get("attn_implementation", "auto"),
+        "static_kv_cache": params.get("static_kv_cache", False),
+        "concurrent_generate": params.get("concurrent_generate", 1),
+        "use_separate_stream": params.get("use_separate_stream", True),
+        "disable_custom_pad_ids": params.get("disable_custom_pad_ids", False),
+        "no_tools_parse": params.get("no_tools_parse", False),
+    }
+
+    instance_id = params.get("instance_id")
+    if instance_id:
+        payload["instance_id"] = instance_id
+    tools_profile = params.get("tools_parser_profile_key")
+    if tools_profile:
+        payload["tools_parser_profile_key"] = tools_profile
+    custom_template = params.get("custom_chat_template")
+    if custom_template:
+        payload["custom_chat_template"] = custom_template
+
+    return payload
 
 
 def load_merged_config(
