@@ -110,11 +110,18 @@ def _should_mark_truncated_for_hard_stop(
             return True
     return False
 
-def _strip_eos_strings(text: str, eos_strings: Iterable[str]) -> str:
+def _strip_eos_strings_from_end(text: str, eos_strings: Iterable[str]) -> str:
+    if not text or not eos_strings:
+        return text
     out = text
-    for s in eos_strings:
-        if s:
-            out = out.replace(s, "")
+    changed = True
+    while changed:
+        changed = False
+        for s in eos_strings:
+            if s and out.endswith(s):
+                out = out[:-len(s)]
+                changed = True
+                break
     return out
 
 
@@ -507,6 +514,12 @@ def _yield_streamed_response_in_chunks(
         extra_eos_ids,
         include_eos=not preserve_eos_for_parsing,
     )
+    stop_ids_all = _get_stop_ids_for_output(
+        tokenizer,
+        extra_eos_ids,
+        include_eos=True,
+    )
+    stop_token_generated = any(t in stop_ids_all for t in generated_token_ids)
     
     clean_token_ids = [t for t in generated_token_ids if t not in stop_ids_to_remove]
 
@@ -514,8 +527,8 @@ def _yield_streamed_response_in_chunks(
     full_generated_text = tokenizer.decode(clean_token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
     eos_strings = _get_eos_strings(tokenizer, extra_eos_ids) if preserve_eos_for_parsing else []
     response_text_for_output = full_generated_text
-    if eos_strings and response_text_for_output:
-        response_text_for_output = _strip_eos_strings(response_text_for_output, eos_strings)
+    if eos_strings and response_text_for_output and stop_token_generated:
+        response_text_for_output = _strip_eos_strings_from_end(response_text_for_output, eos_strings)
 
     tool_blocks: List[ToolCallBlock] = []
     tool_blocks_for_output: Optional[List[ToolCallBlock]] = None
@@ -546,8 +559,8 @@ def _yield_streamed_response_in_chunks(
                 len(tool_blocks), len(full_generated_text), len(final_text_part)
             )
 
-    if eos_strings and final_text_part:
-        final_text_part = _strip_eos_strings(final_text_part, eos_strings)
+    if eos_strings and final_text_part and stop_token_generated:
+        final_text_part = _strip_eos_strings_from_end(final_text_part, eos_strings)
 
     # --- Recalculate tool metrics from the parsed blocks ---
     # This ensures the metrics are correct for the emulated stream, overriding
@@ -636,6 +649,12 @@ def _yield_full_non_streamed_response(
         extra_eos_ids,
         include_eos=not preserve_eos_for_parsing,
     )
+    stop_ids_all = _get_stop_ids_for_output(
+        tokenizer,
+        extra_eos_ids,
+        include_eos=True,
+    )
+    stop_token_generated = any(t in stop_ids_all for t in generated_token_ids)
     
     clean_token_ids = [t for t in generated_token_ids if t not in stop_ids_to_remove]
 
@@ -643,8 +662,8 @@ def _yield_full_non_streamed_response(
     full_generated_text = tokenizer.decode(clean_token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
     eos_strings = _get_eos_strings(tokenizer, extra_eos_ids) if preserve_eos_for_parsing else []
     response_text_for_output = full_generated_text
-    if eos_strings and response_text_for_output:
-        response_text_for_output = _strip_eos_strings(response_text_for_output, eos_strings)
+    if eos_strings and response_text_for_output and stop_token_generated:
+        response_text_for_output = _strip_eos_strings_from_end(response_text_for_output, eos_strings)
 
     tool_blocks_for_output: Optional[List[ToolCallBlock]] = None
     num_tool_blocks = 0
@@ -693,8 +712,8 @@ def _yield_full_non_streamed_response(
         ):
             item_metrics["was_truncated"] = True
 
-    if eos_strings and final_text_part:
-        final_text_part = _strip_eos_strings(final_text_part, eos_strings)
+    if eos_strings and final_text_part and stop_token_generated:
+        final_text_part = _strip_eos_strings_from_end(final_text_part, eos_strings)
 
 
     if not final_text_part:
@@ -936,9 +955,14 @@ async def _generate_non_streamed_batch_internal(
         adapter_names_for_batch = adapter_name_batches[batch_idx]
 
         target_device = first_module_device(inference_model)
-        cpu_inputs = request_tokenizer(
-            prompt_batch_list, return_tensors="pt", padding="longest", pad_to_multiple_of=64
-        )
+        if len(prompt_batch_list) == 1:
+            cpu_inputs = request_tokenizer(
+                prompt_batch_list, return_tensors="pt", padding=False
+            )
+        else:
+            cpu_inputs = request_tokenizer(
+                prompt_batch_list, return_tensors="pt", padding="longest", pad_to_multiple_of=64
+            )
         inputs = to_device_on_stream(cpu_inputs, target_device, req_stream_for_batch)        
 
         # --- Pass engine state and request for potential micro-batch cache routing ---
@@ -972,7 +996,7 @@ async def _generate_non_streamed_batch_internal(
 
         gen_kwargs["generation_config"] = generation_config
 
-        cache_metric_str: str
+        cache_metric_str: str = ""
         cache_warming_str: Optional[str] = None
         deferred_for_this_micro_batch = [] # Local accumulator for this micro-batch
         cache_mode = "dynamic"
@@ -1527,30 +1551,9 @@ async def _internal_response_generator(
             getattr(generation_config, "eos_token_id", None),
         )
         eos_strip_logged = False
+        eos_strip_enabled = False
         eos_tail = ""
         max_eos_len = max((len(s) for s in eos_strings), default=0)
-
-        def _filter_stream_text(text: str) -> str:
-            nonlocal eos_tail, eos_strip_logged
-            if not text or not eos_strings:
-                return text
-            combined = eos_tail + text
-            cleaned = _strip_eos_strings(combined, eos_strings)
-            if not eos_strip_logged and cleaned != combined:
-                engine.state.logger.debug(
-                    "Stripped EOS strings from streaming chunk: %s",
-                    eos_strings,
-                )
-                eos_strip_logged = True
-            if max_eos_len <= 1:
-                eos_tail = ""
-                return cleaned
-            keep = max_eos_len - 1
-            if len(cleaned) <= keep:
-                eos_tail = cleaned
-                return ""
-            eos_tail = cleaned[-keep:]
-            return cleaned[:-keep]
         cpu_inputs = request_tokenizer(
             [first_prompt], return_tensors="pt", padding=False, pad_to_multiple_of=64
         )
@@ -1567,6 +1570,32 @@ async def _internal_response_generator(
             clean_up_tokenization_spaces=False,
             extra_stop_ids=getattr(generation_config, "eos_token_id", None),
         )
+
+        def _filter_stream_text(text: str) -> str:
+            nonlocal eos_tail, eos_strip_logged, eos_strip_enabled
+            if not text:
+                return text
+            if not eos_strip_enabled and streamer.eos_token_seen:
+                eos_strip_enabled = True
+            if not eos_strip_enabled or not eos_strings:
+                return text
+            combined = eos_tail + text
+            cleaned = _strip_eos_strings_from_end(combined, eos_strings)
+            if not eos_strip_logged and cleaned != combined:
+                engine.state.logger.debug(
+                    "Stripped EOS strings from streaming chunk: %s",
+                    eos_strings,
+                )
+                eos_strip_logged = True
+            if max_eos_len <= 1:
+                eos_tail = ""
+                return cleaned
+            keep = max_eos_len - 1
+            if len(cleaned) <= keep:
+                eos_tail = cleaned
+                return ""
+            eos_tail = cleaned[-keep:]
+            return cleaned[:-keep]
         
         #assert isinstance(request_tokenizer.eos_token_id, (int, list))
         #engine.state.logger.debug(f"tok eos: {request_tokenizer.eos_token_id}, pad: {request_tokenizer.pad_token_id}")
@@ -1714,7 +1743,10 @@ async def _internal_response_generator(
                 full_response_text_for_item += final_text_chunk
 
         if eos_tail:
-            tail_text = _strip_eos_strings(eos_tail, eos_strings) if eos_strings else eos_tail
+            if eos_strings and eos_strip_enabled:
+                tail_text = _strip_eos_strings_from_end(eos_tail, eos_strings)
+            else:
+                tail_text = eos_tail
             eos_tail = ""
             if tail_text:
                 produced_text_chunks = True
@@ -1833,9 +1865,9 @@ async def _internal_response_generator(
             if effective_was_truncated:
                 num_tool_blocks = 0
                 num_tool_block_tokens = 0
-        if eos_strings and response_text_for_item:
+        if eos_strings and response_text_for_item and eos_strip_enabled:
             original_response_text_for_item = response_text_for_item
-            response_text_for_item = _strip_eos_strings(response_text_for_item, eos_strings)
+            response_text_for_item = _strip_eos_strings_from_end(response_text_for_item, eos_strings)
             if not eos_strip_logged and response_text_for_item != original_response_text_for_item:
                 engine.state.logger.debug(
                     "Stripped EOS strings from streaming response_text: %s",

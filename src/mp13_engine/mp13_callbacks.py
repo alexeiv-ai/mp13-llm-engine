@@ -22,6 +22,7 @@ from transformers.trainer import Trainer
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from .mp13_state import MP13State, TrainingStatus
+from .mp13_utils import first_module_device, inspect_device_layout
 
 if TYPE_CHECKING:
     from .mp13_state import MP13State
@@ -261,6 +262,22 @@ class QuietTrainer(Trainer):
                 if not isinstance(cb, (PrinterCallback, ProgressCallback))
             ]
 
+    def _move_model_to_device(self, model, device):
+        try:
+            layout = inspect_device_layout(model)
+        except Exception:
+            layout = {}
+        has_meta_params = False
+        try:
+            has_meta_params = any(getattr(p, "is_meta", False) for p in model.parameters())
+        except Exception:
+            has_meta_params = False
+
+        if layout.get("mode") in ("offloaded", "sharded") or has_meta_params:
+            return model
+
+        return super()._move_model_to_device(model, device)
+
     def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> Dict[str, Union[torch.Tensor, Any]]:
         """
         Override _prepare_inputs to prevent moving inputs to a single device
@@ -291,6 +308,7 @@ class TrainingProgressCallback(TrainerCallback):
         self.tokenizer = tokenizer_ref
         self.initial_loss: Optional[float] = None
         self.first_log_call: bool = True
+        self._mem_device: Optional[torch.device] = None
         # Capture the main event loop when the callback is instantiated
         self.main_loop = asyncio.get_event_loop()
 
@@ -306,6 +324,16 @@ class TrainingProgressCallback(TrainerCallback):
     # callback filtering and TrainingArguments are correctly set.
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # MP13State.set_training_started() will handle notifications
+        model = kwargs.get("model")
+        if model is not None and torch.cuda.is_available():
+            try:
+                dev = first_module_device(model)
+                if dev.type == "cuda":
+                    self._mem_device = dev
+                    torch.cuda.set_device(dev)
+                    torch.cuda.reset_peak_memory_stats(dev)
+            except Exception:
+                self._mem_device = None
         asyncio.run_coroutine_threadsafe(self.state.set_training_started(), self.main_loop)
 
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs): # type: ignore
@@ -321,6 +349,13 @@ class TrainingProgressCallback(TrainerCallback):
         loss = logs.get("loss") if logs else None
         lr = logs.get("learning_rate") if logs else None # type: ignore
         grad_norm = logs.get("grad_norm") if logs else None # Get grad_norm
+        if logs is not None and self._mem_device is not None and self._mem_device.type == "cuda":
+            try:
+                alloc_mb = int(torch.cuda.memory_allocated(self._mem_device) / (1024**2))
+                peak_mb = int(torch.cuda.max_memory_allocated(self._mem_device) / (1024**2))
+                logs["mem"] = f"{alloc_mb}/{peak_mb}MB"
+            except Exception:
+                pass
 
         # Epoch here might be a float representing progress through current epoch
         if self.first_log_call and loss is not None:

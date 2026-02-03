@@ -120,6 +120,15 @@ class GlobalEngineConfig(BaseModel):
         default="auto",
         description="Device map for model loading (e.g., 'auto', 'cpu', or a dictionary like {'':0})."
     )
+    memory_mode: Optional[str] = Field(
+        "respect_device_map",
+        description=(
+            "Memory strategy for base model placement. "
+            "'auto_cpu' uses device_map='auto' and low_cpu_mem_usage=False (requires high CPU RAM, avoids meta/offload). "
+            "'single_gpu' forces single-GPU placement and warns on likely OOM. "
+            "'respect_device_map' keeps the provided device_map and uses low_cpu_mem_usage=True."
+        ),
+    )
 
     trust_remote_code: bool = Field(True, description="Trust remote code execution for model/tokenizer.")
     base_model_torch_dtype: str = Field(
@@ -187,6 +196,16 @@ class GlobalEngineConfig(BaseModel):
             print(f"Warning: base_model_torch_dtype is '{v}' but CUDA is not available. Effective dtype may differ.")
         if v == "bfloat16" and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
             print(f"Warning: base_model_torch_dtype is 'bfloat16' but the current CUDA device does not support bfloat16. Effective dtype may differ.")
+        return v
+
+    @field_validator('memory_mode')
+    @classmethod
+    def validate_memory_mode(cls, v: str) -> str:
+        if v is None:
+            return "respect_device_map"
+        allowed = {"auto_cpu", "single_gpu", "respect_device_map"}
+        if v not in allowed:
+            raise ValueError(f"Invalid memory_mode: '{v}'. Must be one of {sorted(allowed)}.")
         return v
 
     # No specific validators for new quantize_bits, awq_*, hqq_*, bnb_* here,

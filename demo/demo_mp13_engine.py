@@ -407,7 +407,10 @@ async def run_test_adapter_training(
 
                 # Get GPU memory info from details_to_render
                 current_gpu_mem = details_to_render.get("current_gpu_mem_allocated_mb", 0.0)
-                peak_gpu_mem_op = details_to_render.get("peak_gpu_mem_current_op_mb", 0.0)
+                peak_gpu_mem_op = details_to_render.get(
+                    "peak_gpu_mem_allocated_current_op_mb",
+                    details_to_render.get("peak_tracked_gpu_mem_allocated_training_mb", 0.0),
+                )
                 
                 loss_str = f"{loss:.4f}" if isinstance(loss, (int, float)) else str(loss)
                 lr_str = f"{lr:.2e}" if isinstance(lr, (float)) else str(lr) # Check for float specifically for scientific notation
@@ -1088,6 +1091,7 @@ async def main_logic():
     parser.add_argument("--default-ctx", type=str, default="auto", help="Default context size for the engine (e.g., '2K', '4096', 'auto'). 'auto' derives from model. Default: auto.")
     parser.add_argument("--train-override-ctx", type=str, default=None, help="Override context size specifically for training (e.g., '512', '1K', 'auto'). 'auto' uses engine's default. Default: auto.")
     parser.add_argument("--device-map", type=str, default="auto", help="Device map for model loading (e.g., 'auto', 'cpu', or a JSON string like '{\"\":0}'). Default: 'auto'.")
+    parser.add_argument("--memory-mode", type=str, default=None, choices=["auto_cpu", "single_gpu", "respect_device_map"], help="Memory mode for model placement. Defaults to config device-map behavior.")
     parser.add_argument("--concurrent-generate", type=int, default=None, help="Number of concurrent generation requests to allow. Defaults to config when omitted.")
     parser.add_argument("--use-separate-stream", type=str_to_bool, default=None, help="Use a separate CUDA stream per request (True|False). Defaults to config when omitted.")
     parser.add_argument("--trust-remote-code", type=str_to_bool, default=None, help="Trust remote code for model/tokenizer loading (True|False). Defaults to config when omitted.")
@@ -1284,6 +1288,12 @@ async def main_logic():
 
     print(f"[DEMO] Using device_map: {parsed_device_map} for global engine.")
 
+    memory_mode = args.memory_mode
+    if memory_mode is None and "memory_mode" in engine_params:
+        memory_mode = engine_params.get("memory_mode")
+    if memory_mode:
+        print(f"[DEMO] Using memory_mode: {memory_mode} for global engine.")
+
     # Parse context size arguments for engine and training config
     default_ctx_raw: Optional[Union[str, int]] = args.default_ctx
     if not _cli_provided("--default-ctx") and "default_context_size" in engine_params:
@@ -1341,6 +1351,7 @@ async def main_logic():
     global_engine_config_dict.update({
         "base_model_name_or_path": abs_base_model_path,
         "device_map": parsed_device_map,
+        "memory_mode": memory_mode,
         "initial_engine_mode": EngineMode.INFERENCE, # Start in inference, switch as needed
         "trust_remote_code": trust_remote_code,
         "base_model_torch_dtype": base_model_dtype,

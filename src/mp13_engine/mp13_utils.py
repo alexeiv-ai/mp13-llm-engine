@@ -87,6 +87,10 @@ class StoringTextIteratorStreamer(TextIteratorStreamer):
         # Diagnostics
         self.eos_token_detected: Optional[int] = None
         self.eos_token_decoded: Optional[str] = None
+        # Tracks whether EOS/PAD was seen in generated (non-prompt) tokens.
+        self.eos_token_seen: bool = False
+        # Debug: log first two put() calls for prompt/first-gen verification.
+        self._debug_put_calls: int = 0
 
     def _initialize_stop_ids(self) -> set:
         """Pre-calculates the set of stop token IDs from the tokenizer."""
@@ -106,20 +110,30 @@ class StoringTextIteratorStreamer(TextIteratorStreamer):
         # We mirror that for metrics by skipping that first chunk in `generated_ids`.
         flat = value.flatten()
 
+        # If this is the prompt chunk and skip_prompt=True, don't record it for metrics.
+        # Still forward to parent so its internal skip_prompt state stays consistent.
+        is_prompt_chunk = not self._skipped_prompt_chunk
+        if is_prompt_chunk:
+            self._skipped_prompt_chunk = True
+
         # Decide what to forward for *visible output*.
         forward_list: List[torch.Tensor] = []
         for tok in flat:
             tok_id = int(tok.item())
 
             # Diagnostics: capture first EOS/PAD observed (regardless of drops)
-            if self.eos_token_detected is None and tok_id in self._stop_ids:
-                self.eos_token_detected = tok_id
-                self.eos_token_decoded = self.tokenizer.decode(
-                    [tok_id],
-                    skip_special_tokens=False,
-                    clean_up_tokenization_spaces=self.clean_up_tokenization_spaces,
-                )
-                self.logger.info(f"EOS/PAD token '{self.eos_token_decoded}', position (post-metrics): {len(self.generated_ids)}")
+            if (not is_prompt_chunk) and tok_id in self._stop_ids:
+                self.eos_token_seen = True
+                if self.eos_token_detected is None:
+                    self.eos_token_detected = tok_id
+                    self.eos_token_decoded = self.tokenizer.decode(
+                        [tok_id],
+                        skip_special_tokens=False,
+                        clean_up_tokenization_spaces=self.clean_up_tokenization_spaces,
+                    )
+                    self.logger.info(
+                        f"EOS/PAD token '{self.eos_token_decoded}', position (post-metrics): {len(self.generated_ids)}"
+                    )
 
             # Output filtering (applies only to what users *see*).
             if self._drop_eos_and_pad and tok_id in self._stop_ids:
@@ -129,17 +143,49 @@ class StoringTextIteratorStreamer(TextIteratorStreamer):
                 forward_list.append(tok.detach().clone())
 
         # Metrics: store everything *except* the initial prompt chunk if skip_prompt=True.
-        if self._skipped_prompt_chunk:
+        if not is_prompt_chunk:
             for tok in flat:
                 self.generated_ids.append(int(tok.item()))
-        else:
-            # This was the prompt chunk; mark as skipped for metrics and do NOT record it.
-            self._skipped_prompt_chunk = True
 
         # Hand off to parent with the (possibly) filtered tensor for output.
         if forward_list:
             out = torch.stack(forward_list) if len(forward_list) > 1 else forward_list[0].unsqueeze(0)
             super().put(out)
+        # Debug-only: detect EOS/PAD filtering in non-prompt chunks, warn only for early drops.
+        if self.logger.isEnabledFor(logging.DEBUG):
+            try:
+                flat_ids = [int(t.item()) for t in flat]
+                fwd_ids = [int(t.item()) for t in out.flatten()] if forward_list else []
+                if (not is_prompt_chunk) and flat_ids and (len(fwd_ids) < len(flat_ids)):
+                    early_drop_warn_threshold = 5
+                    gen_pos = len(self.generated_ids)
+                    if gen_pos < early_drop_warn_threshold:
+                        # Compute multiset difference to capture only dropped token IDs.
+                        fwd_counts: Dict[int, int] = {}
+                        for tid in fwd_ids:
+                            fwd_counts[tid] = fwd_counts.get(tid, 0) + 1
+                        dropped_ids: List[int] = []
+                        for tid in flat_ids:
+                            if fwd_counts.get(tid, 0):
+                                fwd_counts[tid] -= 1
+                            else:
+                                dropped_ids.append(tid)
+                        max_ids = 16
+                        flat_preview = flat_ids[:max_ids]
+                        fwd_preview = fwd_ids[:max_ids]
+                        self.logger.warning(
+                            "Streamer.put early drop detected: pos=%d dropped=%d observed=%d expected=%d dropped_ids=%s flat_ids=%s fwd_ids=%s",
+                            gen_pos,
+                            len(dropped_ids),
+                            len(fwd_ids),
+                            len(flat_ids),
+                            dropped_ids,
+                            flat_preview,
+                            fwd_preview,
+                        )
+            except Exception:
+                # Best-effort debug only; avoid affecting generation.
+                pass
 
 class CancellableStoppingCriteria(StoppingCriteria):
     """
@@ -344,7 +390,8 @@ def format_prompt_messages(
     # Note: tool_call normalization is handled closer to serialization.
     
     # Use tokenizer's chat template if available and valid
-    if tokenizer and hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
+    using_chat_template = bool(tokenizer and hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template)
+    if using_chat_template:
         if tools and not template_accepts_tools and not (parser_profile.tools_in_system_prompt if parser_profile else False):
             # Warn when the template will ignore the tools arg so callers know to inject manually.
             hint = f" {tool_handling_hint}" if tool_handling_hint else ""

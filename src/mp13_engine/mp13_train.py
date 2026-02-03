@@ -1344,6 +1344,26 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
                 "label_names": ["labels"], # Hardcode use_reentrant to False (modern implementation)
             }
 
+            # If the model is sharded/offloaded (or has meta params), prevent Trainer from calling .to(device).
+            # Accelerate hooks will handle placement in that case.
+            try:
+                from .mp13_utils import inspect_device_layout
+                layout_for_training = inspect_device_layout(model_for_training)
+            except Exception:
+                layout_for_training = {}
+            has_meta_params = False
+            try:
+                has_meta_params = any(getattr(p, "is_meta", False) for p in model_for_training.parameters())
+            except Exception:
+                has_meta_params = False
+
+            if layout_for_training.get("mode") in ("offloaded", "sharded") or has_meta_params:
+                training_args_dict["place_model_on_device"] = False
+                engine.state.logger.warning(
+                    "Detected sharded/offloaded/meta model for training. Disabling Trainer device placement "
+                    "(place_model_on_device=False) to avoid meta tensor .to() errors."
+                )
+
             # Drop unsupported TrainingArguments keys for older transformers installs.
             supported_training_args = set(inspect.signature(TrainingArguments.__init__).parameters)
             supported_training_args.discard("self")
@@ -1373,7 +1393,7 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
             # PEFT's `set_adapter` handles setting `requires_grad` correctly.
             engine.state.logger.info(f"Activating adapter '{adapter_to_train}' for training.")
             peft_owner.set_adapter(adapter_to_train)
-    
+
             # Set the model to training mode.
             model_for_training.train()
     

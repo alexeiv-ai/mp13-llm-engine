@@ -521,11 +521,34 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                     init_report["warnings"].append(warn_msg)
                     quantize_bits = "none"
 
+            # Resolve memory placement policy.
+            memory_mode = getattr(config, "memory_mode", "auto_cpu")
+            effective_device_map = device_map
+            low_cpu_mem_usage = True
+            if memory_mode == "auto_cpu":
+                effective_device_map = "auto"
+                low_cpu_mem_usage = False
+            elif memory_mode == "single_gpu":
+                effective_device_map = await asyncio.to_thread(get_best_device_map)
+                low_cpu_mem_usage = True
+            elif memory_mode == "respect_device_map":
+                effective_device_map = device_map
+                low_cpu_mem_usage = True
+
+            if memory_mode == "auto_cpu" and torch.cuda.is_available():
+                warn_msg = (
+                    "memory_mode=auto_cpu uses device_map='auto' with low_cpu_mem_usage=False. "
+                    "This avoids meta/offload but requires high CPU RAM during load. "
+                    "If you hit CPU OOM, use memory_mode='single_gpu' (if it fits) or reduce model size/quantize."
+                )
+                logger.warning(warn_msg)
+                init_report["warnings"].append(warn_msg)
+
             model_load_kwargs: Dict[str, Any] = {
                 "torch_dtype": actual_torch_dtype,
-                "device_map": device_map,
+                "device_map": effective_device_map,
                 "trust_remote_code": trust_remote_code,
-                "low_cpu_mem_usage": True,
+                "low_cpu_mem_usage": low_cpu_mem_usage,
                 # NOTE: some model classes (e.g. Mistral3ForConditionalGeneration in some builds)
                 # do NOT accept `use_cache` as an __init__ kwarg. We set it on config/model after load.
             }
@@ -538,9 +561,64 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 warn_msg = "flash_attention_2 detected on a model that can’t safely shard (e.g., Phi-3 / no SDPA). Forcing single-GPU to avoid blocksparse device mismatches."
                 logger.warning(warn_msg)
                 init_report["warnings"].append(warn_msg)
+                if memory_mode == "auto_cpu":
+                    warn_msg = (
+                        "memory_mode=auto_cpu requested, but model requires single-GPU placement for "
+                        "flash_attention_2. Overriding to single GPU."
+                    )
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
                 single_gpu_device_map = await asyncio.to_thread(get_best_device_map)
                 logger.info(f"Enforcing single GPU device map: {single_gpu_device_map}") # This is info, not a warning
+                try:
+                    if torch.cuda.is_available():
+                        param_count = None
+                        for key in ("num_parameters", "num_params", "model_params", "total_params"):
+                            val = getattr(model_config, key, None)
+                            if isinstance(val, (int, float)) and val > 0:
+                                param_count = int(val)
+                                break
+                        if param_count is None and hasattr(model_config, "to_dict"):
+                            cfg_dict = model_config.to_dict()
+                            for key in ("num_parameters", "num_params", "model_params", "total_params"):
+                                val = cfg_dict.get(key)
+                                if isinstance(val, (int, float)) and val > 0:
+                                    param_count = int(val)
+                                    break
+
+                        device_ids: List[int] = []
+                        if isinstance(single_gpu_device_map, dict):
+                            for v in single_gpu_device_map.values():
+                                if isinstance(v, int):
+                                    device_ids.append(v)
+                                elif isinstance(v, str) and v.startswith("cuda:"):
+                                    device_ids.append(int(v.split(":")[1]))
+                        if device_ids:
+                            dev_id = device_ids[0]
+                            total_mem_gb = torch.cuda.get_device_properties(dev_id).total_memory / (1024**3)
+                            bytes_per_param = 4
+                            if quantize_bits in ("4", "awq", "hqq"):
+                                bytes_per_param = 0.5
+                            elif quantize_bits in ("8", "bnb_8bit"):
+                                bytes_per_param = 1
+                            elif actual_torch_dtype in (torch.float16, torch.bfloat16):
+                                bytes_per_param = 2
+                            est_weight_gb = None
+                            if param_count is not None:
+                                est_weight_gb = (param_count * bytes_per_param) / (1024**3)
+                            if est_weight_gb is not None and est_weight_gb > total_mem_gb * 0.9:
+                                warn_msg = (
+                                    "Single-GPU enforcement is active, and the estimated weight size "
+                                    f"({est_weight_gb:.2f}GB) is near or above GPU memory "
+                                    f"({total_mem_gb:.2f}GB). This may OOM. Consider smaller context/batch, "
+                                    "quantization, or disable flash_attention_2 to allow sharding/offload."
+                                )
+                                logger.warning(warn_msg)
+                                init_report["warnings"].append(warn_msg)
+                except Exception:
+                    pass
                 model_load_kwargs["device_map"] = single_gpu_device_map
+            device_map = model_load_kwargs.get("device_map", device_map)
 
             # --- Create Quantization Config using Helper ---
             bf16_supported_for_quant = await _is_bf16_supported_async() if cuda_is_available else False
@@ -989,6 +1067,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 "tools_parser_profile_key": tool_parser_profile.key,
                 "no_tools_parse": no_tools_parse,
                 "device_map": device_map, "trust_remote_code": trust_remote_code,
+                "memory_mode": memory_mode,
                 "base_model_torch_dtype": base_model_torch_dtype, # Requested
                 # Store new quantization parameters
                 "quantize_bits": quantize_bits,
@@ -1049,6 +1128,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 "engine_default_context_size": tokenizer.model_max_length,
                 "engine_default_max_new_tokens": default_max_new_tokens,
                 "device_map": device_map,
+                "memory_mode": memory_mode,
                 "model_layout": str(layout),
                 "concurrent_generate": concurrent_generate,
                 "no_tools_parse": no_tools_parse,
