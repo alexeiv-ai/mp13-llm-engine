@@ -1474,6 +1474,9 @@ class Toolbox:
                 for block in (response_item.tool_blocks or []):
                     if not block.calls and not block.is_incomplete:
                         block.error_block = "Tool calls list is empty."
+                        if ToolCall.KeepRaw not in (block.action_block or []):
+                            block.action_block = list(block.action_block or [])
+                            block.action_block.append(ToolCall.KeepRaw)
                         continue
                     if ToolCall.Ignore in block.action_block:
                         continue
@@ -1502,6 +1505,9 @@ class Toolbox:
                 for block in (response_item.tool_blocks or []):
                     if not block.calls and not block.is_incomplete:
                         block.error_block = "Tool calls list is empty."
+                        if ToolCall.KeepRaw not in (block.action_block or []):
+                            block.action_block = list(block.action_block or [])
+                            block.action_block.append(ToolCall.KeepRaw)
                         continue
                     if ToolCall.Ignore in block.action_block:
                         continue

@@ -1369,11 +1369,18 @@ def _tool_blocks_have_results(blocks: List[ToolCallBlock]) -> bool:
     if not blocks:
         return False
     for block in blocks:
+        block_actions = list(getattr(block, "action_block", []) or [])
+        if ToolCall.Abort in block_actions or ToolCall.Strip in block_actions:
+            continue
         if getattr(block, "parse_errors", None):
             return True
         if getattr(block, "error_block", None):
             return True
         for call in getattr(block, "calls", []) or []:
+            call_actions = list(getattr(call, "action", []) or [])
+            effective_actions = block_actions or call_actions
+            if ToolCall.Abort in effective_actions or ToolCall.Strip in effective_actions:
+                continue
             if getattr(call, "result", None) is not None or getattr(call, "error", None) or getattr(call, "parse_errors", None):
                 return True
     return False
@@ -3047,6 +3054,15 @@ def _print_turn_content( # noqa
         for item in payload:
             if isinstance(item, ToolCallBlock):
                 calls.extend([call for call in item.calls if isinstance(call, ToolCall)])
+                if not item.calls and getattr(item, "error_block", None):
+                    calls.append(
+                        ToolCall(
+                            name="",
+                            arguments={},
+                            result=None,
+                            error=item.error_block,
+                        )
+                    )
             elif isinstance(item, ToolCall):
                 calls.append(item)
             elif isinstance(item, dict) and item.get("name"):
@@ -5969,34 +5985,12 @@ async def _apply_batch_results_to_children(
                             "source_turn": source_turn,
                         })
             else:
-                tool_results_cursor = child_cursor.add_tool_results(tool_blocks)
-                tool_results_cursor.set_auto(True)
-                _sync_fork_cursor(fork_obj, cursor_idx, tool_results_cursor)
-                if _replay_debug_enabled(tool_results_cursor):
+                if _replay_debug_enabled(child_cursor):
                     try:
-                        head = tool_results_cursor.current_turn if tool_results_cursor else None
-                        head_id = head.gen_id_or_parent if head else "None"
-                        print(
-                            f"{Colors.SYSTEM}Batch: tool results added (no-anchor) child={tool_results_cursor.display_id()} "
-                            f"head={head_id} idx={cursor_idx} orig={original_idx}{Colors.RESET}"
-                        )
+                        label = child_cursor.display_id() if child_cursor else "None"
+                        print(f"{Colors.SYSTEM}Batch: tool results suppressed (no effective results) child={label}{Colors.RESET}")
                     except Exception:
                         pass
-                    _record_source_mapping(source_turn, tool_results_cursor)
-                if next_active_forks is not None and not was_truncated and not was_canceled and not is_error:
-                    pending_tool_followup = True
-                    if _replay_debug_enabled(child_cursor):
-                        try:
-                            label = tool_results_cursor.display_id() if tool_results_cursor else "None"
-                            print(f"{Colors.SYSTEM}DEBUG: queued tool follow-up on {label}.{Colors.RESET}")
-                        except Exception:
-                            pass
-                    next_active_forks.append({
-                        "fork": fork_obj,
-                        "cursor_idx": cursor_idx if cursor_idx is not None else 0,
-                        "original_index": original_idx,
-                        "source_turn": source_turn,
-                    })
 
         metrics_payload = ChatCursor.update_response_metrics(response=response_obj) if response_obj else {}
         if metrics_payload:

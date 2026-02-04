@@ -1517,7 +1517,7 @@ class UnifiedToolIO:
             # Controlled by profile flags and effective tool call actions.
             calls_to_serialize = []
             for c in calls:
-                eff_actions = _effective_actions(c)
+                eff_actions = [a for a in _effective_actions(c) if a != ToolCall.KeepRaw]
                 primary_action = _primary_action(eff_actions)
                 if primary_action in {ToolCall.Ignore, ToolCall.Strip}:
                     continue
@@ -1696,6 +1696,15 @@ class UnifiedToolIO:
         for block in sorted(valid_tool_blocks, key=lambda b:  b.block_start_pos if b.block_start_pos is not None else -1, reverse=True):
             block_actions = list(block.action_block or [])
             has_strip = ToolCall.Strip in block_actions
+            start_marker = self.profile.block_start[0] if self.profile.block_start else ""
+            end_marker = self.profile.block_end[0] if self.profile.block_end else ""
+
+            def _ensure_wrapped(payload: str) -> str:
+                if start_marker and not payload.startswith(start_marker):
+                    payload = f"{start_marker}{payload}"
+                if end_marker and not payload.endswith(end_marker):
+                    payload = f"{payload}{end_marker}"
+                return payload
 
             def _first_error_text() -> Optional[str]:
                 if block.error_block:
@@ -1715,6 +1724,19 @@ class UnifiedToolIO:
                     reconstructed_content = reconstructed_content[:insert_at] + err_text + reconstructed_content[insert_at:]
                 continue
 
+            # Empty block with KeepRaw should preserve the raw tool block in assistant content.
+            if not block.calls:
+                if block.raw_block and ToolCall.KeepRaw in block_actions:
+                    insert_at = block.block_start_pos if (block.block_start_pos is not None and block.block_start_pos >= 0) else len(reconstructed_content)
+                    normalized_block_str = _ensure_wrapped(block.normalized_block or block.raw_block)
+                    reconstructed_content = reconstructed_content[:insert_at] + normalized_block_str + reconstructed_content[insert_at:]
+                else:
+                    err_text = _first_error_text()
+                    if err_text:
+                        insert_at = block.block_start_pos if (block.block_start_pos is not None and block.block_start_pos >= 0) else len(reconstructed_content)
+                        reconstructed_content = reconstructed_content[:insert_at] + err_text + reconstructed_content[insert_at:]
+                continue
+
             # Check if every call is effectively stripped.
             all_calls_stripped = True
             for c in block.calls:
@@ -1732,16 +1754,6 @@ class UnifiedToolIO:
             if block.block_start_pos == -1 and ToolCall.KeepRaw not in block_actions:
                 # If position is unknown and we are not keeping it raw, we can't reconstruct.
                 continue
-
-            start_marker = self.profile.block_start[0] if self.profile.block_start else ""
-            end_marker = self.profile.block_end[0] if self.profile.block_end else ""
-
-            def _ensure_wrapped(payload: str) -> str:
-                if start_marker and not payload.startswith(start_marker):
-                    payload = f"{start_marker}{payload}"
-                if end_marker and not payload.endswith(end_marker):
-                    payload = f"{payload}{end_marker}"
-                return payload
 
             # Serialize the block back to its "model-generated" format.
             if block.calls:
@@ -1912,6 +1924,8 @@ class ToolsParserHelper:
                 block_actions = list(block.action_block or [])
                 # Include block-level error as a synthetic call.
                 if block.error_block:
+                    # For block-level errors, prefer returning the error text over raw payloads.
+                    error_actions = [a for a in block_actions if a and a != ToolCall.KeepRaw]
                     effective_calls.append(
                         ToolCall(
                             name="",
@@ -1922,7 +1936,7 @@ class ToolsParserHelper:
                             raw=block.raw_block,
                             model_format=block.model_format,
                             parse_errors=list(block.parse_errors or []),
-                            action=block_actions or [ToolCall.KeepRaw],
+                            action=error_actions,
                         )
                     )
                 for call in block.calls:

@@ -671,7 +671,7 @@ class RegisteredTool:
 class ToolCall:
     """Represents a single, parsed tool call with its name and arguments."""
     # Action constants, more than one can be specified. If none is set it pick result if not empty or error field. 
-    Ignore: ClassVar[str] = "ignore"    # do include original llm call but do not execute or ignore it's result
+    Ignore: ClassVar[str] = "ignore"    # ignore llm call during execution but do not automatically exclude it's possibly assigned result
     Strip: ClassVar[str] = "strip"      # strip original llm call and ignore result. To avoid empty assistant reponse in prompt,
                                         # the error field if exists will replace tool call in original assistant response.
     KeepRaw: ClassVar[str] = "keep_raw" # unless 'stripped' override tool call normalization in the prompt.
