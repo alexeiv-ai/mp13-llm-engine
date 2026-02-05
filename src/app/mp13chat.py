@@ -94,7 +94,7 @@ from mp13_engine.mp13_config_paths import (
 )
 from .engine_session import EngineSession, Turn, Command, ChatSession, InferenceParams, Colors
 from .context_cursor import ChatCursor, ChatContext, ChatContextScope, StreamDisplayContext, StreamDisplayPlan, ChatForks
-from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsView
+from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsView, ToolBoxRef
 
 # --- Constants and globals ---
 APP_NAME = "mp13chat"
@@ -460,7 +460,7 @@ def _ensure_chat_session_toolbox(chat_session: ChatSession) -> Optional[Toolbox]
         chat_session.toolbox = active_toolbox
     return chat_session.toolbox
 
-def _active_toolbox_ref() -> Optional["ToolBoxRef"]:
+def _active_toolbox_ref() -> Optional[ToolBoxRef]:
     context = _active_chat_context()
     if context and getattr(context, "toolbox_ref", None):
         return context.toolbox_ref
@@ -9190,7 +9190,7 @@ async def handle_command(
         return suppress, False, new_cursor
     elif cmd_prefix.startswith("rl"):
         cursor = _require_current_cursor()
-        cursor.log_command(command_full_text)
+        cursor.log_command(user_input)
         session = cursor.session
         conv_idx: Optional[int] = None
         if sub_args and sub_args.strip():
@@ -12865,6 +12865,7 @@ async def main_logic():
         custom_config_arg,
         DEFAULT_CONFIG_DIR,
     )
+    EFFECTIVE_CONFIG_FILE_PATH = custom_config_path or DEFAULT_CONFIG_FILE
 
     default_config_source_path = DEFAULT_CONFIG_FILE
     default_config = load_json_config(default_config_source_path)
@@ -12876,7 +12877,10 @@ async def main_logic():
         )
 
     if custom_config_path and not custom_config_path.exists():
-        print(f"{Colors.TOOL_WARNING}Custom config not found at {custom_config_path}; continuing with defaults.{Colors.RESET}")
+        print(
+            f"{Colors.TOOL_WARNING}Custom config not found at {custom_config_path}; continuing with defaults."
+            f" (Hint: use .\\name for current folder or name for default config dir.){Colors.RESET}"
+        )
 
     current_config, config_resolver, ok = load_effective_config(
         default_config_path=default_config_source_path,
@@ -13040,7 +13044,8 @@ async def main():
         _attempt_reset_terminal_background()
         print("MP13 Playground Chat closed.")
 
-if __name__ == "__main__":
+
+def cli() -> int:
     try:
         DUMP_INIT_ENABLED = False # Default value before parsing args
         asyncio.run(main())
@@ -13050,3 +13055,8 @@ if __name__ == "__main__":
         print("\nApplication interrupted during startup or shutdown. Exiting.")
     except Exception as e:
         print(f"Critical error: {e}"); traceback.print_exc()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())

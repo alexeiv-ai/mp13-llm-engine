@@ -1116,6 +1116,9 @@ async def main_logic():
     if custom_config_path and not custom_config_path.exists():
         print(f"[DEMO] Warning: Custom config not found at {custom_config_path}; continuing with defaults.")
 
+    effective_config_path = custom_config_path or default_config_source_path
+    print(f"[DEMO] Using configuration from: {effective_config_path}")
+
     resolved_config, resolver, ok = load_effective_config(
         default_config_path=default_config_source_path,
         custom_config_path=custom_config_path,

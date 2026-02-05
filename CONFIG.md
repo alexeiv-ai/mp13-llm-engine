@@ -27,13 +27,33 @@ Inspect resolved config:
 python mp13config.py --print
 ```
 
+Examples:
+```bash
+# Create a custom config (empty unless --clone is provided)
+python mp13config.py --init --config my_setup
+
+# Clone defaults into a new config
+python mp13config.py --init --config my_setup --clone default
+
+# Merge missing values from another config
+python mp13config.py --merge base_config --config my_setup
+
+# Show overrides relative to default
+python mp13config.py --diff default --config my_setup
+
+# Update specific fields
+python mp13config.py --reconfigure engine_params.base_model_path=granite-3.3-2b-instruct \
+  inference_params.stream=true --config my_setup
+```
+
 Other helpers:
 - `--print-raw`: print config file as-is
 - `--print-set`: print only keys set in the config file
 - `--force`: overwrite target config file when used with `--init` or `--interactive`
-- `--reconfigure`: interactive edit of an existing config
+- `--reconfigure key=value ...`: update config values by key path (dot notation)
 - `--clone`: start from another config path/name
-- `--merge-default`: merge current defaults into the target config
+- `--merge <base_config>`: merge missing values from a base config into the target
+- `--diff <base_config>`: show config differences (use `default` to show overrides)
 
 ---
 
@@ -47,6 +67,7 @@ Other helpers:
 
 ## Path resolution rules
 
+- Config names (used with `--config`, `--clone`, `--merge`, `--diff`) default to `.json` and resolve relative to the current working directory.
 - Absolute paths stay absolute.
 - Paths starting with `./` or `../` resolve relative to the current working directory.
 - Other relative paths resolve relative to the category root.
@@ -142,139 +163,27 @@ The core engine is intended to be reused between testing and deployment, so you 
 
 ---
 
-## Reference (original rules)
+## Appendix: Generating A Fresh Reference
 
-Below is the original config rules reference as provided in this repo, preserved for completeness.
+The config surface evolves, so instead of a static reference block, generate a fresh copy from the CLI:
 
-MP13 Config Rules
+```bash
+# Default config template (all supported keys)
+python mp13config.py --init
 
-Default config
-- Default config path: `~/.mp13-llm/mp13_config.json`
-- Custom config: pass `--config` in chat/demo to merge on top of default
+# Resolved view of the default config (paths expanded)
+python mp13config.py --print
 
-Config helper
-- `python mp13config.py --interactive` runs a guided setup with explanations.
-- `python mp13config.py --init` writes a template config.
-- `python mp13config.py --print` prints the resolved config.
-- `python mp13config.py --print-raw` prints the config file as-is.
-- `python mp13config.py --print-set` prints only keys set in the config file.
-
-Alternate:
-- `python -m src.app.config --interactive`
-- `--force` overwrites the target config when used with `--init` or `--interactive`.
-- `--reconfigure` runs interactive edit against an existing config (implies `--interactive`).
-- Use `--config` to set the target config path/name.
-- `--clone` starts from another config path/name (use `default` for the default config).
-- `--merge-default` merges current defaults into the target config.
-
-Merge rules
-- Custom config overrides default config.
-- Missing keys fall back to default config.
-- `category_dirs` in a custom config override only the keys they provide.
-
-Path resolution rules
-- Absolute paths stay absolute.
-- Paths starting with `./` or `../` resolve relative to the current working directory.
-- Other relative paths resolve relative to the category root.
-- `~` expands to the user home directory.
-- Anchors:
-  - `@home` -> user home directory
-  - `@temp` -> OS temp directory
-  - `@project` -> git project root (or cwd if no git root)
-  - `@config` -> directory of the config file
-  - `@models`, `@adapters`, `@data`, `@tools`, `@sessions`, `@logs` -> category roots
-
-Category roots
-Set via `category_dirs` in config:
-```
-{
-  "category_dirs": {
-    "models_root_dir": "@project/..",
-    "adapters_root_dir": "@project/adapters",
-    "data_root_dir": "@project/data",
-    "sessions_root_dir": "@home/.mp13-llm/sessions",
-    "tools_root_dir": "@project/configs",
-    "logs_root_dir": "@temp"
-  }
-}
+# Resolved view of a custom config (merged with defaults)
+python mp13config.py --print --config my_setup
 ```
 
-Model paths
-- `base_model_path` is resolved as a local path (category-relative or anchored).
-
-Tools config path
-- `tools_config_path` lives under `engine_params` and is inherited by `inference_params`.
-- If you need a conversation-specific override, set it explicitly inside `inference_params`.
-
-Inference params
-- `inference_params` is the per-conversation default parameter block for chat.
+Use `--print-set` on your config to see only explicitly set keys.
+- Examples:
 ```
-{
-  "inference_params": {
-    "stream": true,
-    "cache": null,
-    "return_prompt": null,
-    "generation_config_template": {},
-    "max_new_tokens": null,
-    "no_tools_parse": false,
-    "auto_retry_truncated": false,
-    "suppress_full_response": false,
-    "results_as_user_role": false,
-    "pack_results_as_one_role": false,
-    "advertised_tools": [],
-    "silent_tools": [],
-    "disabled_tools": [],
-    "auto_tool_retry_limit": 5,
-    "auto_continue_retry_limit": 10,
-    "global_tools_mode": "advertised"
-  }
-}
-```
-
-Engine params
-- Engine-level settings live under `engine_params` (base model path, quantization, tools config, log levels, engine defaults).
-```
-{
-  "engine_params": {
-    "base_model_path": "",
-    "base_model_dtype": "auto",
-    "quantize_bits": "none",
-    "hqq_bits": 4,
-    "hqq_group_size": 64,
-    "hqq_quant_zero": true,
-    "hqq_quant_scale": false,
-    "hqq_axis": 1,
-    "default_system_message": "",
-    "default_context_size": null,
-    "default_max_new_tokens": 8192,
-    "attn_implementation": "auto",
-    "use_cache": true,
-    "device_map": "auto",
-    "trust_remote_code": true,
-    "use_torch_compile": true,
-    "static_kv_cache": false,
-    "concurrent_generate": 4,
-    "tools_config_path": "mp13tools.json",
-    "console_log_level": "warning",
-    "file_log_level": "debug"
-  }
-}
-```
-
-Training params
-- `training_params` provides default values for the training workflow when CLI flags are omitted.
-- Supported keys: `training_steps`, `trainer_precision`, `lora_r`, `lora_alpha`, `lora_dropout`, `lora_target_modules`, `train_override_ctx`.
-
-Examples
-```
-{
-  "engine_params": {
-    "base_model_path": "granite-3.3-2b-instruct",
-    "tools_config_path": "mp13tools.json"
-  },
-  "category_dirs": {
-    "models_root_dir": "D:/models",
-    "tools_root_dir": "@project/configs"
-  }
-}
+python mp13config.py --init --config my_setup
+python mp13config.py --init --config my_setup --clone default
+python mp13config.py --merge base_config --config my_setup
+python mp13config.py --diff default --config my_setup
+python mp13config.py --reconfigure engine_params.base_model_path=granite-3.3-2b-instruct inference_params.stream=true --config my_setup
 ```

@@ -10,7 +10,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from mp13_engine.mp13_config import EngineMode
+# NOTE: Avoid importing mp13_engine.mp13_config here to keep CLI lightweight.
+ENGINE_MODE_INFERENCE = "inference"
 
 
 APP_DIR_NAME = ".mp13-llm"
@@ -57,6 +58,7 @@ DEFAULT_TRAINING_PARAMS = {
 DEFAULT_CHAT_CONFIG = {
     "category_dirs": DEFAULT_CATEGORY_DIRS,
     "engine_params": {
+        "instance_id": None,
         "base_model_path": "",
         "base_model_dtype": "auto",
         "quantize_bits": "none",
@@ -65,6 +67,10 @@ DEFAULT_CHAT_CONFIG = {
         "hqq_quant_zero": True,
         "hqq_quant_scale": False,
         "hqq_axis": 1,
+        "tools_parser_profile_key": None,
+        "custom_chat_template": None,
+        "initial_engine_mode": "inference",
+        "memory_mode": "respect_device_map",
         "default_system_message": "",
         "default_context_size": None,
         "default_max_new_tokens": 8192,
@@ -76,9 +82,13 @@ DEFAULT_CHAT_CONFIG = {
         "static_kv_cache": False,
         "use_separate_stream": True,
         "concurrent_generate": 4,
+        "disable_custom_pad_ids": False,
+        "no_tools_parse": False,
         "tools_config_path": "mp13tools.json",
         "console_log_level": "warning",
         "file_log_level": "debug",
+        "log_with_instance_id": False,
+        "log_instance_id_width": 8,
     },
     "inference_params": DEFAULT_INFERENCE_PARAMS,
     "training_params": DEFAULT_TRAINING_PARAMS,
@@ -107,6 +117,16 @@ ENGINE_PATH_KEYS = {
     "models_root_dir": ("models", False),
     "logs_root_dir": ("logs", False),
 }
+
+LONG_TEXT_CONFIG_KEYS = (
+    ("engine_params", "custom_chat_template"),
+    ("engine_params", "default_system_message"),
+    ("engine_params", "tools_parser_profile_key"),
+    ("inference_params", "generation_config_template"),
+    ("inference_params", "advertised_tools"),
+    ("inference_params", "silent_tools"),
+    ("inference_params", "disabled_tools"),
+)
 
 
 def get_default_config_dir() -> Path:
@@ -156,8 +176,80 @@ def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str
     return merged
 
 
+def strip_defaults(config: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(config, dict) or not isinstance(defaults, dict):
+        return config
+    result: Dict[str, Any] = {}
+    for key, value in config.items():
+        if key not in defaults:
+            result[key] = value
+            continue
+        default_value = defaults.get(key)
+        if isinstance(value, dict) and isinstance(default_value, dict):
+            nested = strip_defaults(value, default_value)
+            if nested:
+                result[key] = nested
+        else:
+            if value != default_value:
+                result[key] = value
+    return result
+
+
+def diff_configs(base: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+    def _diff(a: Any, b: Any) -> Any:
+        if isinstance(a, dict) and isinstance(b, dict):
+            result: Dict[str, Any] = {}
+            for key in sorted(set(a.keys()) | set(b.keys())):
+                if key not in a:
+                    result[key] = {"base": None, "target": b.get(key)}
+                    continue
+                if key not in b:
+                    result[key] = {"base": a.get(key), "target": None}
+                    continue
+                nested = _diff(a.get(key), b.get(key))
+                if nested not in ({}, None):
+                    result[key] = nested
+            return result
+        if a != b:
+            return {"base": a, "target": b}
+        return {}
+
+    diff = _diff(base, target)
+    return diff if isinstance(diff, dict) else {}
+
+
 def _has_explicit_rel_prefix(value: str) -> bool:
     return value.startswith(("./", ".\\", "../", "..\\"))
+
+
+def normalize_config_name(value: str) -> str:
+    if not value:
+        return value
+    candidate = Path(value)
+    if candidate.suffix:
+        return value
+    return f"{value}.json"
+
+
+def resolve_config_path(
+    config_name: Optional[str],
+    *,
+    cwd: Optional[Path] = None,
+    default_config_path: Optional[Path] = None,
+) -> Path:
+    cwd = (cwd or Path.cwd()).resolve()
+    default_config_path = default_config_path or get_default_config_path()
+    if not config_name:
+        return default_config_path
+    if config_name.lower() == "default":
+        return default_config_path
+    name = normalize_config_name(config_name)
+    candidate = Path(name)
+    if candidate.is_absolute():
+        return candidate.expanduser().resolve()
+    if _has_explicit_rel_prefix(name):
+        return (cwd / candidate).expanduser().resolve()
+    return (default_config_path.parent / candidate).expanduser().resolve()
 
 
 def _split_anchor(value: str) -> Tuple[str, str]:
@@ -317,6 +409,55 @@ def resolve_engine_inputs(config: Dict[str, Any], resolver: PathResolver) -> Dic
     return resolved
 
 
+def get_nested_value(config: Dict[str, Any], path: Tuple[str, ...]) -> Any:
+    current: Any = config
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def set_nested_value(config: Dict[str, Any], path: Tuple[str, ...], value: Any) -> None:
+    current = config
+    for key in path[:-1]:
+        if key not in current or not isinstance(current[key], dict):
+            current[key] = {}
+        current = current[key]
+    current[path[-1]] = value
+
+
+def delete_nested_value(config: Dict[str, Any], path: Tuple[str, ...]) -> None:
+    current = config
+    for key in path[:-1]:
+        if key not in current or not isinstance(current[key], dict):
+            return
+        current = current[key]
+    current.pop(path[-1], None)
+
+
+def resolve_file_references(config: Dict[str, Any], resolver: PathResolver) -> Dict[str, Any]:
+    resolved = dict(config)
+    for path in LONG_TEXT_CONFIG_KEYS:
+        raw_value = get_nested_value(resolved, path)
+        if not isinstance(raw_value, str):
+            continue
+        if not raw_value.startswith("@"):
+            continue
+        resolved_path = resolver.resolve(raw_value, category=None)
+        if not isinstance(resolved_path, str):
+            continue
+        candidate = Path(resolved_path)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            content = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        set_nested_value(resolved, path, content)
+    return resolved
+
+
 def extract_engine_params(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Return a normalized engine_params dict that respects top-level overrides.
@@ -356,7 +497,7 @@ def build_engine_init_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "hqq_quant_zero": params.get("hqq_quant_zero", True),
         "hqq_quant_scale": params.get("hqq_quant_scale", False),
         "hqq_axis": params.get("hqq_axis", 1),
-        "initial_engine_mode": params.get("initial_engine_mode", EngineMode.INFERENCE.value),
+        "initial_engine_mode": params.get("initial_engine_mode", ENGINE_MODE_INFERENCE),
         "default_context_size": params.get("default_context_size"),
         "default_max_new_tokens": params.get("default_max_new_tokens", 8192),
         "use_cache": params.get("use_cache", True),
@@ -414,10 +555,13 @@ def resolve_custom_config_path(
 ) -> Optional[Path]:
     if not config_path:
         return None
-    candidate = Path(config_path)
-    if candidate.is_absolute() or str(candidate).startswith(("./", ".\\", "../", "..\\")):
+    if _has_explicit_rel_prefix(config_path):
+        candidate = Path(normalize_config_name(config_path))
         return candidate.expanduser().resolve()
-    base_dir = default_dir or get_default_config_dir()
+    candidate = Path(normalize_config_name(config_path))
+    if candidate.is_absolute():
+        return candidate.expanduser().resolve()
+    base_dir = default_dir or Path.cwd()
     return (base_dir / candidate).expanduser().resolve()
 
 
@@ -440,5 +584,6 @@ def load_effective_config(
         cwd=cwd or Path.cwd(),
         config_path=custom_config_path or default_path,
     )
+    resolved = resolve_file_references(resolved, resolver)
     resolved = resolve_engine_inputs(resolved, resolver)
     return resolved, resolver, True

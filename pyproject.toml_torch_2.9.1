@@ -5,8 +5,13 @@ description = "HF-based Local LLM engine and tools"
 authors = ["alexeiv-ai <88820640+alexeiv-ai@users.noreply.github.com>"]
 readme = "README.md"
 packages = [
-    { include = "src" }
+    { include = "app", from = "src" },
+    { include = "mp13_engine", from = "src" }
 ]
+
+[tool.poetry.scripts]
+mp13chat = "app.mp13chat:cli"
+mp13config = "app.config:cli"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
