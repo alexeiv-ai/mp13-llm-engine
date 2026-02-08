@@ -5941,6 +5941,7 @@ async def _apply_batch_results_to_children(
                         anchor=anchor,
                         anchor_turn=anchor_turn_for_retry,
                         keep_in_main=True,
+                        convert_existing=True,
                     )
                     if fork_obj and cursor_idx is not None:
                         fork_obj.set_main_placeholder(cursor_idx, main_cursor_for_try)
@@ -9907,7 +9908,7 @@ async def _handle_auto_continuation(cursor: ChatCursor) -> Tuple[ChatCursor, boo
                     origin_cursor=cursor,
                 )
                 cont_anchor.retries_remaining -= 1
-                _, tryout_cursor = cursor.add_try_out(anchor=cont_anchor)
+                _, tryout_cursor = cursor.add_try_out(anchor=cont_anchor, convert_existing=True)
                 cursor = tryout_cursor
                 new_cursor = cursor.add_continuation_turn()
                 cursor.set_auto(True)
@@ -10363,6 +10364,7 @@ async def _execute_inference_round(
                     anchor=tool_anchor,
                     anchor_turn=anchor_turn_for_retry,
                     keep_in_main=True,
+                    convert_existing=True,
                 )
                 try:
                     tryout_cursor.set_main_thread(True)
@@ -11272,10 +11274,7 @@ def _make_replay_mapping_entry(source_turn: Turn, dest_cursor: ChatCursor) -> Di
     anchor_turn = getattr(dest_cursor, "current_turn", None)
     if anchor_turn:
         try:
-            source_is_placeholder = bool(
-                getattr(source_turn, "IsPlaceholderLike", False)
-                or (getattr(source_turn, "data", None) or {}).get("$try_out")
-            )
+            source_is_placeholder = bool(getattr(source_turn, "IsPlaceholderLike", False))
         except Exception:
             source_is_placeholder = False
         if getattr(anchor_turn, "IsPlaceholderLike", False) and not source_is_placeholder:
@@ -11293,12 +11292,51 @@ async def _replay_all_down(
 ) -> ChatCursor:
     driver_context = ChatContext(driver_cursor.session, chat_session=driver_cursor.chat_session, toolbox=toolbox)
     scope_turns = driver_context.get_scope_turns(start_node=driver_cursor.current_turn, suppress_auto=True)
+    session_for_replay = driver_cursor.session
+    cmd_parent_map: Dict[str, str] = {}
+    cmd_sibling_map: Dict[str, int] = {}
+    for cmd in session_for_replay.commands_history:
+        if getattr(cmd, "cmd_type", None) != Command.TURN:
+            continue
+        data = getattr(cmd, "data", None) or {}
+        turn_id = data.get("turn_gen_id")
+        parent_id = data.get("parent_gen_id")
+        if turn_id and parent_id:
+            cmd_parent_map[str(turn_id)] = str(parent_id)
+        if turn_id is not None and isinstance(data.get("sibling_index"), int):
+            cmd_sibling_map[str(turn_id)] = int(data.get("sibling_index"))
     if replay_debug and scope_turns:
         try:
             ids = [t.gen_id_or_parent for t in scope_turns]
             print(f"{Colors.SYSTEM}DEBUG: get_scope_turns returned {len(ids)} turn(s): {ids}{Colors.RESET}")
         except Exception as exc:
             print(f"{Colors.TOOL_WARNING}Replay: failed to render scope turn ids: {exc}{Colors.RESET}")
+    if replay_debug and scope_turns:
+        try:
+            root_turn = scope_turns[0]
+            parent_debug: Dict[Turn, List[Turn]] = {}
+            for t in scope_turns:
+                parent = getattr(t, "parent", None)
+                if parent:
+                    parent_debug.setdefault(parent, []).append(t)
+            for parent, children in parent_debug.items():
+                tree_children = [c for c in getattr(parent, "turns", []) or [] if c in children]
+                cmd_children = sorted(
+                    children,
+                    key=lambda c: (
+                        cmd_parent_map.get(str(getattr(c, "gen_id", ""))) is None,
+                        cmd_sibling_map.get(str(getattr(c, "gen_id", "")), 10**9),
+                        c.sort_id,
+                    ),
+                )
+                tree_ids = [c.gen_id_or_parent for c in tree_children]
+                cmd_ids = [c.gen_id_or_parent for c in cmd_children]
+                print(
+                    f"{Colors.SYSTEM}DEBUG: replay scope parent={getattr(parent,'gen_id_or_parent','N/A')} "
+                    f"tree_children={tree_ids} cmd_children={cmd_ids}{Colors.RESET}"
+                )
+        except Exception as exc:
+            print(f"{Colors.TOOL_WARNING}Replay: failed to compute sibling debug info: {exc}{Colors.RESET}")
 
     if not scope_turns:
         if replay_mode:
@@ -11326,7 +11364,10 @@ async def _replay_all_down(
             ) from exc
         return _ensure_registered_cursor(cloned) or cloned
 
-    def _spawn_try_out_cursor(src_turn: Turn, dest_parent: ChatCursor) -> Tuple[Optional[ChatCursor], Optional[ChatCursor]]:
+    def _spawn_try_out_cursor(
+        src_turn: Turn,
+        dest_parent: ChatCursor,
+    ) -> Tuple[Optional[ChatCursor], Optional[ChatCursor]]:
         anchor = None
         try_meta = (getattr(src_turn, "data", {}) or {}).get("$try_out", {}) if getattr(src_turn, "data", None) else {}
         anchor_name = try_meta.get("anchor")
@@ -11345,8 +11386,15 @@ async def _replay_all_down(
                 anchor = None  # TODO: anchor recreation failed; try-out will be unanchored.
                 if replay_mode:
                     print(f"{Colors.TOOL_WARNING}Replay: failed to rebuild try-out anchor {anchor_name}: {exc}{Colors.RESET}")
+        keep_in_main = bool(getattr(src_turn, "main_thread", False))
+
         try:
-            main_cursor, try_cursor = dest_parent.add_try_out(anchor=anchor, anchor_turn=dest_parent.current_turn)
+            main_cursor, try_cursor = dest_parent.add_try_out(
+                anchor=anchor,
+                anchor_turn=dest_parent.current_turn,
+                keep_in_main=keep_in_main,
+                convert_existing=False,
+            )
             return main_cursor, try_cursor
         except Exception as exc:
             if replay_mode:
@@ -11421,6 +11469,7 @@ async def _replay_all_down(
     root_branch = scope_turns[0].branch_root()
     branch_map[root_branch] = dest_cursor
 
+    replay_manifest: List[Dict[str, Any]] = []
     for source_turn in scope_turns:
         if REPLAY_CANCELLATION_EVENT.is_set():
             if replay_mode:
@@ -11428,10 +11477,46 @@ async def _replay_all_down(
             break
         if getattr(source_turn, "is_auto", False):
             continue
-        if source_turn in handled_turns:
+        try_meta = (getattr(source_turn, "data", None) or {}).get("$try_out")
+        auto_tryout_kind = None
+        if isinstance(try_meta, dict):
+            auto_tryout_kind = try_meta.get("kind")
+        is_auto_tryout = auto_tryout_kind in {
+            "auto_tool",
+            TOOL_AUTO_TRYOUT_KIND,
+            "auto_cont",
+            CONTINUE_AUTO_TRYOUT_KIND,
+        }
+        if is_auto_tryout and getattr(source_turn, "IsPlaceholderLike", False):
+            if replay_mode and replay_debug:
+                print(
+                    f"{Colors.SYSTEM}Replay: skipping auto try-out placeholder {source_turn.gen_id_or_parent} "
+                    f"(kind={auto_tryout_kind}).{Colors.RESET}"
+                )
             continue
 
-        branch_root = source_turn.branch_root()
+        parent = getattr(source_turn, "parent", None)
+        hinted_parent_id = None
+        if getattr(source_turn, "gen_id", None):
+            hinted_parent_id = cmd_parent_map.get(str(source_turn.gen_id))
+        if hinted_parent_id:
+            hinted_parent_turn = session_for_replay.get_turn_by_gen_id(hinted_parent_id, driver_cursor.chat_session)
+            if hinted_parent_turn:
+                parent = hinted_parent_turn
+        replay_manifest.append({
+            "turn": source_turn,
+            "parent": parent,
+            "is_auto_tryout": is_auto_tryout,
+            "try_meta": try_meta if isinstance(try_meta, dict) else None,
+        })
+
+    for item in replay_manifest:
+        source_turn = item["turn"]
+        if source_turn in handled_turns:
+            continue
+        is_auto_tryout = bool(item.get("is_auto_tryout"))
+        parent = item.get("parent")
+        branch_root = parent.branch_root() if (is_auto_tryout and parent) else source_turn.branch_root()
         if branch_root in failed_branches:
             if replay_mode:
                 print(f"{Colors.TOOL_WARNING}Replay: skipping failed branch {branch_root.gen_id_or_parent}: {failed_branches[branch_root]}{Colors.RESET}")
@@ -11439,8 +11524,7 @@ async def _replay_all_down(
         if branch_root in ignored_branches:
             continue
 
-        if branch_root not in branch_map and source_turn.is_try_out_turn():
-            parent = getattr(source_turn, "parent", None)
+        if branch_root not in branch_map and source_turn.is_try_out_turn() and not is_auto_tryout:
             parent_root = parent.branch_root() if parent else None  # type: ignore
             parent_cursor = branch_map.get(parent_root) if parent_root else None
             if not parent_cursor:
@@ -11464,15 +11548,15 @@ async def _replay_all_down(
             _mark_failed_branch(branch_root, "missing destination branch cursor")
             continue
 
-        parent = getattr(source_turn, "parent", None)
         mapped_parent = _find_mapped_ancestor(parent)
         if parent and not mapped_parent:
-            if branch_root in failed_branches:
-                if replay_mode:
-                    print(f"{Colors.TOOL_WARNING}Replay: missing mapped ancestor for {parent.gen_id_or_parent}; skipping failed branch.{Colors.RESET}")
-                continue
-            print(f"{Colors.ERROR}Replay error: missing mapped ancestor for {parent.gen_id_or_parent}. Aborting replay.{Colors.RESET}")
-            return dest_cursor
+            _mark_failed_branch(branch_root, f"missing mapped ancestor for {parent.gen_id_or_parent}")
+            if replay_mode:
+                print(
+                    f"{Colors.ERROR}Replay error: missing mapped ancestor for {parent.gen_id_or_parent}; "
+                    f"skipping branch {branch_root.gen_id_or_parent}.{Colors.RESET}"
+                )
+            continue
         effective_parent = mapped_parent
         effective_cursor = dest_branch_cursor
         if not getattr(source_turn, "IsPlaceholderLike", False) and mapped_parent and dest_branch_cursor.current_turn:
@@ -11506,55 +11590,18 @@ async def _replay_all_down(
             _mark_failed_branch(branch_root, err)
             if replay_mode:
                 print(f"{Colors.ERROR}Replay error: {err}{Colors.RESET}")
-            return dest_cursor
+            continue
 
         try_meta = (getattr(source_turn, "data", None) or {}).get("$try_out")
         if getattr(source_turn, "IsPlaceholderLike", False) and isinstance(try_meta, dict):
             try_kind = try_meta.get("kind")
             if try_kind in {"auto_tool", TOOL_AUTO_TRYOUT_KIND, "auto_cont", CONTINUE_AUTO_TRYOUT_KIND}:
-                if mapped_parent:
-                    dest_placeholder_turn = None
-                    anchor_name = try_meta.get("anchor")
-                    try:
-                        candidates = [
-                            child for child in (getattr(mapped_parent, "turns", []) or [])
-                            if getattr(child, "IsPlaceholderLike", False)
-                        ]
-                        if anchor_name:
-                            for child in candidates:
-                                child_try = (getattr(child, "data", None) or {}).get("$try_out") or {}
-                                if child_try.get("anchor") == anchor_name:
-                                    dest_placeholder_turn = child
-                                    break
-                        if not dest_placeholder_turn:
-                            for child in candidates:
-                                child_try = (getattr(child, "data", None) or {}).get("$try_out") or {}
-                                child_kind = child_try.get("kind")
-                                if child_kind in {"auto_tool", TOOL_AUTO_TRYOUT_KIND, "auto_cont", CONTINUE_AUTO_TRYOUT_KIND}:
-                                    dest_placeholder_turn = child
-                                    break
-                    except Exception as exc:
-                        dest_placeholder_turn = None
-                        if replay_mode and replay_debug:
-                            print(f"{Colors.TOOL_WARNING}Replay: failed to resolve auto-tool placeholder under {mapped_parent.gen_id_or_parent}: {exc}{Colors.RESET}")
-                    if not dest_placeholder_turn:
-                        err = (
-                            "Replay mapping missing auto-tool placeholder: "
-                            f"src={source_turn.gen_id_or_parent} "
-                            f"parent={mapped_parent.gen_id_or_parent}"
-                        )
-                        _mark_failed_branch(branch_root, err)
-                        if replay_mode:
-                            print(f"{Colors.ERROR}Replay error: {err}{Colors.RESET}")
-                        return dest_cursor
-                    _record_mapping(source_turn, dest_cursor_for_turn)
-                    try:
-                        _validate_mapping(source_turn, dest_placeholder_turn)
-                    except Exception as exc:
-                        _mark_failed_branch(branch_root, str(exc))
-                        if replay_mode:
-                            print(f"{Colors.ERROR}Replay error: {exc}{Colors.RESET}")
-                        return dest_cursor
+                # Auto try-outs are runtime artifacts; skip structural replay.
+                if replay_mode and replay_debug:
+                    print(
+                        f"{Colors.SYSTEM}Replay: skipping auto try-out placeholder {source_turn.gen_id_or_parent} "
+                        f"(kind={try_kind}).{Colors.RESET}"
+                    )
                 handled_turns.add(source_turn)
                 continue
             anchor_name = try_meta.get("anchor")
@@ -11589,42 +11636,16 @@ async def _replay_all_down(
                             print(f"{Colors.TOOL_WARNING}Replay: failed to locate try-out placeholder under {mapped_parent.gen_id_or_parent}: {exc}{Colors.RESET}")
 
                 if not dest_placeholder_turn and mapped_parent:
-                    scope = _require_live_chat_scope(dest_cursor_for_turn)
-                    ctx = dest_cursor_for_turn.context if dest_cursor_for_turn else None
-                    anchor = None
-                    try:
-                        anchor = scope.get_try_out_anchor(anchor_name)
-                    except Exception as exc:
-                        anchor = None
-                        if replay_mode and replay_debug:
-                            print(f"{Colors.TOOL_WARNING}Replay: failed to read try-out anchor {anchor_name}: {exc}{Colors.RESET}")
-                    if not anchor and ctx and dest_cursor_for_turn and dest_cursor_for_turn.current_turn:
-                        try:
-                            anchor = scope.start_try_out_anchor(
-                                anchor_name,
-                                dest_cursor_for_turn.current_turn,
-                                kind=anchor_kind,
-                                origin_cursor=dest_cursor_for_turn,
-                            )
-                        except Exception as exc:
-                            anchor = None
-                            if replay_mode:
-                                print(f"{Colors.TOOL_WARNING}Replay: failed to start try-out anchor {anchor_name}: {exc}{Colors.RESET}")
-
-                    try:
-                        temp_cursor = dest_cursor_for_turn.clone_at(mapped_parent) if dest_cursor_for_turn else None
-                        if temp_cursor:
-                            main_cursor, try_cursor = temp_cursor.add_try_out(
-                                anchor=anchor,
-                                anchor_turn=mapped_parent,
-                            )
-                            candidate_cursor = try_cursor if source_is_try else main_cursor
-                            if candidate_cursor and candidate_cursor.current_turn:
-                                dest_placeholder_turn = candidate_cursor.current_turn
-                                dest_placeholder_cursor = candidate_cursor
-                    except Exception as exc:
-                        if replay_mode:
-                            print(f"{Colors.TOOL_WARNING}Replay: failed to recreate try-out placeholder: {exc}{Colors.RESET}")
+                    err = (
+                        "Replay mapping missing try-out placeholder: "
+                        f"src={source_turn.gen_id_or_parent} "
+                        f"anchor={anchor_name} "
+                        f"parent={mapped_parent.gen_id_or_parent}"
+                    )
+                    _mark_failed_branch(branch_root, err)
+                    if replay_mode:
+                        print(f"{Colors.ERROR}Replay error: {err}{Colors.RESET}")
+                    continue
 
                 if dest_placeholder_turn and not dest_placeholder_cursor:
                     try:
@@ -11788,7 +11809,7 @@ async def _replay_all_down(
                     _mark_failed_branch(branch_root, str(exc))
                     if replay_mode:
                         print(f"{Colors.ERROR}Replay error: {exc}{Colors.RESET}")
-                    return dest_cursor
+                    continue
                 _update_branch(branch_root, fork_cursor or dest_branch_cursor)
                 continue
             except Exception as exc:

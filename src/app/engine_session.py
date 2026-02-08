@@ -1132,14 +1132,7 @@ class EngineSession:
         def _is_suppressed_auto(turn: Turn) -> bool:
             if getattr(turn, "is_auto", False):
                 return True
-            data = getattr(turn, "data", None) or {}
-            if "tool_results" not in data:
-                return False
-            try_meta = data.get("$try_out")
-            if not isinstance(try_meta, dict):
-                return False
-            kind = try_meta.get("kind")
-            return kind in {"auto_tool", "auto_tool_tryout"}
+            return False
 
         if suppress_auto:
             scope_turns_set = {t for t in scope_turns_set if not _is_suppressed_auto(t)}
@@ -1188,12 +1181,18 @@ class EngineSession:
                     queue.append(child)
         tree_index_map = {t: i for i, t in enumerate(tree_order)}
 
-        # Capture sibling ordering from the current tree structure.
+        # Capture sibling ordering using command-history when available, otherwise tree order.
         child_order_by_parent: Dict[Turn, List[Turn]] = {}
         for parent_turn in scope_turns_set:
             children = [child for child in getattr(parent_turn, "turns", []) or [] if child in scope_turns_set]
-            if children:
-                child_order_by_parent[parent_turn] = children
+            if not children:
+                continue
+            def _child_key(child: Turn) -> tuple:
+                cmd_index = cmd_index_map.get(child, 10**9)
+                tree_index = tree_index_map.get(child, 10**9)
+                return (cmd_index, tree_index, child.sort_id)
+            children_sorted = sorted(children, key=_child_key)
+            child_order_by_parent[parent_turn] = children_sorted
 
         # Topological ordering with constraints:
         # - parent precedes child
@@ -1291,7 +1290,7 @@ class EngineSession:
 
         # A turn is considered "closed" if it has an assistant response.
         # A turn with no data at all is also considered "open" (it's a placeholder).
-        is_closed = not current_turn.IsEmpty and current_turn.HasResponse
+        is_closed = self._is_closed_turn(current_turn)
 
         if is_closed:
             # The current turn is complete. Find or create a placeholder for the next turn.
@@ -1387,7 +1386,13 @@ class EngineSession:
     # TRY OUT & BRANCH MANAGEMENT
     # ---------------------------
     @_with_write_lock
-    def add_try_out(self, base: "Turn", *, keep_in_main: bool = False) -> Tuple["Turn", "Turn"]:
+    def add_try_out(
+        self,
+        base: "Turn",
+        *,
+        keep_in_main: bool = False,
+        convert_existing: bool = False,
+    ) -> Tuple["Turn", "Turn"]:
         """
         Create a try-out placeholder per the separated semantics.
 
@@ -1401,7 +1406,127 @@ class EngineSession:
             and second child (try-out placeholder) under the root. Root can remain a placeholder.
         • If `base` is NOT a placeholder: go DOWN — ensure/create first child as the main continuation,
             then create a try-out as the second+ child.
+        
+        If convert_existing is True:
+        • Find the first non-placeholder turn walking up from `base`.
+        • Require that turn to be closed (has a response); otherwise raise.
+        • If it has commands, move them into a RESERVED placeholder inserted above it.
+        • If it already has siblings, wrap it with a RESERVED placeholder as well.
+        • Ensure its effective parent has a main placeholder as the first child and
+          the found turn as the second child (the try-out).
         """
+        if convert_existing:
+            if base is None:
+                raise ValueError("add_try_out(convert_existing): base must not be None.")
+
+            def _is_descendant(node: Optional["Turn"], ancestor: Optional["Turn"]) -> bool:
+                if not node or not ancestor:
+                    return False
+                current = node
+                while current:
+                    if current is ancestor:
+                        return True
+                    current = getattr(current, "parent", None)
+                return False
+
+            found = base
+            while found and getattr(found, "IsPlaceholderLike", False):
+                found = found.parent
+
+            if not found:
+                raise ValueError("add_try_out(convert_existing): no non-placeholder turn found from base.")
+
+            is_closed = self._is_closed_turn(found)
+            if not is_closed:
+                raise ValueError(
+                    f"add_try_out(convert_existing): target turn '{self.get_display_id(found)}' is not closed."
+                )
+
+            effective_parent = found.parent
+            if not effective_parent:
+                raise ValueError("add_try_out(convert_existing): cannot convert a root turn into a try-out.")
+
+            siblings = list(getattr(effective_parent, "turns", []) or [])
+            has_siblings = any(child is not found for child in siblings)
+            non_trivial_cmds = [
+                cmd for cmd in list(getattr(found, "cmd", []) or [])
+                if cmd.cmd_type not in (Command.LOG, Command.TURN)
+            ]
+            has_cmds = bool(non_trivial_cmds)
+
+            if has_cmds or has_siblings:
+                wrapper = Turn(turn_type=Turn.RESERVED, metadata={})
+                self._ensure_turn_has_gen_id(wrapper)
+
+                # Replace found with wrapper in the parent's child list.
+                try:
+                    idx = effective_parent.turns.index(found)
+                except ValueError:
+                    idx = None
+                if idx is not None:
+                    effective_parent.turns[idx] = wrapper
+                else:
+                    effective_parent.turns.append(wrapper)
+                wrapper.parent = effective_parent
+
+                # Move commands onto the wrapper in original order.
+                if has_cmds:
+                    retained: List[Command] = []
+                    for cmd in list(found.cmd):
+                        if cmd.cmd_type in (Command.LOG, Command.TURN):
+                            retained.append(cmd)
+                        else:
+                            cmd.parent = wrapper
+                            wrapper.cmd.append(cmd)
+                    found.cmd = retained
+
+                # Reparent the found turn under the wrapper.
+                found.parent = wrapper
+                wrapper.turns = [found]
+                effective_parent = wrapper
+
+            # Normalize children so the main placeholder is first and found is second.
+            kids = list(getattr(effective_parent, "turns", []) or [])
+            if found in kids:
+                kids.remove(found)
+
+            main_node: Optional[Turn] = None
+            if kids:
+                first = kids[0]
+                if first.IsPlaceholderLike:
+                    main_node = first
+                else:
+                    main_node = Turn(turn_type=None, metadata={})
+                    main_node.main_thread = True
+                    main_node.parent = effective_parent
+                    kids.insert(0, main_node)
+            else:
+                main_node = Turn(turn_type=None, metadata={})
+                main_node.main_thread = True
+                main_node.parent = effective_parent
+                kids.insert(0, main_node)
+
+            if kids[0] is not main_node:
+                if main_node in kids:
+                    kids.remove(main_node)
+                kids.insert(0, main_node)
+
+            main_node.main_thread = True
+            found.main_thread = bool(keep_in_main)
+            found.parent = effective_parent
+
+            if found in kids:
+                kids.remove(found)
+            kids.insert(1 if len(kids) >= 1 else 0, found)
+
+            effective_parent.turns = kids
+            tryout_leaf = found
+            if getattr(base, "IsPlaceholderLike", False) and _is_descendant(base, found):
+                tryout_leaf = base
+            else:
+                tryout_leaf = self.get_last_turn_on_branch(found)
+            return (main_node, tryout_leaf)
+
         def _needs_hold_conversion(t: "Turn") -> bool:
             if t.turn_type is not None:
                 return False
@@ -1757,6 +1882,15 @@ class EngineSession:
                 pass
         command.data = data
 
+    @staticmethod
+    def _is_closed_turn(turn: Optional["Turn"]) -> bool:
+        """Return True for turns that should be treated as closed for branching."""
+        if not turn:
+            return False
+        if getattr(turn, "IsStructural", False) or turn.turn_type == Turn.RESERVED:
+            return True
+        return (not turn.IsEmpty) and turn.HasResponse
+
     @_with_write_lock
     def _add_command_to_turn(self, new_command: Command, target_turn: Turn) -> Command:
         """
@@ -1949,7 +2083,12 @@ class EngineSession:
         if not target_turn:
             raise ValueError("Cannot add assistant message: a valid destination_turn must be provided.")
         
-        is_closed_for_assistant = target_turn.IsEmpty or target_turn.HasResponse
+        is_closed_for_assistant = (
+            target_turn.IsEmpty
+            or target_turn.HasResponse
+            or target_turn.IsStructural
+            or target_turn.turn_type == Turn.RESERVED
+        )
 
         if not target_turn: # type: ignore
             raise ValueError("Cannot add assistant message, no valid target turn could be determined.")
@@ -3340,6 +3479,9 @@ class EngineSession:
                 for block in tool_blocks:
                     if not isinstance(block, ToolCallBlock):
                         continue
+                    if not block.calls:
+                        tool_call_summaries.append("<empty tool block>")
+                        continue
                     for call in block.calls:
                         tool_call_summaries.append(self._format_tool_call_summary(call))
         if "tool_results" in data:
@@ -3385,8 +3527,25 @@ class EngineSession:
                 extra = f" (+{len(calls) - max_show} more)" if len(calls) > max_show else ""
                 summary_parts.append(f"tool_results: '{', '.join(shown)}{extra}'")
             elif tool_results_list:
-                # Fallback for unexpected formats
-                summary_parts.append(f"tool_results: '{self._ellipsize(str(tool_results_list[0]))}'")
+                # Fallback for unexpected formats (try error/raw blocks before raw object strings)
+                fallback_items: List[str] = []
+                for item in tool_results_list:
+                    if isinstance(item, ToolCallBlock):
+                        if item.error_block and item.error_block.strip():
+                            fallback_items.append(self._ellipsize(item.error_block))
+                        elif item.raw_block and item.raw_block.strip():
+                            fallback_items.append(self._ellipsize(item.raw_block))
+                        elif item.normalized_block and item.normalized_block.strip():
+                            fallback_items.append(self._ellipsize(item.normalized_block))
+                        else:
+                            fallback_items.append("<empty tool block>")
+                    else:
+                        fallback_items.append(self._ellipsize(str(item)))
+                if fallback_items:
+                    max_show = 2
+                    shown = fallback_items[:max_show]
+                    extra = f" (+{len(fallback_items) - max_show} more)" if len(fallback_items) > max_show else ""
+                    summary_parts.append(f"tool_results: '{', '.join(shown)}{extra}'")
             present_roles.remove('tool_results')
 
         if tool_call_summaries:

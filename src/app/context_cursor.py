@@ -1136,6 +1136,7 @@ class ChatCursor:
         anchor: Optional["TryOutAnchor"] = None,
         anchor_turn: Optional[Turn] = None,
         keep_in_main: bool = False,
+        convert_existing: bool = False,
     ) -> Tuple["ChatCursor", "ChatCursor"]:
         """Create placeholders for a try-out branch and return cursors to track them."""
         anchor_turn = anchor_turn or self.head
@@ -1164,7 +1165,11 @@ class ChatCursor:
             self.session._add_chat_turn(anchor_turn, main_turn)
             self.session._add_chat_turn(anchor_turn, try_turn)
         else:
-            main_turn, try_turn = self.session.add_try_out(anchor_turn, keep_in_main=keep_in_main)
+            main_turn, try_turn = self.session.add_try_out(
+                anchor_turn,
+                keep_in_main=keep_in_main,
+                convert_existing=convert_existing,
+            )
         if keep_in_main:
             try_turn.main_thread = True
             main_turn.main_thread = True
