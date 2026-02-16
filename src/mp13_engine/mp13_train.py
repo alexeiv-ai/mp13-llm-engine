@@ -1207,7 +1207,19 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
         
             use_fp16 = effective_precision == "fp16"
             use_bf16 = effective_precision == "bf16"
-    
+
+            # --- Moved validation logic from mp13_config.py ---
+            if use_fp16 or use_bf16:
+                if not torch.cuda.is_available():
+                    engine.state.logger.warning(f"trainer_compute_precision is '{effective_precision}' but CUDA is not available. Effective precision may differ or training may fail.")
+            if use_bf16 and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
+                engine.state.logger.warning(f"trainer_compute_precision is 'bf16' but the current CUDA device does not support bfloat16. Effective precision may differ or training may fail.")
+            # --- End of moved validation logic ---
+
+            if config.save_strategy == "steps" and (config.save_steps is None or config.save_steps <= 0):
+                # This is a soft warning,
+                engine.state.logger.warning(f"Warning: save_strategy is 'steps' but save_steps is {config.save_steps}. Effective saving might be linked to logging_steps or epoch boundaries by Trainer if not a positive integer.")
+
             # --- Communicate settings to client ---
             summary_lines = [
                 "--- Effective Training Settings ---",

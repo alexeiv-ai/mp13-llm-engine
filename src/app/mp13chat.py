@@ -3227,12 +3227,37 @@ def _print_turn_content( # noqa
                                 line_out = line
                             print(f"{content_prefix}  {content_color}{line_out}{Colors.RESET}")
                 else:
-                    for tool_call in payload:
-                        content_to_print = str(tool_call)
-                        is_error = str(content_to_print).lower().startswith("error")
-                        content_color = Colors.ERROR if is_error else Colors.RESET
-                        for line in content_to_print.splitlines():
-                            print(f"{content_prefix}  {content_color}{line}{Colors.RESET}")
+                    # If no executable calls could be found, the payload likely contains
+                    # un-parsed blocks. Use the serializer to get a consistent error view.
+                    if parser_profile:
+                        # Ensure all items are ToolCallBlock objects for the serializer
+                        blocks = []
+                        for item in payload:
+                            if isinstance(item, ToolCallBlock):
+                                blocks.append(item)
+                            elif isinstance(item, dict):
+                                try:
+                                    blocks.append(ToolCallBlock.from_dict(item))
+                                except Exception:
+                                    pass # Ignore items that can't be converted
+                        
+                        serialized_results = ToolsParserHelper.serialize_blocks(
+                            profile=parser_profile,
+                            blocks=blocks,
+                            is_result=True
+                        )
+                        content_to_print = "\n".join(
+                            json.dumps(r, indent=2) if isinstance(r, dict) else str(r) 
+                            for r in serialized_results
+                        )
+                    else:
+                        # Fallback if no parser profile
+                        content_to_print = "\n".join(str(item) for item in payload)
+
+                    is_error = "error" in content_to_print.lower() or "parse_errors" in content_to_print.lower()
+                    content_color = Colors.ERROR if is_error else Colors.RESET
+                    for line in content_to_print.splitlines():
+                        print(f"{content_prefix}  {content_color}{line}{Colors.RESET}")
 
             else:  # Handle any other custom role
                 content_to_print = ""

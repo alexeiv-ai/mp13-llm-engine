@@ -297,11 +297,11 @@ class Turn:
         if self.gen_id:
             return self.gen_id
         if self.parent and self.parent.gen_id:
-            return f"off:{self.parent.gen_id}"
+            return f"off:{self.parent.gen_id}_{self.parent.turns.index(self)}"
         if self.parent is None:
             # This is a root turn. In a multi-conversation session, we might need more context.
             # For now, 'off:root' is a clear indicator.
-            return "off:root"
+            return "root"
         return "off:unknown"
 
     # helpers for the "first child is the active branch" rule

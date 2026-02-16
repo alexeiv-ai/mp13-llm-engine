@@ -1147,9 +1147,12 @@ class UnifiedToolIO:
             hard_stop_triggered = used_hard_stop and (hard_stop_pos != len(text))
             truncated_at_end = used_hard_stop and (hard_stop_pos == len(text))
 
+            is_hard_stop_termination_by_design = not p.block_end
+
             if hard_stop_triggered:
-                block.is_incomplete = True
-                parse_errors.append("Block terminated by hard stop pattern instead of closing tag.")
+                if not is_hard_stop_termination_by_design:
+                    block.is_incomplete = True
+                    parse_errors.append("Block terminated by hard stop pattern instead of closing tag.")
             elif truncated_at_end and mark_truncated:
                 block.is_incomplete = True
                 parse_errors.append("Stream ended before closing tag was found.")

@@ -11,7 +11,6 @@ from enum import Enum
 from typing import List, Optional, Dict, Union, Any, Callable, TYPE_CHECKING, ClassVar, AsyncIterator
 import copy
 from dataclasses import dataclass, field
-import torch
 import os
 import hashlib
 import json
@@ -175,27 +174,12 @@ class GlobalEngineConfig(BaseModel):
     log_instance_id_width: int = Field(8, description="The fixed width for the instance_id column in logs, if enabled.")
 
 
-    @field_validator('device_map', mode='before')
-    @classmethod
-    def normalize_device_map(cls, v: Union[Optional[str], Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
-        if v is None: # If input is explicitly None
-            return "auto" if torch.cuda.is_available() else "cpu"
-        if isinstance(v, str) and v == "auto" and not torch.cuda.is_available():
-            return "cpu"
-        # If it's a dict, or a str like "cpu", "cuda:0", or "auto" with CUDA, pass it through
-        return v
-
     @field_validator('base_model_torch_dtype')
     @classmethod
     def check_dtype_cuda_support(cls, v: str) -> str:
         allowed_dtypes = ["auto", "float16", "bfloat16", "float32"]
         if v not in allowed_dtypes:
             raise ValueError(f"Invalid base_model_torch_dtype: '{v}'. Must be one of {allowed_dtypes}.")
-        if v in ["float16", "bfloat16"] and not torch.cuda.is_available():
-            # This is a config-level check; engine might still override if CUDA not found at runtime
-            print(f"Warning: base_model_torch_dtype is '{v}' but CUDA is not available. Effective dtype may differ.")
-        if v == "bfloat16" and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
-            print(f"Warning: base_model_torch_dtype is 'bfloat16' but the current CUDA device does not support bfloat16. Effective dtype may differ.")
         return v
 
     @field_validator('memory_mode')
@@ -207,25 +191,6 @@ class GlobalEngineConfig(BaseModel):
         if v not in allowed:
             raise ValueError(f"Invalid memory_mode: '{v}'. Must be one of {sorted(allowed)}.")
         return v
-
-    # No specific validators for new quantize_bits, awq_*, hqq_*, bnb_* here,
-    # as the engine will perform more detailed checks and conversions based on quantize_bits.
-    # Basic type validation is handled by Pydantic.
-        
-    @model_validator(mode='after')
-    def validate_device_map_and_precision_warnings(self) -> 'GlobalEngineConfig':
-        device_map_is_cpu = False
-        if isinstance(self.device_map, str):
-            device_map_is_cpu = (self.device_map == "cpu")
-        # Note: More sophisticated checks for dict device_map implying all CPU are possible but complex.
-        # The engine loading logic will ultimately determine behavior.
-        
-        if device_map_is_cpu:
-            if self.base_model_torch_dtype in ["float16", "bfloat16"]:
-                print(f"Warning: base_model_torch_dtype is '{self.base_model_torch_dtype}' but device_map is '{self.device_map}'. Precision flag will likely be ignored by transformers, defaulting to float32 on CPU.")
-            if self.quantize_bits in ["4", "8", "awq", "hqq", "eetq"]:
-                print(f"Warning: Quantization is enabled but device_map is '{self.device_map}'. Quantization will likely be disabled by transformers on CPU.")
-        return self
     
     model_config = {
         "extra": "ignore", "validate_assignment": True
@@ -295,16 +260,6 @@ class TrainingConfig(BaseModel):
         allowed_precisions = ["bf16", "fp16", "fp32"]
         if self.trainer_compute_precision not in allowed_precisions:
             raise ValueError(f"trainer_compute_precision must be one of {allowed_precisions}, got '{self.trainer_compute_precision}'.")
-
-        if self.trainer_compute_precision in ["fp16", "bf16"]:
-            if not torch.cuda.is_available():
-                # This is a config-level check; Trainer will also check and might error or fallback.
-                print(f"Warning: trainer_compute_precision is '{self.trainer_compute_precision}' but CUDA is not available. Effective precision may differ or training may fail.")
-            if self.trainer_compute_precision == "bf16" and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
-                print(f"Warning: trainer_compute_precision is 'bf16' but the current CUDA device does not support bfloat16. Effective precision may differ or training may fail.")
-        
-        if self.save_strategy == "steps" and (self.save_steps is None or self.save_steps <= 0):
-            print(f"Warning: save_strategy is 'steps' but save_steps is {self.save_steps}. Effective saving might be linked to logging_steps or epoch boundaries by Trainer if not a positive integer.")
 
         return self
     
