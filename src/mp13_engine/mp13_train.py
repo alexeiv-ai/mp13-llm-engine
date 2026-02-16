@@ -1369,15 +1369,20 @@ async def execute_training_run_logic(engine: "MP13Engine", config: TrainingConfi
             except Exception:
                 has_meta_params = False
 
-            if layout_for_training.get("mode") in ("offloaded", "sharded") or has_meta_params:
-                training_args_dict["place_model_on_device"] = False
-                engine.state.logger.warning(
-                    "Detected sharded/offloaded/meta model for training. Disabling Trainer device placement "
-                    "(place_model_on_device=False) to avoid meta tensor .to() errors."
-                )
-
-            # Drop unsupported TrainingArguments keys for older transformers installs.
+            # Check for supported training arguments to handle different transformers versions gracefully.
             supported_training_args = set(inspect.signature(TrainingArguments.__init__).parameters)
+            if layout_for_training.get("mode") in ("offloaded", "sharded") or has_meta_params:
+                if "place_model_on_device" in supported_training_args:
+                    training_args_dict["place_model_on_device"] = False
+                    engine.state.logger.info(
+                        "Detected sharded/offloaded/meta model. Setting 'place_model_on_device=False' for compatibility with this transformers version."
+                    )
+                else:
+                    engine.state.logger.info(
+                        "Detected sharded/offloaded/meta model. Device placement will be handled by Accelerate (as 'place_model_on_device' is deprecated in this transformers version)."
+                    )
+
+            # Drop any other unsupported TrainingArguments keys for older transformers installs.
             supported_training_args.discard("self")
             unsupported_training_args = [k for k in training_args_dict if k not in supported_training_args]
             for key in unsupported_training_args:
