@@ -45,3 +45,6 @@ wheelhouse/
 # Test output
 test*/
 adapters/
+
+# Temp review directory
+.temp-review/
