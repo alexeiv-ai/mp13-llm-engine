@@ -67,7 +67,7 @@ More detail:
 
 * Architecture and internals: **[APPLAYERS.md](APPLAYERS.md)**
 * Feature overview: **[FEATURES.md](FEATURES.md)**
-* Gotchas and caveats: **[GOTCHAS.MD](GOTCHAS.MD)**
+* Gotchas and caveats: **[GOTCHAS.md](GOTCHAS.md)**
 
 ---
 
@@ -113,13 +113,29 @@ cd mp13-llm-engine
 
 **Prerequisites (recommended):**
 - Python 3.12+
-- Poetry installed
+- Poetry 1.8+ installed (2.1+ recommended)
+  - **Install user-wide:** `python3 -m pip install --user "poetry>=2.1"`
+  - Don't install Poetry inside the project's venv (it will disappear - [see why](INSTALL.md#poetry-installed-inside-venv-disappears))
+  - Alternative: Use [pipx](https://pipx.pypa.io/) for isolated Poetry installation
 - For GPU support: A compatible NVIDIA driver and CUDA runtime for your PyTorch build.
+
+**Linux-specific setup:**
+```bash
+# Disable keyring on headless systems (prevents hangs)
+poetry config keyring.enabled false
+
+# If installing from a cross-platform repository, regenerate the lock file
+rm poetry.lock && poetry lock --no-update
+```
 
 Minimal install:
 
 ```bash
+# Poetry 2.1+
 poetry sync
+
+# Poetry 1.8-2.0
+poetry install
 ```
 
 Activate the virtual environment before running any commands:
@@ -139,18 +155,26 @@ source .venv/bin/activate
 >
 > ```bash
 > poetry config virtualenvs.in-project true --local
-> poetry sync
+> poetry install  # or poetry sync on Poetry 2.1+
 > ```
 
 Optional extras (platform-dependent):
 
 ```bash
+# Poetry 2.1+
 poetry sync --with triton
 poetry sync --with flashattn
 poetry sync --with mistral3
+
+# Poetry 1.8-2.0
+poetry install --with triton
+poetry install --with flashattn
+poetry install --with mistral3
 ```
 
-> `--with mistral3` is only required for **Ministral-3-3B-Instruct-2512**.
+> **Note:** `--with mistral3` is only required for **Ministral-3-3B-Instruct-2512**.
+>
+> **ARM64 Linux (aarch64):** Skip `--with flashattn` - pre-built wheels not available. Use default SDPA attention backend.
 
 * Full installation notes: **[INSTALL.md](INSTALL.md)**
 
