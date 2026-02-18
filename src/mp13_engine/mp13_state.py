@@ -517,7 +517,7 @@ class MP13State:
 
             if cuda_available:
                 device_indices_to_query = []
-                if self._base_model and hasattr(self._base_model, 'hf_device_map'):
+                if self._base_model is not None and hasattr(self._base_model, 'hf_device_map'):
                     all_devices = set(self._base_model.hf_device_map.values())
                     device_indices_to_query = sorted([d for d in all_devices if isinstance(d, int)])
                 
@@ -641,7 +641,7 @@ class MP13State:
         # Part 1: Synchronous state clearing under lock
         async with self._lock:
             # Explicitly delete model references to help GC
-            if self._base_model: del self._base_model
+            if self._base_model is not None: del self._base_model
 
             self._base_model = None
             self._peft_model = None
@@ -1332,7 +1332,7 @@ class MP13State:
         bytes_in_gb = 1024.0
 
         model_generation_config = None
-        if self._peft_model and hasattr(self._peft_model, 'generation_config'):
+        if self._peft_model is not None and hasattr(self._peft_model, 'generation_config'):
             model_generation_config = self._peft_model.generation_config.to_dict()
         
         # Get the full inference status dict first, as it contains the calculated peak memory
@@ -1345,8 +1345,8 @@ class MP13State:
             "busy_reason": self._busy_reason,
             "engine_mode": self._engine_mode.value if self._engine_mode else None,
             "global_config": self._global_config, # Already a dict, no lock needed to read
-            "base_model_class": str(type(self._base_model).__name__) if self._base_model else None,
-            "peft_model_class": str(type(self._peft_model).__name__) if self._peft_model else None,
+            "base_model_class": str(type(self._base_model).__name__) if self._base_model is not None else None,
+            "peft_model_class": str(type(self._peft_model).__name__) if self._peft_model is not None else None,
             "tokenizer_class": str(type(self._tokenizer).__name__) if self._tokenizer else None,
             "device": str(self._device) if self._device else None,
             "effective_eos_token_ids": self.effective_eos_token_ids,
@@ -1384,7 +1384,7 @@ class MP13State:
             if len(self._model_active_set) == 1:
                 return self._single_active_adapter_type_if_any # Type of the single active adapter
             return "mixed" # Multiple active adapters
-        elif self._base_model:
+        elif self._base_model is not None:
             return "BASE"
         return None
     
