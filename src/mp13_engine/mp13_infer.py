@@ -180,7 +180,9 @@ def _mixed_generate_like_peft(self, *args, **kwargs):
     req_stream: Optional[torch.cuda.Stream] = kwargs.pop("mp13_cuda_stream", None)
     _is_warmup_call: bool = kwargs.pop("_is_warmup_call", False)
     # for both user and cache warm up threads
-    _disable_compile: bool = engine_state.is_warming_cache or _is_warmup_call 
+    # Also disable compile path when torch.compile is off: _ensure_cudagraph_tls() imports
+    # torch._inductor.cudagraph_trees which natively crashes on CPU-only systems.
+    _disable_compile: bool = not engine_state.is_compiled or engine_state.is_warming_cache or _is_warmup_call
 
     # --- Gating Logic ---
     acquired_first_user_lock = False

@@ -520,6 +520,11 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                     logger.warning(warn_msg)
                     init_report["warnings"].append(warn_msg)
                     quantize_bits = "none"
+                if use_torch_compile:
+                    warn_msg = "CPU mode active. Disabling torch.compile() (cudagraph backend not supported on CPU)."
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
+                    use_torch_compile = False
 
             # Resolve memory placement policy.
             memory_mode = getattr(config, "memory_mode", "auto_cpu")
@@ -811,10 +816,11 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 compiled_model = peft_model
                 if use_torch_compile:
                     import torch as _torch
-                    from torch._inductor import config as ic
-                    ic.triton.cudagraphs = True
-                    ic.triton.cudagraph_trees = True
-                    ic.triton.cudagraph_skip_dynamic_graphs = True
+                    if _torch.cuda.is_available():
+                        from torch._inductor import config as ic
+                        ic.triton.cudagraphs = True
+                        ic.triton.cudagraph_trees = True
+                        ic.triton.cudagraph_skip_dynamic_graphs = True
                     #ic.triton.cudagraph_dynamic_shape_warn_limit = None
 
                     logger.info("Applying torch.compile() to persistent PeftMixedModel for inference...")
