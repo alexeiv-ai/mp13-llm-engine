@@ -1,6 +1,6 @@
 # Install
 
-This repository uses **Poetry** and supports **two pinned dependency stacks** for local LLM inference and LoRA training.
+This repository uses **Poetry** and supports **three pinned dependency stacks** for local LLM inference and LoRA training.
 
 It also supports optional, platform-dependent performance groups (Triton, FlashAttention 2) and a targeted compatibility group for one specific model family.
 
@@ -15,14 +15,16 @@ It also supports optional, platform-dependent performance groups (Triton, FlashA
 git clone https://github.com/alexeiv-ai/mp13-llm-engine
 cd mp13-llm-engine
 python3 -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+source .venv/bin/activate  # or .venv\Scripts\activate.bat on Windows
 
 # 2. Install dependencies directly with pip
 pip install --upgrade pip
 pip install -e .
+# see CONFIGURE.md for full options set
+python mp13config.py --init
 
-# 3. Run the demo or chat
-python -m src.app.mp13chat
+# 3. Run the demo or chat (you will still be asked for the model path/name unless read CONFIGURE.md)
+python mp13chat.py
 ```
 
 **Limitations of this approach:**
@@ -38,8 +40,7 @@ python -m src.app.mp13chat
 
 ### Required
 - **Python** (match the repo's supported version; commonly 3.12)
-- **Poetry** installed and available on PATH (version 1.8+ recommended, 2.1+ for `poetry sync` command)
-- A working C/C++ build toolchain can be helpful for optional packages on some platforms
+- **Poetry** installed and available on PATH for `poetry sync` command)
 
 ### Installing Poetry
 
@@ -73,57 +74,104 @@ poetry --version
 
 **Note:** If you're stuck with Poetry 1.8.x (e.g., restricted environment), the project will work but use `poetry install` instead of `poetry sync`.
 
-### Linux-specific setup
+### Important: Cross-Platform Installation and the `poetry.lock` File
 
-#### Keyring configuration (headless systems)
-On headless Linux systems, Poetry may wait for keyring authentication. Disable it:
+The `poetry.lock` file included in this repository is pre-built for a specific environment to ensure reproducibility for the current/default stack.
+
+**The checked-in `poetry.lock` file is for:**
+- **OS:** Windows
+- **Architecture:** x86_64
+- **CUDA:** 12.6 (for PyTorch 2.9.1+cu126)
+- **GPU Family:** NVIDIA Ada Lovelace series and compatible predecessors
+
+**If your environment is different (except for GPU)** (e.g., you are on Linux, macOS, Linux aarch64 or DGX Spark) you **must delete the existing `poetry.lock` file** before installing dependencies. This will allow Poetry to resolve and lock the correct binary packages for your specific platform.
+
+To do this, run the following command **before** `poetry install` or `poetry sync`:
+
+```bash
+# For Linux / macOS
+rm poetry.lock
+
+# For Windows (Command Prompt)
+del poetry.lock
+```
+
+After deleting the file, you can proceed with the installation commands, and Poetry will automatically generate a new, correct `poetry.lock` file for your system. On slower links or large solver updates, this can add up to about 10 minutes.
+
+### Platform-Specific Configuration
+
+#### Keyring on Headless Linux
+On headless Linux systems, Poetry may hang while waiting for a graphical keyring service. Disable it with this one-time command:
 
 ```bash
 poetry config keyring.enabled false
 ```
 
-#### Platform-specific lock files
-The `poetry.lock` file in this repository may have been generated on a different platform (Windows/Linux/x86_64/ARM64). If you encounter installation errors about platform-incompatible packages, regenerate the lock file on your system:
-
-```bash
-# Remove the existing lock file
-rm poetry.lock
-
-# Generate a new lock file for your platform
-poetry lock --no-update
-
-# Then proceed with installation (see below)
-```
-
 ### GPU (optional)
 If you plan to run on NVIDIA GPUs:
 - NVIDIA driver installed (`nvidia-smi` should work)
-- A torch CUDA build compatible with your driver/runtime
 - CUDA Toolkit is **not** required unless you are building GPU extensions from source
 
 > CPU-only is supported as a reference implementation and for broad compatibility.
+
 
 ---
 
 ## Supported dependency stacks
 
-1) **Mainline (recommended)** — PyTorch **2.9.1 + CUDA 12.6** and Transformers **v5** (default `pyproject.toml`).  
-   Best for: newest HF codepaths and latest kernels.
+1) **Current (recommended)** — PyTorch **2.9.1 + CUDA 12.6** and Transformers **v5** (`pyproject.toml_torch_2.9.1`, mirrored by default `pyproject.toml`).  
+   Best for: newer HF codepaths and latest kernels.
 
-2) **Legacy / compatibility** — PyTorch **2.6.0 + CUDA 12.4** and Transformers **4.53.1** (use `pyproject.toml_torch_2.6.0`).  
-   Best for: older model repos that break on Transformers v5, or workflows relying on v4-era HQQ behavior.
+2) **Legacy / compatibility** — PyTorch **2.6.0 + CUDA 12.4** and Transformers **4.53.1** (`pyproject.toml_torch_2.6.0`).  
+   Best for: broadest compatibility with older model repos and v4-era behavior.
+
+
+3) **Experimental GB10 / SPARC (sm_121)** — PyTorch **nightly cu130** (aarch64-compatible) and Transformers **v5** (`pyproject.toml_gb10`).  
+   Best for very latest models, NVIDIA **GB10** / DGX Spark / other **sm_121** systems where stable cu12.6 wheels fail with `cudaErrorNoKernelImageForDevice`.
 
 ### Selecting a stack
 
 If you want the default stack, follow the rest of this doc.
 
+**Lock file note:** The checked-in `poetry.lock` corresponds to the default stack (default `pyproject.toml`, primary Windows environment). Alternate stacks require generating a **local** lock file; do not commit it and ingore in git pull.
+One way to do that is to run once:
+```bash
+git update-index --skip-worktree poetry.lock 
+```
+To revert (start getting updated lock file from github):
+```bash
+git update-index --no-skip-worktree poetry.lock 
+```
+
 If you need the legacy stack, temporarily replace `pyproject.toml`:
 
 ```bash
 cp pyproject.toml_torch_2.6.0 pyproject.toml
+rm -f poetry.lock
 poetry lock --no-update
-poetry install
+poetry sync  # or: poetry install (Poetry 1.8-2.0)
 ```
+
+If you need the GB10 / SPARC stack (experimental sm_121), temporarily replace `pyproject.toml`:
+
+```bash
+cp pyproject.toml_gb10 pyproject.toml
+rm -f poetry.lock
+poetry lock --no-update
+poetry sync  # or: poetry install (Poetry 1.8-2.0)
+```
+
+### Model compatibility notes by stack
+
+- Most project testing was done with the **legacy** .toml_torch_2.6.0 stack.
+- Newer stacks can unlock newer models, but some older models may stop working.
+- If an older model fails on newer stacks, try setting `trust_remote_code=false` in the engine default or custom config.
+- The **experimental GB10** stack may show additional regressions with older models due to newer torch/runtime paths.
+- On Hopper GPUs, the experimental stack allows opportunistically install and enable `flash_attention_3` adding `--with flashattn3` install/sync option; this path is not yet tested.
+
+### Keep one repeatable install command per target box
+
+Once you settle on a specific machine and install profile, write a small command script (`.cmd`/`.ps1`/`.sh`) that always runs the same stack file swap and Poetry flags. This helps you stay aligned with future `pyproject.toml*` updates without repeatedly forgetting fixed arguments or unnecessarily re-creating lock files from scratch.
 
 ---
 
@@ -133,11 +181,7 @@ poetry install
 - Poetry 2.1+: Use `poetry sync` (faster, more accurate)
 - Poetry 1.8-2.0: Use `poetry install` (works on all versions)
 
-Both commands are shown below. Use the one compatible with your Poetry version.
-
-### A) Minimal (recommended default)
-
-Works on CPU or GPU and avoids GPU-only kernels:
+### 1) Minimal setup (works for most models)
 
 ```bash
 # Poetry 2.1+
@@ -147,80 +191,34 @@ poetry sync
 poetry install
 ```
 
-What you get:
-- Transformers + baseline runtime
-- Attention backend: **SDPA** (no Triton/FlashAttention required)
+Optional: verify CUDA kernel compatibility (recommended on new GPU/driver stacks):
+
+```bash
+# from activated venv
+python misc/cuda_kernel_smoke.py
+
+# or without activating venv
+poetry run python misc/cuda_kernel_smoke.py
+```
 
 ---
 
-### B) Triton-only (kernel support)
+### 2) Complete setup (enable all optional groups)
 
 ```bash
 # Poetry 2.1+
-poetry sync --with triton
+poetry sync --with triton --with flashattn --with mistral3
 
 # Poetry 1.8-2.0
-poetry install --with triton
+poetry install --with triton --with flashattn --with mistral3
 ```
 
-When to use:
-- You need Triton-backed kernels for certain model families/features
-- You experiment with HQQ or other kernel paths
+**Always pass all desired** `--with` groups in  one poetry command.
 
----
+Optional add-on:
 
-### C) FlashAttention 2 (optional acceleration)
-
-```bash
-# Poetry 2.1+
-poetry sync --with flashattn
-
-# Poetry 1.8-2.0
-poetry install --with flashattn
-```
-
-What you get:
-- FlashAttention 2 (where supported) plus the right Triton package
-
-**Windows note:**
-- This repo pins a community wheel URL for a specific Torch/CUDA combo.
-- If it doesn't work on your machine, skip it and use SDPA.
-
-**Linux x86_64 note:**
-- On Linux x86_64, `flash-attn` is typically installed from PyPI.
-
-**Linux ARM64 (aarch64) note:**
-- FlashAttention 2 pre-built wheels are not available for ARM64.
-- Skip this optional group and use SDPA (default attention backend).
-- Advanced users can build from source (see Appendix below).
-
----
-
-### D) Mistral 3 support (targeted)
-
-> The `mistral3` extra is **only needed for `Ministral-3-3B-Instruct-2512`**.
-
-```bash
-# Poetry 2.1+
-poetry sync --with mistral3
-
-# Poetry 1.8-2.0
-poetry install --with mistral3
-```
-
-This is a deliberate deviation from a “single unified dependency set”: it is kept isolated so most users can stay on the minimal profile.
-
----
-
-### E) xFormers (optional)
-
-xFormers can provide alternative attention kernels on some platforms:
-
-```bash
-poetry run pip install -U xformers
-```
-
-Binary availability is sensitive to your exact torch/CUDA build. If it fails, use SDPA (default).
+- With experimental setup (`pyproject.toml_gb10`) and on  Hopper GPU, `--with flashattn3` might work (wheel is not pinned).
+- `mistral3` is only required for `Ministral-3-3B-Instruct-2512`.
 
 ---
 
@@ -238,34 +236,16 @@ poetry install
 Avoid:
 - `--with flashattn`
 - `--with triton`
-- xFormers (usually not beneficial on CPU)
-
-If you want a true CPU-only torch build, you'll need to override the torch selection in your environment / Poetry sources.
 
 ---
 
 ## Troubleshooting
 
-### Lock file platform mismatch
+### "Cannot be installed in the current environment" Error
 
-**Symptom:** Installation fails with errors like:
-```
-RuntimeError: Package https://...flash_attn...win_amd64.whl cannot be installed in the current environment
-```
+**Symptom:** Installation fails with an error about a package being for the wrong platform, often mentioning a `.whl` file (e.g., `...win_amd64.whl` on Linux).
 
-**Cause:** The lock file was generated on a different platform (e.g., Windows lock file used on Linux).
-
-**Solution:**
-```bash
-# Remove the existing lock file
-rm poetry.lock
-
-# Regenerate for your platform
-poetry lock --no-update
-
-# Install
-poetry install  # or poetry sync on Poetry 2.1+
-```
+**Cause & Solution:** This happens when the `poetry.lock` file is for a different operating system or architecture. Please see the **"Important: Cross-Platform Installation"** section near the top of this document for the solution.
 
 ### Poetry hangs on headless Linux
 
@@ -287,9 +267,9 @@ poetry config keyring.enabled false
 poetry lock --no-update
 ```
 
-### ARM64 Linux (aarch64) flash-attn issues
+### Flash-attn issues
 
-**Symptom:** flash-attn installation fails on ARM64 systems.
+**Symptom:** flash-attn fais at installation or runtime.
 
 **Solution:** Skip the flashattn group:
 ```bash
@@ -297,7 +277,7 @@ poetry lock --no-update
 poetry install --with triton --with mistral3  # omit --with flashattn
 ```
 
-The default SDPA attention backend works well on ARM64 systems.
+The default SDPA attention backend should work well and may automatically pick internal flash_attention_2 impl.
 
 ### Using --no-root flag
 
@@ -313,6 +293,7 @@ python -m src.app.mp13chat
 python -m src.app.config
 ```
 
+<a id="poetry-in-venv-disappears"></a>
 ### Poetry installed inside venv disappears
 
 **Symptom:** You installed Poetry inside the project's `.venv`, and after running `poetry install`, Poetry is no longer available.
@@ -325,8 +306,6 @@ When you run `poetry install`, Poetry does the following:
 3. **Synchronizes** the venv to match exactly what's in the lock file
 4. Poetry itself is NOT listed in `pyproject.toml` as a dependency (it shouldn't be - it's a build tool, not a runtime dependency)
 5. During sync, Poetry may remove packages not in the lock file - including itself if it was installed in the venv
-
-Think of it like this: **Poetry is the construction crew, not the building**. The crew builds the house (your venv) but doesn't live inside it.
 
 **Solution 1: User-wide Poetry (Recommended for trying projects)**
 
@@ -413,21 +392,3 @@ poetry --version
 - ❌ Never inside a project's venv (will cause issues)
 
 ---
-
-## Appendix: Building flash-attn on Windows (source build)
-
-Use this only if you cannot use a prebuilt wheel.
-
-Prereqs:
-- NVIDIA driver installed and a working CUDA runtime
-- CUDA Toolkit matching your torch CUDA (e.g., 12.4 for `+cu124`)
-- Visual Studio 2022 Build Tools (C++ + Windows SDK)
-- `ninja`
-
-Then inside the Poetry venv:
-
-```bash
-poetry run python -m pip install --upgrade pip setuptools wheel
-poetry run python -m pip install ninja packaging
-poetry run python -m pip install --no-build-isolation --no-deps flash-attn==2.8.0.post2
-```

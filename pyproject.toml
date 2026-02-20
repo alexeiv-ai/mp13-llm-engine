@@ -77,12 +77,12 @@ optional = true
 
 [tool.poetry.group.flashattn.dependencies]
 # FlashAttention 2
-# - Non-Windows x86_64: install from PyPI (pre-built wheels available)
-# - Windows (Python 3.12): install a community prebuilt wheel (PyTorch 2.9, CUDA 12.8 runtime)
-# - ARM64 (aarch64): Not supported via PyPI; build from source if needed (see INSTALL.md)
+# - Package URLs were found with https://flashattn.dev/versions
+# - Community prebuilt wheels for PyTorch 2.10 (CUDA 12.8 / cu128)
 flash-attn = [
-  { version = "*", markers = "sys_platform != 'win32' and platform_machine == 'x86_64'" },
-  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.6/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-win_amd64.whl", markers = "sys_platform == 'win32' and python_version == '3.12'" }
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.6/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-win_amd64.whl", markers = "sys_platform == 'win32' and python_version == '3.12'" },
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-linux_x86_64.whl", markers = "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'" },
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-linux_aarch64.whl", markers = "sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.12'" },
 ]
 
 # Triton selection (FlashAttention backends depend on Triton)

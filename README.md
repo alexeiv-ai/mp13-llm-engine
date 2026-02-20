@@ -102,7 +102,10 @@ Known to work with any of the below models, subject to compatibility with settin
 
 ### 1) Install
 
-This repository uses **Poetry** and supports two pinned dependency stacks (mainline and legacy).
+This repository uses **Poetry** and supports three dependency stacks:
+- **Older:** `pyproject.toml_torch_2.6.0`
+- **Current:** `pyproject.toml_torch_2.9.1` (default `pyproject.toml`)
+- **Experimental:** `pyproject.toml_gb10`
 
 Clone the repo:
 
@@ -113,22 +116,21 @@ cd mp13-llm-engine
 
 **Prerequisites (recommended):**
 - Python 3.12+
-- Poetry 1.8+ installed (2.1+ recommended)
-  - **Install user-wide:** `python3 -m pip install --user "poetry>=2.1"`
-  - Don't install Poetry inside the project's venv (it will disappear - [see why](INSTALL.md#poetry-installed-inside-venv-disappears))
-  - Alternative: Use [pipx](https://pipx.pypa.io/) for isolated Poetry installation
-- For GPU support: A compatible NVIDIA driver and CUDA runtime for your PyTorch build.
+- Poetry 1.8+ installed (2.1+ recommended): `python3 -m pip install --user "poetry>=2.1"`
+- For GPU support: A compatible or lastest NVIDIA driver.
 
-**Linux-specific setup:**
+Quick notes:
+- Checked-in `poetry.lock` is for the **current Windows stack**; delete it first if your platform/stack differs.
+- Keep Poetry outside project venv; set local venv before first install.
+- For stack-specific compatibility and ARM64/flash-attn details, see **[INSTALL.md](INSTALL.md)**.
+
+Before first install/sync, force a project-local virtual environment:
+
 ```bash
-# Disable keyring on headless systems (prevents hangs)
-poetry config keyring.enabled false
-
-# If installing from a cross-platform repository, regenerate the lock file
-rm poetry.lock && poetry lock --no-update
+poetry config virtualenvs.in-project true --local
 ```
 
-Minimal install:
+Minimal setup (works for most models):
 
 ```bash
 # Poetry 2.1+
@@ -137,6 +139,24 @@ poetry sync
 # Poetry 1.8-2.0
 poetry install
 ```
+
+Complete setup (all optional groups):
+
+```bash
+# Poetry 2.1+
+poetry sync --with triton --with flashattn --with mistral3
+
+# Poetry 1.8-2.0
+poetry install --with triton --with flashattn --with mistral3
+```
+
+Verify Poetry is using the project-local `.venv`:
+
+```bash
+poetry env info --path
+```
+
+Expected path: `<repo>/.venv`
 
 Activate the virtual environment before running any commands:
 
@@ -151,44 +171,19 @@ Activate the virtual environment before running any commands:
 source .venv/bin/activate
 ```
 
-> If you do not see a `.venv` folder, Poetry is likely using its global cache location. To force a per-project venv:
->
-> ```bash
-> poetry config virtualenvs.in-project true --local
-> poetry install  # or poetry sync on Poetry 2.1+
-> ```
-
-Optional extras (platform-dependent):
-
-```bash
-# Poetry 2.1+
-poetry sync --with triton
-poetry sync --with flashattn
-poetry sync --with mistral3
-
-# Poetry 1.8-2.0
-poetry install --with triton
-poetry install --with flashattn
-poetry install --with mistral3
-```
-
-> **Note:** `--with mistral3` is only required for **Ministral-3-3B-Instruct-2512**.
->
-> **ARM64 Linux (aarch64):** Skip `--with flashattn` - pre-built wheels not available. Use default SDPA attention backend.
-
-* Full installation notes: **[INSTALL.md](INSTALL.md)**
+Full installation guidance and troubleshooting: **[INSTALL.md](INSTALL.md)**
 
 ---
 
 ### 2) Configure
 
+Reminder: activate your virtual environment first.
 Create or edit a config file:
 
 ```bash
 python mp13config.py (use --interactive to go through each setting and provide a custom value)
 ```
 
-Reminder: activate your virtual environment first.
 
 Alternate:
 
@@ -216,17 +211,17 @@ py demo/demo_mp13_engine.py --base-model <model_name_or_path>
 ```
 
 By default, it uses the 'root' config.
-Run with `--help` to see all options. The trained adapter is saved under the configured adapters directory and should become visible through core engine API as well as in CLI chat when used with the same or compatible model. Note that different model families or quantized schemes may train an adapter using the same name, the engine will resolve only compatible adapters when loading by their names.
+Run with `--help` to see all options. The trained adapter is saved under the configured adapters directory and should become visible through core engine API as well as in CLI chat when used with the same or compatible model. Note that different model families or quantized schemes may train an adapter using the same name, the engine will resolve only compatible adapters when loading by their short names.
 
 ---
 
 ### 4) Use the chat app
+Reminder: activate your virtual environment first.
 
 ```bash
 python mp13chat.py
 ```
 
-Reminder: activate your virtual environment first.
 
 Alternate:
 
@@ -246,7 +241,7 @@ If the workflow feels unfamiliar, it's often effective to point a capable LLM at
 * (speculating here) Can I build a graphical UI that will make it easier managing, switching and tracking branched conversations using cursors and session tree related iterators?
 
 
-For debugging or research, feeding same LLM extra context such as chat console output, a session tree, or a stack trace is usually enough to make progress.
+For engine debugging or code research, feeding same capabable LLM extra context such as chat console output, a session tree, or a stack trace is usually enough to make progress.
 
 ---
 

@@ -432,33 +432,64 @@ class MP13Engine(metaclass=EngineLogContextMeta):
             # For certain models, 'auto' might default to a suboptimal 'eager' implementation.
             # This logic attempts to force a better implementation if available.
             models_to_override_attn = ['phi', 'phi3', 'phi3small', 'qwen2']
-            if model_type_from_config in models_to_override_attn and attn_implementation and attn_implementation.lower() == "auto":
-                is_flash_attn_available = False
+            def _probe_import(module_name: str) -> bool:
+                """Return True only if the module can be imported (i.e., extensions/DLLs can actually load)."""
                 try:
-                    if importlib.util.find_spec("flash_attn"):
-                        is_flash_attn_available = True
+                    importlib.import_module(module_name)
+                    return True
                 except Exception:
-                    pass  # Ignore any import-related errors
+                    return False
 
-                if is_flash_attn_available:
-                    warn_msg = f"Model type '{model_type_from_config}' detected with attn_implementation='auto'. Forcing to 'flash_attention_2' for optimal performance." # type: ignore
+            # Probe FlashAttention backends (FA2 uses `flash_attn`, FA3 uses `flash_attn_3`).
+            # Note: `find_spec` can be a false positive on Windows when the package exists but DLLs can't load.
+            has_fa3 = _probe_import("flash_attn_3")
+            has_fa2 = _probe_import("flash_attn")
+
+            # If the user explicitly requested a flash backend but it's not available, fall back safely.
+            if attn_implementation and attn_implementation.lower() in ("flash_attention_3", "flash_attention_2"):
+                requested = attn_implementation.lower()
+                ok = (requested == "flash_attention_3" and has_fa3) or (requested == "flash_attention_2" and has_fa2)
+                if not ok:
+                    supports_sdpa = getattr(model_config, "_supports_sdpa", True)  # Default to True if attr not present
+                    fallback = "sdpa" if supports_sdpa else "eager"
+                    warn_msg = (
+                        f"attn_implementation='{requested}' was requested, but the required package could not be imported "
+                        f"(FA3: flash_attn_3={has_fa3}, FA2: flash_attn={has_fa2}). Falling back to '{fallback}'."
+                    )
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
+                    attn_implementation = fallback
+
+            # Auto override for specific model families: prefer FA2, then SDPA (if supported). FA3 is explicit-only.
+            if model_type_from_config in models_to_override_attn and attn_implementation and attn_implementation.lower() == "auto":
+                if has_fa2:
+                    warn_msg = (
+                        f"Model type '{model_type_from_config}' detected with attn_implementation='auto'. "
+                        f"Forcing to 'flash_attention_2' for optimal performance."
+                    )
                     logger.warning(warn_msg)
                     init_report["warnings"].append(warn_msg)
                     attn_implementation = "flash_attention_2"
                 else:
-                    # Check if the model supports SDPA before falling back to it.
-                    # Some models (like Phi-3) do not support SDPA and would fail.
-                    supports_sdpa = getattr(model_config, "_supports_sdpa", True) # Default to True if attr not present
+                    supports_sdpa = getattr(model_config, "_supports_sdpa", True)
                     if supports_sdpa:
-                        warn_msg = f"Model type '{model_type_from_config}' with attn_implementation='auto', but flash-attn is not installed. Using 'sdpa' as a fallback. For best performance, consider `pip install flash-attn --no-build-isolation`." # type: ignore
+                        warn_msg = (
+                            f"Model type '{model_type_from_config}' with attn_implementation='auto', "
+                            f"but FlashAttention is not available (FA3: flash_attn_3={has_fa3}, FA2: flash_attn={has_fa2}). "
+                            f"Using 'sdpa' as a fallback."
+                        )
                         logger.warning(warn_msg)
                         init_report["warnings"].append(warn_msg)
                         attn_implementation = "sdpa"
                     else:
-                        warn_msg = f"Model type '{model_type_from_config}' with attn_implementation='auto', but flash-attn is not installed and the model does not support SDPA. The 'eager' implementation will be used, which may be slow." # type: ignore
+                        warn_msg = (
+                            f"Model type '{model_type_from_config}' with attn_implementation='auto', "
+                            f"but FlashAttention is not available and the model does not support SDPA. "
+                            f"The 'eager' implementation will be used, which may be slow."
+                        )
                         logger.warning(warn_msg)
                         init_report["warnings"].append(warn_msg)
-                        # Do not change attn_implementation, let 'auto' resolve to 'eager'.
+                        # keep 'auto'
             # --- End of Attention Override ---
 
             actual_torch_dtype: Optional[torch.dtype] = None

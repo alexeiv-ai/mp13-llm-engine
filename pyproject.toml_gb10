@@ -1,0 +1,164 @@
+# NOTE: Experimental CUDA 13 (cu130) stack to exercise newest kernels (incl. GB10 / sm_121) without destabilizing the default lockfile.
+#
+# Intended usage (Poetry 2.1+):
+#   - For this experimental stack, copy this file over pyproject.toml *locally* and create a *local* lock.
+#   - On a Hopper GPU machine one can also try optional FA3 by adding --with flashattn3.
+#
+# Windows x86_64:
+#   copy pyproject.toml_gb10 pyproject.toml
+#   del poetry.lock
+#   poetry lock
+#   poetry sync
+#   # Optional: poetry sync --with triton --with flashattn --with mistral3
+#
+# Linux x86_64:
+#   cp pyproject.toml_gb10 pyproject.toml
+#   rm -f poetry.lock
+#   poetry lock
+#   poetry sync
+#   # Optional: poetry sync --with triton --with flashattn --with mistral3
+#
+# GB10 / SPARC (Linux aarch64):
+#   cp pyproject.toml_gb10 pyproject.toml
+#   rm -f poetry.lock
+#   poetry lock
+#   poetry sync
+#   # Triton is installed by default on aarch64 to enable torch.compile/Inductor paths.
+#   # Optional: poetry sync --with flashattn --with mistral3
+#
+# Notes:
+#   - This stack uses *stable* cu130 wheels (not nightly) to keep dependency solving/locking predictable.
+#   - PyTorch cu130 wheels exist for Windows, Linux x86_64, and Linux aarch64.
+#
+
+[tool.poetry]
+name = "mp13-engine"
+version = "0.9.0"
+description = "HF-based Local LLM engine and tools"
+authors = ["alexeiv-ai <88820640+alexeiv-ai@users.noreply.github.com>"]
+readme = "README.md"
+packages = [
+    { include = "app", from = "src" },
+    { include = "mp13_engine", from = "src" }
+]
+
+[tool.poetry.scripts]
+mp13chat = "app.mp13chat:cli"
+mp13config = "app.config:cli"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+
+python-dotenv = ">=0.19.0"
+click = ">=8.0.0"
+requests = ">=2.26.0"
+pydantic = ">=2.4.2"
+
+# Torch/CUDA anchor (Windows + Linux): keep pinned to avoid heavy dependency re-solving.
+torch = [
+  { version = "==2.10.0+cu128", source = "pytorch-cu128", markers = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { version = "==2.10.0+cu128", source = "pytorch-cu128", markers = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { version = "==2.10.0+cu128", source = "pytorch-cu128", markers = "sys_platform == 'win32' and platform_machine == 'x86_64'" }
+]
+# HF stack anchor (transformers/peft/accelerate should be kept compatible)
+transformers = { version = "==5.0.0rc2", allow-prereleases = true }
+peft = ">=0.18.0,<0.19.0"
+datasets = "^4.4.2"
+accelerate = ">=1.12.0,<1.13.0"
+
+# Optional perf/attention libs (torch/CUDA-locked)
+xformers = { version = "*", optional = true, markers = "sys_platform == 'win32' and platform_machine == 'x86_64'" }
+
+# Torch-locked quantization utilities
+# torchao version should track torch; 0.16.0 aligns with torch 2.10.x (see pytorch/ao compatibility table)
+torchao = "==0.16.0"
+hqq = "^0.2.7"
+
+# Loosely coupled utilities
+numpy = ">=1.26.0"
+tiktoken = "^0.9.0"
+
+# GB10 / SPARC (Linux aarch64, sm_121): install Triton by default to enable torch.compile/Inductor paths
+# Note: torch==2.10.0+cu130 pulls triton==3.6.0; keep this range compatible.
+triton = { version = ">=3.6.0,<3.7.0", source = "pytorch-cu128", markers = "sys_platform == 'linux' and platform_machine == 'aarch64'" }
+
+# Misc
+matplotlib = "^3.10.1"
+einops = "^0.8.1"
+numexpr = "^2.11.0"
+prompt-toolkit = "^3.0.51"
+
+[tool.poetry.extras]
+xformers = ["xformers"]
+
+# Triton is required for some features (e.g., mistral3 kernels, HQQ quantization).
+# If you enable `--with flashattn`, Triton is included automatically—no need to also enable `--with triton`.
+[tool.poetry.group.triton]
+optional = true
+
+[tool.poetry.group.triton.dependencies]
+# Linux x86_64 (Triton wheels from PyTorch index). On GB10/SPARC (Linux aarch64) Triton is installed by default above.
+triton = { version = ">=3.6.0,<3.7.0", source = "pytorch-cu128", markers = "sys_platform == 'linux' and platform_machine != 'aarch64'" }
+# Native Windows (community build). Triton 3.5.x is intended for torch >=2.9.
+triton-windows = { version = ">=3.5,<3.6", markers = "sys_platform == 'win32'" }
+
+# Mistral3 / Ministral3 support (adds mistral-common; uses Triton via markers)
+[tool.poetry.group.mistral3]
+optional = true
+
+[tool.poetry.group.mistral3.dependencies]
+mistral-common = ">=1.8.6"
+# Same Triton selection as above, so `--with mistral3` brings Triton on the current platform.
+
+# FlashAttention 2 support (optional; opt-in via `poetry install --with flashattn`)
+# Keep this group optional; do not move flash-attn into main dependencies.
+#
+# Notes:
+# - Uses a community prebuilt wheels for torch 2.10 + cu128.
+#
+[tool.poetry.group.flashattn]
+optional = true
+
+[tool.poetry.group.flashattn.dependencies]
+# FlashAttention 2
+# - Package URLs were found with https://flashattn.dev/versions
+# - Community prebuilt wheels for PyTorch 2.10 (CUDA 12.8 / cu128)
+flash-attn = [
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.10-cp312-cp312-linux_x86_64.whl", markers = "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'" },
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.13/flash_attn-2.8.3+cu128torch2.10-cp312-cp312-win_amd64.whl", markers = "sys_platform == 'win32' and python_version == '3.12'" },
+  { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.10-cp312-cp312-linux_aarch64.whl", markers = "sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.12'" },
+]
+
+# Triton selection (FlashAttention backends depend on Triton)
+triton = { version = ">=3.6.0,<3.7.0", source = "pytorch-cu128", markers = "sys_platform == 'linux' and platform_machine != 'aarch64'" }
+triton-windows = { version = ">=3.5,<3.6", markers = "sys_platform == 'win32'" }
+
+# FlashAttention 3 (FA3) remains optional and is only usable on supported GPU architectures.
+# Keep this group optional; do not move flash-attn-3 into main dependencies.
+[tool.poetry.group.flashattn3]
+optional = true
+
+[tool.poetry.group.flashattn3.dependencies]
+flash-attn-3 = { version = "*", source = "pytorch-cu128" }
+
+[[tool.poetry.source]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+priority = "supplemental"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=6.2.5"
+pytest-asyncio = ">=0.21.0"
+pylint = "^3.3.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
