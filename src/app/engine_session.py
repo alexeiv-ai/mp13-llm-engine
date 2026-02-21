@@ -68,20 +68,28 @@ class Colors:
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
+    BLACK = "\033[30m"
     RED = "\033[31m"
     GREEN = "\033[32m"
     YELLOW = "\033[33m"
     BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    BRIGHT_GREEN = "\033[92m"
+    BRIGHT_MAGENTA = "\033[95m"
+    LIGHT_GRAY = "\033[37m"
+    DARK_BLUE = "\033[34m"
+    DARK_GREEN = "\033[38;5;22m"
+    DARK_MAGENTA = "\033[38;5;54m"
     BRIGHT_BLUE = "\033[94m"    
     CYAN = "\033[36m"
     BRIGHT_CYAN = "\033[96m"
     BRIGHT_BLACK = "\033[90m"  # Grey
     BRIGHT_YELLOW = "\033[93m"
     WHITE = "\033[97m"
-    LOG_DEBUG = "\033[2m"  # DIM
-    LOG_INFO = "\033[2m"   # DIM
-    LOG_WARNING = "\033[33;20m" # YELLOW
-    LOG_ERROR = "\033[31;20m" # RED
+    LOG_DEBUG = f"{DIM}"  # DIM
+    LOG_INFO = f"{DIM}"   # DIM
+    LOG_WARNING = f"{YELLOW}{DIM}" # YELLOW + DIM
+    LOG_ERROR = f"{RED}{DIM}" # RED + DIM
 
     YOU_HEADER = f"{BOLD}{GREEN}"
     YOU_CONTENT = f"{BOLD}{GREEN}"
@@ -93,9 +101,77 @@ class Colors:
     TOOL_WARNING = f"{DIM}{RED}"
     METRICS = f"{DIM}{BRIGHT_BLACK}"
     ERROR = f"{BOLD}{RED}"
-    SUCCESS = f"{BOLD}{GREEN}"
+    SUCCESS = f"{DARK_GREEN}"
     HEADER = f"{BOLD}{WHITE}"
     ECHO = f"{BOLD}{CYAN}"
+
+    @classmethod
+    def normalize_theme(cls, value: Optional[str]) -> str:
+        v = str(value or "").strip().lower()
+        return v if v in ("auto", "dark", "light") else "auto"
+
+    @classmethod
+    def detect_terminal_theme_from_env(cls) -> str:
+        """
+        Best-effort terminal background theme detection using COLORFGBG.
+        """
+        colorfgbg = os.environ.get("COLORFGBG")
+        if colorfgbg:
+            parts = [p for p in re.split(r"[;:]", colorfgbg) if p]
+            if parts:
+                try:
+                    bg_idx = int(parts[-1])
+                    return "light" if 7 <= bg_idx <= 15 else "dark"
+                except Exception:
+                    pass
+        return "dark"
+
+    @classmethod
+    def resolve_theme(cls, cli_theme: str) -> str:
+        env_theme = cls.normalize_theme(os.environ.get("MP13CHAT_THEME"))
+        requested = cls.normalize_theme(cli_theme)
+        effective = env_theme if env_theme != "auto" else requested
+        return cls.detect_terminal_theme_from_env() if effective == "auto" else effective
+
+    @classmethod
+    def apply_theme(cls, theme: str) -> None:
+        if theme == "light":
+            cls.YOU_HEADER = f"{cls.DARK_BLUE}"
+            cls.YOU_CONTENT = f"{cls.DARK_BLUE}"
+            cls.LLM_CONTENT = f"{cls.MAGENTA}"
+            cls.LLM_HEADER = f"{cls.MAGENTA}"
+            cls.SYSTEM = f"{cls.DIM}{cls.BLUE}"
+            cls.TOOL = f"{cls.DARK_MAGENTA}"
+            cls.TOOL_ARGS = f"{cls.DIM}{cls.DARK_MAGENTA}"
+            cls.TOOL_WARNING = f"{cls.DIM}{cls.RED}"
+            cls.METRICS = f"{cls.DIM}{cls.LIGHT_GRAY}"
+            cls.ERROR = f"{cls.BOLD}{cls.RED}"
+            cls.SUCCESS = f"{cls.DARK_GREEN}"
+            cls.HEADER = f"{cls.BOLD}{cls.BLACK}"
+            cls.ECHO = f"{cls.DARK_BLUE}"
+            cls.LOG_DEBUG = f"{cls.BLACK}{cls.DIM}"
+            cls.LOG_INFO = f"{cls.BLACK}{cls.DIM}"
+            cls.LOG_WARNING = f"{cls.YELLOW}{cls.DIM}"
+            cls.LOG_ERROR = f"{cls.RED}{cls.DIM}"
+            return
+
+        cls.YOU_HEADER = f"{cls.BOLD}{cls.GREEN}"
+        cls.YOU_CONTENT = f"{cls.BOLD}{cls.GREEN}"
+        cls.LLM_CONTENT = f"{cls.BOLD}{cls.YELLOW}"
+        cls.LLM_HEADER = f"{cls.YELLOW}"
+        cls.SYSTEM = f"{cls.CYAN}"
+        cls.TOOL = f"{cls.CYAN}"
+        cls.TOOL_ARGS = f"{cls.DIM}{cls.CYAN}"
+        cls.TOOL_WARNING = f"{cls.DIM}{cls.RED}"
+        cls.METRICS = f"{cls.DIM}{cls.BRIGHT_BLACK}"
+        cls.ERROR = f"{cls.BOLD}{cls.RED}"
+        cls.SUCCESS = f"{cls.DARK_GREEN}"
+        cls.HEADER = f"{cls.BOLD}{cls.WHITE}"
+        cls.ECHO = f"{cls.BOLD}{cls.CYAN}"
+        cls.LOG_DEBUG = f"{cls.DIM}"
+        cls.LOG_INFO = f"{cls.DIM}"
+        cls.LOG_WARNING = f"{cls.YELLOW}{cls.DIM}"
+        cls.LOG_ERROR = f"{cls.RED}{cls.DIM}"
 
 @dataclass
 class InferenceParams:
@@ -297,7 +373,11 @@ class Turn:
         if self.gen_id:
             return self.gen_id
         if self.parent and self.parent.gen_id:
-            return f"off:{self.parent.gen_id}_{self.parent.turns.index(self)}"
+            try:
+                # This can fail if a turn is detached from its parent's list
+                return f"off:{self.parent.gen_id}_{self.parent.turns.index(self)}"
+            except ValueError:
+                return f"off:{self.parent.gen_id}_orphan"
         if self.parent is None:
             # This is a root turn. In a multi-conversation session, we might need more context.
             # For now, 'off:root' is a clear indicator.

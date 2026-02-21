@@ -12437,6 +12437,7 @@ async def chat_loop(
     startup_replay_specs: Optional[List[str]] = None,
     startup_save_spec: Optional[str] = None,
     startup_quit: bool = False,
+    ui_theme: str = "dark",
 ):
     global current_config, session_control, toolbox, ENGINE_PARSER_PROFILE, conversation_template
 
@@ -12509,15 +12510,24 @@ async def chat_loop(
     _set_active_cursor(cursor)
  
     print(f"MP13 Playground Chat. Type /help for commands.")
+#    _print_color_debug_preview()
     print_current_session_info(cursor)
     
     # Style for the prompt_toolkit prompt itself
-    pt_style = Style.from_dict({
-        '': 'bold lightgreen', # Default input text color
-        'prompt.you': 'lightgreen',
-        'prompt.override': 'yellow',
-        'prompt.role': 'gray', # Use a dim color instead of the 'dim' attribute
-    })
+    if ui_theme == "light":
+        pt_style = Style.from_dict({
+            '': 'ansiblue',
+            'prompt.you': 'ansiblue',
+            'prompt.override': 'ansiyellow',
+            'prompt.role': 'ansiblue',
+        })
+    else:
+        pt_style = Style.from_dict({
+            '': 'bold lightgreen', # Default input text color
+            'prompt.you': 'lightgreen',
+            'prompt.override': 'yellow',
+            'prompt.role': 'gray', # Use a dim color instead of the 'dim' attribute
+        })
     key_bindings = KeyBindings()
 
     @key_bindings.add("enter")
@@ -12761,12 +12771,48 @@ def _set_console_log_level(level: int):
             handler.setLevel(level)
             return
 
+def _print_color_debug_preview() -> None:
+    """Print all ANSI color constants from Colors for terminal tuning/debug."""
+    print(f"{Colors.HEADER}--- Color Preview ---{Colors.RESET}")
+    color_items: List[Tuple[str, str]] = []
+    for name, value in sorted(vars(Colors).items()):
+        if name.isupper() and isinstance(value, str) and value.startswith("\033["):
+            color_items.append((name, value))
+
+    for idx, (name, value) in enumerate(color_items, start=1):
+        print(f"  {idx:>2}. {value}{name:<18} sample text{Colors.RESET}")
+
+    print(f"{Colors.HEADER}--- Semantic Preview ---{Colors.RESET}")
+    print(f"  {Colors.YOU_HEADER}YOU_HEADER{Colors.RESET} / {Colors.YOU_CONTENT}YOU_CONTENT sample{Colors.RESET}")
+    print(f"  {Colors.LLM_HEADER}LLM_HEADER{Colors.RESET} / {Colors.LLM_CONTENT}LLM_CONTENT sample{Colors.RESET}")
+    print(f"  {Colors.SYSTEM}SYSTEM sample{Colors.RESET}")
+    print(f"  {Colors.TOOL}TOOL sample{Colors.RESET}")
+    print(f"  {Colors.TOOL_ARGS}TOOL_ARGS sample{Colors.RESET}")
+    print(f"  {Colors.METRICS}METRICS sample{Colors.RESET}")
+    print(f"  {Colors.TOOL_WARNING}TOOL_WARNING sample{Colors.RESET}")
+    print(f"  {Colors.ERROR}ERROR sample{Colors.RESET}")
+    print(f"  {Colors.SUCCESS}SUCCESS sample{Colors.RESET}")
+    print(f"{Colors.HEADER}--- End Color Preview ---{Colors.RESET}")
+
 TERMINAL_BG_SET = False
+
+def _is_remote_shell_session() -> bool:
+    """Detect common SSH remote-shell indicators."""
+    return any(os.environ.get(name) for name in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"))
 
 def _attempt_set_dark_terminal_background() -> None:
     """Best-effort OSC 11 background set; ignored by unsupported terminals."""
     global TERMINAL_BG_SET
     if not sys.stdout.isatty():
+        return
+    # OSC 11 modifies terminal window background and can be disruptive across platforms.
+    # Keep this fully opt-in.
+    force_bg = str(os.environ.get("MP13CHAT_FORCE_DARK_BG", "")).strip().lower() in ("1", "true", "yes", "on")
+    if not force_bg:
+        return
+    # Remote SSH clients (notably macOS Terminal/iTerm) may apply this to the whole
+    # local window, making the session appear fully black.
+    if _is_remote_shell_session():
         return
     try:
         sys.stdout.write("\033]11;#101010\007")
@@ -12844,6 +12890,13 @@ async def main_logic():
         help="Save after replay. Optional name/path; if omitted, save to loaded session path."
     )
     parser.add_argument(
+        "--theme",
+        type=str,
+        default="auto",
+        choices=["auto", "dark", "light"],
+        help="Terminal color theme. 'auto' uses COLORFGBG when available."
+    )
+    parser.add_argument(
         "--quit", dest="startup_quit", action="store_true",
         help="Quit after replay (and optional save)."
     )
@@ -12856,6 +12909,8 @@ async def main_logic():
     args = parser.parse_args()
     DUMP_INIT_ENABLED = args.dump_init # Set the global flag
 
+    resolved_theme = Colors.resolve_theme(args.theme)
+    Colors.apply_theme(resolved_theme)
     _attempt_set_dark_terminal_background()
 
 
@@ -13016,6 +13071,7 @@ async def main_logic():
             startup_replay_specs=args.startup_replay_specs,
             startup_save_spec=args.startup_save_spec,
             startup_quit=args.startup_quit,
+            ui_theme=resolved_theme,
         )
     except asyncio.CancelledError:
         # This can happen if the main task is cancelled during shutdown.

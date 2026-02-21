@@ -144,7 +144,7 @@ flash-attn-3 = { version = "*", source = "pytorch-cu128" }
 [[tool.poetry.source]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
-priority = "supplemental"
+priority = "explicit"
 
 
 [tool.poetry.group.dev.dependencies]
