@@ -2079,7 +2079,7 @@ def prompt_for_config(config_to_update: Optional[Dict[str, Any]] = None, save_to
     base_model_path = _input_with_default("Enter base model path (prefix with hf: for remote IDs)", engine_params.get("base_model_path", ""), engine_params.get("base_model_path"))
     base_model_dtype = _input_with_default("Enter base model dtype (auto, bfloat16, float16, float32)", engine_params.get("base_model_dtype", "auto"), engine_params.get("base_model_dtype"))
     attn_implementation = _input_with_default("Enter attention implementation (auto, flash_attention_2, sdpa, eager)", engine_params.get("attn_implementation", "auto"), engine_params.get("attn_implementation"))
-    quant_prompt = "Enter quantization method (none, hqq, eetq)"
+    quant_prompt = "Enter quantization method (none, hqq, eetq, te)"
     quantize_bits_method = (_input_with_default(quant_prompt, engine_params.get("quantize_bits", "none"), engine_params.get("quantize_bits"))).lower()
     default_context_size_str = _input_with_default_optional("Enter default context size (e.g., 4096, or empty for model default)", engine_params.get("default_context_size"), engine_params.get("default_context_size"))
     default_context_size = int(default_context_size_str) if default_context_size_str and default_context_size_str.isdigit() else None
@@ -2088,10 +2088,6 @@ def prompt_for_config(config_to_update: Optional[Dict[str, Any]] = None, save_to
     default_system_message = _input_with_default_optional("Enter default system message for new sessions (can be empty)", engine_params.get("default_system_message", ""), engine_params.get("default_system_message"))
 
     config_data: Dict[str, Any] = current_values.copy() # Start with current/default values
-    if quantize_bits_method not in ("none", "hqq", "eetq"):
-        print(f"{Colors.TOOL_WARNING}Invalid quantization method '{quantize_bits_method}'. Defaulting to 'none'.{Colors.RESET}")
-        quantize_bits_method = "none"
-
     engine_params["quantize_bits"] = quantize_bits_method
 
     if quantize_bits_method == "hqq":
@@ -12866,8 +12862,7 @@ async def main_logic():
     )
     parser.add_argument(
         "--quantize_bits", dest="quantize_bits_override", type=str, default=None,
-        choices=["none", "hqq", "eetq"],
-        help="Override quantize_bits from config for this session only (none, hqq, or eetq)."
+        help="Override quantize_bits from config for this session only (e.g., none, hqq, eetq, te). Validation/fallback is handled by engine init."
     )
     parser.add_argument(
         "--no-torch-compile", action="store_true",

@@ -7,9 +7,76 @@
 """MP13 Engine - Unified training and inference server."""
 
 import logging, types
+import contextlib
+import importlib
 import importlib.util
+from typing import Tuple
 # Create a global logger for the engine module
 logger = logging.getLogger(__name__)
+
+def _probe_import(module_name: str) -> bool:
+    """Return True only if the module can be imported (i.e., extensions can actually load)."""
+    try:
+        importlib.import_module(module_name)
+        return True
+    except Exception:
+        return False
+
+
+def _is_windows() -> bool:
+    try:
+        import platform as _platform
+        return _platform.system().lower().startswith("win")
+    except Exception:
+        return False
+
+
+def _te_fp8_is_available() -> Tuple[bool, str]:
+    """Best-effort probe for NVIDIA Transformer Engine FP8 support.
+
+    Notes:
+    - TE wheels and supported kernel stacks are typically Linux-only. On Windows we disable gracefully.
+    - FP8 capability varies by GPU/driver/TE version. We allow Ada+ (SM89+) and degrade gracefully
+      at runtime if TE refuses FP8 execution.
+    """
+    if _is_windows():
+        return False, "Transformer Engine FP8 not supported on Windows in this build"
+    if not torch.cuda.is_available():
+        return False, "CUDA unavailable"
+    if not _probe_import("transformer_engine"):
+        return False, "transformer_engine package not importable"
+    try:
+        cc = torch.cuda.get_device_capability(0)
+        if isinstance(cc, tuple) and len(cc) == 2:
+            sm = cc[0] * 10 + cc[1]
+            if sm < 89:
+                return False, f"GPU compute capability {cc} (< (8, 9))"
+            if sm < 90:
+                return True, f"GPU compute capability {cc} (SM89: TE FP8 support may be limited)"
+    except Exception as e:
+        return False, f"Could not query GPU capability: {e}"
+    return True, "OK"
+
+
+def _eetq_is_available() -> Tuple[bool, str]:
+    """Best-effort probe for EETQ weight-only INT8 support."""
+    if _is_windows():
+        return False, "EETQ not supported on Windows in this build"
+    if not torch.cuda.is_available():
+        return False, "CUDA unavailable"
+    if not _probe_import("eetq"):
+        return False, "eetq package not importable"
+    return True, "OK"
+
+
+def _hqq_is_available() -> Tuple[bool, str]:
+    """Probe HQQ availability (HQQ is used for inference patching and depends on Triton for best performance)."""
+    try:
+        import hqq  # noqa: F401
+    except Exception as e:
+        return False, f"hqq import failed: {e}"
+    return True, "OK"
+
 
 import asyncio, contextvars, functools, threading
 
@@ -64,7 +131,7 @@ from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 # Optional (newer transformers) autos/classes - imported lazily when needed.
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.utils.quantization_config import BitsAndBytesConfig, AwqConfig, HqqConfig, EetqConfig
+from transformers.utils.quantization_config import AwqConfig, HqqConfig, EetqConfig
 
 # Local imports
 from .mp13_patches import apply_engine_init_patches, apply_infer_patches
@@ -115,44 +182,102 @@ def _safe_log_text(value: Any) -> str:
     except Exception:
         return "<unprintable>"
 
+def _install_te_fp8_forward_wrapper(
+    state: "MP13State",
+    model: Any,
+    *,
+    enable_inference: bool,
+    enable_training: bool,
+) -> None:
+    """Wrap model.forward to enable TE FP8 autocast depending on engine mode.
+
+    This provides opt-in FP8 runtime autocast while preserving a single model object.
+    On Ada (SM89) TE may still reject FP8 at runtime; if that happens, we disable FP8
+    for subsequent calls and fail the current request.
+    """
+    try:
+        import transformer_engine.pytorch as te  # type: ignore
+    except Exception as e:
+        state.logger.warning(f"Transformer Engine requested but could not be imported: {e}. TE FP8 disabled.")
+        state._te_fp8_disabled = True
+        state._te_fp8_disabled_reason = f"import failed: {e}"
+        return
+
+    if getattr(model, "_mp13_te_fp8_wrapped", False):
+        return
+
+    orig_forward = getattr(model, "forward", None)
+    if not callable(orig_forward):
+        return
+
+    def _should_enable_fp8() -> bool:
+        mode_state = getattr(state, "engine_mode", None)
+        mode_val = getattr(mode_state, "value", str(mode_state))
+        if str(mode_val) == EngineMode.TRAIN.value:
+            return bool(enable_training)
+        return bool(enable_inference)
+
+    @functools.wraps(orig_forward)
+    def wrapped_forward(*args, **kwargs):
+        if getattr(state, "_te_fp8_disabled", False):
+            return orig_forward(*args, **kwargs)
+        if not _should_enable_fp8():
+            return orig_forward(*args, **kwargs)
+
+        try:
+            cm = te.fp8_autocast(enabled=True)
+        except TypeError:
+            cm = te.fp8_autocast()
+        except Exception:
+            cm = contextlib.nullcontext()
+
+        try:
+            with cm:
+                return orig_forward(*args, **kwargs)
+        except AssertionError as e:
+            state._te_fp8_disabled = True
+            state._te_fp8_disabled_reason = f"TE FP8 assertion: {e}"
+            state.logger.warning(
+                "Transformer Engine FP8 autocast failed at runtime (%s). Disabling TE FP8 for subsequent calls; current request will fail.",
+                state._te_fp8_disabled_reason,
+            )
+            raise
+        except Exception as e:
+            state._te_fp8_disabled = True
+            state._te_fp8_disabled_reason = f"TE FP8 error: {e}"
+            state.logger.warning(
+                "Transformer Engine FP8 autocast raised an error (%s). Disabling TE FP8 for subsequent calls; current request will fail.",
+                state._te_fp8_disabled_reason,
+                exc_info=True,
+            )
+            raise
+
+    setattr(model, "_mp13_te_fp8_wrapped", True)
+    setattr(model, "_mp13_te_fp8_forward_orig", orig_forward)
+    setattr(model, "forward", wrapped_forward)
+
+
 def _create_quantization_config(
     config: GlobalEngineConfig,
     is_bf16_supported: bool
-) -> Tuple[Optional[Union[BitsAndBytesConfig, AwqConfig, HqqConfig, EetqConfig]], str, Optional[str]]:
+) -> Tuple[Optional[Union[AwqConfig, HqqConfig, EetqConfig]], str, Optional[str]]:
     """Creates the quantization config object based on the global engine config."""
     quantization_config_obj: Optional[Union[BitsAndBytesConfig, AwqConfig, HqqConfig, EetqConfig]] = None
     effective_quantization_method = "none"
     effective_quant_precision: Optional[str] = None
     cuda_is_available = torch.cuda.is_available()
 
-    if config.quantize_bits == "4":
-        logging.info(f"Using 4-bit BitsAndBytes quantization. Type: {config.bnb_4bit_quant_type}, Compute Dtype: {config.bnb_4bit_compute_dtype}")
-        bnb_compute_torch_dtype = getattr(torch, config.bnb_4bit_compute_dtype, torch.bfloat16)
-        if config.bnb_4bit_compute_dtype == "bfloat16" and not (cuda_is_available and is_bf16_supported):
-            logging.warning("bnb_4bit_compute_dtype 'bfloat16' requested but not supported. Falling back to float32 for compute.")
-            bnb_compute_torch_dtype = torch.float32
-        quantization_config_obj = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type=config.bnb_4bit_quant_type,
-            bnb_4bit_compute_dtype=bnb_compute_torch_dtype,
-            bnb_4bit_use_double_quant=True
-        )
-        effective_quantization_method = "bnb"
-        effective_quant_precision = "I4"
-    elif config.quantize_bits == "8":
-        logging.info("Using 8-bit BitsAndBytes quantization.")
-        quantization_config_obj = BitsAndBytesConfig(load_in_8bit=True)
-        effective_quantization_method = "bnb"
-        effective_quant_precision = "I8"
-    elif config.quantize_bits == "awq":
-        logging.info(f"Using AWQ quantization. Bits: {config.awq_bits}, Group Size: {config.awq_group_size}, Zero Point: {config.awq_zero_point}")
-        quantization_config_obj = AwqConfig(
-            bits=config.awq_bits,
-            group_size=config.awq_group_size,
-            zero_point=config.awq_zero_point
-        )
-        effective_quantization_method = "awq"
-        effective_quant_precision = f"I{config.awq_bits}"
+    if config.quantize_bits == "awq":
+        logging.info("AWQ quantization requested but is disabled (no calibration workflow implemented).")
+        # NOTE: AWQ intentionally disabled. Keeping prior implementation commented for future enablement.
+        # quantization_config_obj = AwqConfig(
+        #     bits=config.awq_bits,
+        #     group_size=config.awq_group_size,
+        #     zero_point=config.awq_zero_point
+        # )
+        quantization_config_obj = None
+        effective_quantization_method = "none"
+        effective_quant_precision = None
     elif config.quantize_bits == "hqq":
         logging.info(f"Using HQQ quantization. Bits: {config.hqq_bits}, Group Size: {config.hqq_group_size}, Axis: {config.hqq_axis}")
         quantization_config_obj = HqqConfig(
@@ -165,9 +290,17 @@ def _create_quantization_config(
         effective_quant_precision = f"I{config.hqq_bits}"
     elif config.quantize_bits == "eetq":
         logging.info("Using EETQ quantization.")
-        quantization_config_obj = EetqConfig()
+        try:
+            quantization_config_obj = EetqConfig("int8")
+        except TypeError:
+            quantization_config_obj = EetqConfig()
         effective_quantization_method = "eetq"
         effective_quant_precision = "I8"
+    elif config.quantize_bits == "te":
+        logging.info("Using NVIDIA Transformer Engine (TE) FP8 runtime autocast (if supported).")
+        quantization_config_obj = None
+        effective_quantization_method = "te"
+        effective_quant_precision = "FP8"
     
     return quantization_config_obj, effective_quantization_method, effective_quant_precision
 
@@ -283,7 +416,6 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 # These relate to global state (patches, environment) set by the first engine
                 keys_to_check = [
                     'attn_implementation', 'base_model_torch_dtype', 'use_torch_compile', 'quantize_bits',
-                    'bnb_4bit_quant_type', 'bnb_4bit_compute_dtype',
                     'awq_bits', 'awq_group_size', 'awq_zero_point',
                     'hqq_bits', 'hqq_group_size', 'hqq_axis'
                 ]
@@ -413,6 +545,69 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 await asyncio.to_thread(gc.collect)
                 await asyncio.to_thread(torch.cuda.ipc_collect)
 
+            # --- Quantization capability gating (graceful disable; do NOT modify requested scheme) ---
+            requested_quantize_bits = quantize_bits
+            quantization_disabled_reason: Optional[str] = None
+            te_fp8_supported = False
+            te_fp8_reason = "not requested"
+
+            # BitsAndBytes is intentionally unsupported in this engine (mixed PEFT workflow). Disable gracefully.
+            if quantize_bits in ("4", "8"):
+                quantization_disabled_reason = "bitsandbytes quantization is not supported with mixed PEFT in this engine"
+                warn_msg = f"quantize_bits='{quantize_bits}' requested, but {quantization_disabled_reason}. Quantization will be disabled."
+                logger.warning(warn_msg)
+                init_report["warnings"].append(warn_msg)
+
+            # AWQ is intentionally disabled until calibration support is implemented.
+            if quantize_bits == "awq":
+                quantization_disabled_reason = "AWQ is disabled (no calibration workflow implemented)"
+                warn_msg = f"quantize_bits='awq' requested, but {quantization_disabled_reason}. Quantization will be disabled."
+                logger.warning(warn_msg)
+                init_report["warnings"].append(warn_msg)
+
+            # EETQ requires CUDA + eetq kernels; currently treated as not supported on Windows.
+            if quantize_bits == "eetq" and quantization_disabled_reason is None:
+                ok, reason = _eetq_is_available()
+                if not ok:
+                    quantization_disabled_reason = f"EETQ unavailable: {reason}"
+                    warn_msg = f"quantize_bits='eetq' requested, but {quantization_disabled_reason}. Quantization will be disabled."
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
+
+            # HQQ is supported if importable; keep existing flow, but disable if import fails.
+            if quantize_bits == "hqq" and quantization_disabled_reason is None:
+                ok, reason = _hqq_is_available()
+                if not ok:
+                    quantization_disabled_reason = f"HQQ unavailable: {reason}"
+                    warn_msg = f"quantize_bits='hqq' requested, but {quantization_disabled_reason}. Quantization will be disabled."
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
+
+            # TE FP8 is runtime autocast; enable only when requested and available.
+            if quantize_bits == "te" and quantization_disabled_reason is None:
+                ok, reason = _te_fp8_is_available()
+                te_fp8_reason = reason
+                if not ok:
+                    quantization_disabled_reason = f"TE FP8 unavailable: {reason}"
+                    warn_msg = f"quantize_bits='te' requested, but {quantization_disabled_reason}. TE FP8 will be disabled."
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
+                else:
+                    te_fp8_supported = True
+                    # torch.compile + fp8_autocast can be fragile across TE / Torch versions.
+                    # Disable compile when TE FP8 is active (do not change requested scheme; just disable compile).
+                    if use_torch_compile:
+                        warn_msg = (
+                            "quantize_bits='te' is enabled. Disabling torch.compile() for stability. "
+                            "Transformer Engine FP8 autocast uses custom CUDA ops and its interaction with torch.compile "
+                            "is not consistently supported across TE/PyTorch versions; running both can lead to graph breaks "
+                            "or runtime failures."
+                        )
+                        logger.warning(warn_msg)
+                        init_report["warnings"].append(warn_msg)
+                        use_torch_compile = False
+            # --- End quantization capability gating ---
+                
             # First, load just the configuration to inspect it for feature support
             logger.info(f"Loading model config for '{base_model_name_or_path}' to check for feature support...")
             model_config = await asyncio.to_thread(
@@ -658,9 +853,14 @@ class MP13Engine(metaclass=EngineLogContextMeta):
 
             # --- Create Quantization Config using Helper ---
             bf16_supported_for_quant = await _is_bf16_supported_async() if cuda_is_available else False
-            quantization_config_obj, effective_quantization_method, effective_quant_precision = _create_quantization_config(
-                config, bf16_supported_for_quant
-            )
+            if quantization_disabled_reason is not None:
+                quantization_config_obj = None
+                effective_quantization_method = "none"
+                effective_quant_precision = None
+            else:
+                quantization_config_obj, effective_quantization_method, effective_quant_precision = _create_quantization_config(
+                    config, bf16_supported_for_quant
+                )
             if quantization_config_obj:
                 model_load_kwargs["quantization_config"] = quantization_config_obj
 
@@ -1108,8 +1308,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 "base_model_torch_dtype": base_model_torch_dtype, # Requested
                 # Store new quantization parameters
                 "quantize_bits": quantize_bits,
-                "bnb_4bit_quant_type": bnb_4bit_quant_type if quantize_bits == "4" else None,
-                "bnb_4bit_compute_dtype": bnb_4bit_compute_dtype if quantize_bits == "4" else None,
+                "quantization_disabled_reason": quantization_disabled_reason,
                 "awq_bits": awq_bits if quantize_bits == "awq" else None,
                 "awq_group_size": awq_group_size if quantize_bits == "awq" else None,
                 "awq_zero_point": awq_zero_point if quantize_bits == "awq" else None,
@@ -1136,6 +1335,37 @@ class MP13Engine(metaclass=EngineLogContextMeta):
 
             peft_mixed_model_for_inference = await loop.run_in_executor(self.state._gen_exec, _create_compile_warmup_and_finalize_model)
             # --- End of PeftMixedModel creation & compilation ---
+
+            # --- Enable TE FP8 autocast by wrapping forward (mode-aware) ---
+            # Do not enable if quantization was disabled for any reason.
+            if quantize_bits == "te" and te_fp8_supported and quantization_disabled_reason is None:
+                self.state._te_fp8_supported = True
+                self.state._te_fp8_reason = te_fp8_reason
+                self.state._te_fp8_inference = bool(getattr(config, "te_fp8_inference", True))
+                self.state._te_fp8_training = bool(getattr(config, "te_fp8_training", False))
+                self.state._te_fp8_disabled = False
+                self.state._te_fp8_disabled_reason = None
+
+                _install_te_fp8_forward_wrapper(
+                    self.state,
+                    peft_mixed_model_for_inference,
+                    enable_inference=self.state._te_fp8_inference,
+                    enable_training=self.state._te_fp8_training,
+                )
+                _install_te_fp8_forward_wrapper(
+                    self.state,
+                    actual_base_model,
+                    enable_inference=self.state._te_fp8_inference,
+                    enable_training=self.state._te_fp8_training,
+                )
+                logger.info(
+                    "Transformer Engine FP8 autocast wrapper installed. "
+                    f"(inference={self.state._te_fp8_inference}, training={self.state._te_fp8_training})"
+                )
+            else:
+                self.state._te_fp8_supported = False
+                self.state._te_fp8_reason = te_fp8_reason
+            # --- End TE FP8 ---
 
             layout = inspect_device_layout(peft_mixed_model_for_inference)
             logger.info(f"Loaded model layout: {layout}")
@@ -1177,8 +1407,7 @@ class MP13Engine(metaclass=EngineLogContextMeta):
                 effective_global_config_dump["quantization_details"] = {
                         k: v for k, v in {
                             "quantize_bits": quantize_bits,
-                            "bnb_4bit_quant_type": bnb_4bit_quant_type if quantize_bits == "4" else None,
-                            "bnb_4bit_compute_dtype": bnb_4bit_compute_dtype if quantize_bits == "4" else None,
+                "quantization_disabled_reason": quantization_disabled_reason,
                             "awq_bits": awq_bits if quantize_bits == "awq" else None,
                             "awq_group_size": awq_group_size if quantize_bits == "awq" else None,
                             "awq_zero_point": awq_zero_point if quantize_bits == "awq" else None,

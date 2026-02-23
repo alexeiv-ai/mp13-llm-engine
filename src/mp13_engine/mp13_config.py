@@ -137,15 +137,32 @@ class GlobalEngineConfig(BaseModel):
     # --- Quantization ---
     quantize_bits: str = Field(
         "none",
-        description="Quantization bits/method for base model. Options: 'none', '4', '8', 'awq', 'hqq', 'eetq'."
+        description=(
+            "Quantization method for the base model. Supported options: 'none', 'hqq', 'eetq', 'te'. "
+            "'te' enables NVIDIA Transformer Engine (FP8) autocast if available; otherwise it is disabled gracefully. "
+            "Deprecated/disabled: '4'/'8' (bitsandbytes) and 'awq' (kept for future calibration support) are not supported "
+            "and will be disabled gracefully if requested."
+        ),
+    )
+
+    # --- NVIDIA Transformer Engine (TE) FP8 ---
+    # TE is *runtime* FP8 via autocast (not a weight-only quantization config).
+    # It is only enabled when quantize_bits='te' and the platform supports it.
+    te_fp8_inference: bool = Field(
+        True,
+        description="If quantize_bits='te', enable TE FP8 autocast in INFERENCE mode (if supported)."
+    )
+    te_fp8_training: bool = Field(
+        False,
+        description="If quantize_bits='te', enable TE FP8 autocast in TRAIN mode (if supported). Default is False for stability."
     )
     # (Not supported) BitsAndBytes specific (for quantize_bits='4' or '8')
-    bnb_4bit_quant_type: str = Field("nf4", description="BitsAndBytes 4-bit quantization type (if quantize_bits='4'). Options: 'nf4', 'fp4'.")
-    bnb_4bit_compute_dtype: str = Field("bfloat16", description="BitsAndBytes 4-bit compute dtype (if quantize_bits='4'). Options: 'float32', 'bfloat16', 'float16'.")
+    bnb_4bit_quant_type: str = Field("nf4", description="DEPRECATED/IGNORED. BitsAndBytes is not supported with mixed PEFT in this engine.")
+    bnb_4bit_compute_dtype: str = Field("bfloat16", description="DEPRECATED/IGNORED. BitsAndBytes is not supported with mixed PEFT in this engine.")
     # (Not supported) AWQ specific (for quantize_bits='awq')
-    awq_bits: int = Field(4, description="AWQ bits (if quantize_bits='awq'). Typically 4.")
-    awq_group_size: int = Field(128, description="AWQ group size (if quantize_bits='awq').") # Common default is 128
-    awq_zero_point: bool = Field(True, description="AWQ zero point (if quantize_bits='awq').")
+    awq_bits: int = Field(4, description="DISABLED. AWQ is kept for future calibration support but not currently supported.")
+    awq_group_size: int = Field(128, description="DISABLED. AWQ is kept for future calibration support but not currently supported.") # Common default is 128
+    awq_zero_point: bool = Field(True, description="DISABLED. AWQ is kept for future calibration support but not currently supported.")
     # HQQ specific (for quantize_bits='hqq')
     hqq_bits: int = Field(4, description="HQQ bits (if quantize_bits='hqq'). Options: 2, 3, 4, 8.")
     hqq_group_size: int = Field(64, description="HQQ group size (if quantize_bits='hqq').")
