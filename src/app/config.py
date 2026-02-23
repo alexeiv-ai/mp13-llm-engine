@@ -107,6 +107,7 @@ class FieldSpec:
     description: str
     kind: str
     allowed: Optional[List[str]] = None
+    allow_unknown: bool = False
 
 
 SECTION_SPECS: List[Tuple[str, str, List[FieldSpec]]] = [
@@ -129,7 +130,16 @@ SECTION_SPECS: List[Tuple[str, str, List[FieldSpec]]] = [
             FieldSpec(("engine_params", "instance_id"), "Instance id", "Optional engine instance identifier.", "text"),
             FieldSpec(("engine_params", "base_model_path"), "Base model path", "Model folder name under models root or absolute path. Examples: llama-3.1-8b, D:/models/llama-3.1-8b.", "text"),
             FieldSpec(("engine_params", "base_model_dtype"), "Base model dtype", "Torch dtype for the base model.", "enum", ["auto", "bfloat16", "float16", "float32"]),
-            FieldSpec(("engine_params", "quantize_bits"), "Quantize bits", "Quantization mode for the base model.", "enum", ["none", "hqq", "eetq"]),
+            FieldSpec(
+                ("engine_params", "quantize_bits"),
+                "Quantize bits",
+                "Quantization mode for the base model.",
+                "enum",
+                ["none", "hqq", "eetq", "te"],
+                allow_unknown=True,
+            ),
+            FieldSpec(("engine_params", "te_fp8_inference"), "TE FP8 inference", "Enable TE FP8 autocast in inference mode when quantize_bits='te'.", "bool"),
+            FieldSpec(("engine_params", "te_fp8_training"), "TE FP8 training", "Enable TE FP8 autocast in training mode when quantize_bits='te'.", "bool"),
             FieldSpec(("engine_params", "hqq_bits"), "HQQ bits", "HQQ quantization bits.", "int"),
             FieldSpec(("engine_params", "hqq_group_size"), "HQQ group size", "HQQ group size.", "int"),
             FieldSpec(("engine_params", "hqq_quant_zero"), "HQQ quant zero", "Enable HQQ zero-point.", "bool"),
@@ -290,7 +300,7 @@ def _parse_value(raw: str, field: FieldSpec) -> Any:
     if field.kind == "enum":
         if value.lower() in {"none", "null"}:
             return None
-        if field.allowed and value not in field.allowed:
+        if field.allowed and value not in field.allowed and not field.allow_unknown:
             raise ValueError(f"Expected one of: {', '.join(field.allowed)}.")
         return value
     if field.kind in {"list", "json"}:
@@ -317,6 +327,28 @@ def _parse_value(raw: str, field: FieldSpec) -> Any:
                     raise ValueError("Invalid JSON input.") from exc
         return value
     return value
+
+
+def _confirm_unknown_enum_value(field: FieldSpec, value: str) -> bool:
+    if field.kind != "enum":
+        return True
+    if not field.allowed:
+        return True
+    if value in field.allowed:
+        return True
+    if not field.allow_unknown:
+        return False
+    print(
+        f"Warning: '{value}' is not in known values for {'.'.join(field.path)} "
+        f"({', '.join(field.allowed)})."
+    )
+    while True:
+        decision = input("Accept this value anyway? (y/N): ").strip().lower()
+        if decision in {"y", "yes"}:
+            return True
+        if decision in {"", "n", "no"}:
+            return False
+        print("Enter y or n.")
 
 
 def _build_path_resolver(save_path: Path) -> PathResolver:
@@ -445,44 +477,49 @@ def _interactive_config(
             print(f"\n{str(field_idx).rjust(index_width)}. {'.'.join(field.path)} = {display} — {field.description}")
             if field.allowed:
                 print(f"Acceptable values: {', '.join(field.allowed)}")
-            new_value = input("New value or cancel (#=reset): ").strip()
-            if new_value == "":
-                print("Canceled.")
-                continue
-            if new_value == "^":
-                return {}, save_path, False
-            if new_value == "!":
-                _print_change_summary(original, config)
-                return config, save_path, True
-            if new_value == "#":
-                delete_nested_value(config, field.path)
-                print("Reset to default.")
-                continue
-            if field.path == ("engine_params", "default_system_message"):
-                if new_value == "<def>":
+            while True:
+                new_value = input("New value or cancel (#=reset): ").strip()
+                if new_value == "":
+                    print("Canceled.")
+                    break
+                if new_value == "^":
+                    return {}, save_path, False
+                if new_value == "!":
+                    _print_change_summary(original, config)
+                    return config, save_path, True
+                if new_value == "#":
                     delete_nested_value(config, field.path)
                     print("Reset to default.")
+                    break
+                if field.path == ("engine_params", "default_system_message"):
+                    if new_value == "<def>":
+                        delete_nested_value(config, field.path)
+                        print("Reset to default.")
+                        break
+                    if new_value == "<>":
+                        delete_nested_value(config, field.path)
+                        print("Omitted (will use default).")
+                        break
+                    if new_value == '""':
+                        set_nested_value(config, field.path, "")
+                        print("Updated.")
+                        break
+                try:
+                    _validate_file_reference(new_value, field=field, resolver=resolver)
+                except ValueError as exc:
+                    print(str(exc))
                     continue
-                if new_value == "<>":
-                    delete_nested_value(config, field.path)
-                    print("Omitted (will use default).")
+                try:
+                    parsed = _parse_value(new_value, field)
+                except ValueError as exc:
+                    print(str(exc))
                     continue
-                if new_value == '""':
-                    set_nested_value(config, field.path, "")
-                    print("Updated.")
+                if isinstance(parsed, str) and not _confirm_unknown_enum_value(field, parsed):
+                    print("Canceled.")
                     continue
-            try:
-                _validate_file_reference(new_value, field=field, resolver=resolver)
-            except ValueError as exc:
-                print(str(exc))
-                continue
-            try:
-                parsed = _parse_value(new_value, field)
-            except ValueError as exc:
-                print(str(exc))
-                continue
-            set_nested_value(config, field.path, parsed)
-            print("Updated.")
+                set_nested_value(config, field.path, parsed)
+                print("Updated.")
+                break
 
 
 def main() -> int:

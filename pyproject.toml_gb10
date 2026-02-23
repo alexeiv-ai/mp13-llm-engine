@@ -90,6 +90,9 @@ prompt-toolkit = "^3.0.51"
 
 [tool.poetry.extras]
 xformers = ["xformers"]
+# Extras are advisory; prefer Poetry groups (`--with te/--with eetq`) for platform markers.
+te = ["transformer-engine"]
+eetq = ["eetq"]
 
 # Triton is required for some features (e.g., mistral3 kernels, HQQ quantization).
 # If you enable `--with flashattn`, Triton is included automatically—no need to also enable `--with triton`.
@@ -146,6 +149,22 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 priority = "explicit"
 
+
+# NVIDIA Transformer Engine (FP8) support (Linux-only in this stack).
+# Enable via: poetry sync --with te
+[tool.poetry.group.te]
+optional = true
+
+[tool.poetry.group.te.dependencies]
+transformer-engine = { version = ">=1.13.0", markers = "sys_platform == 'linux'" }
+
+# EETQ weight-only INT8 kernels (Linux-only in this stack).
+# Enable via: poetry sync --with eetq
+[tool.poetry.group.eetq]
+optional = true
+
+[tool.poetry.group.eetq.dependencies]
+eetq = { version = ">=1.0.0", markers = "sys_platform == 'linux'" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=6.2.5"
