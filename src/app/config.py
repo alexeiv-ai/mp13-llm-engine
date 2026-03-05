@@ -8,6 +8,8 @@ import argparse
 import ast
 import json
 import importlib.util
+import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -39,10 +41,138 @@ PathResolver = _cfg.PathResolver
 get_nested_value = _cfg.get_nested_value
 set_nested_value = _cfg.set_nested_value
 delete_nested_value = _cfg.delete_nested_value
+get_hosting_control_state_path = _cfg.get_hosting_control_state_path
+normalize_hosting_config_selector = _cfg.normalize_hosting_config_selector
 
 
 def _resolve_target_path(args: argparse.Namespace, *, cwd: Path) -> Path:
     return resolve_config_path(args.config, cwd=cwd, default_config_path=get_default_config_path())
+
+
+def _parse_csv_list(raw: Optional[str]) -> List[str]:
+    if not str(raw or "").strip():
+        return []
+    return [x.strip() for x in str(raw).split(",") if x.strip()]
+
+
+def _resolve_host_secret(args: argparse.Namespace) -> str:
+    direct = str(getattr(args, "host_auth_secret", "") or "").strip()
+    if direct:
+        return direct
+    env_name = str(getattr(args, "host_auth_secret_env", "") or "").strip()
+    if env_name:
+        return str(os.environ.get(env_name) or "").strip()
+    if bool(getattr(args, "host_auth_secret_stdin", False)):
+        return str(input()).strip()
+    return ""
+
+
+def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
+    host_action = bool(
+        args.host_auth_status
+        or args.host_auth_list_keys
+        or bool(args.host_auth_generate_secret)
+        or bool(args.host_auth_upsert_key)
+        or bool(args.host_auth_revoke_key)
+        or bool(args.host_auth_issue_session)
+        or bool(args.host_auth_revoke_session)
+        or (args.host_auth_require_auth is not None)
+    )
+    if not host_action:
+        return None
+
+    from hosting.engine_host_service import EngineHostService
+
+    control_state = Path(args.host_control_state_file).expanduser().resolve() if args.host_control_state_file else get_hosting_control_state_path().expanduser().resolve()
+    svc = EngineHostService(control_state_file=control_state)
+
+    if args.host_auth_generate_secret:
+        print(json.dumps({"secret": secrets.token_urlsafe(int(args.host_auth_generate_secret))}, indent=2))
+        return 0
+
+    if args.host_auth_status:
+        print(json.dumps(svc.auth_status(), indent=2))
+        return 0
+
+    if args.host_auth_list_keys:
+        print(json.dumps(svc.auth_list_keys(), indent=2))
+        return 0
+
+    if args.host_auth_revoke_key:
+        print(json.dumps(svc.auth_revoke_key(str(args.host_auth_revoke_key)), indent=2))
+        return 0
+
+    if args.host_auth_revoke_session:
+        print(json.dumps(svc.auth_revoke_session(str(args.host_auth_revoke_session)), indent=2))
+        return 0
+
+    if args.host_auth_require_auth is not None:
+        cfg = svc.set_control_config(require_auth=bool(args.host_auth_require_auth))
+        print(json.dumps(cfg, indent=2))
+        return 0
+
+    if args.host_auth_upsert_key:
+        key_id = str(args.host_auth_upsert_key).strip()
+        role = str(args.host_auth_role or "").strip().lower()
+        if role not in {"management", "config", "traffic"}:
+            print("host-auth-upsert-key requires --host-auth-role {management|config|traffic}")
+            return 1
+        secret = _resolve_host_secret(args)
+        if not secret:
+            print("Missing key secret. Use --host-auth-secret, --host-auth-secret-env, or --host-auth-secret-stdin.")
+            return 1
+        allowed_configs = []
+        if role == "config":
+            try:
+                allowed_configs = [normalize_hosting_config_selector(x) if x != "*" else "*" for x in _parse_csv_list(args.host_auth_allowed_configs)]
+            except ValueError as exc:
+                print(f"Invalid --host-auth-allowed-configs: {exc}")
+                return 1
+        allowed_engines = []
+        if role == "traffic":
+            allowed_engines = _parse_csv_list(args.host_auth_allowed_engines)
+        out = svc.auth_upsert_key(
+            key_id=key_id,
+            key_secret=secret,
+            role=role,
+            allowed_configs=allowed_configs,
+            allowed_engines=allowed_engines,
+            disabled=bool(args.host_auth_disable_key),
+        )
+        print(json.dumps(out, indent=2))
+        return 0
+
+    if args.host_auth_issue_session:
+        key_id = str(args.host_auth_issue_session).strip()
+        secret = _resolve_host_secret(args)
+        if not secret:
+            print("Missing key secret. Use --host-auth-secret, --host-auth-secret-env, or --host-auth-secret-stdin.")
+            return 1
+        scope = str(args.host_auth_scope or "control").strip().lower()
+        if scope not in {"control", "config", "traffic"}:
+            print("Invalid --host-auth-scope. Use one of: control, config, traffic.")
+            return 1
+        config_paths: List[str] = []
+        if scope == "config":
+            try:
+                config_paths = [normalize_hosting_config_selector(x) if x != "*" else "*" for x in _parse_csv_list(args.host_auth_config_paths)]
+            except ValueError as exc:
+                print(f"Invalid --host-auth-config-paths: {exc}")
+                return 1
+        engine_ids = _parse_csv_list(args.host_auth_engine_ids) if scope == "traffic" else []
+        out = svc.auth_issue_session(
+            key_id=key_id,
+            key_secret=secret,
+            scope=scope,
+            ttl_seconds=int(args.host_auth_ttl_seconds or 900),
+            config_paths=config_paths,
+            engine_ids=engine_ids,
+        )
+        print(json.dumps(out, indent=2))
+        return 0
+
+    print("No host auth action provided.")
+    return 1
 
 
 def _build_template_config() -> dict:
@@ -540,7 +670,41 @@ def main() -> int:
     parser.add_argument("--print", dest="print_config", action="store_true", help="Print resolved config as JSON.")
     parser.add_argument("--print-raw", action="store_true", help="Print raw config file content without resolution.")
     parser.add_argument("--print-set", action="store_true", help="Print only keys set in the config file (no defaults).")
+    parser.add_argument("--host-control-state-file", type=str, default=None, help="Path to engine_host_control.json for host auth management.")
+    parser.add_argument("--host-auth-status", action="store_true", help="Print host auth status from control state.")
+    parser.add_argument("--host-auth-list-keys", action="store_true", help="List host auth keys (without secrets).")
+    parser.add_argument("--host-auth-generate-secret", type=int, default=0, metavar="BYTES", help="Generate a random key secret token (BYTES entropy hint).")
+    parser.add_argument("--host-auth-upsert-key", type=str, default=None, metavar="KEY_ID", help="Create/update host auth key.")
+    parser.add_argument("--host-auth-role", type=str, default=None, help="Role for --host-auth-upsert-key: management|config|traffic.")
+    parser.add_argument("--host-auth-disable-key", action="store_true", help="Mark upserted key as disabled.")
+    parser.add_argument("--host-auth-revoke-key", type=str, default=None, metavar="KEY_ID", help="Revoke host auth key by ID.")
+    parser.add_argument("--host-auth-issue-session", type=str, default=None, metavar="KEY_ID", help="Issue auth session token using key ID + secret.")
+    parser.add_argument("--host-auth-scope", type=str, default="control", help="Session scope: control|config|traffic.")
+    parser.add_argument("--host-auth-ttl-seconds", type=int, default=900, help="Session TTL seconds.")
+    parser.add_argument("--host-auth-config-paths", type=str, default="", help="Comma-separated allowed config selectors for config scope.")
+    parser.add_argument("--host-auth-engine-ids", type=str, default="", help="Comma-separated allowed engine IDs for traffic scope.")
+    parser.add_argument("--host-auth-revoke-session", type=str, default=None, metavar="TOKEN", help="Revoke session token.")
+    parser.add_argument("--host-auth-require-auth", type=str, default=None, help="Set require_auth in host control config (true/false).")
+    parser.add_argument("--host-auth-allowed-configs", type=str, default="", help="Comma-separated allowed configs for config role key.")
+    parser.add_argument("--host-auth-allowed-engines", type=str, default="", help="Comma-separated allowed engine IDs for traffic role key.")
+    parser.add_argument("--host-auth-secret", type=str, default="", help="Key secret (not recommended in shell history).")
+    parser.add_argument("--host-auth-secret-env", type=str, default="", help="Environment variable name holding key secret.")
+    parser.add_argument("--host-auth-secret-stdin", action="store_true", help="Read key secret from stdin (single line).")
     args = parser.parse_args()
+
+    if isinstance(args.host_auth_require_auth, str):
+        raw = str(args.host_auth_require_auth).strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            args.host_auth_require_auth = True
+        elif raw in {"0", "false", "no", "off"}:
+            args.host_auth_require_auth = False
+        else:
+            print("Invalid --host-auth-require-auth value. Use true/false.")
+            return 1
+
+    host_auth_rc = _run_host_auth_ops(args)
+    if host_auth_rc is not None:
+        return int(host_auth_rc)
 
     cwd = Path.cwd()
     target_path = _resolve_target_path(args, cwd=cwd)

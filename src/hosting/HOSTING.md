@@ -1,277 +1,257 @@
-# MP13 Hosting Guide
+# MP13 Hosting
 
-This document describes how `src/hosting` works, what must be prepared on the host machine, and how remote clients can control and use hosted MP13 engine worker processes.
+This file documents the current hosting implementation in `src/hosting` and practical usage workflows.
 
-Scope:
-- Control-plane and process-hosting behavior in `src/hosting`
-- Linux and Windows operational setup
-- Local and remote control flows
+## 1. Architecture
 
-Out of scope:
-- How to use MP13 engine library APIs inside a worker process (assumed already solved)
+Hosting is a control-plane plus guarded traffic bridge.
 
-## 1. What Hosting Is
+- Control-plane:
+  - worker lifecycle (`spawn`, `shutdown`, `ensure-running`, `discover-running`)
+  - config-driven worker startup
+  - claims/tokens/resource ownership state
+- Traffic bridge:
+  - `proxy-request` forwards HTTP(S) requests to registered worker endpoint
+  - traffic authorization and policy are enforced before forwarding
 
-`src/hosting` is a control plane for managed engine worker processes.
+Workers are still separate processes. Hosting does not expose worker private keys and does not require worker ports to be publicly forwarded.
 
-It provides:
-- Worker process lifecycle: spawn, discover, ensure-running, shutdown
-- Persisted registration/state: engine IDs, PIDs, endpoints, logs
-- Claim and token state for access coordination
-- Local daemon and CLI transport options
-- SSH-based remote command transport
+## 2. Security Model
 
-It does **not** provide:
-- Inference data-plane proxying
-- Reverse proxy/load balancer for worker HTTP endpoints
+Auth roles:
+- `management`: full control scope
+- `config`: config scope only
+- `traffic`: traffic proxy scope only
 
-Practical model:
-1. Host control plane starts/manages worker processes.
-2. Each worker exposes its own endpoint (for example `http://127.0.0.1:9001`).
-3. Clients use hosting APIs/CLI to discover registrations and coordinate ownership.
-4. Clients talk to worker endpoints directly (or through infrastructure you add separately).
+Session scopes:
+- `control`
+- `config`
+- `traffic`
 
-## 2. Components
+When `require_auth=true`, hosting commands require `session_token` in payload (except bootstrap-safe flows and key-based session issuance).
 
-- `engine_host_service.py`
-  - Core file-backed logic (`EngineHostService`)
-  - Owns managed engine and control state JSON files
+Config path hardening:
+- exposed selectors are limited to:
+  - `default`
+  - hosted config names in `<default_config_dir>/backend/configs`
+- direct absolute/relative traversal selectors are rejected
 
-- `engine_host_daemon.py`
-  - Long-lived local TCP daemon (`127.0.0.1:19876` by default)
-  - Routes JSON RPC commands to `EngineHostService`
+Traffic policy hardening (`control_config.traffic_policy`):
+- method allowlist
+- path-prefix allowlist
+- request header allowlist
+- response header allowlist
+- request/response size caps
+- optional blocking of forwarded `Authorization` header
 
-- `engine_host_cli.py`
-  - CLI entry point
-  - Modes:
-    - `--daemon` / `--daemon --background`
-    - `--relay` (stdin/stdout bridge for SSH relay)
-    - one-shot command mode
+## 3. Diagnostics
 
-- `engine_host_connection.py`
-  - Persistent connection strategies:
-    - `LocalSocketConnection` (local daemon TCP)
-    - `SSHRelayConnection` (persistent SSH command running `--relay`)
+`host-metrics` provides process-runtime diagnostics:
+- current in-flight proxy requests:
+  - `proxy.inflight_total`
+  - `proxy.inflight_by_engine`
+  - `proxy.inflight_peak`
+- proxy counters:
+  - `total`, `ok`, `http_error`, `failed`
+  - request/response byte totals
+- auth denial counters and last denial reason
+- recent request ring buffer:
+  - `proxy.recent_requests` (default max `100`)
+  - each entry includes engine/method/path/status/outcome/duration/bytes/truncation/error
 
-- `engine_host_channel.py`
-  - Backend-facing wrapper (`EngineHostControlChannel`)
-  - Tries persistent connection first
-  - Falls back to per-command subprocess CLI path
+Important:
+- Metrics are process-scoped. For stable metrics use daemon mode, not one-shot CLI mode.
+- In multi-endpoint GUIs, fetch metrics through each endpoint's own host channel.
+  There is no built-in cross-endpoint aggregation endpoint in this repo.
 
-## 3. Execution Paths
+## 4. Core Commands
 
-### Typical local path
-`EngineHostControlChannel -> LocalSocketConnection -> EngineHostDaemon -> EngineHostService`
+Auth and sessions:
+- `auth-status`
+- `auth-list-keys`
+- `auth-upsert-key`
+- `auth-revoke-key`
+- `auth-issue-session`
+- `auth-revoke-session`
 
-### Degraded path
-`EngineHostControlChannel -> subprocess (engine_host_cli one-shot) -> EngineHostService`
+Control config:
+- `get-control-config`
+- `set-control-config`
 
-### Remote SSH path (persistent)
-`EngineHostControlChannel -> SSHRelayConnection -> remote engine_host_cli --relay -> remote daemon -> remote service`
+Worker traffic bridge:
+- `proxy-request`
 
-### Remote SSH path (degraded)
-`EngineHostControlChannel -> ssh remote one-shot engine_host_cli command -> remote service`
+Diagnostics:
+- `host-metrics`
 
-Notes:
-- Remote persistent relay works best when remote daemon is already running.
-- Per-command remote path does not require daemon pre-start, but is slower.
-- PTY is not required; SSH exec command capability is required.
+## 5. Workflow Examples
 
-## 4. Host State and Files
+## 5.1 Start daemon
 
-Default state location:
-- Derived from MP13 config dir when available
-- Fallback: `~/.mp13-llm/backend`
-
-Important files:
-- `managed_engines.json`
-- `engine_host_control.json`
-- `host_daemon.pid`
-- `logs/<engine_id>.log`
-
-## 5. What Remote Clients Can Do
-
-Remote clients (through SSH-backed control channel) can:
-- Discover running managed workers
-- Spawn and shut down worker processes
-- Ensure worker process is running
-- Register/read endpoint metadata
-- Inspect endpoint capabilities (`/health`, `/capabilities`, `/inference`, `/ws`)
-- Tail/follow worker logs
-- Apply claim/token/resource coordination semantics
-- Use config-driven worker connect/spawn flow (`connect-from-config`)
-
-Remote clients do **not** automatically get traffic proxying to workers. They must:
-- Reach worker endpoints directly, or
-- Use separate networking/proxying infrastructure
-
-## 6. Linux Setup
-
-## 6.1 Admin prerequisites (one-time)
-
-Example (Ubuntu/Debian):
-
-```bash
-sudo apt update
-sudo apt install -y openssh-server python3 python3-venv git
-sudo systemctl enable --now ssh
-```
-
-If GPU is required, admin also installs and validates NVIDIA driver/CUDA stack.
-
-SSH policy requirements for remote hosting control:
-- User can authenticate by key
-- User can execute non-interactive remote commands
-- Account is not restricted to SFTP-only
-- PTY is optional (not required)
-
-Optional admin hardening:
-- Restrict users with `Match User`
-- Use forced commands and dedicated service accounts if desired
-- Use firewall policy aligned with your endpoint exposure model
-
-## 6.2 Non-admin user setup
-
-```bash
-mkdir -p ~/mp13
-cd ~/mp13
-# clone / sync repo and install runtime as your environment requires
-```
-
-Start host daemon (foreground):
-
-```bash
-python -m hosting.engine_host_cli --daemon
-```
-
-Start host daemon (background):
-
-```bash
+```powershell
+$env:PYTHONPATH='src'
 python -m hosting.engine_host_cli --daemon --background
 ```
 
-Check status by command:
+## 5.2 Bootstrap auth (first management key)
 
-```bash
-python -m hosting.engine_host_cli discover-running
-```
-
-Spawn a managed worker (example):
-
-```bash
-cat <<'JSON' | python -m hosting.engine_host_cli --payload-stdin spawn
-{"engine_id":"worker1","command":["python","-m","http.server","9001"],"endpoint":"http://127.0.0.1:9001"}
-JSON
-```
-
-## 7. Windows Setup
-
-## 7.1 Admin prerequisites (one-time)
-
-1. Install Python.
-2. Install and enable OpenSSH Server feature.
-3. Ensure `sshd` service is running.
-4. Grant account access and key-based auth as needed.
-5. If GPU is required, install NVIDIA driver/CUDA stack.
-
-PowerShell examples:
+Check current auth state first (recommended for bootstrap automation):
 
 ```powershell
-# Install OpenSSH server capability (if missing)
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-
-# Start and persist service
-Start-Service sshd
-Set-Service -Name sshd -StartupType Automatic
+python -m hosting.engine_host_cli auth-status
 ```
 
-## 7.2 Non-admin user setup
+`auth-status` returns:
 
-In PowerShell:
+```json
+{
+  "require_auth": false,
+  "config_store_mode": "store_only",
+  "keys_count": 0,
+  "sessions_count": 0,
+  "roles": []
+}
+```
+
+Bootstrap only when `keys_count == 0`.
 
 ```powershell
-cd C:\path\to\repo
-python -m hosting.engine_host_cli --daemon --background
-python -m hosting.engine_host_cli discover-running
+@'{"key_id":"admin-key","key_secret":"CHANGE_ME","role":"management"}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-upsert-key
+
+@'{"require_auth":true}'@ |
+python -m hosting.engine_host_cli --payload-stdin set-control-config
 ```
 
-Spawn worker example:
+Issue control session:
 
 ```powershell
-@'{"engine_id":"worker1","command":["python","-m","http.server","9001"],"endpoint":"http://127.0.0.1:9001"}'@ |
-python -m hosting.engine_host_cli --payload-stdin spawn
+@'{"key_id":"admin-key","key_secret":"CHANGE_ME","scope":"control","ttl_seconds":900}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-issue-session
 ```
 
-## 8. Remote Client Usage Patterns
+Use returned token:
 
-Assume client can SSH to host user account and repo/runtime is available on host.
+```powershell
+@'{"session_token":"<control_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin discover-running
+```
 
-## 8.1 Persistent remote control channel (preferred)
+## 5.3 Create traffic key and scoped session
 
-Requirements:
-- Remote daemon already running (recommended)
-- SSH exec command access
-- Correct remote command path/environment
+```powershell
+@'{"key_id":"traffic-key","key_secret":"CHANGE_ME","role":"traffic","allowed_engines":["worker1"]}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-upsert-key
 
-Control settings should include:
-- `engine_host_ssh_target`
-- `control_ssh_key`
-- optional `engine_host_remote_cmd` (defaults to `python -m hosting.engine_host_cli`)
+@'{"key_id":"traffic-key","key_secret":"CHANGE_ME","scope":"traffic","ttl_seconds":600,"engine_ids":["worker1"]}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-issue-session
+```
 
-In SSH mode, channel will use relay command:
-- `python -m hosting.engine_host_cli --relay`
+## 5.4 Proxy worker request through hosting
 
-## 8.2 Remote per-command fallback
+```powershell
+@'{"engine_id":"worker1","method":"GET","path":"/health","session_token":"<traffic_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin proxy-request
+```
 
-If persistent relay fails, control channel can execute one-shot SSH CLI commands.
+## 5.5 Set restrictive traffic policy
 
-Pros:
-- Works without persistent remote daemon in many cases
+```powershell
+@'{
+  "traffic_policy":{
+    "allowed_methods":["GET","POST"],
+    "allowed_path_prefixes":["/health","/inference"],
+    "request_header_allowlist":["content-type","x-request-id"],
+    "response_header_allowlist":["content-type","content-length","x-request-id"],
+    "allow_authorization_header":false,
+    "max_request_bytes":262144,
+    "max_response_bytes":524288
+  },
+  "session_token":"<control_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
+```
 
-Cons:
-- Higher latency and process overhead per command
-- Less efficient for high-frequency control operations
+## 5.6 Read diagnostics
 
-## 9. Security and Exposure Guidance
+```powershell
+@'{"session_token":"<control_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin host-metrics
+```
 
-- Keep daemon bound to localhost (`127.0.0.1`) unless you intentionally redesign exposure.
-- Prefer SSH transport over opening daemon TCP externally.
-- Treat issued control tokens as sensitive.
-- If worker endpoints must be remotely reachable, place them behind controlled network policy (VPN/firewall/reverse proxy).
-- Use dedicated service accounts for hosting where possible.
+## 5.7 Host auth management via `mp13config`
 
-## 10. Operational Checklist
+`src/app/config.py` now exposes host-auth management helpers (separate from normal engine config editing):
 
-Before declaring host ready:
+```powershell
+# generate secret
+mp13config --host-auth-generate-secret 32
 
-1. SSH login and remote command exec works:
-   - `ssh user@host "echo ok"`
-2. Python command works remotely:
-   - `ssh user@host "python -V"`
-3. Daemon can start:
-   - `python -m hosting.engine_host_cli --daemon --background`
-4. Control command returns:
-   - `python -m hosting.engine_host_cli discover-running`
-5. Worker spawn + endpoint probe works:
-   - spawn command succeeds
-   - `inspect-capabilities` shows expected endpoints
-6. Logs can be tailed:
-   - `logs-tail` and `logs-follow` return output
+# upsert key using env var to avoid shell history leakage
+$env:MP13_HOST_SECRET="CHANGE_ME"
+mp13config --host-auth-upsert-key admin-key --host-auth-role management --host-auth-secret-env MP13_HOST_SECRET
 
-## 11. Troubleshooting
+# issue session
+mp13config --host-auth-issue-session admin-key --host-auth-scope control --host-auth-secret-env MP13_HOST_SECRET
 
-- `engine host command returned no output`
-  - Check Python/module path on host
-  - Check SSH command restrictions
+# status
+mp13config --host-auth-status
+```
 
-- relay connection fails quickly
-  - Remote daemon likely not running or not reachable by remote `--relay`
-  - Start daemon and retry
+Prefer `--host-auth-secret-env` or `--host-auth-secret-stdin` over `--host-auth-secret`.
 
-- spawn works but endpoint unavailable
-  - Worker process started but app inside worker did not bind expected port/path
-  - Inspect worker log file and command/env templates
+## 6. Remote Access Patterns
 
-- permission denied on state files
-  - Ensure runtime user owns writable state directory
+Two supported SSH patterns:
 
+1. SSH relay (GUI default):
+   - `SSHRelayConnection` starts `python -m hosting.engine_host_cli --relay` on the remote host.
+   - The relay process connects to `127.0.0.1:<daemon_port>` on the remote host.
+   - Benefits: no persistent tunnel process, no extra exposed listener, simple on-demand flow.
+
+2. SSH tunnel (advanced option):
+   - Example: `ssh -L 19876:127.0.0.1:19876 user@host`
+   - Then use local-style daemon connection (`LocalSocketConnection`) to forwarded `127.0.0.1:19876`.
+   - Benefits: persistent channel and lower per-operation latency.
+
+If daemon is directly exposed on public network:
+- enforce `require_auth=true`
+- use short session TTL
+- rotate secrets
+- restrict source IPs/firewall where possible
+
+## 7. Current Limitations
+
+- `proxy-request` currently supports HTTP(S) only.
+- Native websocket pass-through is not yet implemented.
+- Metrics are per-process runtime (not persisted across daemon restarts).
+- Host channel credential bootstrap requires wiring `engine_host_key_id` + `engine_host_key_secret`
+  (or a pre-issued `engine_host_session_token`) in control settings/profile construction.
+
+## 8. Consumer Contract (GUI/Backend in Other Projects)
+
+When another project consumes hosting APIs/channels, use this contract:
+
+1. Daemon status:
+   - `get_daemon_status()` should be treated as both process and auth readiness.
+   - Returned shape includes:
+     - daemon fields: `pid_file`, `pid`, `port`, `started_at`, `alive`
+     - auth fields: `auth_status` (same shape as `auth-status`), `auth_status_error`
+
+2. Auth bootstrap check:
+   - Always call `auth-status` first.
+   - First-time bootstrap is `keys_count == 0`.
+   - Avoid blind `auth-upsert-key` in automated startup.
+
+3. Endpoint-scoped metrics:
+   - Metrics are daemon-process scoped, not global across endpoints.
+   - Consumer APIs should route metrics through the selected endpoint channel
+     (for example, backend endpoint `GET /api/engine-host/metrics?endpoint_id=<id>`).
+   - Do not always route metrics to local supervisor if remote endpoints are present.
+
+4. Host profile/session wiring:
+   - Include one of:
+     - `engine_host_session_token` (pre-issued), or
+     - `engine_host_key_id` + `engine_host_key_secret` (issue session on demand).
+   - Optional tuning fields:
+     - `engine_host_session_scope` (default `control`)
+     - `engine_host_session_ttl_seconds` (default `900`)

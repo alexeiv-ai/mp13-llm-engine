@@ -34,6 +34,21 @@ class EngineHostControlChannel:
         self._engines_state_file = self.control_settings.get("engine_host_state_file")
         self._control_state_file = self.control_settings.get("engine_host_control_state_file")
         self._timeout = float(self.control_settings.get("engine_host_timeout_seconds") or 15.0)
+        self._session_token: Optional[str] = str(
+            self.control_settings.get("engine_host_session_token") or ""
+        ).strip() or None
+        self._key_id: Optional[str] = str(
+            self.control_settings.get("engine_host_key_id") or ""
+        ).strip() or None
+        self._key_secret: Optional[str] = str(
+            self.control_settings.get("engine_host_key_secret") or ""
+        ).strip() or None
+        self._session_scope: str = str(
+            self.control_settings.get("engine_host_session_scope") or "control"
+        ).strip().lower() or "control"
+        self._session_ttl_seconds: int = int(
+            self.control_settings.get("engine_host_session_ttl_seconds") or 900
+        )
         # Connection management
         self._connection: Optional[Any] = None  # BaseConnection instance
         self._connection_lock = threading.Lock()
@@ -272,16 +287,50 @@ class EngineHostControlChannel:
             raise RuntimeError(msg)
         return out.get("result")
 
-    def _invoke(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+    def _invoke(
+        self,
+        command: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        allow_auto_session: bool = True,
+    ) -> Any:
         """
         Send a command and return the result.
 
         Tries persistent connection first; falls back to per-command subprocess.
         """
+        if (
+            allow_auto_session
+            and not self._session_token
+            and command != "auth-issue-session"
+            and self._key_id
+            and self._key_secret
+        ):
+            try:
+                issued = self._invoke(
+                    "auth-issue-session",
+                    {
+                        "key_id": self._key_id,
+                        "key_secret": self._key_secret,
+                        "scope": self._session_scope,
+                        "ttl_seconds": self._session_ttl_seconds,
+                    },
+                    allow_auto_session=False,
+                )
+                token = str((issued or {}).get("token") or "").strip()
+                if token:
+                    self.set_session_token(token)
+            except Exception as exc:
+                logger.debug("Auto session issuance failed: %s", exc)
+
+        effective_payload = dict(payload or {})
+        if self._session_token and command not in {"auth-issue-session"}:
+            effective_payload.setdefault("session_token", self._session_token)
+
         conn = self._get_connection()
         if conn is not None:
             try:
-                return conn.invoke(command, payload)
+                return conn.invoke(command, effective_payload)
             except Exception as exc:
                 logger.warning(
                     "Persistent connection failed for '%s': %s. Falling back to subprocess.",
@@ -290,25 +339,52 @@ class EngineHostControlChannel:
                 )
                 with self._connection_lock:
                     self._connection = None
-        return self._invoke_subprocess(command, payload)
+        return self._invoke_subprocess(command, effective_payload)
+
+    def set_session_token(self, token: Optional[str]) -> None:
+        self._session_token = str(token or "").strip() or None
+        self.control_settings["engine_host_session_token"] = self._session_token
+
+    def get_session_token(self) -> Optional[str]:
+        return self._session_token
 
     # ------------------------------------------------------------------
     # Daemon lifecycle management (new public API)
     # ------------------------------------------------------------------
 
     def get_daemon_status(self) -> Dict[str, Any]:
-        """Return current local daemon PID file info and liveness."""
+        """Return local daemon PID status plus auth-status snapshot when reachable."""
         from .engine_host_daemon import DaemonPidFile
+        from .engine_host_connection import LocalSocketConnection
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
         info = pid_info.read() or {}
-        return {
+        status: Dict[str, Any] = {
             "pid_file": str(pid_info.path),
             "pid": info.get("pid"),
             "port": info.get("port"),
             "started_at": info.get("started_at"),
             "alive": pid_info.is_alive(),
+            "auth_status": None,
+            "auth_status_error": None,
         }
+        if not status["alive"]:
+            return status
+        try:
+            port = int(info.get("port") or 0)
+            if port <= 0:
+                status["auth_status_error"] = "missing_daemon_port"
+                return status
+            conn = LocalSocketConnection(port=port, timeout=min(self._timeout, 5.0), max_reconnect_attempts=1)
+            payload: Dict[str, Any] = {}
+            if self._session_token:
+                payload["session_token"] = self._session_token
+            auth = conn.invoke("auth-status", payload)
+            conn.close()
+            status["auth_status"] = dict(auth or {}) if isinstance(auth, dict) else None
+        except Exception as exc:
+            status["auth_status_error"] = str(exc)
+        return status
 
     def bootstrap_daemon(self, *, wait_ready_seconds: float = 8.0) -> Dict[str, Any]:
         """Start local daemon if not already running. Returns daemon status dict."""
@@ -484,6 +560,123 @@ class EngineHostControlChannel:
                 "max_lines": int(max_lines or 500),
             },
         )
+        return dict(res or {})
+
+    def proxy_request(
+        self,
+        *,
+        engine_id: str,
+        method: str = "GET",
+        path: str = "/",
+        query: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        body_b64: str = "",
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-request",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "method": str(method or "GET"),
+                "path": str(path or "/"),
+                "query": str(query or ""),
+                "headers": dict(headers or {}),
+                "body_b64": str(body_b64 or ""),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "max_response_bytes": int(max_response_bytes or 1024 * 1024),
+            },
+        )
+        return dict(res or {})
+
+    def get_control_config(self) -> Dict[str, Any]:
+        res = self._invoke("get-control-config", {})
+        return dict(res or {})
+
+    def set_control_config(
+        self,
+        *,
+        ssh_key: Optional[str] = None,
+        require_auth: Optional[bool] = None,
+        traffic_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"ssh_key": str(ssh_key).strip() if ssh_key else None}
+        if require_auth is not None:
+            payload["require_auth"] = bool(require_auth)
+        if traffic_policy is not None:
+            payload["traffic_policy"] = dict(traffic_policy or {})
+        res = self._invoke("set-control-config", payload)
+        return dict(res or {})
+
+    def auth_status(self) -> Dict[str, Any]:
+        res = self._invoke("auth-status", {})
+        return dict(res or {})
+
+    def get_host_metrics(self) -> Dict[str, Any]:
+        res = self._invoke("host-metrics", {})
+        return dict(res or {})
+
+    def auth_list_keys(self) -> List[Dict[str, Any]]:
+        res = self._invoke("auth-list-keys", {})
+        return list(res or []) if isinstance(res, list) else []
+
+    def auth_upsert_key(
+        self,
+        *,
+        key_id: str,
+        key_secret: str,
+        role: str,
+        allowed_configs: Optional[List[str]] = None,
+        allowed_engines: Optional[List[str]] = None,
+        disabled: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "auth-upsert-key",
+            {
+                "key_id": str(key_id or ""),
+                "key_secret": str(key_secret or ""),
+                "role": str(role or ""),
+                "allowed_configs": list(allowed_configs or []),
+                "allowed_engines": list(allowed_engines or []),
+                "disabled": bool(disabled),
+            },
+        )
+        return dict(res or {})
+
+    def auth_revoke_key(self, key_id: str) -> Dict[str, Any]:
+        res = self._invoke("auth-revoke-key", {"key_id": str(key_id or "")})
+        return dict(res or {})
+
+    def auth_issue_session(
+        self,
+        *,
+        key_id: str,
+        key_secret: str,
+        scope: str = "control",
+        ttl_seconds: int = 900,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        adopt: bool = True,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "auth-issue-session",
+            {
+                "key_id": str(key_id or ""),
+                "key_secret": str(key_secret or ""),
+                "scope": str(scope or "control"),
+                "ttl_seconds": int(ttl_seconds or 900),
+                "config_paths": list(config_paths or []),
+                "engine_ids": list(engine_ids or []),
+            },
+        )
+        out = dict(res or {})
+        token = str(out.get("token") or "").strip()
+        if adopt and token:
+            self.set_session_token(token)
+        return out
+
+    def auth_revoke_session(self, token: str) -> Dict[str, Any]:
+        res = self._invoke("auth-revoke-session", {"token": str(token or "")})
         return dict(res or {})
 
     @staticmethod

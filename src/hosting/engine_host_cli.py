@@ -65,6 +65,22 @@ EXAMPLES_BY_COMMAND = {
     "logs-follow": [
         "@'{\"engine_id\":\"worker1\",\"cursor\":0,\"max_bytes\":65536}'@ | python -m hosting.engine_host_cli --payload-stdin logs-follow",
     ],
+    "auth-upsert-key": [
+        "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"management\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
+        "@'{\"key_id\":\"traffic-key\",\"key_secret\":\"change_me\",\"role\":\"traffic\",\"allowed_engines\":[\"worker1\",\"worker2\"]}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
+    ],
+    "auth-issue-session": [
+        "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"scope\":\"control\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-issue-session",
+    ],
+    "auth-status": [
+        "python -m hosting.engine_host_cli auth-status",
+    ],
+    "proxy-request": [
+        "@'{\"engine_id\":\"worker1\",\"method\":\"GET\",\"path\":\"/health\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-request",
+    ],
+    "host-metrics": [
+        "python -m hosting.engine_host_cli host-metrics",
+    ],
 }
 
 
@@ -251,6 +267,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "logs-follow",
         "get-control-config",
         "set-control-config",
+        "auth-status",
+        "auth-list-keys",
+        "auth-upsert-key",
+        "auth-revoke-key",
+        "auth-issue-session",
+        "auth-revoke-session",
+        "proxy-request",
+        "host-metrics",
     ]:
         cp = sp.add_parser(name)
         cp.add_argument("--engine-id", type=str, default="")
@@ -345,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     )
     try:
         cmd = str(args.command or "").strip()
+        svc.authorize_command(cmd, payload)
         if cmd == "discover-running":
             _print_ok(svc.discover_running())
             return 0
@@ -499,14 +524,76 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "proxy-request":
+            _print_ok(
+                svc.proxy_request(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    method=str(payload.get("method") or "GET"),
+                    path=str(payload.get("path") or "/"),
+                    query=str(payload.get("query") or ""),
+                    headers=dict(payload.get("headers") or {}),
+                    body_b64=str(payload.get("body_b64") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                    max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
+                )
+            )
+            return 0
+        if cmd == "host-metrics":
+            _print_ok(svc.get_host_metrics())
+            return 0
         if cmd == "get-control-config":
             _print_ok(svc.get_control_config())
             return 0
         if cmd == "set-control-config":
-            _print_ok(svc.set_control_config(ssh_key=payload.get("ssh_key")))
+            _print_ok(
+                svc.set_control_config(
+                    ssh_key=payload.get("ssh_key"),
+                    require_auth=payload.get("require_auth"),
+                    traffic_policy=dict(payload.get("traffic_policy") or {}),
+                )
+            )
+            return 0
+        if cmd == "auth-status":
+            _print_ok(svc.auth_status())
+            return 0
+        if cmd == "auth-list-keys":
+            _print_ok(svc.auth_list_keys())
+            return 0
+        if cmd == "auth-upsert-key":
+            _print_ok(
+                svc.auth_upsert_key(
+                    key_id=str(payload.get("key_id") or ""),
+                    key_secret=str(payload.get("key_secret") or ""),
+                    role=str(payload.get("role") or ""),
+                    allowed_configs=list(payload.get("allowed_configs") or []),
+                    allowed_engines=list(payload.get("allowed_engines") or []),
+                    disabled=bool(payload.get("disabled", False)),
+                )
+            )
+            return 0
+        if cmd == "auth-revoke-key":
+            _print_ok(svc.auth_revoke_key(str(payload.get("key_id") or "")))
+            return 0
+        if cmd == "auth-issue-session":
+            _print_ok(
+                svc.auth_issue_session(
+                    key_id=str(payload.get("key_id") or ""),
+                    key_secret=str(payload.get("key_secret") or ""),
+                    scope=str(payload.get("scope") or "control"),
+                    ttl_seconds=int(payload.get("ttl_seconds") or 900),
+                    config_paths=list(payload.get("config_paths") or []),
+                    engine_ids=list(payload.get("engine_ids") or []),
+                )
+            )
+            return 0
+        if cmd == "auth-revoke-session":
+            _print_ok(svc.auth_revoke_session(str(payload.get("token") or "")))
             return 0
         _print_error(f"Unknown command '{cmd}'")
         return 2
+    except PermissionError as e:
+        _print_error(f"auth_failed: {e}")
+        return 1
     except Exception as e:
         _print_error(str(e))
         return 1

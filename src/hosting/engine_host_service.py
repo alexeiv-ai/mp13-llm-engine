@@ -11,13 +11,17 @@ import os
 import re
 import secrets
 import signal
+import hashlib
 import shlex
 import subprocess
 import sys
 import time
+import hmac
+import base64
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,6 +41,8 @@ DEFAULT_CONTROL_STATE_FILE = DEFAULT_STATE_DIR / "engine_host_control.json"
 
 class EngineHostService:
     """File-backed engine host service for terminal-command control."""
+    _metrics_lock = threading.Lock()
+    _runtime_metrics: Optional[Dict[str, Any]] = None
 
     def __init__(
         self,
@@ -46,6 +52,148 @@ class EngineHostService:
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
         self.control_state_file = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
+        self._ensure_metrics_initialized()
+
+    @classmethod
+    def _ensure_metrics_initialized(cls) -> None:
+        with cls._metrics_lock:
+            if isinstance(cls._runtime_metrics, dict):
+                return
+            cls._runtime_metrics = {
+                "started_at": time.time(),
+                "proxy": {
+                    "inflight_total": 0,
+                    "inflight_by_engine": {},
+                    "inflight_peak": 0,
+                    "total": 0,
+                    "ok": 0,
+                    "http_error": 0,
+                    "failed": 0,
+                    "request_bytes": 0,
+                    "response_bytes": 0,
+                    "last_status_code": None,
+                    "last_error": None,
+                    "last_request_at": 0.0,
+                    "last_response_at": 0.0,
+                    "recent_limit": 100,
+                    "recent_requests": [],
+                },
+                "auth": {
+                    "denied": 0,
+                    "last_denied_reason": None,
+                    "last_denied_at": 0.0,
+                },
+            }
+
+    @classmethod
+    def _metrics_proxy_start(cls, engine_id: str, request_bytes: int) -> None:
+        cls._ensure_metrics_initialized()
+        with cls._metrics_lock:
+            assert isinstance(cls._runtime_metrics, dict)
+            proxy = dict(cls._runtime_metrics.get("proxy") or {})
+            inflight_by_engine = dict(proxy.get("inflight_by_engine") or {})
+            eid = str(engine_id or "").strip() or "unknown"
+            inflight_by_engine[eid] = int(inflight_by_engine.get(eid) or 0) + 1
+            proxy["inflight_by_engine"] = inflight_by_engine
+            proxy["inflight_total"] = int(proxy.get("inflight_total") or 0) + 1
+            proxy["inflight_peak"] = max(
+                int(proxy.get("inflight_peak") or 0),
+                int(proxy.get("inflight_total") or 0),
+            )
+            proxy["total"] = int(proxy.get("total") or 0) + 1
+            proxy["request_bytes"] = int(proxy.get("request_bytes") or 0) + max(0, int(request_bytes or 0))
+            proxy["last_request_at"] = time.time()
+            cls._runtime_metrics["proxy"] = proxy
+
+    @classmethod
+    def _metrics_proxy_finish(
+        cls,
+        engine_id: str,
+        *,
+        status_code: Optional[int] = None,
+        response_bytes: int = 0,
+        http_error: bool = False,
+        failed: bool = False,
+        error_message: Optional[str] = None,
+        method: Optional[str] = None,
+        path: Optional[str] = None,
+        started_at: Optional[float] = None,
+        truncated: Optional[bool] = None,
+        request_bytes: int = 0,
+    ) -> None:
+        cls._ensure_metrics_initialized()
+        with cls._metrics_lock:
+            assert isinstance(cls._runtime_metrics, dict)
+            proxy = dict(cls._runtime_metrics.get("proxy") or {})
+            inflight_by_engine = dict(proxy.get("inflight_by_engine") or {})
+            eid = str(engine_id or "").strip() or "unknown"
+            current = int(inflight_by_engine.get(eid) or 0)
+            if current <= 1:
+                inflight_by_engine.pop(eid, None)
+            else:
+                inflight_by_engine[eid] = current - 1
+            proxy["inflight_by_engine"] = inflight_by_engine
+            proxy["inflight_total"] = max(0, int(proxy.get("inflight_total") or 0) - 1)
+            proxy["response_bytes"] = int(proxy.get("response_bytes") or 0) + max(0, int(response_bytes or 0))
+            proxy["last_response_at"] = time.time()
+            if status_code is not None:
+                proxy["last_status_code"] = int(status_code)
+            if http_error:
+                proxy["http_error"] = int(proxy.get("http_error") or 0) + 1
+                outcome = "http_error"
+            elif failed:
+                proxy["failed"] = int(proxy.get("failed") or 0) + 1
+                if error_message:
+                    proxy["last_error"] = str(error_message)
+                outcome = "failed"
+            else:
+                proxy["ok"] = int(proxy.get("ok") or 0) + 1
+                outcome = "ok"
+            now = time.time()
+            entry = {
+                "timestamp": now,
+                "engine_id": eid,
+                "method": str(method or ""),
+                "path": str(path or ""),
+                "status_code": int(status_code) if status_code is not None else None,
+                "outcome": outcome,
+                "request_bytes": max(0, int(request_bytes or 0)),
+                "response_bytes": max(0, int(response_bytes or 0)),
+                "duration_ms": int(max(0.0, (now - float(started_at or now)) * 1000.0)),
+                "truncated": bool(truncated) if truncated is not None else None,
+                "error": str(error_message or "") or None,
+            }
+            recent = list(proxy.get("recent_requests") or [])
+            recent.append(entry)
+            limit = max(10, int(proxy.get("recent_limit") or 100))
+            if len(recent) > limit:
+                recent = recent[-limit:]
+            proxy["recent_requests"] = recent
+            cls._runtime_metrics["proxy"] = proxy
+
+    @classmethod
+    def _metrics_auth_denied(cls, reason: str) -> None:
+        cls._ensure_metrics_initialized()
+        with cls._metrics_lock:
+            assert isinstance(cls._runtime_metrics, dict)
+            auth = dict(cls._runtime_metrics.get("auth") or {})
+            auth["denied"] = int(auth.get("denied") or 0) + 1
+            auth["last_denied_reason"] = str(reason or "denied")
+            auth["last_denied_at"] = time.time()
+            cls._runtime_metrics["auth"] = auth
+
+    def get_host_metrics(self) -> Dict[str, Any]:
+        self._ensure_metrics_initialized()
+        with self._metrics_lock:
+            assert isinstance(self._runtime_metrics, dict)
+            snapshot = json.loads(json.dumps(self._runtime_metrics))
+        snapshot["pid"] = os.getpid()
+        snapshot["runtime_scope"] = "process"
+        snapshot["recommended_mode"] = "daemon"
+        snapshot["engines_state_file"] = str(self.engines_state_file)
+        snapshot["control_state_file"] = str(self.control_state_file)
+        snapshot["timestamp"] = time.time()
+        return snapshot
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -101,7 +249,40 @@ class EngineHostService:
             self.control_state_file,
             {
                 "version": 1,
-                "control_config": {"ssh_key": None},
+                "control_config": {
+                    "ssh_key": None,
+                    "require_auth": False,
+                    "auth": {"keys": {}, "sessions": {}},
+                    "config_store_mode": "store_only",
+                    "traffic_policy": {
+                        "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+                        "allowed_path_prefixes": ["/"],
+                        "request_header_allowlist": [
+                            "accept",
+                            "content-type",
+                            "authorization",
+                            "x-request-id",
+                            "x-trace-id",
+                            "x-correlation-id",
+                            "user-agent",
+                        ],
+                        "response_header_allowlist": [
+                            "content-type",
+                            "content-length",
+                            "cache-control",
+                            "etag",
+                            "last-modified",
+                            "x-request-id",
+                            "x-trace-id",
+                            "x-correlation-id",
+                            "date",
+                            "server",
+                        ],
+                        "allow_authorization_header": False,
+                        "max_request_bytes": 1024 * 1024,
+                        "max_response_bytes": 1024 * 1024,
+                    },
+                },
                 "claims_by_engine": {},
                 "endpoint_claim": {"owners": [], "exclusive_owner": None, "claimed_at": 0.0},
                 "tokens": {},
@@ -109,12 +290,45 @@ class EngineHostService:
                 "resource_tokens": {},
             },
         )
-        payload.setdefault("control_config", {"ssh_key": None})
+        payload.setdefault(
+            "control_config",
+            {
+                "ssh_key": None,
+                "require_auth": False,
+                "auth": {"keys": {}, "sessions": {}},
+                "config_store_mode": "store_only",
+                "traffic_policy": {},
+            },
+        )
         payload.setdefault("claims_by_engine", {})
         payload.setdefault("endpoint_claim", {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
         payload.setdefault("tokens", {})
         payload.setdefault("resource_claims", {})
         payload.setdefault("resource_tokens", {})
+        cfg = dict(payload.get("control_config") or {})
+        cfg.setdefault("ssh_key", None)
+        cfg.setdefault("require_auth", False)
+        cfg.setdefault("config_store_mode", "store_only")
+        raw_policy = dict(cfg.get("traffic_policy") or {})
+        raw_policy.setdefault("allowed_methods", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+        raw_policy.setdefault("allowed_path_prefixes", ["/"])
+        raw_policy.setdefault(
+            "request_header_allowlist",
+            ["accept", "content-type", "authorization", "x-request-id", "x-trace-id", "x-correlation-id", "user-agent"],
+        )
+        raw_policy.setdefault(
+            "response_header_allowlist",
+            ["content-type", "content-length", "cache-control", "etag", "last-modified", "x-request-id", "x-trace-id", "x-correlation-id", "date", "server"],
+        )
+        raw_policy.setdefault("allow_authorization_header", False)
+        raw_policy.setdefault("max_request_bytes", 1024 * 1024)
+        raw_policy.setdefault("max_response_bytes", 1024 * 1024)
+        cfg["traffic_policy"] = raw_policy
+        auth = dict(cfg.get("auth") or {})
+        auth.setdefault("keys", {})
+        auth.setdefault("sessions", {})
+        cfg["auth"] = auth
+        payload["control_config"] = cfg
         return payload
 
     def _write_control(self, payload: Dict[str, Any]) -> None:
@@ -148,17 +362,469 @@ class EngineHostService:
         base = self._default_config_path().parent
         return (base / "backend" / "configs").expanduser().resolve()
 
-    def _resolve_json_config_path(self, config_path: str) -> Path:
+    def _config_store_mode(self) -> str:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        mode = str(cfg.get("config_store_mode") or "store_only").strip().lower()
+        return mode if mode in {"store_only"} else "store_only"
+
+    @staticmethod
+    def _normalize_traffic_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        p = dict(policy or {})
+        allowed_methods = [str(x or "").strip().upper() for x in list(p.get("allowed_methods") or []) if str(x or "").strip()]
+        if not allowed_methods:
+            allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+        allowed_path_prefixes = [str(x or "").strip() for x in list(p.get("allowed_path_prefixes") or []) if str(x or "").strip()]
+        if not allowed_path_prefixes:
+            allowed_path_prefixes = ["/"]
+        req_headers = [str(x or "").strip().lower() for x in list(p.get("request_header_allowlist") or []) if str(x or "").strip()]
+        resp_headers = [str(x or "").strip().lower() for x in list(p.get("response_header_allowlist") or []) if str(x or "").strip()]
+        if not req_headers:
+            req_headers = ["accept", "content-type", "authorization", "x-request-id", "x-trace-id", "x-correlation-id", "user-agent"]
+        if not resp_headers:
+            resp_headers = ["content-type", "content-length", "cache-control", "etag", "last-modified", "x-request-id", "x-trace-id", "x-correlation-id", "date", "server"]
+        max_req = max(1024, int(p.get("max_request_bytes") or (1024 * 1024)))
+        max_resp = max(1024, int(p.get("max_response_bytes") or (1024 * 1024)))
+        return {
+            "allowed_methods": sorted(list(set(allowed_methods))),
+            "allowed_path_prefixes": sorted(list(set(allowed_path_prefixes))),
+            "request_header_allowlist": sorted(list(set(req_headers))),
+            "response_header_allowlist": sorted(list(set(resp_headers))),
+            "allow_authorization_header": bool(p.get("allow_authorization_header", False)),
+            "max_request_bytes": max_req,
+            "max_response_bytes": max_resp,
+        }
+
+    def _traffic_policy(self) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        return self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {}))
+
+    def _normalize_config_selector(self, config_path: str) -> str:
         raw = str(config_path or "").strip()
-        default_path = self._default_config_path()
         if not raw or raw.lower() == "default":
+            return "default"
+        if any(x in raw for x in ["/", "\\", ":"]) or raw.startswith("."):
+            raise ValueError("config_path must be 'default' or a config name in hosted config store")
+        stem = Path(raw if Path(raw).suffix else f"{raw}.json").stem
+        safe = self._safe_config_name(stem)
+        if safe != stem:
+            raise ValueError("config_path contains unsupported characters")
+        return safe
+
+    def _resolve_json_config_path(self, config_path: str) -> Path:
+        default_path = self._default_config_path()
+        selector = self._normalize_config_selector(config_path)
+        if selector == "default":
             return default_path
-        candidate = Path(raw if Path(raw).suffix else f"{raw}.json")
-        if candidate.is_absolute():
-            return candidate.expanduser().resolve()
-        if raw.startswith(("./", ".\\", "../", "..\\")):
-            return (Path.cwd() / candidate).expanduser().resolve()
-        return (self._config_store_dir() / candidate).expanduser().resolve()
+        if self._config_store_mode() != "store_only":
+            raise ValueError("Unsupported config store mode")
+        return (self._config_store_dir() / f"{selector}.json").expanduser().resolve()
+
+    @staticmethod
+    def _hash_secret(secret: str) -> str:
+        raw = str(secret or "")
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _prune_expired_sessions(self, auth: Dict[str, Any]) -> int:
+        sessions = dict(auth.get("sessions") or {})
+        now = time.time()
+        removed = 0
+        for token, meta in list(sessions.items()):
+            expires = float((meta or {}).get("expires_at") or 0.0)
+            if expires > 0 and now >= expires:
+                sessions.pop(token, None)
+                removed += 1
+        auth["sessions"] = sessions
+        return removed
+
+    def _extract_session_token(self, payload: Optional[Dict[str, Any]]) -> str:
+        p = dict(payload or {})
+        token = str(p.get("session_token") or p.get("auth_token") or "").strip()
+        return token
+
+    def _validate_session(
+        self,
+        control: Dict[str, Any],
+        token: str,
+        *,
+        required_scope: str,
+        requested_config: Optional[str] = None,
+        requested_engine: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+        sessions = dict(auth.get("sessions") or {})
+        session = dict(sessions.get(str(token or "").strip()) or {})
+        if not session:
+            raise PermissionError("missing_or_invalid_session_token")
+        if bool(session.get("revoked", False)):
+            raise PermissionError("session_revoked")
+        key_role = str(session.get("role") or "").strip().lower()
+        scope = str(session.get("scope") or "").strip().lower()
+        if key_role == "management":
+            return session
+        if scope != required_scope:
+            raise PermissionError("insufficient_scope")
+        if required_scope == "config":
+            allowed = set(str(x) for x in list(session.get("allowed_configs") or []))
+            if requested_config and "*" not in allowed and str(requested_config) not in allowed:
+                raise PermissionError("config_access_denied")
+        if required_scope == "traffic":
+            allowed_engines = set(str(x) for x in list(session.get("allowed_engines") or []))
+            if requested_engine and "*" not in allowed_engines and str(requested_engine) not in allowed_engines:
+                raise PermissionError("engine_access_denied")
+        return session
+
+    def auth_status(self) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+        keys = dict(auth.get("keys") or {})
+        sessions = dict(auth.get("sessions") or {})
+        return {
+            "require_auth": bool(cfg.get("require_auth", False)),
+            "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
+            "keys_count": len(keys),
+            "sessions_count": len(sessions),
+            "roles": sorted(list({str((v or {}).get("role") or "") for v in keys.values() if isinstance(v, dict)})),
+        }
+
+    def auth_list_keys(self) -> List[Dict[str, Any]]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        out: List[Dict[str, Any]] = []
+        for key_id, meta in dict(auth.get("keys") or {}).items():
+            m = dict(meta or {})
+            out.append(
+                {
+                    "key_id": str(key_id),
+                    "role": str(m.get("role") or ""),
+                    "disabled": bool(m.get("disabled", False)),
+                    "created_at": float(m.get("created_at") or 0.0),
+                    "updated_at": float(m.get("updated_at") or 0.0),
+                    "allowed_configs": list(m.get("allowed_configs") or []),
+                    "allowed_engines": list(m.get("allowed_engines") or []),
+                }
+            )
+        out.sort(key=lambda x: str(x.get("key_id") or ""))
+        return out
+
+    def auth_upsert_key(
+        self,
+        *,
+        key_id: str,
+        key_secret: str,
+        role: str,
+        allowed_configs: Optional[List[str]] = None,
+        allowed_engines: Optional[List[str]] = None,
+        disabled: bool = False,
+    ) -> Dict[str, Any]:
+        kid = str(key_id or "").strip()
+        secret = str(key_secret or "").strip()
+        role_norm = str(role or "").strip().lower()
+        if not kid:
+            raise ValueError("key_id is required")
+        if not secret:
+            raise ValueError("key_secret is required")
+        if role_norm not in {"management", "config", "traffic"}:
+            raise ValueError("role must be 'management', 'config', or 'traffic'")
+        normalized_allowed: List[str] = []
+        normalized_engines: List[str] = []
+        if role_norm == "config":
+            raw_rows = list(allowed_configs or [])
+            if not raw_rows:
+                normalized_allowed = ["*"]
+            else:
+                for row in raw_rows:
+                    rs = str(row or "").strip()
+                    if not rs:
+                        continue
+                    if rs == "*":
+                        normalized_allowed.append("*")
+                        continue
+                    normalized_allowed.append(self._normalize_config_selector(rs))
+                if not normalized_allowed:
+                    normalized_allowed = ["*"]
+        if role_norm == "traffic":
+            raw_engines = list(allowed_engines or [])
+            if not raw_engines:
+                normalized_engines = ["*"]
+            else:
+                for row in raw_engines:
+                    rs = str(row or "").strip()
+                    if not rs:
+                        continue
+                    if rs == "*":
+                        normalized_engines.append("*")
+                        continue
+                    normalized_engines.append(self._safe_config_name(rs))
+                if not normalized_engines:
+                    normalized_engines = ["*"]
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        keys = dict(auth.get("keys") or {})
+        now = time.time()
+        existing = dict(keys.get(kid) or {})
+        keys[kid] = {
+            "role": role_norm,
+            "secret_hash": self._hash_secret(secret),
+            "created_at": float(existing.get("created_at") or now),
+            "updated_at": now,
+            "disabled": bool(disabled),
+            "allowed_configs": normalized_allowed,
+            "allowed_engines": normalized_engines,
+        }
+        auth["keys"] = keys
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        return {
+            "key_id": kid,
+            "role": role_norm,
+            "disabled": bool(disabled),
+            "allowed_configs": normalized_allowed,
+            "allowed_engines": normalized_engines,
+        }
+
+    def auth_revoke_key(self, key_id: str) -> Dict[str, Any]:
+        kid = str(key_id or "").strip()
+        if not kid:
+            raise ValueError("key_id is required")
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        keys = dict(auth.get("keys") or {})
+        existed = kid in keys
+        if existed:
+            keys.pop(kid, None)
+        sessions = dict(auth.get("sessions") or {})
+        revoked_sessions = 0
+        for tok, meta in list(sessions.items()):
+            if str((meta or {}).get("key_id") or "") == kid:
+                sessions.pop(tok, None)
+                revoked_sessions += 1
+        auth["keys"] = keys
+        auth["sessions"] = sessions
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        return {"key_id": kid, "revoked": bool(existed), "revoked_sessions": revoked_sessions}
+
+    def auth_issue_session(
+        self,
+        *,
+        key_id: str,
+        key_secret: str,
+        scope: str = "control",
+        ttl_seconds: int = 900,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        kid = str(key_id or "").strip()
+        secret = str(key_secret or "").strip()
+        if not kid:
+            raise ValueError("key_id is required")
+        if not secret:
+            raise ValueError("key_secret is required")
+        scope_norm = str(scope or "control").strip().lower()
+        if scope_norm not in {"control", "config", "traffic"}:
+            raise ValueError("scope must be 'control', 'config', or 'traffic'")
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+        keys = dict(auth.get("keys") or {})
+        key_meta = dict(keys.get(kid) or {})
+        if not key_meta:
+            raise PermissionError("unknown_key_id")
+        if bool(key_meta.get("disabled", False)):
+            raise PermissionError("key_disabled")
+        expected_hash = str(key_meta.get("secret_hash") or "")
+        provided_hash = self._hash_secret(secret)
+        if not expected_hash or not hmac.compare_digest(expected_hash, provided_hash):
+            raise PermissionError("invalid_key_secret")
+        role = str(key_meta.get("role") or "").strip().lower()
+        if role == "config" and scope_norm != "config":
+            raise PermissionError("config_role_cannot_issue_non_config_scope")
+        if role == "traffic" and scope_norm != "traffic":
+            raise PermissionError("traffic_role_cannot_issue_non_traffic_scope")
+        allowed_configs: List[str] = []
+        allowed_engines: List[str] = []
+        key_allowed = set(str(x) for x in list(key_meta.get("allowed_configs") or []))
+        key_allowed_engines = set(str(x) for x in list(key_meta.get("allowed_engines") or []))
+        if scope_norm == "config":
+            requested = list(config_paths or [])
+            if not requested:
+                if key_allowed:
+                    allowed_configs = sorted(list(key_allowed))
+                else:
+                    allowed_configs = ["*"]
+            else:
+                rows: List[str] = []
+                for r in requested:
+                    rs = str(r or "").strip()
+                    if not rs:
+                        continue
+                    if rs == "*":
+                        rows.append("*")
+                    else:
+                        rows.append(self._normalize_config_selector(rs))
+                if "*" in key_allowed:
+                    allowed_configs = sorted(list(set(rows or ["*"])))
+                else:
+                    clipped = [x for x in rows if x in key_allowed]
+                    if not clipped:
+                        raise PermissionError("no_allowed_config_overlap")
+                    allowed_configs = sorted(list(set(clipped)))
+        if scope_norm == "traffic":
+            requested_engines = list(engine_ids or [])
+            if not requested_engines:
+                if key_allowed_engines:
+                    allowed_engines = sorted(list(key_allowed_engines))
+                else:
+                    allowed_engines = ["*"]
+            else:
+                rows: List[str] = []
+                for row in requested_engines:
+                    rs = str(row or "").strip()
+                    if not rs:
+                        continue
+                    if rs == "*":
+                        rows.append("*")
+                    else:
+                        rows.append(self._safe_config_name(rs))
+                if "*" in key_allowed_engines:
+                    allowed_engines = sorted(list(set(rows or ["*"])))
+                else:
+                    clipped = [x for x in rows if x in key_allowed_engines]
+                    if not clipped:
+                        raise PermissionError("no_allowed_engine_overlap")
+                    allowed_engines = sorted(list(set(clipped)))
+        token = secrets.token_urlsafe(36)
+        ttl = max(60, min(int(ttl_seconds or 900), 24 * 3600))
+        now = time.time()
+        sessions = dict(auth.get("sessions") or {})
+        sessions[token] = {
+            "key_id": kid,
+            "role": role,
+            "scope": scope_norm,
+            "issued_at": now,
+            "expires_at": now + ttl,
+            "allowed_configs": allowed_configs,
+            "allowed_engines": allowed_engines,
+        }
+        auth["sessions"] = sessions
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        return {
+            "status": "ok",
+            "token": token,
+            "scope": scope_norm,
+            "role": role,
+            "expires_at": now + ttl,
+            "ttl_seconds": ttl,
+            "allowed_configs": allowed_configs,
+            "allowed_engines": allowed_engines,
+        }
+
+    def auth_revoke_session(self, token: str) -> Dict[str, Any]:
+        tok = str(token or "").strip()
+        if not tok:
+            raise ValueError("token is required")
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        sessions = dict(auth.get("sessions") or {})
+        existed = tok in sessions
+        sessions.pop(tok, None)
+        auth["sessions"] = sessions
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        return {"token": tok, "revoked": bool(existed)}
+
+    def authorize_command(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        c = str(cmd or "").strip()
+        if not c:
+            self._metrics_auth_denied("empty_command")
+            raise PermissionError("empty_command")
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        require_auth = bool(cfg.get("require_auth", False))
+        auth = dict(cfg.get("auth") or {})
+        keys_count = len(dict(auth.get("keys") or {}))
+        if not require_auth:
+            return
+        # Bootstrap: allow key provisioning if no keys are present.
+        if c in {"auth-upsert-key", "auth-status"} and keys_count == 0:
+            return
+        if c in {"auth-issue-session"}:
+            # Session issuance authenticates with key_id/key_secret in payload.
+            return
+        token = self._extract_session_token(payload)
+        if not token:
+            self._metrics_auth_denied("session_token_required")
+            raise PermissionError("session_token_required")
+        if c in {
+            "discover-running",
+            "spawn",
+            "get-registration",
+            "shutdown",
+            "ensure-running",
+            "remove-registration",
+            "claim-engine",
+            "claim-endpoint",
+            "claim-status",
+            "issue-token",
+            "validate-token",
+            "claim-resource",
+            "resource-claim-status",
+            "issue-resource-token",
+            "validate-resource-token",
+            "inspect-capabilities",
+            "logs-tail",
+            "logs-follow",
+            "get-control-config",
+            "set-control-config",
+            "auth-upsert-key",
+            "auth-revoke-key",
+            "auth-list-keys",
+            "auth-revoke-session",
+            "host-metrics",
+        }:
+            try:
+                _ = self._validate_session(control, token, required_scope="control")
+            except PermissionError as exc:
+                self._metrics_auth_denied(str(exc))
+                raise
+            return
+        if c in {"proxy-request"}:
+            p = dict(payload or {})
+            requested_engine = str(p.get("engine_id") or "").strip()
+            try:
+                _ = self._validate_session(control, token, required_scope="traffic", requested_engine=requested_engine)
+            except PermissionError as exc:
+                self._metrics_auth_denied(str(exc))
+                raise
+            return
+        if c in {"list-configs", "create-config", "models-from-config", "connect-from-config"}:
+            requested_config = None
+            p = dict(payload or {})
+            if c in {"models-from-config", "connect-from-config"}:
+                requested_config = self._normalize_config_selector(str(p.get("config_path") or "default"))
+            try:
+                _ = self._validate_session(control, token, required_scope="config", requested_config=requested_config)
+            except PermissionError as exc:
+                self._metrics_auth_denied(str(exc))
+                raise
+            return
+        raise PermissionError(f"auth_policy_missing_for_command:{c}")
 
     def _merge_default_and_selected_config(self, config_path: str) -> Dict[str, Any]:
         default_path = self._default_config_path()
@@ -485,15 +1151,45 @@ class EngineHostService:
     def get_control_config(self) -> Dict[str, Any]:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
-        return {"ssh_key": cfg.get("ssh_key")}
+        auth = dict(cfg.get("auth") or {})
+        return {
+            "ssh_key": cfg.get("ssh_key"),
+            "require_auth": bool(cfg.get("require_auth", False)),
+            "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
+            "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
+            "keys_count": len(dict(auth.get("keys") or {})),
+            "sessions_count": len(dict(auth.get("sessions") or {})),
+        }
 
-    def set_control_config(self, *, ssh_key: Optional[str] = None) -> Dict[str, Any]:
+    def set_control_config(
+        self,
+        *,
+        ssh_key: Optional[str] = None,
+        require_auth: Optional[bool] = None,
+        traffic_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
-        cfg["ssh_key"] = str(ssh_key).strip() if ssh_key else None
+        if ssh_key is not None:
+            cfg["ssh_key"] = str(ssh_key).strip() if ssh_key else None
+        if require_auth is not None:
+            cfg["require_auth"] = bool(require_auth)
+        cfg.setdefault("config_store_mode", "store_only")
+        cfg.setdefault("auth", {"keys": {}, "sessions": {}})
+        cfg["traffic_policy"] = self._normalize_traffic_policy(
+            dict(cfg.get("traffic_policy") or {}) | dict(traffic_policy or {})
+        )
         control["control_config"] = cfg
         self._write_control(control)
-        return {"ssh_key": cfg.get("ssh_key")}
+        auth = dict(cfg.get("auth") or {})
+        return {
+            "ssh_key": cfg.get("ssh_key"),
+            "require_auth": bool(cfg.get("require_auth", False)),
+            "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
+            "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
+            "keys_count": len(dict(auth.get("keys") or {})),
+            "sessions_count": len(dict(auth.get("sessions") or {})),
+        }
 
     @staticmethod
     def _probe_url(endpoint: str, path: str) -> str:
@@ -790,6 +1486,244 @@ class EngineHostService:
             "has_more": bool(new_cursor < size),
             "alive": bool(reg.get("pid")) and self._pid_alive(int(reg.get("pid") or 0)),
         }
+
+    @staticmethod
+    def _join_endpoint_path(endpoint: str, req_path: str, query: str = "") -> str:
+        raw_endpoint = str(endpoint or "").strip()
+        if not raw_endpoint:
+            return ""
+        parsed = urllib.parse.urlsplit(raw_endpoint if "://" in raw_endpoint else f"http://{raw_endpoint}")
+        incoming = str(req_path or "").strip() or "/"
+        if not incoming.startswith("/"):
+            incoming = f"/{incoming}"
+        path = incoming
+        if str(query or "").strip():
+            q = str(query or "").lstrip("?")
+            return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, path, q, ""))
+        return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, path, "", ""))
+
+    def proxy_request(
+        self,
+        *,
+        engine_id: str,
+        method: str = "GET",
+        path: str = "/",
+        query: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        body_b64: str = "",
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        req_started_at = time.time()
+        m = str(method or "GET").strip().upper()
+        req_path = str(path or "/").strip() or "/"
+        if not req_path.startswith("/"):
+            req_path = f"/{req_path}"
+        if not eid:
+            raise ValueError("engine_id is required")
+        reg = self._find_registration(eid) or {}
+        endpoint = str(reg.get("endpoint") or "").strip()
+        if not endpoint:
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message="engine endpoint is not registered",
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+            )
+            raise ValueError("engine endpoint is not registered")
+        url = self._join_endpoint_path(endpoint, path, query=query)
+        if not url:
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message="failed to build proxy url",
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+            )
+            raise ValueError("failed to build proxy url")
+        traffic_policy = self._traffic_policy()
+        if not re.fullmatch(r"[A-Z]+", m):
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message="invalid method",
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+            )
+            raise ValueError("invalid method")
+        allowed_methods = set(str(x).upper() for x in list(traffic_policy.get("allowed_methods") or []))
+        if allowed_methods and m not in allowed_methods:
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message=f"proxy_method_not_allowed:{m}",
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+            )
+            raise PermissionError(f"proxy_method_not_allowed:{m}")
+        prefixes = [str(x) for x in list(traffic_policy.get("allowed_path_prefixes") or ["/"])]
+        if prefixes and not any(req_path.startswith(px if px else "/") for px in prefixes):
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message=f"proxy_path_not_allowed:{req_path}",
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+            )
+            raise PermissionError(f"proxy_path_not_allowed:{req_path}")
+        body_raw = b""
+        if str(body_b64 or "").strip():
+            try:
+                body_raw = base64.b64decode(str(body_b64), validate=True)
+            except Exception as exc:
+                self._metrics_proxy_finish(
+                    eid,
+                    failed=True,
+                    error_message=f"invalid body_b64: {exc}",
+                    method=m,
+                    path=req_path,
+                    started_at=req_started_at,
+                )
+                raise ValueError(f"invalid body_b64: {exc}") from exc
+        max_req = int(traffic_policy.get("max_request_bytes") or (1024 * 1024))
+        if len(body_raw) > max_req:
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message=f"request body too large ({len(body_raw)} > {max_req})",
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+                request_bytes=len(body_raw),
+            )
+            raise ValueError(f"request body too large ({len(body_raw)} > {max_req})")
+        self._metrics_proxy_start(eid, request_bytes=len(body_raw))
+        header_allow = set(str(x).lower() for x in list(traffic_policy.get("request_header_allowlist") or []))
+        allow_authz = bool(traffic_policy.get("allow_authorization_header", False))
+        req_headers: Dict[str, str] = {}
+        for k, v in dict(headers or {}).items():
+            key = str(k or "").strip()
+            if not key:
+                continue
+            low = key.lower()
+            if low == "authorization" and not allow_authz:
+                continue
+            if header_allow and low not in header_allow:
+                continue
+            req_headers[key] = str(v)
+        req = urllib.request.Request(url, data=body_raw if body_raw else None, method=m, headers=req_headers)
+        policy_lim = max(1024, int(traffic_policy.get("max_response_bytes") or (1024 * 1024)))
+        lim = min(max(1024, int(max_response_bytes or policy_lim)), policy_lim)
+        timeout = max(1.0, float(timeout_seconds or 30.0))
+        resp_allow = set(str(x).lower() for x in list(traffic_policy.get("response_header_allowlist") or []))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                status = int(getattr(resp, "status", 200) or 200)
+                response_headers: Dict[str, str] = {}
+                for k, v in dict(getattr(resp, "headers", {}) or {}).items():
+                    key = str(k or "").strip()
+                    if not key:
+                        continue
+                    if resp_allow and key.lower() not in resp_allow:
+                        continue
+                    response_headers[key] = str(v)
+                raw = resp.read(lim + 1)
+                truncated = len(raw) > lim
+                if truncated:
+                    raw = raw[:lim]
+                out_b64 = base64.b64encode(raw).decode("ascii")
+                self._metrics_proxy_finish(
+                    eid,
+                    status_code=status,
+                    response_bytes=len(raw),
+                    http_error=False,
+                    failed=False,
+                    method=m,
+                    path=req_path,
+                    started_at=req_started_at,
+                    truncated=bool(truncated),
+                    request_bytes=len(body_raw),
+                )
+                return {
+                    "engine_id": eid,
+                    "endpoint": endpoint,
+                    "url": url,
+                    "status_code": status,
+                    "headers": response_headers,
+                    "body_b64": out_b64,
+                    "body_size": len(raw),
+                    "truncated": bool(truncated),
+                }
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(lim + 1)
+            truncated = len(raw) > lim
+            if truncated:
+                raw = raw[:lim]
+            out_b64 = base64.b64encode(raw).decode("ascii")
+            response_headers: Dict[str, str] = {}
+            for k, v in dict(exc.headers or {}).items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                if resp_allow and key.lower() not in resp_allow:
+                    continue
+                response_headers[key] = str(v)
+            self._metrics_proxy_finish(
+                eid,
+                status_code=int(exc.code),
+                response_bytes=len(raw),
+                http_error=True,
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+                truncated=bool(truncated),
+                error_message=f"http_{int(exc.code)}",
+                request_bytes=len(body_raw),
+            )
+            return {
+                "engine_id": eid,
+                "endpoint": endpoint,
+                "url": url,
+                "status_code": int(exc.code),
+                "headers": response_headers,
+                "body_b64": out_b64,
+                "body_size": len(raw),
+                "truncated": bool(truncated),
+                "http_error": True,
+            }
+        except Exception as exc:
+            self._metrics_proxy_finish(
+                eid,
+                failed=True,
+                error_message=str(exc),
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+                request_bytes=len(body_raw),
+            )
+            raise
+        finally:
+            # Ensure we decrement inflight in paths where finish wasn't called yet.
+            with self._metrics_lock:
+                assert isinstance(self._runtime_metrics, dict)
+                proxy = dict(self._runtime_metrics.get("proxy") or {})
+                inflight_by_engine = dict(proxy.get("inflight_by_engine") or {})
+                current = int(inflight_by_engine.get(eid) or 0)
+                if current > 0:
+                    if current == 1:
+                        inflight_by_engine.pop(eid, None)
+                    else:
+                        inflight_by_engine[eid] = current - 1
+                    proxy["inflight_by_engine"] = inflight_by_engine
+                    proxy["inflight_total"] = max(0, int(proxy.get("inflight_total") or 0) - 1)
+                    self._runtime_metrics["proxy"] = proxy
 
     def _revoke_engine_tokens(self, control: Dict[str, Any], engine_id: str) -> int:
         tokens = dict(control.get("tokens") or {})

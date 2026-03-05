@@ -216,8 +216,11 @@ class EngineHostDaemon:
             return {"seq": seq, "ok": False, "error": "invalid_shutdown_token"}
 
         try:
+            self.svc.authorize_command(cmd, payload)
             result = await asyncio.to_thread(self._call_service, cmd, payload)
             return {"seq": seq, "ok": True, "result": result}
+        except PermissionError as exc:
+            return {"seq": seq, "ok": False, "error": f"auth_failed: {exc}"}
         except Exception as exc:
             return {"seq": seq, "ok": False, "error": str(exc)}
 
@@ -326,10 +329,53 @@ class EngineHostDaemon:
                 max_bytes=int(payload.get("max_bytes") or 65536),
                 max_lines=int(payload.get("max_lines") or 500),
             )
+        if cmd == "proxy-request":
+            return svc.proxy_request(
+                engine_id=str(payload.get("engine_id") or ""),
+                method=str(payload.get("method") or "GET"),
+                path=str(payload.get("path") or "/"),
+                query=str(payload.get("query") or ""),
+                headers=dict(payload.get("headers") or {}),
+                body_b64=str(payload.get("body_b64") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
+            )
         if cmd == "get-control-config":
             return svc.get_control_config()
         if cmd == "set-control-config":
-            return svc.set_control_config(ssh_key=payload.get("ssh_key"))
+            return svc.set_control_config(
+                ssh_key=payload.get("ssh_key"),
+                require_auth=payload.get("require_auth"),
+                traffic_policy=dict(payload.get("traffic_policy") or {}),
+            )
+        if cmd == "auth-status":
+            return svc.auth_status()
+        if cmd == "auth-list-keys":
+            return svc.auth_list_keys()
+        if cmd == "auth-upsert-key":
+            return svc.auth_upsert_key(
+                key_id=str(payload.get("key_id") or ""),
+                key_secret=str(payload.get("key_secret") or ""),
+                role=str(payload.get("role") or ""),
+                allowed_configs=list(payload.get("allowed_configs") or []),
+                allowed_engines=list(payload.get("allowed_engines") or []),
+                disabled=bool(payload.get("disabled", False)),
+            )
+        if cmd == "auth-revoke-key":
+            return svc.auth_revoke_key(str(payload.get("key_id") or ""))
+        if cmd == "auth-issue-session":
+            return svc.auth_issue_session(
+                key_id=str(payload.get("key_id") or ""),
+                key_secret=str(payload.get("key_secret") or ""),
+                scope=str(payload.get("scope") or "control"),
+                ttl_seconds=int(payload.get("ttl_seconds") or 900),
+                config_paths=list(payload.get("config_paths") or []),
+                engine_ids=list(payload.get("engine_ids") or []),
+            )
+        if cmd == "auth-revoke-session":
+            return svc.auth_revoke_session(str(payload.get("token") or ""))
+        if cmd == "host-metrics":
+            return svc.get_host_metrics()
         raise ValueError(f"Unknown command '{cmd}'")
 
 

@@ -16,6 +16,10 @@ ENGINE_MODE_INFERENCE = "inference"
 
 APP_DIR_NAME = ".mp13-llm"
 DEFAULT_CONFIG_FILENAME = "mp13_config.json"
+HOSTING_CONFIGS_SUBDIR = "backend/configs"
+HOSTING_BACKEND_SUBDIR = "backend"
+HOSTING_ENGINES_STATE_FILENAME = "managed_engines.json"
+HOSTING_CONTROL_STATE_FILENAME = "engine_host_control.json"
 
 DEFAULT_CATEGORY_DIRS = {
     "models_root_dir": "@project/..",
@@ -135,6 +139,42 @@ def get_default_config_dir() -> Path:
 
 def get_default_config_path() -> Path:
     return get_default_config_dir() / DEFAULT_CONFIG_FILENAME
+
+
+def get_hosting_config_store_dir() -> Path:
+    return (get_default_config_dir() / HOSTING_CONFIGS_SUBDIR).resolve()
+
+
+def get_hosting_backend_dir() -> Path:
+    return (get_default_config_dir() / HOSTING_BACKEND_SUBDIR).resolve()
+
+
+def get_hosting_engines_state_path() -> Path:
+    return get_hosting_backend_dir() / HOSTING_ENGINES_STATE_FILENAME
+
+
+def get_hosting_control_state_path() -> Path:
+    return get_hosting_backend_dir() / HOSTING_CONTROL_STATE_FILENAME
+
+
+def normalize_hosting_config_selector(selector: Optional[str]) -> str:
+    raw = str(selector or "").strip()
+    if not raw or raw.lower() == "default":
+        return "default"
+    if any(x in raw for x in ["/", "\\", ":"]) or raw.startswith("."):
+        raise ValueError("selector must be 'default' or a hosted config name")
+    stem = Path(raw if Path(raw).suffix else f"{raw}.json").stem
+    cleaned = "".join(ch if (ch.isalnum() or ch in {"_", "-"}) else "_" for ch in stem).strip("_")
+    if cleaned != stem or not cleaned:
+        raise ValueError("selector contains unsupported characters")
+    return cleaned
+
+
+def resolve_hosting_config_path(selector: Optional[str]) -> Path:
+    name = normalize_hosting_config_selector(selector)
+    if name == "default":
+        return get_default_config_path()
+    return (get_hosting_config_store_dir() / f"{name}.json").resolve()
 
 
 
