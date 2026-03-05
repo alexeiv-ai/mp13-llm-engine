@@ -24,6 +24,21 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Keywords that indicate an expired or invalid session token in daemon error strings.
+_SESSION_AUTH_ERROR_KEYWORDS = (
+    "auth_failed",
+    "session_expired",
+    "invalid_session",
+    "missing_or_invalid_session_token",
+    "session_token_required",
+    "session_not_found",
+)
+
+
+def _is_session_auth_error(msg: str) -> bool:
+    ml = msg.lower()
+    return any(k in ml for k in _SESSION_AUTH_ERROR_KEYWORDS)
+
 
 class EngineHostControlChannel:
     """Command-channel wrapper — persistent daemon connection with subprocess fallback."""
@@ -48,6 +63,9 @@ class EngineHostControlChannel:
         ).strip().lower() or "control"
         self._session_ttl_seconds: int = int(
             self.control_settings.get("engine_host_session_ttl_seconds") or 900
+        )
+        self._bind_session_to_ssh: bool = bool(
+            self.control_settings.get("engine_host_bind_session_to_ssh", True)
         )
         # Connection management
         self._connection: Optional[Any] = None  # BaseConnection instance
@@ -213,6 +231,7 @@ class EngineHostControlChannel:
                         ssh_key=str(self.control_settings.get("control_ssh_key") or "").strip() or None,
                         remote_cmd=raw_remote,
                         timeout=self._timeout,
+                        known_hosts_line=str(self.control_settings.get("ssh_known_hosts_line") or "").strip() or None,
                     )
                 return self._connection
 
@@ -293,11 +312,14 @@ class EngineHostControlChannel:
         payload: Optional[Dict[str, Any]] = None,
         *,
         allow_auto_session: bool = True,
+        _retry_on_auth_error: bool = True,
     ) -> Any:
         """
         Send a command and return the result.
 
         Tries persistent connection first; falls back to per-command subprocess.
+        On auth/session errors, clears the session token and retries once so that
+        an auto-issued fresh session can succeed without caller intervention.
         """
         if (
             allow_auto_session
@@ -307,6 +329,7 @@ class EngineHostControlChannel:
             and self._key_secret
         ):
             try:
+                ssh_binding = self._current_ssh_session_binding()
                 issued = self._invoke(
                     "auth-issue-session",
                     {
@@ -314,6 +337,7 @@ class EngineHostControlChannel:
                         "key_secret": self._key_secret,
                         "scope": self._session_scope,
                         "ttl_seconds": self._session_ttl_seconds,
+                        "ssh_binding": ssh_binding if ssh_binding else None,
                     },
                     allow_auto_session=False,
                 )
@@ -324,6 +348,12 @@ class EngineHostControlChannel:
                 logger.debug("Auto session issuance failed: %s", exc)
 
         effective_payload = dict(payload or {})
+        ssh_binding = self._current_ssh_session_binding()
+        if command == "auth-issue-session":
+            if ssh_binding and not effective_payload.get("ssh_binding"):
+                effective_payload["ssh_binding"] = ssh_binding
+        elif ssh_binding:
+            effective_payload.setdefault("_ssh_session_binding", ssh_binding)
         if self._session_token and command not in {"auth-issue-session"}:
             effective_payload.setdefault("session_token", self._session_token)
 
@@ -339,7 +369,26 @@ class EngineHostControlChannel:
                 )
                 with self._connection_lock:
                     self._connection = None
-        return self._invoke_subprocess(command, effective_payload)
+        try:
+            return self._invoke_subprocess(command, effective_payload)
+        except RuntimeError as exc:
+            # Retry once on session/auth errors: clear stale token so auto-issue fires again.
+            _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge"}
+            if (
+                _retry_on_auth_error
+                and self._session_token
+                and command not in _no_retry_cmds
+                and _is_session_auth_error(str(exc))
+            ):
+                logger.info(
+                    "Auth error on '%s' (likely expired session); clearing token and retrying: %s",
+                    command,
+                    exc,
+                )
+                self._session_token = None
+                self.control_settings["engine_host_session_token"] = None
+                return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
+            raise
 
     def set_session_token(self, token: Optional[str]) -> None:
         self._session_token = str(token or "").strip() or None
@@ -347,6 +396,23 @@ class EngineHostControlChannel:
 
     def get_session_token(self) -> Optional[str]:
         return self._session_token
+
+    def _current_ssh_session_binding(self) -> Optional[Dict[str, str]]:
+        if not self._bind_session_to_ssh:
+            return None
+        target = self.get_target()
+        if str(target.get("mode") or "") != "ssh":
+            return None
+        raw_target = str(target.get("target") or "").strip()
+        if raw_target.startswith("ssh://"):
+            raw_target = raw_target[6:]
+        if not raw_target:
+            return None
+        fp = str(self.control_settings.get("control_ssh_fingerprint") or "").strip()
+        binding: Dict[str, str] = {"target": raw_target}
+        if fp:
+            binding["key_fingerprint"] = fp
+        return binding
 
     # ------------------------------------------------------------------
     # Daemon lifecycle management (new public API)
@@ -433,6 +499,70 @@ class EngineHostControlChannel:
                 except Exception:
                     pass
                 self._connection = None
+
+    def restart_remote_daemon(self, *, wait_seconds: float = 3.0) -> Dict[str, Any]:
+        """SSH-exec the remote daemon start command and wait for it to bind.
+
+        Only valid in SSH mode.  Raises ValueError if called on a local channel.
+        Returns {"started": bool, "error": Optional[str]}.
+        """
+        import time as _time
+
+        target = self.get_target()
+        if str(target.get("mode") or "local") != "ssh":
+            raise ValueError("restart_remote_daemon is only valid in SSH mode")
+        ssh_target = str(target.get("target") or "").strip()
+        if not ssh_target:
+            raise ValueError("SSH target is not set")
+        ssh_key = str(self.control_settings.get("control_ssh_key") or "").strip() or None
+        known_hosts_line = str(self.control_settings.get("ssh_known_hosts_line") or "").strip() or None
+
+        # Build the daemon-start command (use base CLI without --relay)
+        raw_remote = str(
+            self.control_settings.get("engine_host_remote_cmd") or ""
+        ).strip()
+        if not raw_remote or "--relay" in raw_remote:
+            raw_remote = "python -m hosting.engine_host_cli"
+        daemon_cmd = f"{raw_remote} --daemon --background"
+
+        argv: List[str] = [
+            "ssh", "-T",
+            "-o", "BatchMode=yes",
+            "-o", f"ConnectTimeout={max(5, int(self._timeout))}",
+        ]
+        if known_hosts_line:
+            import tempfile as _tempfile, os as _os
+            try:
+                fd, tmppath = _tempfile.mkstemp(prefix="mp13_kh_", suffix=".txt")
+                with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(known_hosts_line + "\n")
+                argv += ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={tmppath}"]
+            except Exception:
+                argv += ["-o", "StrictHostKeyChecking=accept-new"]
+        else:
+            argv += ["-o", "StrictHostKeyChecking=accept-new"]
+        if ssh_key:
+            argv += ["-i", ssh_key]
+        argv.append(ssh_target)
+        argv += shlex.split(daemon_cmd)
+
+        try:
+            proc = subprocess.run(  # noqa: S603
+                argv,
+                capture_output=True,
+                timeout=float(wait_seconds) + 10.0,
+                check=False,
+            )
+            if proc.returncode != 0:
+                stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                logger.warning("restart_remote_daemon SSH exec returned %d: %s", proc.returncode, stderr)
+                return {"started": False, "error": f"exit {proc.returncode}: {stderr}"}
+        except Exception as exc:
+            logger.warning("restart_remote_daemon failed: %s", exc)
+            return {"started": False, "error": str(exc)}
+
+        _time.sleep(float(wait_seconds))
+        return {"started": True, "error": None}
 
     def discover_running(self) -> List[Dict[str, Any]]:
         res = self._invoke("discover-running", {})
@@ -589,6 +719,80 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def proxy_ws_open(
+        self,
+        *,
+        engine_id: str,
+        path: str = "/",
+        query: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-ws-open",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "path": str(path or "/"),
+                "query": str(query or ""),
+                "headers": dict(headers or {}),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_ws_send(
+        self,
+        *,
+        ws_id: str,
+        text: Optional[str] = None,
+        data_b64: str = "",
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-ws-send",
+            {
+                "ws_id": str(ws_id or "").strip(),
+                "text": str(text) if text is not None else None,
+                "data_b64": str(data_b64 or ""),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_ws_recv(
+        self,
+        *,
+        ws_id: str,
+        timeout_seconds: float = 30.0,
+        max_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-ws-recv",
+            {
+                "ws_id": str(ws_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "max_bytes": int(max_bytes or (1024 * 1024)),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_ws_close(
+        self,
+        *,
+        ws_id: str,
+        code: int = 1000,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-ws-close",
+            {
+                "ws_id": str(ws_id or "").strip(),
+                "code": int(code or 1000),
+                "reason": str(reason or ""),
+            },
+        )
+        return dict(res or {})
+
     def get_control_config(self) -> Dict[str, Any]:
         res = self._invoke("get-control-config", {})
         return dict(res or {})
@@ -599,12 +803,20 @@ class EngineHostControlChannel:
         ssh_key: Optional[str] = None,
         require_auth: Optional[bool] = None,
         traffic_policy: Optional[Dict[str, Any]] = None,
+        engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
+        websocket_session_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"ssh_key": str(ssh_key).strip() if ssh_key else None}
         if require_auth is not None:
             payload["require_auth"] = bool(require_auth)
         if traffic_policy is not None:
             payload["traffic_policy"] = dict(traffic_policy or {})
+        if engine_traffic_policies is not None:
+            payload["engine_traffic_policies"] = {
+                str(k): dict(v or {}) for k, v in dict(engine_traffic_policies or {}).items()
+            }
+        if websocket_session_policy is not None:
+            payload["websocket_session_policy"] = dict(websocket_session_policy or {})
         res = self._invoke("set-control-config", payload)
         return dict(res or {})
 
@@ -620,12 +832,62 @@ class EngineHostControlChannel:
         res = self._invoke("auth-list-keys", {})
         return list(res or []) if isinstance(res, list) else []
 
+    def auth_list_sessions(
+        self,
+        *,
+        key_id: Optional[str] = None,
+        scope: Optional[str] = None,
+        role: Optional[str] = None,
+        token_preview_contains: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "auth-list-sessions",
+            {
+                "key_id": str(key_id).strip() if key_id else None,
+                "scope": str(scope).strip() if scope else None,
+                "role": str(role).strip() if role else None,
+                "token_preview_contains": str(token_preview_contains).strip() if token_preview_contains else None,
+                "limit": int(limit or 100),
+                "offset": int(offset or 0),
+            },
+        )
+        return dict(res or {}) if isinstance(res, dict) else {}
+
+    def auth_list_issued_tokens(
+        self,
+        *,
+        engine_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        backend_id: Optional[str] = None,
+        token_preview_contains: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "auth-list-issued-tokens",
+            {
+                "engine_id": str(engine_id).strip() if engine_id else None,
+                "resource_kind": str(resource_kind).strip() if resource_kind else None,
+                "resource_id": str(resource_id).strip() if resource_id else None,
+                "backend_id": str(backend_id).strip() if backend_id else None,
+                "token_preview_contains": str(token_preview_contains).strip() if token_preview_contains else None,
+                "limit": int(limit or 100),
+                "offset": int(offset or 0),
+            },
+        )
+        return dict(res or {}) if isinstance(res, dict) else {}
+
     def auth_upsert_key(
         self,
         *,
         key_id: str,
-        key_secret: str,
+        key_secret: str = "",
         role: str,
+        auth_method: str = "shared_secret",
+        public_key: str = "",
         allowed_configs: Optional[List[str]] = None,
         allowed_engines: Optional[List[str]] = None,
         disabled: bool = False,
@@ -636,6 +898,8 @@ class EngineHostControlChannel:
                 "key_id": str(key_id or ""),
                 "key_secret": str(key_secret or ""),
                 "role": str(role or ""),
+                "auth_method": str(auth_method or "shared_secret"),
+                "public_key": str(public_key or ""),
                 "allowed_configs": list(allowed_configs or []),
                 "allowed_engines": list(allowed_engines or []),
                 "disabled": bool(disabled),
@@ -656,8 +920,10 @@ class EngineHostControlChannel:
         ttl_seconds: int = 900,
         config_paths: Optional[List[str]] = None,
         engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
         adopt: bool = True,
     ) -> Dict[str, Any]:
+        binding = self._current_ssh_session_binding() if bind_to_ssh else None
         res = self._invoke(
             "auth-issue-session",
             {
@@ -667,6 +933,51 @@ class EngineHostControlChannel:
                 "ttl_seconds": int(ttl_seconds or 900),
                 "config_paths": list(config_paths or []),
                 "engine_ids": list(engine_ids or []),
+                "ssh_binding": dict(binding or {}),
+            },
+        )
+        out = dict(res or {})
+        token = str(out.get("token") or "").strip()
+        if adopt and token:
+            self.set_session_token(token)
+        return out
+
+    def auth_begin_challenge(
+        self,
+        *,
+        key_id: str,
+        scope: str = "control",
+        ttl_seconds: int = 120,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+    ) -> Dict[str, Any]:
+        binding = self._current_ssh_session_binding() if bind_to_ssh else None
+        res = self._invoke(
+            "auth-begin-challenge",
+            {
+                "key_id": str(key_id or ""),
+                "scope": str(scope or "control"),
+                "ttl_seconds": int(ttl_seconds or 120),
+                "config_paths": list(config_paths or []),
+                "engine_ids": list(engine_ids or []),
+                "ssh_binding": dict(binding or {}),
+            },
+        )
+        return dict(res or {})
+
+    def auth_complete_challenge(
+        self,
+        *,
+        challenge_id: str,
+        signature_ssh: str,
+        adopt: bool = True,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "auth-complete-challenge",
+            {
+                "challenge_id": str(challenge_id or ""),
+                "signature_ssh": str(signature_ssh or ""),
             },
         )
         out = dict(res or {})

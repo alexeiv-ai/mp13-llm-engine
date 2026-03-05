@@ -18,6 +18,10 @@ import sys
 import time
 import hmac
 import base64
+import socket
+import ssl
+import struct
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +47,8 @@ class EngineHostService:
     """File-backed engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
+    _ws_lock = threading.Lock()
+    _ws_sessions: Optional[Dict[str, Dict[str, Any]]] = None
 
     def __init__(
         self,
@@ -82,8 +88,21 @@ class EngineHostService:
                     "denied": 0,
                     "last_denied_reason": None,
                     "last_denied_at": 0.0,
+                    "challenge_begin_total": 0,
+                    "challenge_complete_ok": 0,
+                    "challenge_complete_failed": 0,
+                    "challenge_replay_suspected": 0,
+                    "challenge_recent_limit": 100,
+                    "challenge_recent_events": [],
                 },
             }
+
+    @classmethod
+    def _ensure_ws_initialized(cls) -> None:
+        with cls._ws_lock:
+            if isinstance(cls._ws_sessions, dict):
+                return
+            cls._ws_sessions = {}
 
     @classmethod
     def _metrics_proxy_start(cls, engine_id: str, request_bytes: int) -> None:
@@ -182,6 +201,45 @@ class EngineHostService:
             auth["last_denied_at"] = time.time()
             cls._runtime_metrics["auth"] = auth
 
+    @classmethod
+    def _metrics_challenge_event(
+        cls,
+        *,
+        event: str,
+        key_id: Optional[str] = None,
+        challenge_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        replay_suspected: bool = False,
+    ) -> None:
+        cls._ensure_metrics_initialized()
+        with cls._metrics_lock:
+            assert isinstance(cls._runtime_metrics, dict)
+            auth = dict(cls._runtime_metrics.get("auth") or {})
+            ev = str(event or "").strip().lower()
+            if ev == "begin":
+                auth["challenge_begin_total"] = int(auth.get("challenge_begin_total") or 0) + 1
+            elif ev == "complete_ok":
+                auth["challenge_complete_ok"] = int(auth.get("challenge_complete_ok") or 0) + 1
+            else:
+                auth["challenge_complete_failed"] = int(auth.get("challenge_complete_failed") or 0) + 1
+            if replay_suspected:
+                auth["challenge_replay_suspected"] = int(auth.get("challenge_replay_suspected") or 0) + 1
+            entry = {
+                "timestamp": time.time(),
+                "event": ev,
+                "key_id": str(key_id or "") or None,
+                "challenge_id_preview": cls._token_preview(str(challenge_id or ""), prefix=6, suffix=4) if challenge_id else None,
+                "reason": str(reason or "") or None,
+                "replay_suspected": bool(replay_suspected),
+            }
+            recent = list(auth.get("challenge_recent_events") or [])
+            recent.append(entry)
+            limit = max(10, int(auth.get("challenge_recent_limit") or 100))
+            if len(recent) > limit:
+                recent = recent[-limit:]
+            auth["challenge_recent_events"] = recent
+            cls._runtime_metrics["auth"] = auth
+
     def get_host_metrics(self) -> Dict[str, Any]:
         self._ensure_metrics_initialized()
         with self._metrics_lock:
@@ -252,8 +310,14 @@ class EngineHostService:
                 "control_config": {
                     "ssh_key": None,
                     "require_auth": False,
-                    "auth": {"keys": {}, "sessions": {}},
+                    "auth": {"keys": {}, "sessions": {}, "challenges": {}},
                     "config_store_mode": "store_only",
+                    "engine_traffic_policies": {},
+                    "websocket_session_policy": {
+                        "max_sessions": 128,
+                        "idle_timeout_seconds": 300,
+                        "max_lifetime_seconds": 3600,
+                    },
                     "traffic_policy": {
                         "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
                         "allowed_path_prefixes": ["/"],
@@ -295,8 +359,10 @@ class EngineHostService:
             {
                 "ssh_key": None,
                 "require_auth": False,
-                "auth": {"keys": {}, "sessions": {}},
+                "auth": {"keys": {}, "sessions": {}, "challenges": {}},
                 "config_store_mode": "store_only",
+                "engine_traffic_policies": {},
+                "websocket_session_policy": {},
                 "traffic_policy": {},
             },
         )
@@ -309,6 +375,8 @@ class EngineHostService:
         cfg.setdefault("ssh_key", None)
         cfg.setdefault("require_auth", False)
         cfg.setdefault("config_store_mode", "store_only")
+        cfg.setdefault("engine_traffic_policies", {})
+        cfg.setdefault("websocket_session_policy", {})
         raw_policy = dict(cfg.get("traffic_policy") or {})
         raw_policy.setdefault("allowed_methods", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
         raw_policy.setdefault("allowed_path_prefixes", ["/"])
@@ -324,9 +392,20 @@ class EngineHostService:
         raw_policy.setdefault("max_request_bytes", 1024 * 1024)
         raw_policy.setdefault("max_response_bytes", 1024 * 1024)
         cfg["traffic_policy"] = raw_policy
+        engine_policies = dict(cfg.get("engine_traffic_policies") or {})
+        normalized_engine_policies: Dict[str, Dict[str, Any]] = {}
+        for raw_engine_id, policy in engine_policies.items():
+            eid = self._safe_config_name(str(raw_engine_id or "").strip())
+            if not eid:
+                continue
+            normalized_engine_policies[eid] = self._normalize_traffic_policy(dict(policy or {}))
+        cfg["engine_traffic_policies"] = normalized_engine_policies
+        raw_ws = dict(cfg.get("websocket_session_policy") or {})
+        cfg["websocket_session_policy"] = self._normalize_websocket_session_policy(raw_ws)
         auth = dict(cfg.get("auth") or {})
         auth.setdefault("keys", {})
         auth.setdefault("sessions", {})
+        auth.setdefault("challenges", {})
         cfg["auth"] = auth
         payload["control_config"] = cfg
         return payload
@@ -400,6 +479,36 @@ class EngineHostService:
         cfg = dict(control.get("control_config") or {})
         return self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {}))
 
+    def _traffic_policy_for_engine(self, engine_id: str) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        base = self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {}))
+        engine_policies = dict(cfg.get("engine_traffic_policies") or {})
+        eid = self._safe_config_name(str(engine_id or "").strip())
+        override = dict(engine_policies.get(eid) or {})
+        if not override:
+            return base
+        merged = dict(base)
+        merged.update(override)
+        return self._normalize_traffic_policy(merged)
+
+    @staticmethod
+    def _normalize_websocket_session_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        p = dict(policy or {})
+        max_sessions = max(1, min(int(p.get("max_sessions") or 128), 4096))
+        idle_timeout = max(5, min(int(p.get("idle_timeout_seconds") or 300), 24 * 3600))
+        max_lifetime = max(30, min(int(p.get("max_lifetime_seconds") or 3600), 7 * 24 * 3600))
+        return {
+            "max_sessions": max_sessions,
+            "idle_timeout_seconds": idle_timeout,
+            "max_lifetime_seconds": max_lifetime,
+        }
+
+    def _websocket_session_policy(self) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        return self._normalize_websocket_session_policy(dict(cfg.get("websocket_session_policy") or {}))
+
     def _normalize_config_selector(self, config_path: str) -> str:
         raw = str(config_path or "").strip()
         if not raw or raw.lower() == "default":
@@ -426,6 +535,15 @@ class EngineHostService:
         raw = str(secret or "")
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _token_preview(token: str, *, prefix: int = 8, suffix: int = 4) -> str:
+        tok = str(token or "").strip()
+        if not tok:
+            return ""
+        if len(tok) <= (prefix + suffix + 3):
+            return tok[: max(1, len(tok) // 2)] + "..."
+        return f"{tok[:prefix]}...{tok[-suffix:]}"
+
     def _prune_expired_sessions(self, auth: Dict[str, Any]) -> int:
         sessions = dict(auth.get("sessions") or {})
         now = time.time()
@@ -437,6 +555,64 @@ class EngineHostService:
                 removed += 1
         auth["sessions"] = sessions
         return removed
+
+    def _prune_expired_challenges(self, auth: Dict[str, Any]) -> int:
+        challenges = dict(auth.get("challenges") or {})
+        now = time.time()
+        removed = 0
+        for challenge_id, meta in list(challenges.items()):
+            expires = float((meta or {}).get("expires_at") or 0.0)
+            if expires > 0 and now >= expires:
+                challenges.pop(challenge_id, None)
+                removed += 1
+        auth["challenges"] = challenges
+        return removed
+
+    @staticmethod
+    def _verify_ssh_signature(*, key_id: str, public_key: str, challenge: str, signature_ssh: str) -> bool:
+        """
+        Verify OpenSSH armored signature over challenge text using ssh-keygen -Y verify.
+
+        Returns False on verification failure or tool error.
+        """
+        kid = str(key_id or "").strip()
+        pub = str(public_key or "").strip()
+        ch = str(challenge or "")
+        sig = str(signature_ssh or "").strip()
+        if not (kid and pub and ch and sig):
+            return False
+        try:
+            with tempfile.TemporaryDirectory(prefix="host_auth_") as td:
+                tdp = Path(td)
+                data_file = tdp / "challenge.txt"
+                sig_file = tdp / "challenge.sig"
+                allowed_file = tdp / "allowed_signers"
+                data_file.write_text(ch, encoding="utf-8")
+                sig_file.write_text(sig, encoding="utf-8")
+                allowed_file.write_text(f"{kid} {pub}\n", encoding="utf-8")
+                proc = subprocess.run(  # noqa: S603
+                    [
+                        "ssh-keygen",
+                        "-Y",
+                        "verify",
+                        "-f",
+                        str(allowed_file),
+                        "-I",
+                        kid,
+                        "-n",
+                        "engine-host-auth",
+                        "-s",
+                        str(sig_file),
+                    ],
+                    input=ch,
+                    text=True,
+                    capture_output=True,
+                    timeout=15.0,
+                    check=False,
+                )
+                return int(proc.returncode) == 0
+        except Exception:
+            return False
 
     def _extract_session_token(self, payload: Optional[Dict[str, Any]]) -> str:
         p = dict(payload or {})
@@ -451,6 +627,7 @@ class EngineHostService:
         required_scope: str,
         requested_config: Optional[str] = None,
         requested_engine: Optional[str] = None,
+        presented_ssh_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         cfg = dict(control.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
@@ -461,6 +638,19 @@ class EngineHostService:
             raise PermissionError("missing_or_invalid_session_token")
         if bool(session.get("revoked", False)):
             raise PermissionError("session_revoked")
+        expected_binding = dict(session.get("ssh_binding") or {})
+        if expected_binding:
+            presented = dict(presented_ssh_binding or {})
+            if not presented:
+                raise PermissionError("ssh_binding_required")
+            expected_target = str(expected_binding.get("target") or "").strip()
+            expected_fp = str(expected_binding.get("key_fingerprint") or "").strip()
+            got_target = str(presented.get("target") or "").strip()
+            got_fp = str(presented.get("key_fingerprint") or "").strip()
+            if expected_target and expected_target != got_target:
+                raise PermissionError("ssh_binding_mismatch")
+            if expected_fp and expected_fp != got_fp:
+                raise PermissionError("ssh_binding_mismatch")
         key_role = str(session.get("role") or "").strip().lower()
         scope = str(session.get("scope") or "").strip().lower()
         if key_role == "management":
@@ -482,13 +672,16 @@ class EngineHostService:
         cfg = dict(control.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_sessions(auth)
+        self._prune_expired_challenges(auth)
         keys = dict(auth.get("keys") or {})
         sessions = dict(auth.get("sessions") or {})
+        challenges = dict(auth.get("challenges") or {})
         return {
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
             "keys_count": len(keys),
             "sessions_count": len(sessions),
+            "challenges_count": len(challenges),
             "roles": sorted(list({str((v or {}).get("role") or "") for v in keys.values() if isinstance(v, dict)})),
         }
 
@@ -504,6 +697,7 @@ class EngineHostService:
                     "key_id": str(key_id),
                     "role": str(m.get("role") or ""),
                     "disabled": bool(m.get("disabled", False)),
+                    "auth_method": str(m.get("auth_method") or "shared_secret"),
                     "created_at": float(m.get("created_at") or 0.0),
                     "updated_at": float(m.get("updated_at") or 0.0),
                     "allowed_configs": list(m.get("allowed_configs") or []),
@@ -513,12 +707,165 @@ class EngineHostService:
         out.sort(key=lambda x: str(x.get("key_id") or ""))
         return out
 
+    def auth_list_sessions(
+        self,
+        *,
+        key_id: Optional[str] = None,
+        scope: Optional[str] = None,
+        role: Optional[str] = None,
+        token_preview_contains: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+        sessions = dict(auth.get("sessions") or {})
+        now = time.time()
+        rows: List[Dict[str, Any]] = []
+        key_id_filter = str(key_id or "").strip()
+        scope_filter = str(scope or "").strip().lower()
+        role_filter = str(role or "").strip().lower()
+        preview_filter = str(token_preview_contains or "").strip().lower()
+        for token, meta in sessions.items():
+            m = dict(meta or {})
+            expires_at = float(m.get("expires_at") or 0.0)
+            remaining = max(0, int(expires_at - now)) if expires_at > 0 else None
+            row = {
+                "token_preview": self._token_preview(str(token)),
+                "key_id": str(m.get("key_id") or ""),
+                "role": str(m.get("role") or ""),
+                "scope": str(m.get("scope") or ""),
+                "issued_at": float(m.get("issued_at") or 0.0),
+                "expires_at": expires_at,
+                "ttl_remaining_seconds": remaining,
+                "allowed_configs": list(m.get("allowed_configs") or []),
+                "allowed_engines": list(m.get("allowed_engines") or []),
+                "ssh_binding": dict(m.get("ssh_binding") or {}),
+            }
+            if key_id_filter and str(row["key_id"]) != key_id_filter:
+                continue
+            if scope_filter and str(row["scope"]).lower() != scope_filter:
+                continue
+            if role_filter and str(row["role"]).lower() != role_filter:
+                continue
+            if preview_filter and preview_filter not in str(row["token_preview"]).lower():
+                continue
+            rows.append(row)
+        rows.sort(key=lambda x: (str(x.get("key_id") or ""), float(x.get("issued_at") or 0.0)))
+        total = len(rows)
+        page_offset = max(0, int(offset or 0))
+        page_limit = max(1, min(int(limit or 100), 1000))
+        page = rows[page_offset: page_offset + page_limit]
+        next_offset = page_offset + len(page)
+        return {
+            "sessions_count": total,
+            "timestamp": now,
+            "offset": page_offset,
+            "limit": page_limit,
+            "count": len(page),
+            "has_more": bool(next_offset < total),
+            "next_offset": next_offset if next_offset < total else None,
+            "sessions": page,
+        }
+
+    def auth_list_issued_tokens(
+        self,
+        *,
+        engine_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        backend_id: Optional[str] = None,
+        token_preview_contains: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        control = self._read_control()
+        now = time.time()
+        engine_tokens: List[Dict[str, Any]] = []
+        resource_tokens: List[Dict[str, Any]] = []
+        engine_filter = str(engine_id or "").strip()
+        rk_filter = str(resource_kind or "").strip().lower()
+        rid_filter = str(resource_id or "").strip()
+        backend_filter = str(backend_id or "").strip()
+        preview_filter = str(token_preview_contains or "").strip().lower()
+        for token, meta in dict(control.get("tokens") or {}).items():
+            m = dict(meta or {})
+            row = {
+                "token_preview": self._token_preview(str(token)),
+                "engine_id": str(m.get("engine_id") or ""),
+                "backend_id": str(m.get("backend_id") or ""),
+                "issued_at": float(m.get("issued_at") or 0.0),
+            }
+            if engine_filter and str(row["engine_id"]) != engine_filter:
+                continue
+            if backend_filter and str(row["backend_id"]) != backend_filter:
+                continue
+            if preview_filter and preview_filter not in str(row["token_preview"]).lower():
+                continue
+            engine_tokens.append(row)
+        for token, meta in dict(control.get("resource_tokens") or {}).items():
+            m = dict(meta or {})
+            row = {
+                "token_preview": self._token_preview(str(token)),
+                "resource_kind": str(m.get("resource_kind") or ""),
+                "resource_id": str(m.get("resource_id") or ""),
+                "resource_key": str(m.get("resource_key") or ""),
+                "backend_id": str(m.get("backend_id") or ""),
+                "issued_at": float(m.get("issued_at") or 0.0),
+            }
+            if rk_filter and str(row["resource_kind"]).lower() != rk_filter:
+                continue
+            if rid_filter and str(row["resource_id"]) != rid_filter:
+                continue
+            if backend_filter and str(row["backend_id"]) != backend_filter:
+                continue
+            if preview_filter and preview_filter not in str(row["token_preview"]).lower():
+                continue
+            resource_tokens.append(row)
+        engine_tokens.sort(key=lambda x: (str(x.get("engine_id") or ""), float(x.get("issued_at") or 0.0)))
+        resource_tokens.sort(key=lambda x: (str(x.get("resource_key") or ""), float(x.get("issued_at") or 0.0)))
+        merged: List[Dict[str, Any]] = []
+        for row in engine_tokens:
+            merged.append({"kind": "engine", **row})
+        for row in resource_tokens:
+            merged.append({"kind": "resource", **row})
+        merged.sort(
+            key=lambda x: (
+                str(x.get("kind") or ""),
+                str(x.get("engine_id") or x.get("resource_key") or ""),
+                float(x.get("issued_at") or 0.0),
+            )
+        )
+        total = len(merged)
+        page_offset = max(0, int(offset or 0))
+        page_limit = max(1, min(int(limit or 100), 1000))
+        page = merged[page_offset: page_offset + page_limit]
+        next_offset = page_offset + len(page)
+        return {
+            "timestamp": now,
+            "engine_tokens_count": len(engine_tokens),
+            "resource_tokens_count": len(resource_tokens),
+            "engine_tokens": engine_tokens,
+            "resource_tokens": resource_tokens,
+            "total_count": total,
+            "offset": page_offset,
+            "limit": page_limit,
+            "count": len(page),
+            "has_more": bool(next_offset < total),
+            "next_offset": next_offset if next_offset < total else None,
+            "tokens": page,
+        }
+
     def auth_upsert_key(
         self,
         *,
         key_id: str,
-        key_secret: str,
+        key_secret: str = "",
         role: str,
+        auth_method: str = "shared_secret",
+        public_key: str = "",
         allowed_configs: Optional[List[str]] = None,
         allowed_engines: Optional[List[str]] = None,
         disabled: bool = False,
@@ -526,12 +873,18 @@ class EngineHostService:
         kid = str(key_id or "").strip()
         secret = str(key_secret or "").strip()
         role_norm = str(role or "").strip().lower()
+        method = str(auth_method or "shared_secret").strip().lower()
+        pubkey = str(public_key or "").strip()
         if not kid:
             raise ValueError("key_id is required")
-        if not secret:
-            raise ValueError("key_secret is required")
         if role_norm not in {"management", "config", "traffic"}:
             raise ValueError("role must be 'management', 'config', or 'traffic'")
+        if method not in {"shared_secret", "public_key"}:
+            raise ValueError("auth_method must be 'shared_secret' or 'public_key'")
+        if method == "shared_secret" and not secret:
+            raise ValueError("key_secret is required for shared_secret auth_method")
+        if method == "public_key" and not pubkey:
+            raise ValueError("public_key is required for public_key auth_method")
         normalized_allowed: List[str] = []
         normalized_engines: List[str] = []
         if role_norm == "config":
@@ -572,7 +925,9 @@ class EngineHostService:
         existing = dict(keys.get(kid) or {})
         keys[kid] = {
             "role": role_norm,
-            "secret_hash": self._hash_secret(secret),
+            "auth_method": method,
+            "secret_hash": self._hash_secret(secret) if method == "shared_secret" else "",
+            "public_key": pubkey if method == "public_key" else "",
             "created_at": float(existing.get("created_at") or now),
             "updated_at": now,
             "disabled": bool(disabled),
@@ -586,6 +941,7 @@ class EngineHostService:
         return {
             "key_id": kid,
             "role": role_norm,
+            "auth_method": method,
             "disabled": bool(disabled),
             "allowed_configs": normalized_allowed,
             "allowed_engines": normalized_engines,
@@ -624,6 +980,7 @@ class EngineHostService:
         ttl_seconds: int = 900,
         config_paths: Optional[List[str]] = None,
         engine_ids: Optional[List[str]] = None,
+        ssh_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         kid = str(key_id or "").strip()
         secret = str(key_secret or "").strip()
@@ -644,10 +1001,43 @@ class EngineHostService:
             raise PermissionError("unknown_key_id")
         if bool(key_meta.get("disabled", False)):
             raise PermissionError("key_disabled")
+        auth_method = str(key_meta.get("auth_method") or "shared_secret").strip().lower()
+        if auth_method != "shared_secret":
+            raise PermissionError("auth_method_requires_challenge_flow")
         expected_hash = str(key_meta.get("secret_hash") or "")
         provided_hash = self._hash_secret(secret)
         if not expected_hash or not hmac.compare_digest(expected_hash, provided_hash):
             raise PermissionError("invalid_key_secret")
+        return self._issue_session_for_key(
+            key_id=kid,
+            key_meta=key_meta,
+            scope=scope_norm,
+            ttl_seconds=ttl_seconds,
+            config_paths=config_paths,
+            engine_ids=engine_ids,
+            ssh_binding=ssh_binding,
+            control=control,
+        )
+
+    def _issue_session_for_key(
+        self,
+        *,
+        key_id: str,
+        key_meta: Dict[str, Any],
+        scope: str,
+        ttl_seconds: int,
+        config_paths: Optional[List[str]],
+        engine_ids: Optional[List[str]],
+        ssh_binding: Optional[Dict[str, Any]],
+        control: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        scope_norm = str(scope or "control").strip().lower()
+        if scope_norm not in {"control", "config", "traffic"}:
+            raise ValueError("scope must be 'control', 'config', or 'traffic'")
+        control_payload = dict(control or self._read_control())
+        cfg = dict(control_payload.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
         role = str(key_meta.get("role") or "").strip().lower()
         if role == "config" and scope_norm != "config":
             raise PermissionError("config_role_cannot_issue_non_config_scope")
@@ -708,20 +1098,27 @@ class EngineHostService:
         token = secrets.token_urlsafe(36)
         ttl = max(60, min(int(ttl_seconds or 900), 24 * 3600))
         now = time.time()
+        binding_target = str((ssh_binding or {}).get("target") or "").strip()
+        binding_fp = str((ssh_binding or {}).get("key_fingerprint") or "").strip()
+        normalized_binding = {
+            "target": binding_target or None,
+            "key_fingerprint": binding_fp or None,
+        } if (binding_target or binding_fp) else {}
         sessions = dict(auth.get("sessions") or {})
         sessions[token] = {
-            "key_id": kid,
+            "key_id": str(key_id or ""),
             "role": role,
             "scope": scope_norm,
             "issued_at": now,
             "expires_at": now + ttl,
             "allowed_configs": allowed_configs,
             "allowed_engines": allowed_engines,
+            "ssh_binding": normalized_binding,
         }
         auth["sessions"] = sessions
         cfg["auth"] = auth
-        control["control_config"] = cfg
-        self._write_control(control)
+        control_payload["control_config"] = cfg
+        self._write_control(control_payload)
         return {
             "status": "ok",
             "token": token,
@@ -731,7 +1128,198 @@ class EngineHostService:
             "ttl_seconds": ttl,
             "allowed_configs": allowed_configs,
             "allowed_engines": allowed_engines,
+            "ssh_binding": normalized_binding,
         }
+
+    def auth_begin_challenge(
+        self,
+        *,
+        key_id: str,
+        scope: str = "control",
+        ttl_seconds: int = 120,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        ssh_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        kid = str(key_id or "").strip()
+        if not kid:
+            self._metrics_challenge_event(event="begin_failed", key_id=kid or None, reason="key_id_required")
+            raise ValueError("key_id is required")
+        scope_norm = str(scope or "control").strip().lower()
+        if scope_norm not in {"control", "config", "traffic"}:
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="invalid_scope")
+            raise ValueError("scope must be 'control', 'config', or 'traffic'")
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_challenges(auth)
+        keys = dict(auth.get("keys") or {})
+        key_meta = dict(keys.get(kid) or {})
+        if not key_meta:
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="unknown_key_id")
+            raise PermissionError("unknown_key_id")
+        if bool(key_meta.get("disabled", False)):
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="key_disabled")
+            raise PermissionError("key_disabled")
+        auth_method = str(key_meta.get("auth_method") or "shared_secret").strip().lower()
+        if auth_method != "public_key":
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="auth_method_is_not_public_key")
+            raise PermissionError("auth_method_is_not_public_key")
+        role = str(key_meta.get("role") or "").strip().lower()
+        if role == "config" and scope_norm != "config":
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="config_role_cannot_issue_non_config_scope")
+            raise PermissionError("config_role_cannot_issue_non_config_scope")
+        if role == "traffic" and scope_norm != "traffic":
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="traffic_role_cannot_issue_non_traffic_scope")
+            raise PermissionError("traffic_role_cannot_issue_non_traffic_scope")
+        challenge_id = secrets.token_urlsafe(18)
+        nonce = secrets.token_urlsafe(24)
+        issued_at = time.time()
+        ttl = max(30, min(int(ttl_seconds or 120), 600))
+        expires_at = issued_at + ttl
+        binding_target = str((ssh_binding or {}).get("target") or "").strip()
+        binding_fp = str((ssh_binding or {}).get("key_fingerprint") or "").strip()
+        normalized_binding = {
+            "target": binding_target or None,
+            "key_fingerprint": binding_fp or None,
+        } if (binding_target or binding_fp) else {}
+        challenge_text = json.dumps(
+            {
+                "kind": "engine-host-auth-challenge",
+                "challenge_id": challenge_id,
+                "key_id": kid,
+                "nonce": nonce,
+                "issued_at": issued_at,
+                "expires_at": expires_at,
+                "scope": scope_norm,
+                "ssh_binding_target": normalized_binding.get("target"),
+                "ssh_binding_key_fingerprint": normalized_binding.get("key_fingerprint"),
+            },
+            separators=(",", ":"),
+        )
+        challenges = dict(auth.get("challenges") or {})
+        challenges[challenge_id] = {
+            "key_id": kid,
+            "scope": scope_norm,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "config_paths": list(config_paths or []),
+            "engine_ids": list(engine_ids or []),
+            "ssh_binding": normalized_binding,
+            "challenge": challenge_text,
+        }
+        auth["challenges"] = challenges
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        self._metrics_challenge_event(event="begin", key_id=kid, challenge_id=challenge_id)
+        return {
+            "status": "ok",
+            "challenge_id": challenge_id,
+            "key_id": kid,
+            "scope": scope_norm,
+            "challenge": challenge_text,
+            "expires_at": expires_at,
+            "ttl_seconds": ttl,
+        }
+
+    def auth_complete_challenge(
+        self,
+        *,
+        challenge_id: str,
+        signature_ssh: str,
+        presented_ssh_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        cid = str(challenge_id or "").strip()
+        sig = str(signature_ssh or "").strip()
+        if not cid:
+            self._metrics_challenge_event(event="complete_failed", reason="challenge_id_required")
+            raise ValueError("challenge_id is required")
+        if not sig:
+            self._metrics_challenge_event(event="complete_failed", challenge_id=cid, reason="signature_required")
+            raise ValueError("signature_ssh is required")
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_challenges(auth)
+        challenges = dict(auth.get("challenges") or {})
+        item = dict(challenges.get(cid) or {})
+        if not item:
+            self._metrics_challenge_event(
+                event="complete_failed",
+                challenge_id=cid,
+                reason="missing_or_expired_challenge",
+                replay_suspected=True,
+            )
+            raise PermissionError("missing_or_expired_challenge")
+        key_id = str(item.get("key_id") or "").strip()
+        scope = str(item.get("scope") or "control").strip().lower()
+        expected_binding = dict(item.get("ssh_binding") or {})
+        if expected_binding:
+            presented = dict(presented_ssh_binding or {})
+            expected_target = str(expected_binding.get("target") or "").strip()
+            expected_fp = str(expected_binding.get("key_fingerprint") or "").strip()
+            got_target = str(presented.get("target") or "").strip()
+            got_fp = str(presented.get("key_fingerprint") or "").strip()
+            if (expected_target and expected_target != got_target) or (expected_fp and expected_fp != got_fp):
+                self._metrics_challenge_event(
+                    event="complete_failed",
+                    key_id=key_id,
+                    challenge_id=cid,
+                    reason="ssh_binding_mismatch",
+                    replay_suspected=True,
+                )
+                raise PermissionError("ssh_binding_mismatch")
+        keys = dict(auth.get("keys") or {})
+        key_meta = dict(keys.get(key_id) or {})
+        if not key_meta:
+            self._metrics_challenge_event(event="complete_failed", key_id=key_id, challenge_id=cid, reason="unknown_key_id")
+            raise PermissionError("unknown_key_id")
+        if bool(key_meta.get("disabled", False)):
+            self._metrics_challenge_event(event="complete_failed", key_id=key_id, challenge_id=cid, reason="key_disabled")
+            raise PermissionError("key_disabled")
+        auth_method = str(key_meta.get("auth_method") or "shared_secret").strip().lower()
+        if auth_method != "public_key":
+            self._metrics_challenge_event(event="complete_failed", key_id=key_id, challenge_id=cid, reason="auth_method_is_not_public_key")
+            raise PermissionError("auth_method_is_not_public_key")
+        public_key = str(key_meta.get("public_key") or "").strip()
+        challenge_text = str(item.get("challenge") or "")
+        if not self._verify_ssh_signature(
+            key_id=key_id,
+            public_key=public_key,
+            challenge=challenge_text,
+            signature_ssh=sig,
+        ):
+            self._metrics_challenge_event(
+                event="complete_failed",
+                key_id=key_id,
+                challenge_id=cid,
+                reason="invalid_challenge_signature",
+                replay_suspected=True,
+            )
+            raise PermissionError("invalid_challenge_signature")
+        # one-time challenge
+        challenges.pop(cid, None)
+        auth["challenges"] = challenges
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        role = str(key_meta.get("role") or "").strip().lower()
+        if role not in {"management", "config", "traffic"}:
+            self._metrics_challenge_event(event="complete_failed", key_id=key_id, challenge_id=cid, reason="invalid_role")
+            return {"status": "denied"}
+        out = self._issue_session_for_key(
+            key_id=key_id,
+            key_meta=key_meta,
+            scope=scope,
+            ttl_seconds=900,
+            config_paths=list(item.get("config_paths") or []),
+            engine_ids=list(item.get("engine_ids") or []),
+            ssh_binding=dict(item.get("ssh_binding") or {}),
+            control=control,
+        )
+        self._metrics_challenge_event(event="complete_ok", key_id=key_id, challenge_id=cid)
+        return out
 
     def auth_revoke_session(self, token: str) -> Dict[str, Any]:
         tok = str(token or "").strip()
@@ -767,10 +1355,14 @@ class EngineHostService:
         if c in {"auth-issue-session"}:
             # Session issuance authenticates with key_id/key_secret in payload.
             return
+        if c in {"auth-begin-challenge", "auth-complete-challenge"}:
+            # Challenge issuance/completion perform their own key-based verification.
+            return
         token = self._extract_session_token(payload)
         if not token:
             self._metrics_auth_denied("session_token_required")
             raise PermissionError("session_token_required")
+        presented_ssh_binding = dict((payload or {}).get("_ssh_session_binding") or {})
         if c in {
             "discover-running",
             "spawn",
@@ -795,11 +1387,18 @@ class EngineHostService:
             "auth-upsert-key",
             "auth-revoke-key",
             "auth-list-keys",
+            "auth-list-sessions",
+            "auth-list-issued-tokens",
             "auth-revoke-session",
             "host-metrics",
         }:
             try:
-                _ = self._validate_session(control, token, required_scope="control")
+                _ = self._validate_session(
+                    control,
+                    token,
+                    required_scope="control",
+                    presented_ssh_binding=presented_ssh_binding,
+                )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
                 raise
@@ -808,7 +1407,32 @@ class EngineHostService:
             p = dict(payload or {})
             requested_engine = str(p.get("engine_id") or "").strip()
             try:
-                _ = self._validate_session(control, token, required_scope="traffic", requested_engine=requested_engine)
+                _ = self._validate_session(
+                    control,
+                    token,
+                    required_scope="traffic",
+                    requested_engine=requested_engine,
+                    presented_ssh_binding=presented_ssh_binding,
+                )
+            except PermissionError as exc:
+                self._metrics_auth_denied(str(exc))
+                raise
+            return
+        if c in {"proxy-ws-open", "proxy-ws-send", "proxy-ws-recv", "proxy-ws-close"}:
+            p = dict(payload or {})
+            requested_engine = str(p.get("engine_id") or "").strip()
+            if c in {"proxy-ws-send", "proxy-ws-recv", "proxy-ws-close"} and not requested_engine:
+                ws_id = str(p.get("ws_id") or "").strip()
+                sess = self._ws_session_get(ws_id) if ws_id else None
+                requested_engine = str((sess or {}).get("engine_id") or "").strip()
+            try:
+                _ = self._validate_session(
+                    control,
+                    token,
+                    required_scope="traffic",
+                    requested_engine=requested_engine,
+                    presented_ssh_binding=presented_ssh_binding,
+                )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
                 raise
@@ -819,7 +1443,13 @@ class EngineHostService:
             if c in {"models-from-config", "connect-from-config"}:
                 requested_config = self._normalize_config_selector(str(p.get("config_path") or "default"))
             try:
-                _ = self._validate_session(control, token, required_scope="config", requested_config=requested_config)
+                _ = self._validate_session(
+                    control,
+                    token,
+                    required_scope="config",
+                    requested_config=requested_config,
+                    presented_ssh_binding=presented_ssh_binding,
+                )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
                 raise
@@ -1152,11 +1782,20 @@ class EngineHostService:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
+        engine_policies = dict(cfg.get("engine_traffic_policies") or {})
         return {
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
             "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
+            "engine_traffic_policies": {
+                str(k): self._normalize_traffic_policy(dict(v or {}))
+                for k, v in engine_policies.items()
+            },
+            "engine_traffic_policies_count": len(engine_policies),
+            "websocket_session_policy": self._normalize_websocket_session_policy(
+                dict(cfg.get("websocket_session_policy") or {})
+            ),
             "keys_count": len(dict(auth.get("keys") or {})),
             "sessions_count": len(dict(auth.get("sessions") or {})),
         }
@@ -1167,6 +1806,8 @@ class EngineHostService:
         ssh_key: Optional[str] = None,
         require_auth: Optional[bool] = None,
         traffic_policy: Optional[Dict[str, Any]] = None,
+        engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
+        websocket_session_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
@@ -1176,17 +1817,41 @@ class EngineHostService:
             cfg["require_auth"] = bool(require_auth)
         cfg.setdefault("config_store_mode", "store_only")
         cfg.setdefault("auth", {"keys": {}, "sessions": {}})
+        cfg.setdefault("engine_traffic_policies", {})
+        cfg.setdefault("websocket_session_policy", {})
         cfg["traffic_policy"] = self._normalize_traffic_policy(
             dict(cfg.get("traffic_policy") or {}) | dict(traffic_policy or {})
         )
+        if engine_traffic_policies is not None:
+            incoming = dict(engine_traffic_policies or {})
+            normalized: Dict[str, Dict[str, Any]] = {}
+            for raw_engine_id, policy in incoming.items():
+                eid = self._safe_config_name(str(raw_engine_id or "").strip())
+                if not eid:
+                    continue
+                normalized[eid] = self._normalize_traffic_policy(dict(policy or {}))
+            cfg["engine_traffic_policies"] = normalized
+        if websocket_session_policy is not None:
+            cfg["websocket_session_policy"] = self._normalize_websocket_session_policy(
+                dict(websocket_session_policy or {})
+            )
         control["control_config"] = cfg
         self._write_control(control)
         auth = dict(cfg.get("auth") or {})
+        engine_policies = dict(cfg.get("engine_traffic_policies") or {})
         return {
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
             "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
+            "engine_traffic_policies": {
+                str(k): self._normalize_traffic_policy(dict(v or {}))
+                for k, v in engine_policies.items()
+            },
+            "engine_traffic_policies_count": len(engine_policies),
+            "websocket_session_policy": self._normalize_websocket_session_policy(
+                dict(cfg.get("websocket_session_policy") or {})
+            ),
             "keys_count": len(dict(auth.get("keys") or {})),
             "sessions_count": len(dict(auth.get("sessions") or {})),
         }
@@ -1502,6 +2167,188 @@ class EngineHostService:
             return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, path, q, ""))
         return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, path, "", ""))
 
+    @staticmethod
+    def _to_ws_url(endpoint: str, req_path: str, query: str = "") -> str:
+        base = EngineHostService._join_endpoint_path(endpoint, req_path, query=query)
+        if not base:
+            return ""
+        parsed = urllib.parse.urlsplit(base)
+        scheme = str(parsed.scheme or "http").lower()
+        if scheme in {"ws", "wss"}:
+            ws_scheme = scheme
+        else:
+            ws_scheme = "wss" if scheme == "https" else "ws"
+        return urllib.parse.urlunsplit((ws_scheme, parsed.netloc, parsed.path, parsed.query, ""))
+
+    @staticmethod
+    def _read_until(sock: socket.socket, marker: bytes, *, max_bytes: int = 65536, timeout_seconds: float = 10.0) -> bytes:
+        buf = bytearray()
+        sock.settimeout(max(0.2, float(timeout_seconds or 10.0)))
+        while marker not in buf and len(buf) < max_bytes:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf.extend(chunk)
+        return bytes(buf)
+
+    @staticmethod
+    def _read_exact(sock: socket.socket, n: int, *, timeout_seconds: float = 10.0) -> bytes:
+        out = bytearray()
+        sock.settimeout(max(0.2, float(timeout_seconds or 10.0)))
+        while len(out) < n:
+            chunk = sock.recv(n - len(out))
+            if not chunk:
+                raise ConnectionError("socket_closed")
+            out.extend(chunk)
+        return bytes(out)
+
+    @staticmethod
+    def _ws_frame_encode(opcode: int, payload: bytes, *, masked: bool = True, fin: bool = True) -> bytes:
+        first = (0x80 if fin else 0x00) | (int(opcode) & 0x0F)
+        plen = len(payload)
+        mask_bit = 0x80 if masked else 0x00
+        if plen < 126:
+            head = bytes([first, mask_bit | plen])
+        elif plen <= 0xFFFF:
+            head = bytes([first, mask_bit | 126]) + struct.pack("!H", plen)
+        else:
+            head = bytes([first, mask_bit | 127]) + struct.pack("!Q", plen)
+        if not masked:
+            return head + payload
+        mask_key = os.urandom(4)
+        masked_payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+        return head + mask_key + masked_payload
+
+    @staticmethod
+    def _ws_frame_read(sock: socket.socket, *, max_bytes: int = 1024 * 1024, timeout_seconds: float = 30.0) -> Dict[str, Any]:
+        head = EngineHostService._read_exact(sock, 2, timeout_seconds=timeout_seconds)
+        b1, b2 = head[0], head[1]
+        fin = bool(b1 & 0x80)
+        opcode = int(b1 & 0x0F)
+        masked = bool(b2 & 0x80)
+        plen = int(b2 & 0x7F)
+        if plen == 126:
+            plen = int(struct.unpack("!H", EngineHostService._read_exact(sock, 2, timeout_seconds=timeout_seconds))[0])
+        elif plen == 127:
+            plen = int(struct.unpack("!Q", EngineHostService._read_exact(sock, 8, timeout_seconds=timeout_seconds))[0])
+        if plen > int(max_bytes or (1024 * 1024)):
+            raise ValueError("websocket_frame_too_large")
+        mask_key = EngineHostService._read_exact(sock, 4, timeout_seconds=timeout_seconds) if masked else b""
+        payload = EngineHostService._read_exact(sock, plen, timeout_seconds=timeout_seconds) if plen > 0 else b""
+        if masked and mask_key:
+            payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+        return {"fin": fin, "opcode": opcode, "payload": payload}
+
+    @classmethod
+    def _ws_session_get(cls, ws_id: str) -> Optional[Dict[str, Any]]:
+        cls._ensure_ws_initialized()
+        with cls._ws_lock:
+            assert isinstance(cls._ws_sessions, dict)
+            sess = cls._ws_sessions.get(str(ws_id or "").strip())
+            return dict(sess or {}) if isinstance(sess, dict) else None
+
+    @classmethod
+    def _ws_session_set(cls, ws_id: str, sess: Dict[str, Any]) -> None:
+        cls._ensure_ws_initialized()
+        with cls._ws_lock:
+            assert isinstance(cls._ws_sessions, dict)
+            cls._ws_sessions[str(ws_id)] = dict(sess or {})
+
+    @classmethod
+    def _ws_session_pop(cls, ws_id: str) -> Optional[Dict[str, Any]]:
+        cls._ensure_ws_initialized()
+        with cls._ws_lock:
+            assert isinstance(cls._ws_sessions, dict)
+            sess = cls._ws_sessions.pop(str(ws_id or "").strip(), None)
+            return dict(sess or {}) if isinstance(sess, dict) else None
+
+    @classmethod
+    def _ws_cleanup(cls, *, policy: Dict[str, Any], now: Optional[float] = None) -> Dict[str, int]:
+        cls._ensure_ws_initialized()
+        ts_now = float(now if now is not None else time.time())
+        idle_limit = int(policy.get("idle_timeout_seconds") or 300)
+        life_limit = int(policy.get("max_lifetime_seconds") or 3600)
+        max_sessions = int(policy.get("max_sessions") or 128)
+        to_close: List[socket.socket] = []
+        removed_idle = 0
+        removed_lifetime = 0
+        removed_cap = 0
+        with cls._ws_lock:
+            assert isinstance(cls._ws_sessions, dict)
+            sessions = cls._ws_sessions
+            for sid, sess in list(sessions.items()):
+                s = dict(sess or {})
+                created_at = float(s.get("created_at") or ts_now)
+                last_io = float(s.get("last_io_at") or created_at)
+                remove_reason = ""
+                if ts_now - created_at > life_limit:
+                    remove_reason = "lifetime"
+                elif ts_now - last_io > idle_limit:
+                    remove_reason = "idle"
+                if remove_reason:
+                    popped = sessions.pop(sid, None)
+                    sock = (popped or {}).get("socket") if isinstance(popped, dict) else None
+                    if isinstance(sock, socket.socket):
+                        to_close.append(sock)
+                    if remove_reason == "idle":
+                        removed_idle += 1
+                    else:
+                        removed_lifetime += 1
+            if len(sessions) > max_sessions:
+                ordered = sorted(
+                    sessions.items(),
+                    key=lambda item: float(((item[1] or {}).get("last_io_at") or 0.0)),
+                )
+                overflow = len(sessions) - max_sessions
+                for sid, _ in ordered[:overflow]:
+                    popped = sessions.pop(sid, None)
+                    sock = (popped or {}).get("socket") if isinstance(popped, dict) else None
+                    if isinstance(sock, socket.socket):
+                        to_close.append(sock)
+                    removed_cap += 1
+        for sock in to_close:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return {
+            "removed_idle": removed_idle,
+            "removed_lifetime": removed_lifetime,
+            "removed_cap": removed_cap,
+        }
+
+    @classmethod
+    def _ws_count(cls) -> int:
+        cls._ensure_ws_initialized()
+        with cls._ws_lock:
+            assert isinstance(cls._ws_sessions, dict)
+            return len(cls._ws_sessions)
+
+    @classmethod
+    def _ws_evict_oldest(cls, *, count: int = 1) -> int:
+        cls._ensure_ws_initialized()
+        to_close: List[socket.socket] = []
+        evicted = 0
+        with cls._ws_lock:
+            assert isinstance(cls._ws_sessions, dict)
+            sessions = cls._ws_sessions
+            ordered = sorted(
+                sessions.items(),
+                key=lambda item: float(((item[1] or {}).get("last_io_at") or 0.0)),
+            )
+            for sid, _ in ordered[: max(0, int(count or 0))]:
+                popped = sessions.pop(sid, None)
+                sock = (popped or {}).get("socket") if isinstance(popped, dict) else None
+                if isinstance(sock, socket.socket):
+                    to_close.append(sock)
+                evicted += 1
+        for sock in to_close:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return evicted
+
     def proxy_request(
         self,
         *,
@@ -1545,7 +2392,7 @@ class EngineHostService:
                 started_at=req_started_at,
             )
             raise ValueError("failed to build proxy url")
-        traffic_policy = self._traffic_policy()
+        traffic_policy = self._traffic_policy_for_engine(eid)
         if not re.fullmatch(r"[A-Z]+", m):
             self._metrics_proxy_finish(
                 eid,
@@ -1724,6 +2571,251 @@ class EngineHostService:
                     proxy["inflight_by_engine"] = inflight_by_engine
                     proxy["inflight_total"] = max(0, int(proxy.get("inflight_total") or 0) - 1)
                     self._runtime_metrics["proxy"] = proxy
+
+    def proxy_ws_open(
+        self,
+        *,
+        engine_id: str,
+        path: str = "/",
+        query: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        ws_policy = self._websocket_session_policy()
+        _ = self._ws_cleanup(policy=ws_policy)
+        max_sessions = int(ws_policy.get("max_sessions") or 128)
+        active = self._ws_count()
+        if active >= max_sessions:
+            _ = self._ws_evict_oldest(count=(active - max_sessions + 1))
+        eid = str(engine_id or "").strip()
+        req_path = str(path or "/").strip() or "/"
+        if not req_path.startswith("/"):
+            req_path = f"/{req_path}"
+        if not eid:
+            raise ValueError("engine_id is required")
+        reg = self._find_registration(eid) or {}
+        endpoint = str(reg.get("endpoint") or "").strip()
+        if not endpoint:
+            raise ValueError("engine endpoint is not registered")
+        ws_url = self._to_ws_url(endpoint, req_path, query=query)
+        if not ws_url:
+            raise ValueError("failed to build websocket url")
+        traffic_policy = self._traffic_policy_for_engine(eid)
+        prefixes = [str(x) for x in list(traffic_policy.get("allowed_path_prefixes") or ["/"])]
+        if prefixes and not any(req_path.startswith(px if px else "/") for px in prefixes):
+            raise PermissionError(f"proxy_path_not_allowed:{req_path}")
+
+        parsed = urllib.parse.urlsplit(ws_url)
+        host = str(parsed.hostname or "").strip()
+        if not host:
+            raise ValueError("invalid websocket host")
+        port = int(parsed.port or (443 if parsed.scheme == "wss" else 80))
+        request_uri = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query or "", ""))
+
+        header_allow = set(str(x).lower() for x in list(traffic_policy.get("request_header_allowlist") or []))
+        allow_authz = bool(traffic_policy.get("allow_authorization_header", False))
+        req_headers: Dict[str, str] = {}
+        for k, v in dict(headers or {}).items():
+            key = str(k or "").strip()
+            if not key:
+                continue
+            low = key.lower()
+            if low == "authorization" and not allow_authz:
+                continue
+            if header_allow and low not in header_allow:
+                continue
+            req_headers[key] = str(v)
+
+        ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
+        lines = [
+            f"GET {request_uri} HTTP/1.1",
+            f"Host: {host}:{port}" if parsed.port else f"Host: {host}",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            f"Sec-WebSocket-Key: {ws_key}",
+            "Sec-WebSocket-Version: 13",
+        ]
+        if "Sec-WebSocket-Protocol" in req_headers:
+            lines.append(f"Sec-WebSocket-Protocol: {req_headers['Sec-WebSocket-Protocol']}")
+        if "Origin" in req_headers:
+            lines.append(f"Origin: {req_headers['Origin']}")
+        if "User-Agent" in req_headers:
+            lines.append(f"User-Agent: {req_headers['User-Agent']}")
+        if "Authorization" in req_headers:
+            lines.append(f"Authorization: {req_headers['Authorization']}")
+        raw_req = ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
+
+        sock: Optional[socket.socket] = None
+        try:
+            sock = socket.create_connection((host, port), timeout=max(1.0, float(timeout_seconds or 30.0)))
+            if parsed.scheme == "wss":
+                ctx = ssl.create_default_context()
+                sock = ctx.wrap_socket(sock, server_hostname=host)
+            sock.sendall(raw_req)
+            raw_resp = self._read_until(
+                sock,
+                b"\r\n\r\n",
+                max_bytes=65536,
+                timeout_seconds=max(1.0, float(timeout_seconds or 30.0)),
+            )
+            if b"\r\n\r\n" not in raw_resp:
+                raise RuntimeError("upstream_ws_handshake_failed")
+            head = raw_resp.split(b"\r\n\r\n", 1)[0].decode("latin-1", errors="replace")
+            lines_resp = head.split("\r\n")
+            status_line = lines_resp[0] if lines_resp else ""
+            if " 101 " not in f" {status_line} ":
+                raise RuntimeError(f"upstream_ws_handshake_failed:{status_line}")
+            headers_resp: Dict[str, str] = {}
+            for row in lines_resp[1:]:
+                if ":" not in row:
+                    continue
+                k, v = row.split(":", 1)
+                headers_resp[str(k).strip()] = str(v).strip()
+            accept = str(headers_resp.get("Sec-WebSocket-Accept") or "").strip()
+            expected = base64.b64encode(
+                hashlib.sha1((ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("utf-8")).digest()
+            ).decode("ascii")
+            if not accept or accept != expected:
+                raise RuntimeError("invalid_ws_handshake_accept")
+            ws_id = secrets.token_urlsafe(24)
+            self._ws_session_set(
+                ws_id,
+                {
+                    "engine_id": eid,
+                    "url": ws_url,
+                    "created_at": time.time(),
+                    "last_io_at": time.time(),
+                    "socket": sock,
+                    "closed": False,
+                },
+            )
+            return {
+                "status": "ok",
+                "ws_id": ws_id,
+                "engine_id": eid,
+                "url": ws_url,
+                "created_at": time.time(),
+                "subprotocol": str(headers_resp.get("Sec-WebSocket-Protocol") or "") or None,
+            }
+        except Exception:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            raise
+
+    def proxy_ws_send(
+        self,
+        *,
+        ws_id: str,
+        text: Optional[str] = None,
+        data_b64: str = "",
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        ws_policy = self._websocket_session_policy()
+        _ = self._ws_cleanup(policy=ws_policy)
+        sid = str(ws_id or "").strip()
+        if not sid:
+            raise ValueError("ws_id is required")
+        sess = self._ws_session_get(sid)
+        if not sess:
+            raise ValueError("ws_session_not_found")
+        sock = sess.get("socket")
+        if not isinstance(sock, socket.socket):
+            raise ValueError("ws_session_invalid_socket")
+        if text is not None and str(data_b64 or "").strip():
+            raise ValueError("provide either text or data_b64, not both")
+        if text is not None:
+            payload = str(text).encode("utf-8")
+            opcode = 0x1
+            kind = "text"
+        else:
+            payload = base64.b64decode(str(data_b64 or "") or "", validate=True) if str(data_b64 or "").strip() else b""
+            opcode = 0x2
+            kind = "binary"
+        frame = self._ws_frame_encode(opcode, payload, masked=True, fin=True)
+        sock.settimeout(max(0.2, float(timeout_seconds or 30.0)))
+        sock.sendall(frame)
+        sess["last_io_at"] = time.time()
+        self._ws_session_set(sid, sess)
+        return {"status": "ok", "ws_id": sid, "sent_kind": kind, "sent_bytes": len(payload)}
+
+    def proxy_ws_recv(
+        self,
+        *,
+        ws_id: str,
+        timeout_seconds: float = 30.0,
+        max_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        ws_policy = self._websocket_session_policy()
+        _ = self._ws_cleanup(policy=ws_policy)
+        sid = str(ws_id or "").strip()
+        if not sid:
+            raise ValueError("ws_id is required")
+        sess = self._ws_session_get(sid)
+        if not sess:
+            raise ValueError("ws_session_not_found")
+        sock = sess.get("socket")
+        if not isinstance(sock, socket.socket):
+            raise ValueError("ws_session_invalid_socket")
+        try:
+            frame = self._ws_frame_read(
+                sock,
+                max_bytes=max(1, int(max_bytes or (1024 * 1024))),
+                timeout_seconds=max(0.2, float(timeout_seconds or 30.0)),
+            )
+        except socket.timeout:
+            return {"status": "timeout", "ws_id": sid}
+        opcode = int(frame.get("opcode") or 0)
+        payload = bytes(frame.get("payload") or b"")
+        sess["last_io_at"] = time.time()
+        self._ws_session_set(sid, sess)
+        if opcode == 0x1:
+            return {"status": "ok", "ws_id": sid, "event": "text", "text": payload.decode("utf-8", errors="replace")}
+        if opcode == 0x2:
+            return {"status": "ok", "ws_id": sid, "event": "binary", "data_b64": base64.b64encode(payload).decode("ascii"), "bytes": len(payload)}
+        if opcode == 0x8:
+            self.proxy_ws_close(ws_id=sid)
+            return {"status": "ok", "ws_id": sid, "event": "close"}
+        if opcode == 0x9:
+            pong = self._ws_frame_encode(0xA, payload, masked=True, fin=True)
+            sock.sendall(pong)
+            return {"status": "ok", "ws_id": sid, "event": "ping"}
+        if opcode == 0xA:
+            return {"status": "ok", "ws_id": sid, "event": "pong"}
+        return {"status": "ok", "ws_id": sid, "event": f"opcode_{opcode}"}
+
+    def proxy_ws_close(
+        self,
+        *,
+        ws_id: str,
+        code: int = 1000,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        ws_policy = self._websocket_session_policy()
+        _ = self._ws_cleanup(policy=ws_policy)
+        sid = str(ws_id or "").strip()
+        if not sid:
+            raise ValueError("ws_id is required")
+        sess = self._ws_session_pop(sid)
+        if not sess:
+            return {"status": "not_found", "ws_id": sid}
+        sock = sess.get("socket")
+        if isinstance(sock, socket.socket):
+            try:
+                payload = struct.pack("!H", int(code or 1000))
+                if str(reason or "").strip():
+                    payload += str(reason).encode("utf-8", errors="replace")[:123]
+                frame = self._ws_frame_encode(0x8, payload, masked=True, fin=True)
+                sock.sendall(frame)
+            except Exception:
+                pass
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return {"status": "closed", "ws_id": sid}
 
     def _revoke_engine_tokens(self, control: Dict[str, Any], engine_id: str) -> int:
         tokens = dict(control.get("tokens") or {})

@@ -55,6 +55,12 @@ Traffic policy hardening (`control_config.traffic_policy`):
   - `total`, `ok`, `http_error`, `failed`
   - request/response byte totals
 - auth denial counters and last denial reason
+- challenge auth telemetry:
+  - `auth.challenge_begin_total`
+  - `auth.challenge_complete_ok`
+  - `auth.challenge_complete_failed`
+  - `auth.challenge_replay_suspected`
+  - `auth.challenge_recent_events`
 - recent request ring buffer:
   - `proxy.recent_requests` (default max `100`)
   - each entry includes engine/method/path/status/outcome/duration/bytes/truncation/error
@@ -69,10 +75,21 @@ Important:
 Auth and sessions:
 - `auth-status`
 - `auth-list-keys`
+- `auth-list-sessions`
+- `auth-list-issued-tokens`
 - `auth-upsert-key`
 - `auth-revoke-key`
 - `auth-issue-session`
+- `auth-begin-challenge`
+- `auth-complete-challenge`
 - `auth-revoke-session`
+
+Optional SSH-bound session issuance payload fields:
+- `ssh_binding.target`
+- `ssh_binding.key_fingerprint`
+
+When a session is SSH-bound, subsequent commands must include `_ssh_session_binding`
+with matching values.
 
 Control config:
 - `get-control-config`
@@ -80,6 +97,10 @@ Control config:
 
 Worker traffic bridge:
 - `proxy-request`
+- `proxy-ws-open`
+- `proxy-ws-send`
+- `proxy-ws-recv`
+- `proxy-ws-close`
 
 Diagnostics:
 - `host-metrics`
@@ -92,6 +113,24 @@ Diagnostics:
 $env:PYTHONPATH='src'
 python -m hosting.engine_host_cli --daemon --background
 ```
+
+Start dedicated HTTP ingress daemon (for worker API proxy ingress):
+
+```powershell
+$env:PYTHONPATH='src'
+python -m hosting.engine_host_cli --daemon-http --background
+```
+
+Ingress endpoints:
+- `GET /health`
+- `POST /__shutdown__`
+- `* /proxy/<engine_id>/<path...>`
+- `* /api/engine-host/proxy/<engine_id>/<path...>`
+
+Websocket ingress:
+- Use websocket upgrade on the same proxy routes.
+- Auth/session uses the same traffic token model (`Authorization: Bearer <token>` or `X-Session-Token`).
+- Engine allowlist and traffic path policy are enforced before tunnel creation.
 
 ## 5.2 Bootstrap auth (first management key)
 
@@ -114,6 +153,29 @@ python -m hosting.engine_host_cli auth-status
 ```
 
 Bootstrap only when `keys_count == 0`.
+
+Public-key bootstrap (asymmetric challenge-response):
+
+```powershell
+@'{
+  "key_id":"admin-pub",
+  "auth_method":"public_key",
+  "public_key":"ssh-ed25519 AAAA... user@host",
+  "role":"management"
+}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key
+
+@'{"key_id":"admin-pub","scope":"control"}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-begin-challenge
+
+# sign returned `challenge` with your private key externally, then:
+@'{"challenge_id":"<id>","signature_ssh":"-----BEGIN SSH SIGNATURE-----..."}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-complete-challenge
+```
+
+Transport binding assurance:
+- If `ssh_binding` is supplied at `auth-begin-challenge`, completion requires matching
+  `_ssh_session_binding` (same target/fingerprint) and the signed challenge payload
+  includes those binding claims.
 
 ```powershell
 @'{"key_id":"admin-key","key_secret":"CHANGE_ME","role":"management"}'@ |
@@ -154,6 +216,26 @@ python -m hosting.engine_host_cli --payload-stdin auth-issue-session
 python -m hosting.engine_host_cli --payload-stdin proxy-request
 ```
 
+Websocket command-level flow:
+
+```powershell
+# open
+@'{"engine_id":"worker1","path":"/ws","session_token":"<traffic_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin proxy-ws-open
+
+# send text
+@'{"ws_id":"<ws_id>","text":"hello","session_token":"<traffic_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin proxy-ws-send
+
+# receive
+@'{"ws_id":"<ws_id>","timeout_seconds":2.0,"session_token":"<traffic_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin proxy-ws-recv
+
+# close
+@'{"ws_id":"<ws_id>","session_token":"<traffic_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin proxy-ws-close
+```
+
 ## 5.5 Set restrictive traffic policy
 
 ```powershell
@@ -166,6 +248,33 @@ python -m hosting.engine_host_cli --payload-stdin proxy-request
     "allow_authorization_header":false,
     "max_request_bytes":262144,
     "max_response_bytes":524288
+  },
+  "session_token":"<control_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
+```
+
+Per-engine traffic policy override (HTTP ingress and proxy-request path evaluation):
+
+```powershell
+@'{
+  "engine_traffic_policies":{
+    "worker2":{
+      "allowed_methods":["GET"],
+      "allowed_path_prefixes":["/other"]
+    }
+  },
+  "session_token":"<control_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
+```
+
+Websocket session policy (command-level `proxy-ws-*` lifecycle):
+
+```powershell
+@'{
+  "websocket_session_policy":{
+    "max_sessions":128,
+    "idle_timeout_seconds":300,
+    "max_lifetime_seconds":3600
   },
   "session_token":"<control_token>"
 }'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
@@ -199,6 +308,30 @@ mp13config --host-auth-status
 
 Prefer `--host-auth-secret-env` or `--host-auth-secret-stdin` over `--host-auth-secret`.
 
+## 5.8 Audit sessions and issued tokens
+
+```powershell
+@'{"session_token":"<control_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-list-sessions
+
+@'{"session_token":"<control_token>"}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-list-issued-tokens
+```
+
+Both endpoints return metadata with redacted `token_preview` values (not full tokens).
+
+Filtering and pagination examples:
+
+```powershell
+# sessions: traffic-only, first page
+@'{"session_token":"<control_token>","scope":"traffic","limit":50,"offset":0}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-list-sessions
+
+# issued tokens: worker1 only, page 2
+@'{"session_token":"<control_token>","engine_id":"worker1","limit":50,"offset":50}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-list-issued-tokens
+```
+
 ## 6. Remote Access Patterns
 
 Two supported SSH patterns:
@@ -222,7 +355,9 @@ If daemon is directly exposed on public network:
 ## 7. Current Limitations
 
 - `proxy-request` currently supports HTTP(S) only.
-- Native websocket pass-through is not yet implemented.
+- Native websocket pass-through is currently available in HTTP ingress mode only (not in `proxy-request` command path).
+- Command-level websocket pass-through uses session lifecycle commands (`proxy-ws-open/send/recv/close`), not a single streaming `proxy-request` response.
+- Command-level websocket sessions are in-memory process state and subject to configured GC policy (`websocket_session_policy`).
 - Metrics are per-process runtime (not persisted across daemon restarts).
 - Host channel credential bootstrap requires wiring `engine_host_key_id` + `engine_host_key_secret`
   (or a pre-issued `engine_host_session_token`) in control settings/profile construction.

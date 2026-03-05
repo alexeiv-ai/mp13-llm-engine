@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -166,12 +168,15 @@ class SSHRelayConnection(BaseConnection):
         remote_cmd: str = "python -m hosting.engine_host_cli --relay",
         timeout: float = 15.0,
         max_reconnect_attempts: int = 3,
+        known_hosts_line: Optional[str] = None,
     ):
         self._ssh_target = str(ssh_target)
         self._ssh_key = str(ssh_key or "").strip() or None
         self._remote_cmd = str(remote_cmd or "python -m hosting.engine_host_cli --relay")
         self._timeout = float(timeout or 15.0)
         self._max_reconnect = max(1, int(max_reconnect_attempts or 3))
+        self._known_hosts_line: Optional[str] = str(known_hosts_line or "").strip() or None
+        self._known_hosts_tmpfile: Optional[str] = None
         self._proc: Optional[subprocess.Popen] = None
         self._reader_thread: Optional[threading.Thread] = None
         self._seq = 0
@@ -183,8 +188,23 @@ class SSHRelayConnection(BaseConnection):
             "-T",
             "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={max(5, int(self._timeout))}",
-            "-o", "StrictHostKeyChecking=accept-new",
         ]
+        if self._known_hosts_line:
+            # Write temp known_hosts file for strict checking
+            try:
+                fd, tmppath = tempfile.mkstemp(prefix="mp13_kh_", suffix=".txt")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(self._known_hosts_line + "\n")
+                self._known_hosts_tmpfile = tmppath
+                argv += [
+                    "-o", "StrictHostKeyChecking=yes",
+                    "-o", f"UserKnownHostsFile={tmppath}",
+                ]
+            except Exception:
+                # Fallback: accept-new if temp file creation fails
+                argv += ["-o", "StrictHostKeyChecking=accept-new"]
+        else:
+            argv += ["-o", "StrictHostKeyChecking=accept-new"]
         if self._ssh_key:
             argv += ["-i", self._ssh_key]
         argv.append(self._ssh_target)
@@ -215,6 +235,14 @@ class SSHRelayConnection(BaseConnection):
             p.terminate()
         except Exception:
             pass
+        # Clean up temp known_hosts file
+        tmpfile = self._known_hosts_tmpfile
+        self._known_hosts_tmpfile = None
+        if tmpfile:
+            try:
+                os.unlink(tmpfile)
+            except Exception:
+                pass
 
     def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         with self._lock:

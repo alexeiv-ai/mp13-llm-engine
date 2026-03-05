@@ -4,12 +4,16 @@ Terminal-friendly command interface for engine host lifecycle/control.
 Modes:
   --daemon              Start long-lived daemon server (foreground)
   --daemon --background Start daemon detached in background
+  --daemon-http         Start HTTP ingress daemon (foreground)
+  --daemon-http --background Start HTTP ingress daemon detached in background
   --relay               Bridge stdin/stdout to local daemon TCP socket (SSH channel)
   <subcommand>          Short-lived: send one command to running daemon (or direct fallback)
 
 Usage examples:
   python -m hosting.engine_host_cli --daemon
   python -m hosting.engine_host_cli --daemon --background
+  python -m hosting.engine_host_cli --daemon-http
+  python -m hosting.engine_host_cli --daemon-http --background
   python -m hosting.engine_host_cli --relay
   python -m hosting.engine_host_cli discover-running
   python -m hosting.engine_host_cli spawn --payload-stdin < payload.json
@@ -68,6 +72,7 @@ EXAMPLES_BY_COMMAND = {
     "auth-upsert-key": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"management\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
         "@'{\"key_id\":\"traffic-key\",\"key_secret\":\"change_me\",\"role\":\"traffic\",\"allowed_engines\":[\"worker1\",\"worker2\"]}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
+        "@'{\"key_id\":\"admin-pub\",\"auth_method\":\"public_key\",\"public_key\":\"ssh-ed25519 AAAA...\",\"role\":\"management\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
     ],
     "auth-issue-session": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"scope\":\"control\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-issue-session",
@@ -75,8 +80,32 @@ EXAMPLES_BY_COMMAND = {
     "auth-status": [
         "python -m hosting.engine_host_cli auth-status",
     ],
+    "auth-begin-challenge": [
+        "@'{\"key_id\":\"admin-pub\",\"scope\":\"control\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-begin-challenge",
+    ],
+    "auth-complete-challenge": [
+        "@'{\"challenge_id\":\"<id>\",\"signature_ssh\":\"-----BEGIN SSH SIGNATURE-----...\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-complete-challenge",
+    ],
+    "auth-list-sessions": [
+        "python -m hosting.engine_host_cli auth-list-sessions",
+    ],
+    "auth-list-issued-tokens": [
+        "python -m hosting.engine_host_cli auth-list-issued-tokens",
+    ],
     "proxy-request": [
         "@'{\"engine_id\":\"worker1\",\"method\":\"GET\",\"path\":\"/health\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-request",
+    ],
+    "proxy-ws-open": [
+        "@'{\"engine_id\":\"worker1\",\"path\":\"/ws\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-open",
+    ],
+    "proxy-ws-send": [
+        "@'{\"ws_id\":\"<ws_id>\",\"text\":\"hello\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-send",
+    ],
+    "proxy-ws-recv": [
+        "@'{\"ws_id\":\"<ws_id>\",\"timeout_seconds\":1.0,\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-recv",
+    ],
+    "proxy-ws-close": [
+        "@'{\"ws_id\":\"<ws_id>\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-close",
     ],
     "host-metrics": [
         "python -m hosting.engine_host_cli host-metrics",
@@ -269,11 +298,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "set-control-config",
         "auth-status",
         "auth-list-keys",
+        "auth-list-sessions",
+        "auth-list-issued-tokens",
         "auth-upsert-key",
         "auth-revoke-key",
         "auth-issue-session",
+        "auth-begin-challenge",
+        "auth-complete-challenge",
         "auth-revoke-session",
         "proxy-request",
+        "proxy-ws-open",
+        "proxy-ws-send",
+        "proxy-ws-recv",
+        "proxy-ws-close",
         "host-metrics",
     ]:
         cp = sp.add_parser(name)
@@ -317,6 +354,44 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 return 1
         else:
             run_daemon_foreground(
+                port=port,
+                pid_file=pid_file,
+                engines_state_file=engines_state,
+                control_state_file=control_state,
+            )
+            return 0
+
+    # ------------------------------------------------------------------
+    # Mode 1b: --daemon-http  →  start HTTP ingress daemon
+    # ------------------------------------------------------------------
+    if "--daemon-http" in argv:
+        from .engine_host_daemon import (
+            DEFAULT_HTTP_INGRESS_PORT,
+            run_http_ingress_foreground,
+            start_http_ingress_background,
+        )
+
+        port = _extract_int_arg(argv, "--http-port", DEFAULT_HTTP_INGRESS_PORT)
+        pid_file = _extract_path_arg(argv, "--pid-file", None)
+        engines_state = _extract_path_arg(argv, "--engines-state-file", None)
+        control_state = _extract_path_arg(argv, "--control-state-file", None)
+        background = "--background" in argv
+
+        if background:
+            try:
+                result = start_http_ingress_background(
+                    port=port,
+                    pid_file=pid_file,
+                    engines_state_file=engines_state,
+                    control_state_file=control_state,
+                )
+                _print_ok(result)
+                return 0
+            except Exception as exc:
+                _print_error(str(exc))
+                return 1
+        else:
+            run_http_ingress_foreground(
                 port=port,
                 pid_file=pid_file,
                 engines_state_file=engines_state,
@@ -538,6 +613,45 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "proxy-ws-open":
+            _print_ok(
+                svc.proxy_ws_open(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    path=str(payload.get("path") or "/"),
+                    query=str(payload.get("query") or ""),
+                    headers=dict(payload.get("headers") or {}),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
+        if cmd == "proxy-ws-send":
+            _print_ok(
+                svc.proxy_ws_send(
+                    ws_id=str(payload.get("ws_id") or ""),
+                    text=payload.get("text"),
+                    data_b64=str(payload.get("data_b64") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
+        if cmd == "proxy-ws-recv":
+            _print_ok(
+                svc.proxy_ws_recv(
+                    ws_id=str(payload.get("ws_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                    max_bytes=int(payload.get("max_bytes") or (1024 * 1024)),
+                )
+            )
+            return 0
+        if cmd == "proxy-ws-close":
+            _print_ok(
+                svc.proxy_ws_close(
+                    ws_id=str(payload.get("ws_id") or ""),
+                    code=int(payload.get("code") or 1000),
+                    reason=str(payload.get("reason") or ""),
+                )
+            )
+            return 0
         if cmd == "host-metrics":
             _print_ok(svc.get_host_metrics())
             return 0
@@ -550,6 +664,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     ssh_key=payload.get("ssh_key"),
                     require_auth=payload.get("require_auth"),
                     traffic_policy=dict(payload.get("traffic_policy") or {}),
+                    engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
+                    websocket_session_policy=dict(payload.get("websocket_session_policy") or {}),
                 )
             )
             return 0
@@ -559,12 +675,39 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "auth-list-keys":
             _print_ok(svc.auth_list_keys())
             return 0
+        if cmd == "auth-list-sessions":
+            _print_ok(
+                svc.auth_list_sessions(
+                    key_id=payload.get("key_id"),
+                    scope=payload.get("scope"),
+                    role=payload.get("role"),
+                    token_preview_contains=payload.get("token_preview_contains"),
+                    limit=int(payload.get("limit") or 100),
+                    offset=int(payload.get("offset") or 0),
+                )
+            )
+            return 0
+        if cmd == "auth-list-issued-tokens":
+            _print_ok(
+                svc.auth_list_issued_tokens(
+                    engine_id=payload.get("engine_id"),
+                    resource_kind=payload.get("resource_kind"),
+                    resource_id=payload.get("resource_id"),
+                    backend_id=payload.get("backend_id"),
+                    token_preview_contains=payload.get("token_preview_contains"),
+                    limit=int(payload.get("limit") or 100),
+                    offset=int(payload.get("offset") or 0),
+                )
+            )
+            return 0
         if cmd == "auth-upsert-key":
             _print_ok(
                 svc.auth_upsert_key(
                     key_id=str(payload.get("key_id") or ""),
                     key_secret=str(payload.get("key_secret") or ""),
                     role=str(payload.get("role") or ""),
+                    auth_method=str(payload.get("auth_method") or "shared_secret"),
+                    public_key=str(payload.get("public_key") or ""),
                     allowed_configs=list(payload.get("allowed_configs") or []),
                     allowed_engines=list(payload.get("allowed_engines") or []),
                     disabled=bool(payload.get("disabled", False)),
@@ -583,6 +726,28 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     ttl_seconds=int(payload.get("ttl_seconds") or 900),
                     config_paths=list(payload.get("config_paths") or []),
                     engine_ids=list(payload.get("engine_ids") or []),
+                    ssh_binding=dict(payload.get("ssh_binding") or {}),
+                )
+            )
+            return 0
+        if cmd == "auth-begin-challenge":
+            _print_ok(
+                svc.auth_begin_challenge(
+                    key_id=str(payload.get("key_id") or ""),
+                    scope=str(payload.get("scope") or "control"),
+                    ttl_seconds=int(payload.get("ttl_seconds") or 120),
+                    config_paths=list(payload.get("config_paths") or []),
+                    engine_ids=list(payload.get("engine_ids") or []),
+                    ssh_binding=dict(payload.get("ssh_binding") or {}),
+                )
+            )
+            return 0
+        if cmd == "auth-complete-challenge":
+            _print_ok(
+                svc.auth_complete_challenge(
+                    challenge_id=str(payload.get("challenge_id") or ""),
+                    signature_ssh=str(payload.get("signature_ssh") or ""),
+                    presented_ssh_binding=dict(payload.get("_ssh_session_binding") or {}),
                 )
             )
             return 0
