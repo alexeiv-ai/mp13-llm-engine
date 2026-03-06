@@ -44,6 +44,136 @@ Traffic policy hardening (`control_config.traffic_policy`):
 - request/response size caps
 - optional blocking of forwarded `Authorization` header
 
+Daemon-side claim ACL hardening:
+- claim actor identity is daemon-derived from authenticated session:
+  - actor id format: `key:<key_id>`
+  - client-supplied `backend_id` is ignored for daemon-enforced claim identity
+- owner keepalive and orphan policy are daemon-enforced (`control_config.claim_acl_policy`):
+  - `owner_ttl_seconds` (default `120`)
+  - `audit_event_limit` (default `200`)
+- non-localhost management connection restriction:
+  - non-localhost callers cannot create shared claims (`exclusive=false`) for claim commands
+- localhost force override safety:
+  - `force_override=true` requires `force_override_confirmation="CONFIRM_LOCALHOST_FORCE_OVERRIDE"`
+  - applies to localhost claim overrides in daemon command path
+
+### 2.1 Required Claim/Auth Fields (Daemon Command Path)
+
+Required auth material when `require_auth=true`:
+- `session_token` (or `auth_token`) in payload
+- optional `_ssh_session_binding` when session was SSH-bound
+
+Claim/ownership payload fields:
+- `exclusive` (`bool`): request exclusive claim mode
+- `force_override` (`bool`, optional): request override against active owner
+- `force_override_confirmation` (`string`, required on localhost force override):
+  - exact token: `CONFIRM_LOCALHOST_FORCE_OVERRIDE`
+
+Daemon-injected identity/context fields (not caller-controlled in daemon mode):
+- `backend_id` -> normalized actor id (`key:<key_id>`)
+- `_claim_actor_id`
+- `_daemon_peer_host`
+
+### 2.2 Sensitive Command Enforcement Matrix
+
+`R=requires claim membership when claim exists`, `X=requires exclusive/shared rules`, `N=non-localhost shared denied`, `F=localhost force-confirm required`.
+
+| Command | Resource scope | Enforcement |
+|---|---|---|
+| `claim-engine` | engine | `X`, `N`, `F` |
+| `claim-endpoint` | endpoint | `X`, `N`, `F` |
+| `claim-resource` | resource | `X`, `N`, `F` |
+| `issue-token` | engine | `R`, exclusive/shared conflict denial |
+| `issue-resource-token` | resource/engine | `R`, exclusive/shared conflict denial |
+| `spawn` | engine | `R` (when existing claim present) |
+| `get-registration` | engine | `R` (when existing claim present) |
+| `shutdown` | engine | `R` (when existing claim present) |
+| `ensure-running` | engine | `R` (when existing claim present) |
+| `remove-registration` | engine | `R` (when existing claim present) |
+| `logs-tail` | engine | `R` (when existing claim present) |
+| `logs-follow` | engine | `R` (when existing claim present) |
+| `inspect-capabilities` | engine | `R` (when existing claim present) |
+
+### 2.3 Takeover And Override Rules
+
+- active owner: owner keepalive within `owner_ttl_seconds`
+- orphan owner: owner keepalive expired
+- takeover transitions returned in claim results:
+  - `joined_shared`
+  - `refreshed`
+  - `orphan_takeover`
+  - `force_override`
+- deny conditions:
+  - active conflicting owner + no force override
+  - non-localhost shared claim attempt
+  - localhost force override without confirmation token
+
+### 2.4 Daemon Denial Contract (Stable Error Taxonomy)
+
+Daemon denial response shape:
+
+```json
+{
+  "seq": 1,
+  "ok": false,
+  "error": "access_denied|auth_failed",
+  "error_code": "stable_machine_code",
+  "error_details": { "optional": "details" },
+  "result": { "status": "denied", "...": "optional command result payload" }
+}
+```
+
+Common `error_code` values:
+- `session_token_required`
+- `missing_or_invalid_session_token`
+- `session_revoked`
+- `insufficient_scope`
+- `engine_access_denied`
+- `config_access_denied`
+- `non_localhost_shared_claim_denied`
+- `localhost_force_override_confirmation_required`
+- `engine_shared_claim_not_member`
+- `engine_exclusive_conflict`
+- `resource_shared_claim_not_member`
+- `resource_exclusive_conflict`
+- `endpoint_exclusive_conflict`
+- `exclusive_owner_conflict`
+
+### 2.5 Claim Audit Event Schema
+
+Claim ACL audit events are written to control state (`claim_audit_events`) with schema version `1`.
+
+Event fields:
+- `schema_version`
+- `event_id`
+- `timestamp`
+- `event_type` (`claim_grant`, `claim_deny`)
+- `command`
+- `scope` (`engine|endpoint|resource`)
+- `resource_kind`, `resource_id`, `resource_key`
+- `actor_id`
+- `peer_host`
+- `decision` (`grant|deny`)
+- `code`
+- `transition`
+- `mode` (`shared|exclusive`)
+- `owners_before`
+- `owners_after`
+- `details`
+
+### 2.6 Compatibility Note (For mp13-docs)
+
+Minimum required daemon behavior: **Hosting ACL Contract v2**.
+
+Consumers should require daemon support for:
+- daemon-derived claim actor identity (`key:<key_id>`)
+- structured denial response (`error_code`, `error_details`)
+- owner keepalive/orphan takeover transitions
+- localhost force-override confirmation token
+- non-localhost shared-claim denial
+
+If these fields/codes are missing, treat daemon as pre-v2 and disable claim-sensitive UX automation.
+
 ## 3. Diagnostics
 
 `host-metrics` provides process-runtime diagnostics:

@@ -482,6 +482,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     str(payload.get("engine_id") or args.engine_id),
                     backend_id=payload.get("backend_id"),
                     exclusive=bool(payload.get("exclusive", False)),
+                    force_override=bool(payload.get("force_override", False)),
+                    actor_id=payload.get("_claim_actor_id"),
+                    peer_host=payload.get("_daemon_peer_host"),
                 )
             )
             return 0
@@ -490,6 +493,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.claim_endpoint(
                     backend_id=payload.get("backend_id"),
                     exclusive=bool(payload.get("exclusive", False)),
+                    force_override=bool(payload.get("force_override", False)),
+                    actor_id=payload.get("_claim_actor_id"),
+                    peer_host=payload.get("_daemon_peer_host"),
                 )
             )
             return 0
@@ -519,6 +525,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     str(payload.get("resource_id") or args.resource_id),
                     backend_id=payload.get("backend_id"),
                     exclusive=bool(payload.get("exclusive", False)),
+                    force_override=bool(payload.get("force_override", False)),
+                    actor_id=payload.get("_claim_actor_id"),
+                    peer_host=payload.get("_daemon_peer_host"),
                 )
             )
             return 0
@@ -666,6 +675,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     traffic_policy=dict(payload.get("traffic_policy") or {}),
                     engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
                     websocket_session_policy=dict(payload.get("websocket_session_policy") or {}),
+                    claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
                 )
             )
             return 0

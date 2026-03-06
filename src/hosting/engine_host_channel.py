@@ -597,12 +597,44 @@ class EngineHostControlChannel:
         res = self._invoke("remove-registration", {"engine_id": str(engine_id)})
         return dict(res or {})
 
-    def claim_engine(self, engine_id: str, *, backend_id: Optional[str], exclusive: bool = False) -> Dict[str, Any]:
-        res = self._invoke("claim-engine", {"engine_id": str(engine_id), "backend_id": backend_id, "exclusive": bool(exclusive)})
+    def claim_engine(
+        self,
+        engine_id: str,
+        *,
+        backend_id: Optional[str],
+        exclusive: bool = False,
+        force_override: bool = False,
+        force_override_confirmation: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "claim-engine",
+            {
+                "engine_id": str(engine_id),
+                "backend_id": backend_id,
+                "exclusive": bool(exclusive),
+                "force_override": bool(force_override),
+                "force_override_confirmation": force_override_confirmation,
+            },
+        )
         return dict(res or {})
 
-    def claim_endpoint(self, *, backend_id: Optional[str], exclusive: bool = False) -> Dict[str, Any]:
-        res = self._invoke("claim-endpoint", {"backend_id": backend_id, "exclusive": bool(exclusive)})
+    def claim_endpoint(
+        self,
+        *,
+        backend_id: Optional[str],
+        exclusive: bool = False,
+        force_override: bool = False,
+        force_override_confirmation: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "claim-endpoint",
+            {
+                "backend_id": backend_id,
+                "exclusive": bool(exclusive),
+                "force_override": bool(force_override),
+                "force_override_confirmation": force_override_confirmation,
+            },
+        )
         return dict(res or {})
 
     def get_claim_status(self, engine_id: str) -> Dict[str, Any]:
@@ -617,10 +649,26 @@ class EngineHostControlChannel:
         res = self._invoke("validate-token", {"engine_id": str(engine_id), "token": str(token or "")})
         return bool(res)
 
-    def claim_resource(self, resource_kind: str, resource_id: str, *, backend_id: Optional[str], exclusive: bool = False) -> Dict[str, Any]:
+    def claim_resource(
+        self,
+        resource_kind: str,
+        resource_id: str,
+        *,
+        backend_id: Optional[str],
+        exclusive: bool = False,
+        force_override: bool = False,
+        force_override_confirmation: Optional[str] = None,
+    ) -> Dict[str, Any]:
         res = self._invoke(
             "claim-resource",
-            {"resource_kind": str(resource_kind), "resource_id": str(resource_id), "backend_id": backend_id, "exclusive": bool(exclusive)},
+            {
+                "resource_kind": str(resource_kind),
+                "resource_id": str(resource_id),
+                "backend_id": backend_id,
+                "exclusive": bool(exclusive),
+                "force_override": bool(force_override),
+                "force_override_confirmation": force_override_confirmation,
+            },
         )
         return dict(res or {})
 

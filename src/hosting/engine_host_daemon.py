@@ -573,7 +573,13 @@ class EngineHostDaemon:
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
                     continue
-                response = await self._dispatch(raw)
+                peer_host = ""
+                try:
+                    if isinstance(peer, tuple) and len(peer) >= 1:
+                        peer_host = str(peer[0] or "")
+                except Exception:
+                    peer_host = ""
+                response = await self._dispatch(raw, peer_host=peer_host)
                 writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
                 # Stop serving this client after __shutdown__ is accepted
@@ -591,7 +597,7 @@ class EngineHostDaemon:
                 pass
             logger.debug("Client disconnected: %s", peer)
 
-    async def _dispatch(self, raw_line: str) -> Dict[str, Any]:
+    async def _dispatch(self, raw_line: str, *, peer_host: Optional[str] = None) -> Dict[str, Any]:
         try:
             req = json.loads(raw_line)
         except Exception:
@@ -599,6 +605,8 @@ class EngineHostDaemon:
         seq = int(req.get("seq") or 0)
         cmd = str(req.get("cmd") or "").strip()
         payload = dict(req.get("payload") or {})
+        host = str(peer_host or "").strip().lower()
+        is_localhost = host in {"", "127.0.0.1", "::1", "localhost"}
 
         if cmd == "__ping__":
             return {"seq": seq, "ok": True, "result": "pong"}
@@ -613,10 +621,41 @@ class EngineHostDaemon:
 
         try:
             self.svc.authorize_command(cmd, payload)
+            acl = self.svc.enforce_daemon_claim_policy(
+                cmd,
+                payload,
+                peer_host=peer_host,
+                is_localhost=is_localhost,
+            )
+            if not bool(acl.get("ok", False)):
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": str(acl.get("error") or "access_denied"),
+                    "error_code": str(acl.get("error_code") or "access_denied"),
+                    "error_details": dict(acl.get("error_details") or {}),
+                }
+            payload = dict(acl.get("payload") or payload)
             result = await asyncio.to_thread(self._call_service, cmd, payload)
+            if isinstance(result, dict) and str(result.get("status") or "").strip().lower() == "denied":
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": str(result.get("denied_code") or result.get("denied_reason") or "access_denied"),
+                    "error_details": dict(result.get("details") or {}),
+                    "result": result,
+                }
             return {"seq": seq, "ok": True, "result": result}
         except PermissionError as exc:
-            return {"seq": seq, "ok": False, "error": f"auth_failed: {exc}"}
+            code = str(exc or "").strip() or "auth_failed"
+            return {
+                "seq": seq,
+                "ok": False,
+                "error": "auth_failed",
+                "error_code": code,
+                "error_details": {"reason": code},
+            }
         except Exception as exc:
             return {"seq": seq, "ok": False, "error": str(exc)}
 
@@ -649,11 +688,17 @@ class EngineHostDaemon:
                 str(payload.get("engine_id") or ""),
                 backend_id=payload.get("backend_id"),
                 exclusive=bool(payload.get("exclusive", False)),
+                force_override=bool(payload.get("force_override", False)),
+                actor_id=payload.get("_claim_actor_id"),
+                peer_host=payload.get("_daemon_peer_host"),
             )
         if cmd == "claim-endpoint":
             return svc.claim_endpoint(
                 backend_id=payload.get("backend_id"),
                 exclusive=bool(payload.get("exclusive", False)),
+                force_override=bool(payload.get("force_override", False)),
+                actor_id=payload.get("_claim_actor_id"),
+                peer_host=payload.get("_daemon_peer_host"),
             )
         if cmd == "claim-status":
             return svc.get_claim_status(str(payload.get("engine_id") or ""))
@@ -673,6 +718,9 @@ class EngineHostDaemon:
                 str(payload.get("resource_id") or ""),
                 backend_id=payload.get("backend_id"),
                 exclusive=bool(payload.get("exclusive", False)),
+                force_override=bool(payload.get("force_override", False)),
+                actor_id=payload.get("_claim_actor_id"),
+                peer_host=payload.get("_daemon_peer_host"),
             )
         if cmd == "resource-claim-status":
             return svc.get_resource_claim_status(
@@ -772,6 +820,7 @@ class EngineHostDaemon:
                 traffic_policy=dict(payload.get("traffic_policy") or {}),
                 engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
                 websocket_session_policy=dict(payload.get("websocket_session_policy") or {}),
+                claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
             )
         if cmd == "auth-status":
             return svc.auth_status()

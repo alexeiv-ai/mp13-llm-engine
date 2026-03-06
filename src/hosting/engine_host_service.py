@@ -273,6 +273,24 @@ class EngineHostService:
         return raw or "backend:unknown"
 
     @staticmethod
+    def _actor_id_from_session_key(key_id: Optional[str]) -> str:
+        kid = str(key_id or "").strip()
+        if not kid:
+            return "key:unknown"
+        return f"key:{kid}"
+
+    @staticmethod
+    def _deny_payload(code: str, message: str, **details: Any) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "status": "denied",
+            "denied_code": str(code or "denied"),
+            "denied_reason": str(message or code or "denied"),
+        }
+        if details:
+            out["details"] = dict(details)
+        return out
+
+    @staticmethod
     def _resource_key(resource_kind: str, resource_id: str) -> str:
         return f"{str(resource_kind or '').strip().lower()}:{str(resource_id or '').strip()}"
 
@@ -312,6 +330,10 @@ class EngineHostService:
                     "require_auth": False,
                     "auth": {"keys": {}, "sessions": {}, "challenges": {}},
                     "config_store_mode": "store_only",
+                    "claim_acl_policy": {
+                        "owner_ttl_seconds": 120,
+                        "audit_event_limit": 200,
+                    },
                     "engine_traffic_policies": {},
                     "websocket_session_policy": {
                         "max_sessions": 128,
@@ -352,6 +374,8 @@ class EngineHostService:
                 "tokens": {},
                 "resource_claims": {},
                 "resource_tokens": {},
+                "claim_owner_keepalive": {},
+                "claim_audit_events": [],
             },
         )
         payload.setdefault(
@@ -361,6 +385,7 @@ class EngineHostService:
                 "require_auth": False,
                 "auth": {"keys": {}, "sessions": {}, "challenges": {}},
                 "config_store_mode": "store_only",
+                "claim_acl_policy": {},
                 "engine_traffic_policies": {},
                 "websocket_session_policy": {},
                 "traffic_policy": {},
@@ -371,10 +396,17 @@ class EngineHostService:
         payload.setdefault("tokens", {})
         payload.setdefault("resource_claims", {})
         payload.setdefault("resource_tokens", {})
+        payload.setdefault("claim_owner_keepalive", {})
+        payload.setdefault("claim_audit_events", [])
         cfg = dict(payload.get("control_config") or {})
         cfg.setdefault("ssh_key", None)
         cfg.setdefault("require_auth", False)
         cfg.setdefault("config_store_mode", "store_only")
+        raw_claim_acl = dict(cfg.get("claim_acl_policy") or {})
+        cfg["claim_acl_policy"] = {
+            "owner_ttl_seconds": max(10, min(int(raw_claim_acl.get("owner_ttl_seconds") or 120), 24 * 3600)),
+            "audit_event_limit": max(20, min(int(raw_claim_acl.get("audit_event_limit") or 200), 2000)),
+        }
         cfg.setdefault("engine_traffic_policies", {})
         cfg.setdefault("websocket_session_policy", {})
         raw_policy = dict(cfg.get("traffic_policy") or {})
@@ -415,6 +447,132 @@ class EngineHostService:
         out["version"] = 1
         out["updated_at"] = time.time()
         self._write_json(self.control_state_file, out)
+
+    @staticmethod
+    def _claim_scope_key(scope: str, resource_kind: Optional[str], resource_id: Optional[str]) -> str:
+        s = str(scope or "").strip().lower()
+        if s == "engine":
+            return f"engine:{str(resource_id or '').strip()}"
+        if s == "endpoint":
+            return "endpoint:*"
+        kind = str(resource_kind or "").strip().lower()
+        rid = str(resource_id or "").strip()
+        return f"resource:{kind}:{rid}"
+
+    def _claim_acl_policy(self, control: Dict[str, Any]) -> Dict[str, int]:
+        cfg = dict(control.get("control_config") or {})
+        policy = dict(cfg.get("claim_acl_policy") or {})
+        return {
+            "owner_ttl_seconds": max(10, min(int(policy.get("owner_ttl_seconds") or 120), 24 * 3600)),
+            "audit_event_limit": max(20, min(int(policy.get("audit_event_limit") or 200), 2000)),
+        }
+
+    def _owner_keepalive_map(self, control: Dict[str, Any]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for key, val in dict(control.get("claim_owner_keepalive") or {}).items():
+            k = str(key or "").strip()
+            if not k:
+                continue
+            try:
+                out[k] = float(val)
+            except Exception:
+                continue
+        return out
+
+    def _touch_claim_owner_keepalive(self, control: Dict[str, Any], owner_id: str) -> None:
+        oid = str(owner_id or "").strip()
+        if not oid:
+            return
+        keepalive = self._owner_keepalive_map(control)
+        keepalive[oid] = time.time()
+        control["claim_owner_keepalive"] = keepalive
+
+    def _is_owner_active(self, control: Dict[str, Any], owner_id: str, *, now: Optional[float] = None) -> bool:
+        oid = str(owner_id or "").strip()
+        if not oid:
+            return False
+        policy = self._claim_acl_policy(control)
+        ttl = float(policy["owner_ttl_seconds"])
+        seen = float(self._owner_keepalive_map(control).get(oid) or 0.0)
+        current = float(now if now is not None else time.time())
+        return seen > 0.0 and (current - seen) <= ttl
+
+    def _active_and_orphan_owners(
+        self,
+        control: Dict[str, Any],
+        owners: List[str],
+        *,
+        now: Optional[float] = None,
+    ) -> Tuple[List[str], List[str]]:
+        current = float(now if now is not None else time.time())
+        active: List[str] = []
+        orphan: List[str] = []
+        for owner in [str(x or "").strip() for x in list(owners or []) if str(x or "").strip()]:
+            if self._is_owner_active(control, owner, now=current):
+                active.append(owner)
+            else:
+                orphan.append(owner)
+        return sorted(list(set(active))), sorted(list(set(orphan)))
+
+    def _append_claim_audit_event(
+        self,
+        control: Dict[str, Any],
+        *,
+        event_type: str,
+        command: str,
+        scope: str,
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
+        actor_id: str,
+        decision: str,
+        code: str,
+        transition: Optional[str],
+        mode: Optional[str],
+        peer_host: Optional[str],
+        owners_before: Optional[List[str]] = None,
+        owners_after: Optional[List[str]] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        policy = self._claim_acl_policy(control)
+        limit = int(policy["audit_event_limit"])
+        rows = list(control.get("claim_audit_events") or [])
+        rows.append(
+            {
+                "schema_version": 1,
+                "event_id": secrets.token_urlsafe(10),
+                "timestamp": time.time(),
+                "event_type": str(event_type or "claim_event"),
+                "command": str(command or ""),
+                "scope": str(scope or ""),
+                "resource_kind": str(resource_kind or "") or None,
+                "resource_id": str(resource_id or "") or None,
+                "resource_key": self._claim_scope_key(scope, resource_kind, resource_id),
+                "actor_id": str(actor_id or ""),
+                "peer_host": str(peer_host or "") or None,
+                "decision": str(decision or "deny"),
+                "code": str(code or "unknown"),
+                "transition": str(transition or "") or None,
+                "mode": str(mode or "") or None,
+                "owners_before": sorted(list(set(str(x or "").strip() for x in list(owners_before or []) if str(x or "").strip()))),
+                "owners_after": sorted(list(set(str(x or "").strip() for x in list(owners_after or []) if str(x or "").strip()))),
+                "details": dict(details or {}),
+            }
+        )
+        if len(rows) > limit:
+            rows = rows[-limit:]
+        control["claim_audit_events"] = rows
+
+    def _actor_id_from_payload(self, control: Dict[str, Any], payload: Optional[Dict[str, Any]]) -> str:
+        p = dict(payload or {})
+        token = self._extract_session_token(p)
+        if token:
+            auth = dict(dict(control.get("control_config") or {}).get("auth") or {})
+            self._prune_expired_sessions(auth)
+            session = dict(dict(auth.get("sessions") or {}).get(token) or {})
+            key_id = str(session.get("key_id") or "").strip()
+            if key_id:
+                return self._actor_id_from_session_key(key_id)
+        return self._normalize_backend_id(p.get("backend_id"))
 
     @staticmethod
     def _safe_config_name(value: str) -> str:
@@ -1456,6 +1614,103 @@ class EngineHostService:
             return
         raise PermissionError(f"auth_policy_missing_for_command:{c}")
 
+    def enforce_daemon_claim_policy(
+        self,
+        cmd: str,
+        payload: Optional[Dict[str, Any]],
+        *,
+        peer_host: Optional[str],
+        is_localhost: bool,
+    ) -> Dict[str, Any]:
+        c = str(cmd or "").strip()
+        p = dict(payload or {})
+        control = self._read_control()
+        actor_id = self._actor_id_from_payload(control, p)
+        p["backend_id"] = actor_id
+        p["_claim_actor_id"] = actor_id
+        p["_daemon_peer_host"] = str(peer_host or "") or None
+
+        claim_cmds = {"claim-engine", "claim-endpoint", "claim-resource"}
+        sensitive_engine_cmds = {
+            "spawn",
+            "get-registration",
+            "shutdown",
+            "ensure-running",
+            "remove-registration",
+            "logs-tail",
+            "logs-follow",
+            "inspect-capabilities",
+            "issue-token",
+            "issue-resource-token",
+        }
+
+        if c in claim_cmds and (not is_localhost) and (not bool(p.get("exclusive", False))):
+            return {
+                "ok": False,
+                "error": "access_denied",
+                "error_code": "non_localhost_shared_claim_denied",
+                "error_details": {
+                    "command": c,
+                    "actor_id": actor_id,
+                    "peer_host": str(peer_host or ""),
+                },
+                "payload": p,
+            }
+
+        if c in claim_cmds and bool(p.get("force_override", False)) and is_localhost:
+            confirmation = str(p.get("force_override_confirmation") or "").strip()
+            if confirmation != "CONFIRM_LOCALHOST_FORCE_OVERRIDE":
+                return {
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "localhost_force_override_confirmation_required",
+                    "error_details": {
+                        "command": c,
+                        "actor_id": actor_id,
+                    },
+                    "payload": p,
+                }
+
+        if c in sensitive_engine_cmds:
+            if c in {"issue-resource-token"} and str(p.get("resource_kind") or "").strip().lower() != "engine":
+                # Non-engine resource token checks are enforced in issue_resource_token().
+                return {"ok": True, "payload": p}
+            engine_id = str(p.get("engine_id") or p.get("resource_id") or "").strip()
+            if engine_id:
+                claim = dict((control.get("claims_by_engine") or {}).get(engine_id) or {})
+                owners = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+                active_owners, _ = self._active_and_orphan_owners(control, owners)
+                exclusive_owner = str(claim.get("exclusive_owner") or "").strip()
+                if exclusive_owner and (exclusive_owner not in active_owners):
+                    exclusive_owner = ""
+                if exclusive_owner and exclusive_owner != actor_id:
+                    return {
+                        "ok": False,
+                        "error": "access_denied",
+                        "error_code": "engine_exclusive_conflict",
+                        "error_details": {
+                            "engine_id": engine_id,
+                            "actor_id": actor_id,
+                            "engine_exclusive_owner": exclusive_owner,
+                        },
+                        "payload": p,
+                    }
+                if active_owners and actor_id not in active_owners:
+                    return {
+                        "ok": False,
+                        "error": "access_denied",
+                        "error_code": "engine_shared_claim_not_member",
+                        "error_details": {
+                            "engine_id": engine_id,
+                            "actor_id": actor_id,
+                            "engine_owners": active_owners,
+                        },
+                        "payload": p,
+                    }
+                self._touch_claim_owner_keepalive(control, actor_id)
+                self._write_control(control)
+        return {"ok": True, "payload": p}
+
     def _merge_default_and_selected_config(self, config_path: str) -> Dict[str, Any]:
         default_path = self._default_config_path()
         selected_path = self._resolve_json_config_path(config_path)
@@ -1787,6 +2042,7 @@ class EngineHostService:
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
+            "claim_acl_policy": self._claim_acl_policy(control),
             "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
             "engine_traffic_policies": {
                 str(k): self._normalize_traffic_policy(dict(v or {}))
@@ -1808,6 +2064,7 @@ class EngineHostService:
         traffic_policy: Optional[Dict[str, Any]] = None,
         engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
         websocket_session_policy: Optional[Dict[str, Any]] = None,
+        claim_acl_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
@@ -1819,6 +2076,7 @@ class EngineHostService:
         cfg.setdefault("auth", {"keys": {}, "sessions": {}})
         cfg.setdefault("engine_traffic_policies", {})
         cfg.setdefault("websocket_session_policy", {})
+        cfg.setdefault("claim_acl_policy", {"owner_ttl_seconds": 120, "audit_event_limit": 200})
         cfg["traffic_policy"] = self._normalize_traffic_policy(
             dict(cfg.get("traffic_policy") or {}) | dict(traffic_policy or {})
         )
@@ -1835,6 +2093,12 @@ class EngineHostService:
             cfg["websocket_session_policy"] = self._normalize_websocket_session_policy(
                 dict(websocket_session_policy or {})
             )
+        if claim_acl_policy is not None:
+            raw_claim_acl = dict(cfg.get("claim_acl_policy") or {}) | dict(claim_acl_policy or {})
+            cfg["claim_acl_policy"] = {
+                "owner_ttl_seconds": max(10, min(int(raw_claim_acl.get("owner_ttl_seconds") or 120), 24 * 3600)),
+                "audit_event_limit": max(20, min(int(raw_claim_acl.get("audit_event_limit") or 200), 2000)),
+            }
         control["control_config"] = cfg
         self._write_control(control)
         auth = dict(cfg.get("auth") or {})
@@ -1843,6 +2107,7 @@ class EngineHostService:
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
+            "claim_acl_policy": self._claim_acl_policy(control),
             "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
             "engine_traffic_policies": {
                 str(k): self._normalize_traffic_policy(dict(v or {}))
@@ -2835,34 +3100,138 @@ class EngineHostService:
         control["resource_tokens"] = {}
         return revoked
 
-    def claim_engine(self, engine_id: str, *, backend_id: Optional[str], exclusive: bool = False) -> Dict[str, Any]:
+    def claim_engine(
+        self,
+        engine_id: str,
+        *,
+        backend_id: Optional[str],
+        exclusive: bool = False,
+        force_override: bool = False,
+        actor_id: Optional[str] = None,
+        peer_host: Optional[str] = None,
+    ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
-        bid = self._normalize_backend_id(backend_id)
+        bid = str(actor_id or "").strip() or self._normalize_backend_id(backend_id)
         if not eid:
             raise ValueError("engine_id is required")
         control = self._read_control()
         claims = dict(control.get("claims_by_engine") or {})
         claim = dict(claims.get(eid) or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
-        owners = set(claim.get("owners") or [])
+        owners_before = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+        active_owners, orphan_owners = self._active_and_orphan_owners(control, owners_before)
+        owners = set(active_owners)
+        previous_exclusive = str(claim.get("exclusive_owner") or "").strip()
+        if previous_exclusive and previous_exclusive not in owners:
+            previous_exclusive = ""
+        if previous_exclusive:
+            claim["exclusive_owner"] = previous_exclusive
+        else:
+            claim["exclusive_owner"] = None
         displaced: List[str] = []
         revoked = 0
+        transition = "claimed"
         if exclusive:
-            displaced = sorted([o for o in owners if o != bid])
+            blocked_by = sorted([o for o in owners if o != bid])
+            if blocked_by and not bool(force_override):
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-engine",
+                    scope="engine",
+                    resource_kind="engine",
+                    resource_id=eid,
+                    actor_id=bid,
+                    decision="deny",
+                    code="exclusive_owner_conflict",
+                    transition=None,
+                    mode="exclusive",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"blocking_owners": blocked_by},
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "exclusive_owner_conflict",
+                    "exclusive owner conflict",
+                    engine_id=eid,
+                    backend_id=bid,
+                    blocking_owners=blocked_by,
+                )
+                out.update({"engine_id": eid, "backend_id": bid, "mode": "exclusive"})
+                return out
+            if blocked_by and bool(force_override):
+                transition = "force_override"
+            elif orphan_owners:
+                transition = "orphan_takeover"
             claim["owners"] = [bid]
             claim["exclusive_owner"] = bid
             claim["claimed_at"] = time.time()
             revoked = self._revoke_engine_tokens(control, eid)
+            displaced = sorted([o for o in owners_before if o != bid])
         else:
-            previous_exclusive = str(claim.get("exclusive_owner") or "")
             if previous_exclusive and previous_exclusive != bid:
+                if not bool(force_override):
+                    self._append_claim_audit_event(
+                        control,
+                        event_type="claim_deny",
+                        command="claim-engine",
+                        scope="engine",
+                        resource_kind="engine",
+                        resource_id=eid,
+                        actor_id=bid,
+                        decision="deny",
+                        code="engine_exclusive_conflict",
+                        transition=None,
+                        mode="shared",
+                        peer_host=peer_host,
+                        owners_before=owners_before,
+                        owners_after=owners_before,
+                        details={"engine_exclusive_owner": previous_exclusive},
+                    )
+                    self._write_control(control)
+                    out = self._deny_payload(
+                        "engine_exclusive_conflict",
+                        "engine exclusive conflict",
+                        engine_id=eid,
+                        backend_id=bid,
+                        engine_exclusive_owner=previous_exclusive,
+                    )
+                    out.update({"engine_id": eid, "backend_id": bid, "mode": "shared"})
+                    return out
+                transition = "force_override"
                 displaced = [previous_exclusive]
                 revoked = self._revoke_engine_tokens(control, eid)
             owners.add(bid)
             claim["owners"] = sorted(list(owners))
             claim["exclusive_owner"] = None
             claim["claimed_at"] = time.time()
+            if bid in owners_before:
+                transition = "refreshed"
+            elif orphan_owners:
+                transition = "orphan_takeover"
+            else:
+                transition = "joined_shared"
         claims[eid] = claim
         control["claims_by_engine"] = claims
+        self._touch_claim_owner_keepalive(control, bid)
+        self._append_claim_audit_event(
+            control,
+            event_type="claim_grant",
+            command="claim-engine",
+            scope="engine",
+            resource_kind="engine",
+            resource_id=eid,
+            actor_id=bid,
+            decision="grant",
+            code="ok",
+            transition=transition,
+            mode="exclusive" if exclusive else "shared",
+            peer_host=peer_host,
+            owners_before=owners_before,
+            owners_after=list(claim.get("owners") or []),
+            details={"orphan_owners": orphan_owners, "force_override": bool(force_override)},
+        )
         self._write_control(control)
         return {
             "scope": "engine",
@@ -2873,17 +3242,61 @@ class EngineHostService:
             "exclusive_owner": claim.get("exclusive_owner"),
             "displaced_backends": displaced,
             "revoked_tokens": revoked,
+            "transition": transition,
         }
 
-    def claim_endpoint(self, *, backend_id: Optional[str], exclusive: bool = False) -> Dict[str, Any]:
-        bid = self._normalize_backend_id(backend_id)
+    def claim_endpoint(
+        self,
+        *,
+        backend_id: Optional[str],
+        exclusive: bool = False,
+        force_override: bool = False,
+        actor_id: Optional[str] = None,
+        peer_host: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        bid = str(actor_id or "").strip() or self._normalize_backend_id(backend_id)
         control = self._read_control()
         endpoint = dict(control.get("endpoint_claim") or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
-        owners = set(endpoint.get("owners") or [])
+        owners_before = [str(x or "").strip() for x in list(endpoint.get("owners") or []) if str(x or "").strip()]
+        active_owners, orphan_owners = self._active_and_orphan_owners(control, owners_before)
+        owners = set(active_owners)
         displaced: List[str] = []
         revoked = 0
+        transition = "claimed"
         if exclusive:
-            displaced = sorted([o for o in owners if o != bid])
+            blocked_by = sorted([o for o in owners if o != bid])
+            if blocked_by and not bool(force_override):
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-endpoint",
+                    scope="endpoint",
+                    resource_kind="endpoint",
+                    resource_id="*",
+                    actor_id=bid,
+                    decision="deny",
+                    code="exclusive_owner_conflict",
+                    transition=None,
+                    mode="exclusive",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"blocking_owners": blocked_by},
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "exclusive_owner_conflict",
+                    "exclusive owner conflict",
+                    backend_id=bid,
+                    blocking_owners=blocked_by,
+                )
+                out.update({"scope": "endpoint", "backend_id": bid, "mode": "exclusive"})
+                return out
+            if blocked_by and bool(force_override):
+                transition = "force_override"
+            elif orphan_owners:
+                transition = "orphan_takeover"
+            displaced = sorted([o for o in owners_before if o != bid])
             endpoint = {"owners": [bid], "exclusive_owner": bid, "claimed_at": time.time()}
             control["claims_by_engine"] = {}
             control["resource_claims"] = {}
@@ -2891,11 +3304,63 @@ class EngineHostService:
         else:
             previous_exclusive = str(endpoint.get("exclusive_owner") or "")
             if previous_exclusive and previous_exclusive != bid:
+                if self._is_owner_active(control, previous_exclusive) and not bool(force_override):
+                    self._append_claim_audit_event(
+                        control,
+                        event_type="claim_deny",
+                        command="claim-endpoint",
+                        scope="endpoint",
+                        resource_kind="endpoint",
+                        resource_id="*",
+                        actor_id=bid,
+                        decision="deny",
+                        code="endpoint_exclusive_conflict",
+                        transition=None,
+                        mode="shared",
+                        peer_host=peer_host,
+                        owners_before=owners_before,
+                        owners_after=owners_before,
+                        details={"endpoint_exclusive_owner": previous_exclusive},
+                    )
+                    self._write_control(control)
+                    out = self._deny_payload(
+                        "endpoint_exclusive_conflict",
+                        "endpoint exclusive conflict",
+                        backend_id=bid,
+                        endpoint_exclusive_owner=previous_exclusive,
+                    )
+                    out.update({"scope": "endpoint", "backend_id": bid, "mode": "shared"})
+                    return out
+                transition = "force_override"
                 displaced = [previous_exclusive]
                 revoked = self._revoke_all_tokens(control)
             owners.add(bid)
             endpoint = {"owners": sorted(list(owners)), "exclusive_owner": None, "claimed_at": time.time()}
+            if bid in owners_before:
+                transition = "refreshed"
+            elif orphan_owners:
+                transition = "orphan_takeover"
+            else:
+                transition = "joined_shared"
         control["endpoint_claim"] = endpoint
+        self._touch_claim_owner_keepalive(control, bid)
+        self._append_claim_audit_event(
+            control,
+            event_type="claim_grant",
+            command="claim-endpoint",
+            scope="endpoint",
+            resource_kind="endpoint",
+            resource_id="*",
+            actor_id=bid,
+            decision="grant",
+            code="ok",
+            transition=transition,
+            mode="exclusive" if exclusive else "shared",
+            peer_host=peer_host,
+            owners_before=owners_before,
+            owners_after=list(endpoint.get("owners") or []),
+            details={"orphan_owners": orphan_owners, "force_override": bool(force_override)},
+        )
         self._write_control(control)
         return {
             "scope": "endpoint",
@@ -2905,6 +3370,7 @@ class EngineHostService:
             "exclusive_owner": endpoint.get("exclusive_owner"),
             "displaced_backends": displaced,
             "revoked_tokens": revoked,
+            "transition": transition,
         }
 
     def get_claim_status(self, engine_id: str) -> Dict[str, Any]:
@@ -2912,6 +3378,7 @@ class EngineHostService:
         control = self._read_control()
         claim = dict((control.get("claims_by_engine") or {}).get(eid) or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
         endpoint = dict(control.get("endpoint_claim") or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
+        active_owners, orphan_owners = self._active_and_orphan_owners(control, list(claim.get("owners") or []))
         token_count = 0
         for meta in dict(control.get("tokens") or {}).values():
             if str((meta or {}).get("engine_id") or "") == eid:
@@ -2919,6 +3386,8 @@ class EngineHostService:
         return {
             "engine_id": eid,
             "engine_claim": claim,
+            "active_owners": active_owners,
+            "orphan_owners": orphan_owners,
             "endpoint_claim": endpoint,
             "issued_tokens": token_count,
         }
@@ -2928,19 +3397,43 @@ class EngineHostService:
         bid = self._normalize_backend_id(backend_id)
         control = self._read_control()
         endpoint_exclusive = str((control.get("endpoint_claim") or {}).get("exclusive_owner") or "")
+        if endpoint_exclusive and (not self._is_owner_active(control, endpoint_exclusive)):
+            endpoint_exclusive = ""
         if endpoint_exclusive and endpoint_exclusive != bid:
-            return {"status": "denied", "engine_id": eid, "backend_id": bid, "token": None, "denied_reason": "endpoint_exclusive_conflict", "endpoint_exclusive_owner": endpoint_exclusive}
+            out = self._deny_payload(
+                "endpoint_exclusive_conflict",
+                "endpoint exclusive conflict",
+                endpoint_exclusive_owner=endpoint_exclusive,
+            )
+            out.update({"engine_id": eid, "backend_id": bid, "token": None, "endpoint_exclusive_owner": endpoint_exclusive})
+            return out
         claim = dict((control.get("claims_by_engine") or {}).get(eid) or {})
         exclusive_owner = str(claim.get("exclusive_owner") or "")
+        if exclusive_owner and (not self._is_owner_active(control, exclusive_owner)):
+            exclusive_owner = ""
         if exclusive_owner and exclusive_owner != bid:
-            return {"status": "denied", "engine_id": eid, "backend_id": bid, "token": None, "denied_reason": "engine_exclusive_conflict", "engine_exclusive_owner": exclusive_owner}
-        owners = set(claim.get("owners") or [])
+            out = self._deny_payload(
+                "engine_exclusive_conflict",
+                "engine exclusive conflict",
+                engine_exclusive_owner=exclusive_owner,
+            )
+            out.update({"engine_id": eid, "backend_id": bid, "token": None, "engine_exclusive_owner": exclusive_owner})
+            return out
+        active_owners, _ = self._active_and_orphan_owners(control, list(claim.get("owners") or []))
+        owners = set(active_owners)
         if owners and bid not in owners:
-            return {"status": "denied", "engine_id": eid, "backend_id": bid, "token": None, "denied_reason": "engine_shared_claim_not_member", "engine_owners": sorted(list(owners))}
+            out = self._deny_payload(
+                "engine_shared_claim_not_member",
+                "engine shared claim not member",
+                engine_owners=sorted(list(owners)),
+            )
+            out.update({"engine_id": eid, "backend_id": bid, "token": None, "engine_owners": sorted(list(owners))})
+            return out
         token = secrets.token_urlsafe(24)
         tokens = dict(control.get("tokens") or {})
         tokens[token] = {"engine_id": eid, "backend_id": bid, "issued_at": time.time()}
         control["tokens"] = tokens
+        self._touch_claim_owner_keepalive(control, bid)
         self._write_control(control)
         return {"status": "ok", "engine_id": eid, "backend_id": bid, "token": token, "issued_at": tokens[token]["issued_at"]}
 
@@ -2949,21 +3442,75 @@ class EngineHostService:
         meta = dict(control.get("tokens") or {}).get(str(token or "").strip())
         return bool(meta and str(meta.get("engine_id") or "") == str(engine_id or ""))
 
-    def claim_resource(self, resource_kind: str, resource_id: str, *, backend_id: Optional[str], exclusive: bool = False) -> Dict[str, Any]:
+    def claim_resource(
+        self,
+        resource_kind: str,
+        resource_id: str,
+        *,
+        backend_id: Optional[str],
+        exclusive: bool = False,
+        force_override: bool = False,
+        actor_id: Optional[str] = None,
+        peer_host: Optional[str] = None,
+    ) -> Dict[str, Any]:
         rkind = str(resource_kind or "").strip().lower()
         rid = str(resource_id or "").strip()
         if rkind == "engine":
-            return self.claim_engine(rid, backend_id=backend_id, exclusive=exclusive)
-        bid = self._normalize_backend_id(backend_id)
+            return self.claim_engine(
+                rid,
+                backend_id=backend_id,
+                exclusive=exclusive,
+                force_override=force_override,
+                actor_id=actor_id,
+                peer_host=peer_host,
+            )
+        bid = str(actor_id or "").strip() or self._normalize_backend_id(backend_id)
         rkey = self._resource_key(rkind, rid)
         control = self._read_control()
         claims = dict(control.get("resource_claims") or {})
         claim = dict(claims.get(rkey) or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
-        owners = set(claim.get("owners") or [])
+        owners_before = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+        active_owners, orphan_owners = self._active_and_orphan_owners(control, owners_before)
+        owners = set(active_owners)
         displaced: List[str] = []
         revoked = 0
+        transition = "claimed"
         if exclusive:
-            displaced = sorted([o for o in owners if o != bid])
+            blocked_by = sorted([o for o in owners if o != bid])
+            if blocked_by and not bool(force_override):
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-resource",
+                    scope="resource",
+                    resource_kind=rkind,
+                    resource_id=rid,
+                    actor_id=bid,
+                    decision="deny",
+                    code="exclusive_owner_conflict",
+                    transition=None,
+                    mode="exclusive",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"blocking_owners": blocked_by},
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "exclusive_owner_conflict",
+                    "exclusive owner conflict",
+                    resource_kind=rkind,
+                    resource_id=rid,
+                    backend_id=bid,
+                    blocking_owners=blocked_by,
+                )
+                out.update({"scope": "resource", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "mode": "exclusive"})
+                return out
+            if blocked_by and bool(force_override):
+                transition = "force_override"
+            elif orphan_owners:
+                transition = "orphan_takeover"
+            displaced = sorted([o for o in owners_before if o != bid])
             claim["owners"] = [bid]
             claim["exclusive_owner"] = bid
             claim["claimed_at"] = time.time()
@@ -2976,13 +3523,67 @@ class EngineHostService:
         else:
             previous_exclusive = str(claim.get("exclusive_owner") or "")
             if previous_exclusive and previous_exclusive != bid:
+                if self._is_owner_active(control, previous_exclusive) and not bool(force_override):
+                    self._append_claim_audit_event(
+                        control,
+                        event_type="claim_deny",
+                        command="claim-resource",
+                        scope="resource",
+                        resource_kind=rkind,
+                        resource_id=rid,
+                        actor_id=bid,
+                        decision="deny",
+                        code="resource_exclusive_conflict",
+                        transition=None,
+                        mode="shared",
+                        peer_host=peer_host,
+                        owners_before=owners_before,
+                        owners_after=owners_before,
+                        details={"resource_exclusive_owner": previous_exclusive},
+                    )
+                    self._write_control(control)
+                    out = self._deny_payload(
+                        "resource_exclusive_conflict",
+                        "resource exclusive conflict",
+                        resource_kind=rkind,
+                        resource_id=rid,
+                        backend_id=bid,
+                        resource_exclusive_owner=previous_exclusive,
+                    )
+                    out.update({"scope": "resource", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "mode": "shared"})
+                    return out
+                transition = "force_override"
                 displaced = [previous_exclusive]
             owners.add(bid)
             claim["owners"] = sorted(list(owners))
             claim["exclusive_owner"] = None
             claim["claimed_at"] = time.time()
+            if bid in owners_before:
+                transition = "refreshed"
+            elif orphan_owners:
+                transition = "orphan_takeover"
+            else:
+                transition = "joined_shared"
         claims[rkey] = claim
         control["resource_claims"] = claims
+        self._touch_claim_owner_keepalive(control, bid)
+        self._append_claim_audit_event(
+            control,
+            event_type="claim_grant",
+            command="claim-resource",
+            scope="resource",
+            resource_kind=rkind,
+            resource_id=rid,
+            actor_id=bid,
+            decision="grant",
+            code="ok",
+            transition=transition,
+            mode="exclusive" if exclusive else "shared",
+            peer_host=peer_host,
+            owners_before=owners_before,
+            owners_after=list(claim.get("owners") or []),
+            details={"orphan_owners": orphan_owners, "force_override": bool(force_override)},
+        )
         self._write_control(control)
         return {
             "scope": "resource",
@@ -2994,6 +3595,7 @@ class EngineHostService:
             "exclusive_owner": claim.get("exclusive_owner"),
             "displaced_backends": displaced,
             "revoked_tokens": revoked,
+            "transition": transition,
         }
 
     def get_resource_claim_status(self, resource_kind: str, resource_id: str) -> Dict[str, Any]:
@@ -3005,6 +3607,7 @@ class EngineHostService:
         control = self._read_control()
         claim = dict((control.get("resource_claims") or {}).get(rkey) or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
         endpoint = dict(control.get("endpoint_claim") or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
+        active_owners, orphan_owners = self._active_and_orphan_owners(control, list(claim.get("owners") or []))
         issued_tokens = 0
         for meta in dict(control.get("resource_tokens") or {}).values():
             if str((meta or {}).get("resource_key") or "") == rkey:
@@ -3013,6 +3616,8 @@ class EngineHostService:
             "resource_kind": rkind,
             "resource_id": rid,
             "resource_claim": claim,
+            "active_owners": active_owners,
+            "orphan_owners": orphan_owners,
             "endpoint_claim": endpoint,
             "issued_tokens": issued_tokens,
         }
@@ -3029,19 +3634,43 @@ class EngineHostService:
         rkey = self._resource_key(rkind, rid)
         control = self._read_control()
         endpoint_exclusive = str((control.get("endpoint_claim") or {}).get("exclusive_owner") or "")
+        if endpoint_exclusive and (not self._is_owner_active(control, endpoint_exclusive)):
+            endpoint_exclusive = ""
         if endpoint_exclusive and endpoint_exclusive != bid:
-            return {"status": "denied", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": None, "denied_reason": "endpoint_exclusive_conflict", "endpoint_exclusive_owner": endpoint_exclusive}
+            out = self._deny_payload(
+                "endpoint_exclusive_conflict",
+                "endpoint exclusive conflict",
+                endpoint_exclusive_owner=endpoint_exclusive,
+            )
+            out.update({"resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": None, "endpoint_exclusive_owner": endpoint_exclusive})
+            return out
         claim = dict((control.get("resource_claims") or {}).get(rkey) or {})
         exclusive_owner = str(claim.get("exclusive_owner") or "")
+        if exclusive_owner and (not self._is_owner_active(control, exclusive_owner)):
+            exclusive_owner = ""
         if exclusive_owner and exclusive_owner != bid:
-            return {"status": "denied", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": None, "denied_reason": "resource_exclusive_conflict", "resource_exclusive_owner": exclusive_owner}
-        owners = set(claim.get("owners") or [])
+            out = self._deny_payload(
+                "resource_exclusive_conflict",
+                "resource exclusive conflict",
+                resource_exclusive_owner=exclusive_owner,
+            )
+            out.update({"resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": None, "resource_exclusive_owner": exclusive_owner})
+            return out
+        active_owners, _ = self._active_and_orphan_owners(control, list(claim.get("owners") or []))
+        owners = set(active_owners)
         if owners and bid not in owners:
-            return {"status": "denied", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": None, "denied_reason": "resource_shared_claim_not_member", "resource_owners": sorted(list(owners))}
+            out = self._deny_payload(
+                "resource_shared_claim_not_member",
+                "resource shared claim not member",
+                resource_owners=sorted(list(owners)),
+            )
+            out.update({"resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": None, "resource_owners": sorted(list(owners))})
+            return out
         token = secrets.token_urlsafe(24)
         res_tokens = dict(control.get("resource_tokens") or {})
         res_tokens[token] = {"resource_kind": rkind, "resource_id": rid, "resource_key": rkey, "backend_id": bid, "issued_at": time.time()}
         control["resource_tokens"] = res_tokens
+        self._touch_claim_owner_keepalive(control, bid)
         self._write_control(control)
         return {"status": "ok", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "token": token, "issued_at": res_tokens[token]["issued_at"]}
 

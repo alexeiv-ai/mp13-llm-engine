@@ -1,6 +1,6 @@
 # Hosting Security Refactor Status
 
-Date: 2026-03-03
+Date: 2026-03-06
 
 ## Goal
 
@@ -289,6 +289,51 @@ Security hole mitigated:
   Previously, an attacker who obtained a valid challenge signature might attempt completion
   from a different SSH transport context. With binding enforcement, completion must originate
   from the same bound SSH identity context (target/fingerprint), reducing replay/relay risk.
+
+## 17) Daemon-native claim ACL enforcement and denial contract
+
+Files:
+- `src/hosting/engine_host_service.py`
+- `src/hosting/engine_host_daemon.py`
+- `src/hosting/engine_host_channel.py`
+- `src/hosting/engine_host_cli.py`
+- `tests/test_hosting_daemon_acl.py`
+
+Implemented:
+- daemon-native durable claim actor identity:
+  - claim actor is derived from authenticated session (`key:<key_id>`)
+  - daemon command path no longer trusts caller-supplied `backend_id` for claim identity
+- daemon-enforced claim checks for sensitive daemon command handlers:
+  - `spawn`, `get-registration`, `shutdown`, `ensure-running`, `remove-registration`
+  - `logs-tail`, `logs-follow`, `inspect-capabilities`
+  - `claim-engine`, `claim-endpoint`, `claim-resource`
+  - `issue-token`, `issue-resource-token`
+- daemon-side keepalive + orphan takeover policy:
+  - owner keepalive state persisted in control state (`claim_owner_keepalive`)
+  - TTL policy in `control_config.claim_acl_policy.owner_ttl_seconds`
+  - explicit claim transition values: `joined_shared`, `refreshed`, `orphan_takeover`, `force_override`
+- daemon-side localhost force override confirmation:
+  - `force_override=true` requires `force_override_confirmation="CONFIRM_LOCALHOST_FORCE_OVERRIDE"` on localhost command path
+- daemon-side non-localhost shared-claim denial:
+  - non-localhost callers are denied if claim command requests shared mode (`exclusive=false`)
+- structured daemon denial contract:
+  - daemon error response now includes `error_code` and `error_details`
+  - denied command results are surfaced with stable machine codes
+- stable claim audit events in control state:
+  - `claim_audit_events` with schema version `1`
+  - grant/deny/takeover/override events are appended with bounded retention (`audit_event_limit`)
+
+Regression coverage added (daemon command path):
+- unauthorized command denied
+- non-member denied on shared claim
+- exclusive owner conflict denied
+- orphan takeover allowed only per policy
+- localhost force override requires explicit confirmation token
+- non-localhost shared claim denied
+
+Compatibility note for consumers:
+- minimum behavior requirement published as `Hosting ACL Contract v2`
+- downstream consumers (`mp13-docs`) should require v2 fields/codes for claim-sensitive UX mapping
 
 ## Not Implemented Yet
 
