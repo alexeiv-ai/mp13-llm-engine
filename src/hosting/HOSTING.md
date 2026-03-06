@@ -274,6 +274,12 @@ python -m hosting.engine_host_cli auth-status
 
 ```json
 {
+  "daemon_version": "2.1.0",
+  "capabilities": {
+    "claim_acl_v2": true,
+    "structured_denials_v1": true,
+    "force_override_confirmation_v1": true
+  },
   "require_auth": false,
   "config_store_mode": "store_only",
   "keys_count": 0,
@@ -281,6 +287,10 @@ python -m hosting.engine_host_cli auth-status
   "roles": []
 }
 ```
+
+Version pinning guidance:
+- pin to a SemVer `daemon_version` (for example `2.1.0`)
+- prefer capability checks first (`capabilities.*`) and use version as fallback gate
 
 Bootstrap only when `keys_count == 0`.
 

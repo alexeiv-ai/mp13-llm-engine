@@ -41,6 +41,7 @@ def _default_state_dir() -> Path:
 DEFAULT_STATE_DIR = _default_state_dir()
 DEFAULT_ENGINES_STATE_FILE = DEFAULT_STATE_DIR / "managed_engines.json"
 DEFAULT_CONTROL_STATE_FILE = DEFAULT_STATE_DIR / "engine_host_control.json"
+DAEMON_VERSION = "2.1.0"
 
 
 class EngineHostService:
@@ -271,6 +272,14 @@ class EngineHostService:
     def _normalize_backend_id(backend_id: Optional[str]) -> str:
         raw = str(backend_id or "").strip()
         return raw or "backend:unknown"
+
+    @staticmethod
+    def daemon_capabilities() -> Dict[str, bool]:
+        return {
+            "claim_acl_v2": True,
+            "structured_denials_v1": True,
+            "force_override_confirmation_v1": True,
+        }
 
     @staticmethod
     def _actor_id_from_session_key(key_id: Optional[str]) -> str:
@@ -835,6 +844,8 @@ class EngineHostService:
         sessions = dict(auth.get("sessions") or {})
         challenges = dict(auth.get("challenges") or {})
         return {
+            "daemon_version": DAEMON_VERSION,
+            "capabilities": self.daemon_capabilities(),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
             "keys_count": len(keys),
@@ -2039,6 +2050,8 @@ class EngineHostService:
         auth = dict(cfg.get("auth") or {})
         engine_policies = dict(cfg.get("engine_traffic_policies") or {})
         return {
+            "daemon_version": DAEMON_VERSION,
+            "capabilities": self.daemon_capabilities(),
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
@@ -2104,6 +2117,8 @@ class EngineHostService:
         auth = dict(cfg.get("auth") or {})
         engine_policies = dict(cfg.get("engine_traffic_policies") or {})
         return {
+            "daemon_version": DAEMON_VERSION,
+            "capabilities": self.daemon_capabilities(),
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),

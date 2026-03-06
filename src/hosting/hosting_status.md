@@ -335,6 +335,30 @@ Compatibility note for consumers:
 - minimum behavior requirement published as `Hosting ACL Contract v2`
 - downstream consumers (`mp13-docs`) should require v2 fields/codes for claim-sensitive UX mapping
 
+## 18) Daemon version pinning and capability contract fields
+
+Files:
+- `src/hosting/engine_host_service.py`
+- `src/hosting/engine_host_daemon.py`
+- `tests/test_engine_host_channel.py`
+- `tests/test_hosting_http_ingress.py`
+
+Implemented:
+- stable SemVer daemon version field:
+  - `daemon_version` now included in `auth-status`
+  - `daemon_version` now included in `get-control-config`
+- capability flags for machine gating:
+  - `capabilities.claim_acl_v2`
+  - `capabilities.structured_denials_v1`
+  - `capabilities.force_override_confirmation_v1`
+- structured denial envelope stability improvements:
+  - daemon RPC responses now consistently include `error_code` and `error_details` on parse/auth/access/internal failures
+- transport path consistency:
+  - HTTP ingress `/health` now includes `daemon_version` and `capabilities` from the same service contract
+- contract regression coverage:
+  - SemVer validation for `auth-status.daemon_version`
+  - cross-path equality check between daemon RPC `auth-status` and HTTP ingress `/health`
+
 ## Not Implemented Yet
 
 None (for the currently tracked hosting_status scope).

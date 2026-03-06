@@ -212,8 +212,23 @@ class EngineHostHttpIngressDaemon:
         daemon = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
-            def _send_http_error(self, status: int, message: str) -> None:
-                raw = json.dumps({"ok": False, "error": str(message or "error")}, ensure_ascii=False).encode("utf-8")
+            def _send_http_error(
+                self,
+                status: int,
+                message: str,
+                *,
+                error_code: str = "http_error",
+                error_details: Optional[Dict[str, Any]] = None,
+            ) -> None:
+                raw = json.dumps(
+                    {
+                        "ok": False,
+                        "error": str(message or "error"),
+                        "error_code": str(error_code or "http_error"),
+                        "error_details": dict(error_details or {}),
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
                 self.send_response(int(status))
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
@@ -288,7 +303,7 @@ class EngineHostHttpIngressDaemon:
                 parsed = urllib.parse.urlsplit(self.path)
                 route = daemon._proxy_route(parsed.path)
                 if not route:
-                    self._send_http_error(404, "not_found")
+                    self._send_http_error(404, "not_found", error_code="route_not_found")
                     return True
                 engine_id, proxied_path = route
                 query_map = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -306,24 +321,39 @@ class EngineHostHttpIngressDaemon:
                 try:
                     daemon.svc.authorize_command("proxy-request", req_payload)
                 except PermissionError as exc:
-                    self._send_http_error(daemon._status_from_auth_error(str(exc)), f"auth_failed: {exc}")
+                    self._send_http_error(
+                        daemon._status_from_auth_error(str(exc)),
+                        "auth_failed",
+                        error_code=str(exc or "auth_failed"),
+                        error_details={"reason": str(exc or "auth_failed")},
+                    )
                     return True
 
                 # Reuse traffic policy path/method constraints for websocket upgrade path.
                 policy = daemon.svc._traffic_policy_for_engine(engine_id)  # noqa: SLF001
                 allowed_methods = set(str(x).upper() for x in list(policy.get("allowed_methods") or []))
                 if allowed_methods and "GET" not in allowed_methods:
-                    self._send_http_error(403, "auth_failed: proxy_method_not_allowed:GET")
+                    self._send_http_error(
+                        403,
+                        "auth_failed",
+                        error_code="proxy_method_not_allowed",
+                        error_details={"method": "GET"},
+                    )
                     return True
                 prefixes = [str(x) for x in list(policy.get("allowed_path_prefixes") or ["/"])]
                 if prefixes and not any(proxied_path.startswith(px if px else "/") for px in prefixes):
-                    self._send_http_error(403, f"auth_failed: proxy_path_not_allowed:{proxied_path}")
+                    self._send_http_error(
+                        403,
+                        "auth_failed",
+                        error_code="proxy_path_not_allowed",
+                        error_details={"path": proxied_path},
+                    )
                     return True
 
                 reg = daemon.svc.get_registration(engine_id) or {}
                 endpoint = str(reg.get("endpoint") or "").strip()
                 if not endpoint:
-                    self._send_http_error(400, "engine endpoint is not registered")
+                    self._send_http_error(400, "engine endpoint is not registered", error_code="engine_endpoint_not_registered")
                     return True
 
                 target_url = daemon.svc._join_endpoint_path(endpoint, proxied_path, query=parsed.query)  # noqa: SLF001
@@ -334,7 +364,7 @@ class EngineHostHttpIngressDaemon:
                     ws_scheme = "wss"
                 host = str(target.hostname or "").strip()
                 if not host:
-                    self._send_http_error(400, "invalid_target_endpoint")
+                    self._send_http_error(400, "invalid_target_endpoint", error_code="invalid_target_endpoint")
                     return True
                 port = int(target.port or (443 if ws_scheme == "wss" else 80))
                 request_uri = urllib.parse.urlunsplit(("", "", target.path or "/", target.query or "", ""))
@@ -367,7 +397,7 @@ class EngineHostHttpIngressDaemon:
                     backend_sock.sendall(backend_req)
                     backend_resp = self._read_backend_http_response(backend_sock)
                     if not backend_resp:
-                        self._send_http_error(502, "upstream_ws_handshake_failed")
+                        self._send_http_error(502, "upstream_ws_handshake_failed", error_code="upstream_ws_handshake_failed")
                         try:
                             backend_sock.close()
                         except Exception:
@@ -395,14 +425,17 @@ class EngineHostHttpIngressDaemon:
                             backend_sock.close()
                         except Exception:
                             pass
-                    self._send_http_error(502, "upstream_ws_connect_failed")
+                    self._send_http_error(502, "upstream_ws_connect_failed", error_code="upstream_ws_connect_failed")
                     return True
 
             def _handle_proxy(self) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
                 route = daemon._proxy_route(parsed.path)
                 if not route:
-                    self._send_json(404, {"ok": False, "error": "not_found"})
+                    self._send_json(
+                        404,
+                        {"ok": False, "error": "not_found", "error_code": "route_not_found", "error_details": {}},
+                    )
                     return
                 engine_id, proxied_path = route
                 query_map = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -444,13 +477,30 @@ class EngineHostHttpIngressDaemon:
                     self._send_json(200, {"ok": True, "result": result})
                 except PermissionError as exc:
                     status = daemon._status_from_auth_error(str(exc))
-                    self._send_json(status, {"ok": False, "error": f"auth_failed: {exc}"})
+                    self._send_json(
+                        status,
+                        {
+                            "ok": False,
+                            "error": "auth_failed",
+                            "error_code": str(exc or "auth_failed"),
+                            "error_details": {"reason": str(exc or "auth_failed")},
+                        },
+                    )
                 except Exception as exc:
-                    self._send_json(500, {"ok": False, "error": str(exc)})
+                    self._send_json(
+                        500,
+                        {
+                            "ok": False,
+                            "error": "internal_error",
+                            "error_code": "internal_error",
+                            "error_details": {"message": str(exc)},
+                        },
+                    )
 
             def do_GET(self) -> None:  # noqa: N802
                 parsed = urllib.parse.urlsplit(self.path)
                 if parsed.path == "/health":
+                    auth = daemon.svc.auth_status()
                     self._send_json(
                         200,
                         {
@@ -459,6 +509,8 @@ class EngineHostHttpIngressDaemon:
                             "pid": os.getpid(),
                             "port": daemon.port,
                             "started_at": daemon.pid_file.read().get("started_at") if daemon.pid_file.read() else None,
+                            "daemon_version": str(auth.get("daemon_version") or ""),
+                            "capabilities": dict(auth.get("capabilities") or {}),
                         },
                     )
                     return
@@ -477,7 +529,15 @@ class EngineHostHttpIngressDaemon:
                         if daemon._server is not None:
                             threading.Thread(target=daemon._server.shutdown, daemon=True).start()
                         return
-                    self._send_json(403, {"ok": False, "error": "invalid_shutdown_token"})
+                    self._send_json(
+                        403,
+                        {
+                            "ok": False,
+                            "error": "invalid_shutdown_token",
+                            "error_code": "invalid_shutdown_token",
+                            "error_details": {},
+                        },
+                    )
                     return
                 self._handle_proxy()
 
@@ -601,7 +661,13 @@ class EngineHostDaemon:
         try:
             req = json.loads(raw_line)
         except Exception:
-            return {"seq": -1, "ok": False, "error": "parse_error"}
+            return {
+                "seq": -1,
+                "ok": False,
+                "error": "parse_error",
+                "error_code": "parse_error",
+                "error_details": {},
+            }
         seq = int(req.get("seq") or 0)
         cmd = str(req.get("cmd") or "").strip()
         payload = dict(req.get("payload") or {})
@@ -617,7 +683,13 @@ class EngineHostDaemon:
                 assert self._stop_event is not None
                 self._stop_event.set()
                 return {"seq": seq, "ok": True, "result": "shutting_down"}
-            return {"seq": seq, "ok": False, "error": "invalid_shutdown_token"}
+            return {
+                "seq": seq,
+                "ok": False,
+                "error": "invalid_shutdown_token",
+                "error_code": "invalid_shutdown_token",
+                "error_details": {},
+            }
 
         try:
             self.svc.authorize_command(cmd, payload)
@@ -657,7 +729,13 @@ class EngineHostDaemon:
                 "error_details": {"reason": code},
             }
         except Exception as exc:
-            return {"seq": seq, "ok": False, "error": str(exc)}
+            return {
+                "seq": seq,
+                "ok": False,
+                "error": "internal_error",
+                "error_code": "internal_error",
+                "error_details": {"message": str(exc)},
+            }
 
     def _call_service(self, cmd: str, payload: Dict[str, Any]) -> Any:
         """Synchronous dispatch to EngineHostService (runs in thread pool)."""
