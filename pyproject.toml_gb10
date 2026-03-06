@@ -39,7 +39,8 @@ authors = ["alexeiv-ai <88820640+alexeiv-ai@users.noreply.github.com>"]
 readme = "README.md"
 packages = [
     { include = "app", from = "src" },
-    { include = "mp13_engine", from = "src" }
+    { include = "mp13_engine", from = "src" },
+    { include = "hosting", from = "src" }
 ]
 
 [tool.poetry.scripts]
