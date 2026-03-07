@@ -841,6 +841,80 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def proxy_stream_open(
+        self,
+        *,
+        engine_id: str,
+        tool: str = "run-inference",
+        arguments: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-stream-open",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "tool": str(tool or "run-inference"),
+                "arguments": dict(arguments or {}),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_stream_send(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        message: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-stream-send",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "stream_id": str(stream_id or "").strip(),
+                "message": dict(message or {}),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_stream_recv(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 2.0,
+        max_items: int = 64,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-stream-recv",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "stream_id": str(stream_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 2.0),
+                "max_items": int(max_items or 64),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_stream_close(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-stream-close",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "stream_id": str(stream_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 10.0),
+            },
+        )
+        return dict(res or {})
+
     def get_control_config(self) -> Dict[str, Any]:
         res = self._invoke("get-control-config", {})
         return dict(res or {})

@@ -12,7 +12,6 @@ import re
 import secrets
 import signal
 import hashlib
-import shlex
 import subprocess
 import sys
 import time
@@ -22,6 +21,7 @@ import socket
 import ssl
 import struct
 import tempfile
+from multiprocessing.connection import Client as MPClient
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1587,13 +1587,25 @@ class EngineHostService:
                 self._metrics_auth_denied(str(exc))
                 raise
             return
-        if c in {"proxy-ws-open", "proxy-ws-send", "proxy-ws-recv", "proxy-ws-close"}:
+        if c in {
+            "proxy-ws-open",
+            "proxy-ws-send",
+            "proxy-ws-recv",
+            "proxy-ws-close",
+            "proxy-stream-open",
+            "proxy-stream-send",
+            "proxy-stream-recv",
+            "proxy-stream-close",
+        }:
             p = dict(payload or {})
             requested_engine = str(p.get("engine_id") or "").strip()
             if c in {"proxy-ws-send", "proxy-ws-recv", "proxy-ws-close"} and not requested_engine:
                 ws_id = str(p.get("ws_id") or "").strip()
                 sess = self._ws_session_get(ws_id) if ws_id else None
                 requested_engine = str((sess or {}).get("engine_id") or "").strip()
+            if c in {"proxy-stream-open", "proxy-stream-send", "proxy-stream-recv", "proxy-stream-close"} and not requested_engine:
+                self._metrics_auth_denied("engine_id_required")
+                raise PermissionError("engine_id_required")
             try:
                 _ = self._validate_session(
                     control,
@@ -1653,6 +1665,10 @@ class EngineHostService:
             "inspect-capabilities",
             "issue-token",
             "issue-resource-token",
+            "proxy-stream-open",
+            "proxy-stream-send",
+            "proxy-stream-recv",
+            "proxy-stream-close",
         }
 
         if c in claim_cmds and (not is_localhost) and (not bool(p.get("exclusive", False))):
@@ -1770,23 +1786,17 @@ class EngineHostService:
         default_path = self._default_config_path()
         out: List[Dict[str, Any]] = []
         seen: set[str] = set()
+        engine_python = self._engine_python_executable()
+        engine_runtime_ok, _engine_runtime_err = self._check_module_available(engine_python, "mp13_engine")
         def _config_meta(path_str: str) -> Dict[str, Any]:
             try:
-                merged = self._merge_default_and_selected_config(path_str)
+                _ = self._merge_default_and_selected_config(path_str)
             except Exception as e:
                 return {"has_spawn_command": False, "connect_reason": f"invalid_config: {e}"}
-            host_cfg = merged.get("engine_host") if isinstance(merged.get("engine_host"), dict) else {}
-            command_spec = host_cfg.get("spawn_command") if isinstance(host_cfg, dict) else None
-            if not command_spec:
-                command_spec = merged.get("spawn_command")
-            has_spawn = bool(command_spec)
-            if not has_spawn:
-                worker_profile = host_cfg.get("worker_profile") if isinstance(host_cfg, dict) and isinstance(host_cfg.get("worker_profile"), dict) else None
-                if not worker_profile and isinstance(merged.get("worker_profile"), dict):
-                    worker_profile = dict(merged.get("worker_profile") or {})
-                if worker_profile:
-                    has_spawn = bool((self._worker_profile_to_command(worker_profile) or {}).get("command"))
-            return {"has_spawn_command": has_spawn, "connect_reason": None if has_spawn else "missing_spawn_command"}
+            return {
+                "has_spawn_command": bool(engine_runtime_ok),
+                "connect_reason": None if engine_runtime_ok else "engine_not_available",
+            }
         if default_path.exists():
             row = {"name": "default", "path": str(default_path), "is_default": True}
             row.update(_config_meta(str(default_path)))
@@ -1838,17 +1848,6 @@ class EngineHostService:
         results.sort(key=lambda x: str(x.get("name") or "").lower())
         return results
 
-    @staticmethod
-    def _replace_template(value: Optional[str], *, engine_id: str, config_path: str, model_path: Optional[str], endpoint: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        out = str(value)
-        out = out.replace("{engine_id}", str(engine_id))
-        out = out.replace("{config_path}", str(config_path))
-        out = out.replace("{model_path}", str(model_path or ""))
-        out = out.replace("{endpoint}", str(endpoint or ""))
-        return out
-
     def _next_engine_id(self, base_name: str) -> str:
         existing = {str(x.get("engine_id") or "") for x in self._read_engines()}
         if base_name not in existing:
@@ -1886,103 +1885,182 @@ class EngineHostService:
             return False, str(exc)
 
     @staticmethod
-    def _worker_profile_to_command(worker_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Translate simple worker profile knobs into concrete spawn settings.
-        This keeps spawn command out of user-facing UX while preserving host-only execution details.
+    def _engine_python_executable() -> str:
+        python = os.environ.get("MP13_ENGINE_PYTHON", "").strip()
+        return python or sys.executable
 
-        Supported kinds:
-          http_server / placeholder  — plain ``python -m http.server <port>`` (dev/test stand-in)
-          mp13_engine                — real mp13_engine worker; verifies engine availability first
-        """
-        wp = dict(worker_profile or {})
-        kind = str(wp.get("kind") or "http_server").strip().lower()
+    @staticmethod
+    def _allocate_loopback_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    @staticmethod
+    def _worker_transport_mode() -> str:
+        raw = str(os.environ.get("MP13_HOST_WORKER_TRANSPORT") or "").strip().lower()
+        if raw in {"legacy_http", "http", "http_ws"}:
+            return "legacy_http"
+        return "ipc"
+
+    @staticmethod
+    def _allocate_ipc_address(engine_id: str) -> Tuple[str, str]:
+        safe_engine = re.sub(r"[^A-Za-z0-9_-]+", "_", str(engine_id or "engine")).strip("_") or "engine"
+        nonce = secrets.token_hex(6)
+        if os.name == "nt":
+            return "AF_PIPE", f"\\\\.\\pipe\\mp13-host-{safe_engine}-{nonce}"
+        base = Path(tempfile.gettempdir()).expanduser().resolve()
+        return "AF_UNIX", str((base / f"mp13-host-{safe_engine}-{nonce}.sock"))
+
+    @staticmethod
+    def _parse_worker_authkey_token(token: Optional[str]) -> bytes:
+        raw = str(token or "").strip()
+        if not raw:
+            return b""
+        return raw.encode("utf-8", errors="ignore")
+
+    def _proxy_request_via_ipc(
+        self,
+        *,
+        reg: Dict[str, Any],
+        engine_id: str,
+        method: str,
+        path: str,
+        query: str,
+        headers: Dict[str, str],
+        body_b64: str,
+        timeout_seconds: float,
+    ) -> Dict[str, Any]:
+        family = str(reg.get("worker_ipc_family") or "").strip()
+        address = str(reg.get("worker_ipc_address") or "").strip()
+        auth_token = str(reg.get("worker_auth_token") or "").strip()
+        endpoint = str(reg.get("endpoint") or "").strip() or "ipc://local"
+        if not family or not address:
+            raise ValueError("engine ipc endpoint is not registered")
+        authkey = self._parse_worker_authkey_token(auth_token)
+        payload = {
+            "kind": "http_request",
+            "engine_id": str(engine_id or "").strip(),
+            "method": str(method or "GET").strip().upper(),
+            "path": str(path or "/").strip() or "/",
+            "query": str(query or ""),
+            "headers": dict(headers or {}),
+            "body_b64": str(body_b64 or ""),
+        }
+        conn = None
         try:
-            port = int(wp.get("port") or 9001)
-        except Exception:
-            port = 9001
-        if port <= 0:
-            port = 9001
-        endpoint = str(wp.get("endpoint") or "").strip() or f"http://127.0.0.1:{port}"
-        cwd = str(wp.get("cwd") or "").strip() or None
+            conn = MPClient(address=address, family=family, authkey=authkey)
+            conn.send(payload)
+            if not conn.poll(max(0.1, float(timeout_seconds or 30.0))):
+                raise TimeoutError("ipc worker timeout")
+            resp = conn.recv()
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        if not isinstance(resp, dict):
+            raise RuntimeError("invalid ipc worker response")
+        if str(resp.get("status") or "").strip().lower() == "error":
+            msg = str(resp.get("message") or "ipc worker error")
+            raise RuntimeError(msg)
+        status_code = int(resp.get("status_code") or 500)
+        out_headers = dict(resp.get("headers") or {})
+        out_body_b64 = str(resp.get("body_b64") or "")
+        return {
+            "engine_id": str(engine_id),
+            "endpoint": endpoint,
+            "url": f"ipc://{engine_id}{path}",
+            "status_code": status_code,
+            "headers": out_headers,
+            "body_b64": out_body_b64,
+            "body_size": len(base64.b64decode(out_body_b64)) if out_body_b64 else 0,
+            "truncated": False,
+        }
 
-        if kind in {"http_server", "http.server", "placeholder"}:
-            # Placeholder launcher — useful for dev/test; replace with engine-native when ready.
-            cmd = ["python", "-m", "http.server", str(port)]
-            return {"command": cmd, "endpoint": endpoint, "cwd": cwd}
+    def _ipc_call(self, *, reg: Dict[str, Any], payload: Dict[str, Any], timeout_seconds: float = 30.0) -> Dict[str, Any]:
+        family = str(reg.get("worker_ipc_family") or "").strip()
+        address = str(reg.get("worker_ipc_address") or "").strip()
+        auth_token = str(reg.get("worker_auth_token") or "").strip()
+        if not family or not address:
+            raise ValueError("engine ipc endpoint is not registered")
+        authkey = self._parse_worker_authkey_token(auth_token)
+        conn = None
+        try:
+            conn = MPClient(address=address, family=family, authkey=authkey)
+            conn.send(dict(payload or {}))
+            if not conn.poll(max(0.1, float(timeout_seconds or 30.0))):
+                raise TimeoutError("ipc worker timeout")
+            out = conn.recv()
+            if not isinstance(out, dict):
+                raise RuntimeError("invalid ipc response")
+            return dict(out or {})
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-        if kind == "mp13_engine":
-            # Resolve the Python executable that has mp13_engine installed.
-            # Priority: worker_profile.engine_python → MP13_ENGINE_PYTHON env var → sys.executable
-            python = str(wp.get("engine_python") or "").strip()
-            if not python:
-                python = os.environ.get("MP13_ENGINE_PYTHON", "").strip()
-            if not python:
-                python = sys.executable
-            # Verify availability before committing to a spawn.
-            ok, err_detail = EngineHostService._check_module_available(python, "mp13_engine")
-            if not ok:
-                return {
-                    "command": [],
-                    "endpoint": endpoint,
-                    "cwd": cwd,
-                    "error": (
-                        f"mp13_engine is not available in Python '{python}': {err_detail}. "
-                        f"Set engine_python in the worker_profile or MP13_ENGINE_PYTHON env var "
-                        f"to point at a Python that has the full engine installed."
-                    ),
-                    "error_kind": "engine_not_available",
-                }
-            module = str(wp.get("module") or "mp13_engine").strip()
-            cmd = [python, "-m", module, "--port", str(port)]
-            extra_args = [str(a) for a in list(wp.get("args") or [])]
-            if extra_args:
-                cmd.extend(extra_args)
-            return {"command": cmd, "endpoint": endpoint, "cwd": cwd}
-
-        return {"command": [], "endpoint": endpoint, "cwd": cwd}
+    def _build_engine_spawn_spec(self, *, engine_id: str, config_path: str, model_path: str) -> Dict[str, Any]:
+        python = self._engine_python_executable()
+        ok, err_detail = self._check_module_available(python, "mp13_engine")
+        if not ok:
+            return {
+                "error": (
+                    f"mp13_engine is not available in Python '{python}': {err_detail}. "
+                    "Set MP13_ENGINE_PYTHON to a Python that has mp13_engine installed."
+                ),
+                "error_kind": "engine_not_available",
+            }
+        transport = self._worker_transport_mode()
+        worker_auth_token = secrets.token_urlsafe(24)
+        worker_auth_header = "X-MP13-Host-Token"
+        if transport == "legacy_http":
+            port = self._allocate_loopback_port()
+            endpoint = f"http://127.0.0.1:{port}"
+            command = [python, "-m", "mp13_engine", "--port", str(port)]
+            ipc_family = None
+            ipc_address = None
+        else:
+            ipc_family, ipc_address = self._allocate_ipc_address(engine_id)
+            endpoint = "ipc://local"
+            command = [
+                python,
+                "-m",
+                "hosting.engine_worker_ipc",
+                "--ipc-family",
+                str(ipc_family),
+                "--ipc-address",
+                str(ipc_address),
+            ]
+        return {
+            "command": command,
+            "cwd": None,
+            "endpoint": endpoint,
+            "worker_auth_token": worker_auth_token,
+            "worker_auth_header": worker_auth_header,
+            "worker_transport": transport,
+            "worker_ipc_family": ipc_family,
+            "worker_ipc_address": ipc_address,
+            "env": {
+                "MP13_ENGINE_CONFIG_PATH": str(config_path),
+                "MP13_ENGINE_ID": str(engine_id),
+                "MP13_MODEL_PATH": str(model_path),
+                "MP13_ENGINE_HOST_TOKEN": worker_auth_token,
+                "MP13_ENGINE_HOST_TOKEN_HEADER": worker_auth_header,
+                "MP13_ENGINE_TRANSPORT": transport,
+            },
+        }
 
     def connect_from_config(self, *, config_path: str, engine_id: Optional[str] = None, model_path: Optional[str] = None) -> Dict[str, Any]:
         selected = self._resolve_json_config_path(config_path)
         cfg = self._merge_default_and_selected_config(config_path)
         if not isinstance(cfg, dict):
             cfg = {}
-        host_cfg = cfg.get("engine_host") if isinstance(cfg.get("engine_host"), dict) else {}
         base_name = self._safe_config_name(Path(selected).stem or "engine")
         requested = self._safe_config_name(engine_id) if str(engine_id or "").strip() else ""
         eid = self._next_engine_id(requested or base_name)
-
-        command_spec = host_cfg.get("spawn_command") if isinstance(host_cfg, dict) else None
-        if not command_spec:
-            command_spec = cfg.get("spawn_command")
-        if isinstance(command_spec, str):
-            command_list = shlex.split(command_spec)
-        elif isinstance(command_spec, list):
-            command_list = [str(x) for x in command_spec]
-        else:
-            command_list = []
-        worker_profile = host_cfg.get("worker_profile") if isinstance(host_cfg, dict) and isinstance(host_cfg.get("worker_profile"), dict) else None
-        if not worker_profile and isinstance(cfg.get("worker_profile"), dict):
-            worker_profile = dict(cfg.get("worker_profile") or {})
-        profile_spawn = self._worker_profile_to_command(worker_profile) if worker_profile else {"command": [], "endpoint": None, "cwd": None}
-        if profile_spawn.get("error"):
-            return {
-                "status": "failed",
-                "engine_id": eid,
-                "config_path": str(selected),
-                "reason": str(profile_spawn.get("error_kind") or "worker_profile_error"),
-                "message": str(profile_spawn["error"]),
-            }
-        if not command_list and list(profile_spawn.get("command") or []):
-            command_list = [str(x) for x in list(profile_spawn.get("command") or [])]
-        if not command_list:
-            return {
-                "status": "failed",
-                "engine_id": eid,
-                "config_path": str(selected),
-                "reason": "missing_spawn_command",
-                "message": "Config is missing engine_host.spawn_command (or spawn_command).",
-            }
 
         configured_model = (
             ((cfg.get("engine_params") or {}).get("base_model_path") if isinstance(cfg.get("engine_params"), dict) else None)
@@ -1999,34 +2077,33 @@ class EngineHostService:
                 "models": self.models_from_config(config_path),
                 "message": "Config loaded but no model is configured. Select a model folder and connect again.",
             }
-
-        endpoint_raw = host_cfg.get("endpoint") if isinstance(host_cfg, dict) else None
-        if not endpoint_raw:
-            endpoint_raw = cfg.get("endpoint")
-        if not endpoint_raw:
-            endpoint_raw = profile_spawn.get("endpoint")
-        cwd_raw = host_cfg.get("cwd") if isinstance(host_cfg, dict) else None
-        if not cwd_raw:
-            cwd_raw = profile_spawn.get("cwd")
-        env_raw = host_cfg.get("env") if isinstance(host_cfg, dict) and isinstance(host_cfg.get("env"), dict) else {}
-        endpoint = self._replace_template(endpoint_raw, engine_id=eid, config_path=str(selected), model_path=effective_model_path, endpoint=endpoint_raw)
-        cwd = self._replace_template(cwd_raw, engine_id=eid, config_path=str(selected), model_path=effective_model_path, endpoint=endpoint)
-        env = {
-            str(k): str(
-                self._replace_template(str(v), engine_id=eid, config_path=str(selected), model_path=effective_model_path, endpoint=endpoint) or ""
-            )
-            for k, v in dict(env_raw or {}).items()
-        }
-        env.setdefault("MP13_ENGINE_CONFIG_PATH", str(selected))
-        env.setdefault("MP13_ENGINE_ID", str(eid))
-        env.setdefault("MP13_MODEL_PATH", str(effective_model_path))
-        command = [
-            self._replace_template(x, engine_id=eid, config_path=str(selected), model_path=effective_model_path, endpoint=endpoint) or ""
-            for x in command_list
-        ]
-        command = [c for c in command if c]
+        spawn_spec = self._build_engine_spawn_spec(
+            engine_id=eid,
+            config_path=str(selected),
+            model_path=str(effective_model_path),
+        )
+        if spawn_spec.get("error"):
+            return {
+                "status": "failed",
+                "engine_id": eid,
+                "config_path": str(selected),
+                "model_path": effective_model_path,
+                "reason": str(spawn_spec.get("error_kind") or "engine_spawn_error"),
+                "message": str(spawn_spec.get("error") or "engine spawn spec build failed"),
+            }
         try:
-            rec = self.spawn(engine_id=eid, command=command, cwd=cwd, endpoint=endpoint, env=env)
+            rec = self.spawn(
+                engine_id=eid,
+                command=list(spawn_spec.get("command") or []),
+                cwd=spawn_spec.get("cwd"),
+                endpoint=spawn_spec.get("endpoint"),
+                env=dict(spawn_spec.get("env") or {}),
+                worker_auth_token=str(spawn_spec.get("worker_auth_token") or "").strip() or None,
+                worker_auth_header=str(spawn_spec.get("worker_auth_header") or "").strip() or None,
+                worker_transport=str(spawn_spec.get("worker_transport") or "").strip() or None,
+                worker_ipc_family=str(spawn_spec.get("worker_ipc_family") or "").strip() or None,
+                worker_ipc_address=str(spawn_spec.get("worker_ipc_address") or "").strip() or None,
+            )
             return {
                 "status": "ok",
                 "engine_id": eid,
@@ -2233,6 +2310,11 @@ class EngineHostService:
         command: List[str],
         cwd: Optional[str] = None,
         endpoint: Optional[str] = None,
+        worker_auth_token: Optional[str] = None,
+        worker_auth_header: Optional[str] = None,
+        worker_transport: Optional[str] = None,
+        worker_ipc_family: Optional[str] = None,
+        worker_ipc_address: Optional[str] = None,
         source: str = "engine_host_spawned",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
@@ -2247,6 +2329,11 @@ class EngineHostService:
             "owner_host_pid": os.getpid(),
             "source": str(source or "engine_host_spawned"),
             "endpoint": str(endpoint).strip() if endpoint else None,
+            "worker_auth_token": str(worker_auth_token or "").strip() or None,
+            "worker_auth_header": str(worker_auth_header or "").strip() or None,
+            "worker_transport": str(worker_transport or "").strip() or None,
+            "worker_ipc_family": str(worker_ipc_family or "").strip() or None,
+            "worker_ipc_address": str(worker_ipc_address or "").strip() or None,
             "log_path": str(self._engine_log_path(eid)),
         }
         rows = [r for r in self._read_engines() if str(r.get("engine_id") or "") != eid]
@@ -2262,6 +2349,11 @@ class EngineHostService:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
         endpoint: Optional[str] = None,
+        worker_auth_token: Optional[str] = None,
+        worker_auth_header: Optional[str] = None,
+        worker_transport: Optional[str] = None,
+        worker_ipc_family: Optional[str] = None,
+        worker_ipc_address: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not list(command or []):
             raise ValueError("command is required")
@@ -2283,6 +2375,11 @@ class EngineHostService:
             command=[str(x) for x in command],
             cwd=cwd,
             endpoint=endpoint,
+            worker_auth_token=worker_auth_token,
+            worker_auth_header=worker_auth_header,
+            worker_transport=worker_transport,
+            worker_ipc_family=worker_ipc_family,
+            worker_ipc_address=worker_ipc_address,
         )
 
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:
@@ -2334,6 +2431,11 @@ class EngineHostService:
         command = [str(x) for x in list(entry.get("command") or []) if str(x).strip()]
         cwd = entry.get("cwd")
         endpoint = entry.get("endpoint")
+        worker_auth_token = str(entry.get("worker_auth_token") or "").strip() or None
+        worker_auth_header = str(entry.get("worker_auth_header") or "").strip() or None
+        worker_transport = str(entry.get("worker_transport") or "").strip() or None
+        worker_ipc_family = str(entry.get("worker_ipc_family") or "").strip() or None
+        worker_ipc_address = str(entry.get("worker_ipc_address") or "").strip() or None
         if pid > 0 and self._pid_alive(pid):
             return {"status": "running", "engine_id": eid, "pid": pid, "alive": True, "endpoint": endpoint}
         if not command:
@@ -2357,7 +2459,18 @@ class EngineHostService:
             stderr=subprocess.STDOUT,
         )
         log_fp.close()
-        reg = self.register_spawned(engine_id=eid, pid=int(proc.pid), command=command, cwd=str(cwd) if cwd else None, endpoint=str(endpoint) if endpoint else None)
+        reg = self.register_spawned(
+            engine_id=eid,
+            pid=int(proc.pid),
+            command=command,
+            cwd=str(cwd) if cwd else None,
+            endpoint=str(endpoint) if endpoint else None,
+            worker_auth_token=worker_auth_token,
+            worker_auth_header=worker_auth_header,
+            worker_transport=worker_transport,
+            worker_ipc_family=worker_ipc_family,
+            worker_ipc_address=worker_ipc_address,
+        )
         return {
             "status": "respawned",
             "engine_id": eid,
@@ -2661,8 +2774,9 @@ class EngineHostService:
                 started_at=req_started_at,
             )
             raise ValueError("engine endpoint is not registered")
+        transport = str(reg.get("worker_transport") or "").strip().lower()
         url = self._join_endpoint_path(endpoint, path, query=query)
-        if not url:
+        if transport != "ipc" and not url:
             self._metrics_proxy_finish(
                 eid,
                 failed=True,
@@ -2745,6 +2859,46 @@ class EngineHostService:
             if header_allow and low not in header_allow:
                 continue
             req_headers[key] = str(v)
+        worker_auth_header = str(reg.get("worker_auth_header") or "").strip()
+        worker_auth_token = str(reg.get("worker_auth_token") or "").strip()
+        if worker_auth_header and worker_auth_token:
+            # Host-controlled channel proof. Client headers cannot override this.
+            req_headers[worker_auth_header] = worker_auth_token
+        if transport == "ipc":
+            out = self._proxy_request_via_ipc(
+                reg=reg,
+                engine_id=eid,
+                method=m,
+                path=req_path,
+                query=query,
+                headers=req_headers,
+                body_b64=str(body_b64 or ""),
+                timeout_seconds=timeout_seconds,
+            )
+            raw = base64.b64decode(str(out.get("body_b64") or "")) if str(out.get("body_b64") or "") else b""
+            lim = min(
+                max(1024, int(max_response_bytes or 1024 * 1024)),
+                max(1024, int(traffic_policy.get("max_response_bytes") or (1024 * 1024))),
+            )
+            truncated = len(raw) > lim
+            if truncated:
+                raw = raw[:lim]
+                out["body_b64"] = base64.b64encode(raw).decode("ascii")
+                out["body_size"] = len(raw)
+                out["truncated"] = True
+            self._metrics_proxy_finish(
+                eid,
+                status_code=int(out.get("status_code") or 500),
+                response_bytes=len(raw),
+                http_error=bool(int(out.get("status_code") or 500) >= 400),
+                failed=False,
+                method=m,
+                path=req_path,
+                started_at=req_started_at,
+                truncated=bool(out.get("truncated")),
+                request_bytes=len(body_raw),
+            )
+            return out
         req = urllib.request.Request(url, data=body_raw if body_raw else None, method=m, headers=req_headers)
         policy_lim = max(1024, int(traffic_policy.get("max_response_bytes") or (1024 * 1024)))
         lim = min(max(1024, int(max_response_bytes or policy_lim)), policy_lim)
@@ -2877,6 +3031,8 @@ class EngineHostService:
         endpoint = str(reg.get("endpoint") or "").strip()
         if not endpoint:
             raise ValueError("engine endpoint is not registered")
+        if str(reg.get("worker_transport") or "").strip().lower() == "ipc":
+            raise ValueError("ipc transport does not support websocket passthrough")
         ws_url = self._to_ws_url(endpoint, req_path, query=query)
         if not ws_url:
             raise ValueError("failed to build websocket url")
@@ -2905,6 +3061,11 @@ class EngineHostService:
             if header_allow and low not in header_allow:
                 continue
             req_headers[key] = str(v)
+        worker_auth_header = str(reg.get("worker_auth_header") or "").strip()
+        worker_auth_token = str(reg.get("worker_auth_token") or "").strip()
+        if worker_auth_header and worker_auth_token:
+            # Host-controlled channel proof. Client headers cannot override this.
+            req_headers[worker_auth_header] = worker_auth_token
 
         ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
         lines = [
@@ -3096,6 +3257,122 @@ class EngineHostService:
             except Exception:
                 pass
         return {"status": "closed", "ws_id": sid}
+
+    def proxy_stream_open(
+        self,
+        *,
+        engine_id: str,
+        tool: str = "run-inference",
+        arguments: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            raise ValueError("engine_id is required")
+        reg = self._find_registration(eid) or {}
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError("proxy-stream is only supported for ipc transport")
+        out = self._ipc_call(
+            reg=reg,
+            payload={
+                "kind": "stream_open",
+                "engine_id": eid,
+                "tool": str(tool or "run-inference"),
+                "arguments": dict(arguments or {}),
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        if str(out.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(out.get("message") or "stream_open_failed"))
+        return {
+            "status": "ok",
+            "engine_id": eid,
+            "stream_id": str(out.get("stream_id") or ""),
+            "worker_transport": "ipc",
+        }
+
+    def proxy_stream_send(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        message: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        sid = str(stream_id or "").strip()
+        if not eid:
+            raise ValueError("engine_id is required")
+        if not sid:
+            raise ValueError("stream_id is required")
+        reg = self._find_registration(eid) or {}
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError("proxy-stream is only supported for ipc transport")
+        out = self._ipc_call(
+            reg=reg,
+            payload={"kind": "stream_send", "engine_id": eid, "stream_id": sid, "message": dict(message or {})},
+            timeout_seconds=timeout_seconds,
+        )
+        if str(out.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(out.get("message") or "stream_send_failed"))
+        return dict(out or {})
+
+    def proxy_stream_recv(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 2.0,
+        max_items: int = 64,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        sid = str(stream_id or "").strip()
+        if not eid:
+            raise ValueError("engine_id is required")
+        if not sid:
+            raise ValueError("stream_id is required")
+        reg = self._find_registration(eid) or {}
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError("proxy-stream is only supported for ipc transport")
+        out = self._ipc_call(
+            reg=reg,
+            payload={
+                "kind": "stream_recv",
+                "engine_id": eid,
+                "stream_id": sid,
+                "timeout_seconds": float(timeout_seconds or 2.0),
+                "max_items": int(max_items or 64),
+            },
+            timeout_seconds=max(1.0, float(timeout_seconds or 2.0) + 1.0),
+        )
+        if str(out.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(out.get("message") or "stream_recv_failed"))
+        return dict(out or {})
+
+    def proxy_stream_close(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        sid = str(stream_id or "").strip()
+        if not eid:
+            raise ValueError("engine_id is required")
+        if not sid:
+            raise ValueError("stream_id is required")
+        reg = self._find_registration(eid) or {}
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError("proxy-stream is only supported for ipc transport")
+        out = self._ipc_call(
+            reg=reg,
+            payload={"kind": "stream_close", "engine_id": eid, "stream_id": sid},
+            timeout_seconds=timeout_seconds,
+        )
+        if str(out.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(out.get("message") or "stream_close_failed"))
+        return dict(out or {})
 
     def _revoke_engine_tokens(self, control: Dict[str, Any], engine_id: str) -> int:
         tokens = dict(control.get("tokens") or {})

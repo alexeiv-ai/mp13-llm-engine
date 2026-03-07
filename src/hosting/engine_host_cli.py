@@ -52,7 +52,7 @@ EXAMPLES_BY_COMMAND = {
         "python -m hosting.engine_host_cli list-configs",
     ],
     "create-config": [
-        "@'{\"name\":\"local_worker\",\"config\":{\"engine_host\":{\"spawn_command\":[\"python\",\"-m\",\"http.server\",\"9001\"],\"endpoint\":\"http://127.0.0.1:9001\"}}}'@ | python -m hosting.engine_host_cli --payload-stdin create-config",
+        "@'{\"name\":\"local_worker\",\"config\":{\"engine_params\":{\"base_model_path\":\"C:\\\\models\\\\granite-3.3-2b-instruct\"}}}'@ | python -m hosting.engine_host_cli --payload-stdin create-config",
     ],
     "claim-engine": [
         "@'{\"engine_id\":\"worker1\",\"backend_id\":\"backend:abc123\",\"exclusive\":false}'@ | python -m hosting.engine_host_cli --payload-stdin claim-engine",
@@ -106,6 +106,18 @@ EXAMPLES_BY_COMMAND = {
     ],
     "proxy-ws-close": [
         "@'{\"ws_id\":\"<ws_id>\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-close",
+    ],
+    "proxy-stream-open": [
+        "@'{\"engine_id\":\"worker1\",\"tool\":\"run-inference\",\"arguments\":{\"messages_list\":[[{\"role\":\"user\",\"content\":\"hello\"}]],\"stream\":true}}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-open",
+    ],
+    "proxy-stream-send": [
+        "@'{\"engine_id\":\"worker1\",\"stream_id\":\"<stream_id>\",\"message\":{\"action\":\"cancel\"}}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-send",
+    ],
+    "proxy-stream-recv": [
+        "@'{\"engine_id\":\"worker1\",\"stream_id\":\"<stream_id>\",\"timeout_seconds\":2.0,\"max_items\":64}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-recv",
+    ],
+    "proxy-stream-close": [
+        "@'{\"engine_id\":\"worker1\",\"stream_id\":\"<stream_id>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-close",
     ],
     "host-metrics": [
         "python -m hosting.engine_host_cli host-metrics",
@@ -311,6 +323,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "proxy-ws-send",
         "proxy-ws-recv",
         "proxy-ws-close",
+        "proxy-stream-open",
+        "proxy-stream-send",
+        "proxy-stream-recv",
+        "proxy-stream-close",
         "host-metrics",
     ]:
         cp = sp.add_parser(name)
@@ -658,6 +674,45 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     ws_id=str(payload.get("ws_id") or ""),
                     code=int(payload.get("code") or 1000),
                     reason=str(payload.get("reason") or ""),
+                )
+            )
+            return 0
+        if cmd == "proxy-stream-open":
+            _print_ok(
+                svc.proxy_stream_open(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    tool=str(payload.get("tool") or "run-inference"),
+                    arguments=dict(payload.get("arguments") or {}),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
+        if cmd == "proxy-stream-send":
+            _print_ok(
+                svc.proxy_stream_send(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    stream_id=str(payload.get("stream_id") or ""),
+                    message=dict(payload.get("message") or {}),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
+        if cmd == "proxy-stream-recv":
+            _print_ok(
+                svc.proxy_stream_recv(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    stream_id=str(payload.get("stream_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 2.0),
+                    max_items=int(payload.get("max_items") or 64),
+                )
+            )
+            return 0
+        if cmd == "proxy-stream-close":
+            _print_ok(
+                svc.proxy_stream_close(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    stream_id=str(payload.get("stream_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
                 )
             )
             return 0

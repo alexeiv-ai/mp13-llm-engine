@@ -225,12 +225,22 @@ Control config:
 - `get-control-config`
 - `set-control-config`
 
+Config lifecycle and connect:
+- `list-configs`
+- `create-config`
+- `models-from-config`
+- `connect-from-config`
+
 Worker traffic bridge:
 - `proxy-request`
 - `proxy-ws-open`
 - `proxy-ws-send`
 - `proxy-ws-recv`
 - `proxy-ws-close`
+- `proxy-stream-open`
+- `proxy-stream-send`
+- `proxy-stream-recv`
+- `proxy-stream-close`
 
 Diagnostics:
 - `host-metrics`
@@ -356,6 +366,62 @@ python -m hosting.engine_host_cli --payload-stdin auth-issue-session
 python -m hosting.engine_host_cli --payload-stdin proxy-request
 ```
 
+## 5.4.1 Connect engine from config (host-controlled spawn)
+
+`connect-from-config` launches engine instances with host-owned deterministic behavior.
+It does not use client-provided `spawn_command`/`worker_profile` fields.
+
+- default transport: cross-platform local IPC
+  - Linux: Unix domain socket (`AF_UNIX`)
+  - Windows: named pipe (`AF_PIPE`)
+- IPC worker command: `python -m hosting.engine_worker_ipc --ipc-family <AF_UNIX|AF_PIPE> --ipc-address <path_or_pipe>`
+- endpoint registration: `ipc://local`
+- model: from payload `model_path` or config model fields
+- host->worker anti-spoofing token:
+  - host generates per-engine token
+  - token is passed to worker env: `MP13_ENGINE_HOST_TOKEN`
+  - IPC channel auth uses this token as connection authkey
+
+Legacy transport mode (HTTP loopback) is still available:
+- set `MP13_HOST_WORKER_TRANSPORT=legacy_http`
+- launch command becomes `python -m mp13_engine --port <ephemeral_port>`
+- host forwards token header on proxied traffic: `X-MP13-Host-Token`
+- websocket pass-through remains available only in this legacy HTTP transport mode
+
+IPC async stream mode (default transport):
+- use `proxy-stream-open/send/recv/close` for async/multiplexed engine API calls
+- each open call returns a `stream_id`
+- multiple concurrent `stream_id` sessions are supported per worker
+- typical inference stream flow:
+  - open with `tool="run-inference"` and `arguments={...}`
+  - recv loop until `done=true`
+  - optional send `{"action":"cancel","request_id":"..."}` for cancellation
+  - close when finished
+
+```powershell
+# optional: pin the Python environment used for engine launch
+$env:MP13_ENGINE_PYTHON='C:\path\to\python.exe'
+
+# default (new): IPC transport
+@'{"config_path":"default","engine_id":"worker_cfg","model_path":"C:\\models\\granite-3.3-2b-instruct"}'@ |
+python -m hosting.engine_host_cli --payload-stdin connect-from-config
+
+# opt-in old transport: HTTP loopback worker
+$env:MP13_HOST_WORKER_TRANSPORT='legacy_http'
+@'{"config_path":"default","engine_id":"worker_cfg","model_path":"C:\\models\\granite-3.3-2b-instruct"}'@ |
+python -m hosting.engine_host_cli --payload-stdin connect-from-config
+```
+
+### Removing legacy HTTP transport later
+
+When all consumers are migrated to IPC workers and websocket passthrough is no longer required:
+
+1. Stop setting `MP13_HOST_WORKER_TRANSPORT=legacy_http` in all launch scripts/env.
+2. Remove legacy-http branch from `EngineHostService._build_engine_spawn_spec`.
+3. Remove HTTP worker-specific token header injection path used only for loopback HTTP workers.
+4. Remove websocket passthrough commands/routes (`proxy-ws-*`, ingress websocket upgrade) if no longer needed.
+5. Update this document's compatibility notes and examples to IPC-only.
+
 Websocket command-level flow:
 
 ```powershell
@@ -374,6 +440,45 @@ python -m hosting.engine_host_cli --payload-stdin proxy-ws-recv
 # close
 @'{"ws_id":"<ws_id>","session_token":"<traffic_token>"}'@ |
 python -m hosting.engine_host_cli --payload-stdin proxy-ws-close
+```
+
+IPC stream command-level flow (default transport):
+
+```powershell
+# open inference stream
+@'{
+  "engine_id":"worker1",
+  "tool":"run-inference",
+  "arguments":{
+    "messages_list":[[{"role":"user","content":"hello"}]],
+    "stream":true
+  },
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-open
+
+# recv events (repeat until done=true)
+@'{
+  "engine_id":"worker1",
+  "stream_id":"<stream_id>",
+  "timeout_seconds":2.0,
+  "max_items":64,
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-recv
+
+# optional cancel
+@'{
+  "engine_id":"worker1",
+  "stream_id":"<stream_id>",
+  "message":{"action":"cancel","request_id":"<request_id>"},
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-send
+
+# close
+@'{
+  "engine_id":"worker1",
+  "stream_id":"<stream_id>",
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-close
 ```
 
 ## 5.5 Set restrictive traffic policy

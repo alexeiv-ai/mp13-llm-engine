@@ -889,6 +889,33 @@ class EngineHostDaemon:
                 code=int(payload.get("code") or 1000),
                 reason=str(payload.get("reason") or ""),
             )
+        if cmd == "proxy-stream-open":
+            return svc.proxy_stream_open(
+                engine_id=str(payload.get("engine_id") or ""),
+                tool=str(payload.get("tool") or "run-inference"),
+                arguments=dict(payload.get("arguments") or {}),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+            )
+        if cmd == "proxy-stream-send":
+            return svc.proxy_stream_send(
+                engine_id=str(payload.get("engine_id") or ""),
+                stream_id=str(payload.get("stream_id") or ""),
+                message=dict(payload.get("message") or {}),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+            )
+        if cmd == "proxy-stream-recv":
+            return svc.proxy_stream_recv(
+                engine_id=str(payload.get("engine_id") or ""),
+                stream_id=str(payload.get("stream_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 2.0),
+                max_items=int(payload.get("max_items") or 64),
+            )
+        if cmd == "proxy-stream-close":
+            return svc.proxy_stream_close(
+                engine_id=str(payload.get("engine_id") or ""),
+                stream_id=str(payload.get("stream_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
+            )
         if cmd == "get-control-config":
             return svc.get_control_config()
         if cmd == "set-control-config":
