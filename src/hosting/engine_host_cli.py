@@ -36,7 +36,7 @@ EXAMPLES_BY_COMMAND = {
         "python -m hosting.engine_host_cli --engines-state-file C:\\tmp\\managed_engines.json discover-running",
     ],
     "spawn": [
-        "@'{\"engine_id\":\"worker1\",\"command\":[\"python\",\"-m\",\"http.server\",\"9001\"],\"endpoint\":\"http://127.0.0.1:9001\"}'@ | python -m hosting.engine_host_cli --payload-stdin spawn",
+        "@'{\"engine_id\":\"worker1\",\"command\":[\"python\",\"-m\",\"hosting.engine_worker_ipc\"]}'@ | python -m hosting.engine_host_cli --payload-stdin spawn",
     ],
     "shutdown": [
         "@'{\"engine_id\":\"worker1\"}'@ | python -m hosting.engine_host_cli --payload-stdin shutdown",
@@ -61,7 +61,7 @@ EXAMPLES_BY_COMMAND = {
         "@'{\"engine_id\":\"worker1\",\"backend_id\":\"backend:abc123\"}'@ | python -m hosting.engine_host_cli --payload-stdin issue-token",
     ],
     "inspect-capabilities": [
-        "@'{\"engine_id\":\"worker1\",\"endpoint\":\"http://127.0.0.1:9001\"}'@ | python -m hosting.engine_host_cli --payload-stdin inspect-capabilities",
+        "@'{\"engine_id\":\"worker1\"}'@ | python -m hosting.engine_host_cli --payload-stdin inspect-capabilities",
     ],
     "logs-tail": [
         "@'{\"engine_id\":\"worker1\",\"lines\":100}'@ | python -m hosting.engine_host_cli --payload-stdin logs-tail",
@@ -95,17 +95,20 @@ EXAMPLES_BY_COMMAND = {
     "proxy-request": [
         "@'{\"engine_id\":\"worker1\",\"method\":\"GET\",\"path\":\"/health\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-request",
     ],
-    "proxy-ws-open": [
-        "@'{\"engine_id\":\"worker1\",\"path\":\"/ws\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-open",
+    "proxy-rpc-call": [
+        "@'{\"engine_id\":\"worker1\",\"method\":\"rpc.describe\",\"params\":{},\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-call",
     ],
-    "proxy-ws-send": [
-        "@'{\"ws_id\":\"<ws_id>\",\"text\":\"hello\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-send",
+    "proxy-rpc-open": [
+        "@'{\"engine_id\":\"worker1\",\"method\":\"run-inference\",\"params\":{\"messages_list\":[[{\"role\":\"user\",\"content\":\"hello\"}]],\"stream\":true},\"request_id\":\"req-1\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-open",
     ],
-    "proxy-ws-recv": [
-        "@'{\"ws_id\":\"<ws_id>\",\"timeout_seconds\":1.0,\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-recv",
+    "proxy-rpc-send": [
+        "@'{\"engine_id\":\"worker1\",\"stream_id\":\"<stream_id>\",\"message\":{\"action\":\"cancel\",\"request_id\":\"req-1\"}}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-send",
     ],
-    "proxy-ws-close": [
-        "@'{\"ws_id\":\"<ws_id>\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-ws-close",
+    "proxy-rpc-recv": [
+        "@'{\"engine_id\":\"worker1\",\"stream_id\":\"<stream_id>\",\"timeout_seconds\":2.0,\"max_items\":64}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-recv",
+    ],
+    "proxy-rpc-close": [
+        "@'{\"engine_id\":\"worker1\",\"stream_id\":\"<stream_id>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-close",
     ],
     "proxy-stream-open": [
         "@'{\"engine_id\":\"worker1\",\"tool\":\"run-inference\",\"arguments\":{\"messages_list\":[[{\"role\":\"user\",\"content\":\"hello\"}]],\"stream\":true}}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-stream-open",
@@ -319,10 +322,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "auth-complete-challenge",
         "auth-revoke-session",
         "proxy-request",
-        "proxy-ws-open",
-        "proxy-ws-send",
-        "proxy-ws-recv",
-        "proxy-ws-close",
+        "proxy-rpc-call",
+        "proxy-rpc-open",
+        "proxy-rpc-send",
+        "proxy-rpc-recv",
+        "proxy-rpc-close",
         "proxy-stream-open",
         "proxy-stream-send",
         "proxy-stream-recv",
@@ -471,7 +475,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     command=list(payload.get("command") or []),
                     cwd=payload.get("cwd"),
                     env=dict(payload.get("env") or {}),
-                    endpoint=payload.get("endpoint"),
                 )
             )
             return 0
@@ -601,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(
                 svc.inspect_engine_capabilities(
                     str(payload.get("engine_id") or args.engine_id),
-                    str(payload.get("endpoint") or ""),
+                    "",
                 )
             )
             return 0
@@ -638,42 +641,53 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "proxy-ws-open":
+        if cmd == "proxy-rpc-call":
             _print_ok(
-                svc.proxy_ws_open(
+                svc.proxy_rpc_call(
                     engine_id=str(payload.get("engine_id") or args.engine_id),
-                    path=str(payload.get("path") or "/"),
-                    query=str(payload.get("query") or ""),
-                    headers=dict(payload.get("headers") or {}),
+                    method=str(payload.get("method") or ""),
+                    params=dict(payload.get("params") or {}),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 )
             )
             return 0
-        if cmd == "proxy-ws-send":
+        if cmd == "proxy-rpc-open":
             _print_ok(
-                svc.proxy_ws_send(
-                    ws_id=str(payload.get("ws_id") or ""),
-                    text=payload.get("text"),
-                    data_b64=str(payload.get("data_b64") or ""),
+                svc.proxy_rpc_open(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    method=str(payload.get("method") or ""),
+                    params=dict(payload.get("params") or {}),
+                    request_id=str(payload.get("request_id") or ""),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 )
             )
             return 0
-        if cmd == "proxy-ws-recv":
+        if cmd == "proxy-rpc-send":
             _print_ok(
-                svc.proxy_ws_recv(
-                    ws_id=str(payload.get("ws_id") or ""),
+                svc.proxy_rpc_send(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    stream_id=str(payload.get("stream_id") or ""),
+                    message=dict(payload.get("message") or {}),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
-                    max_bytes=int(payload.get("max_bytes") or (1024 * 1024)),
                 )
             )
             return 0
-        if cmd == "proxy-ws-close":
+        if cmd == "proxy-rpc-recv":
             _print_ok(
-                svc.proxy_ws_close(
-                    ws_id=str(payload.get("ws_id") or ""),
-                    code=int(payload.get("code") or 1000),
-                    reason=str(payload.get("reason") or ""),
+                svc.proxy_rpc_recv(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    stream_id=str(payload.get("stream_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 2.0),
+                    max_items=int(payload.get("max_items") or 64),
+                )
+            )
+            return 0
+        if cmd == "proxy-rpc-close":
+            _print_ok(
+                svc.proxy_rpc_close(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    stream_id=str(payload.get("stream_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
                 )
             )
             return 0
@@ -729,7 +743,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     require_auth=payload.get("require_auth"),
                     traffic_policy=dict(payload.get("traffic_policy") or {}),
                     engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
-                    websocket_session_policy=dict(payload.get("websocket_session_policy") or {}),
                     claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
                 )
             )

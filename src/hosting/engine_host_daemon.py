@@ -29,7 +29,6 @@ import logging
 import os
 import secrets
 import socket
-import ssl
 import subprocess
 import sys
 import threading
@@ -259,175 +258,6 @@ class EngineHostHttpIngressDaemon:
                 except Exception:
                     return {}, raw
 
-            def _is_websocket_upgrade(self) -> bool:
-                upgrade = str(self.headers.get("Upgrade") or "").strip().lower()
-                conn = str(self.headers.get("Connection") or "").strip().lower()
-                key = str(self.headers.get("Sec-WebSocket-Key") or "").strip()
-                return upgrade == "websocket" and "upgrade" in conn and bool(key)
-
-            def _read_backend_http_response(self, backend: socket.socket, *, max_bytes: int = 65536) -> bytes:
-                buf = bytearray()
-                while len(buf) < max_bytes:
-                    chunk = backend.recv(4096)
-                    if not chunk:
-                        break
-                    buf.extend(chunk)
-                    if b"\r\n\r\n" in buf:
-                        break
-                return bytes(buf)
-
-            def _copy_stream(self, src: socket.socket, dst: socket.socket) -> None:
-                try:
-                    while True:
-                        data = src.recv(32768)
-                        if not data:
-                            break
-                        dst.sendall(data)
-                except Exception:
-                    pass
-                finally:
-                    try:
-                        dst.shutdown(socket.SHUT_WR)
-                    except Exception:
-                        pass
-
-            def _run_tunnel(self, client_sock: socket.socket, backend_sock: socket.socket) -> None:
-                t1 = threading.Thread(target=self._copy_stream, args=(client_sock, backend_sock), daemon=True)
-                t2 = threading.Thread(target=self._copy_stream, args=(backend_sock, client_sock), daemon=True)
-                t1.start()
-                t2.start()
-                t1.join(timeout=3600)
-                t2.join(timeout=3600)
-
-            def _handle_websocket_proxy(self) -> bool:
-                parsed = urllib.parse.urlsplit(self.path)
-                route = daemon._proxy_route(parsed.path)
-                if not route:
-                    self._send_http_error(404, "not_found", error_code="route_not_found")
-                    return True
-                engine_id, proxied_path = route
-                query_map = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-                token = daemon._extract_token(self.headers, query_map, {})
-
-                req_payload: Dict[str, Any] = {
-                    "engine_id": engine_id,
-                    "method": "GET",
-                    "path": proxied_path,
-                    "query": parsed.query,
-                    "headers": {str(k): str(v) for k, v in self.headers.items()},
-                }
-                if token:
-                    req_payload["session_token"] = token
-                try:
-                    daemon.svc.authorize_command("proxy-request", req_payload)
-                except PermissionError as exc:
-                    self._send_http_error(
-                        daemon._status_from_auth_error(str(exc)),
-                        "auth_failed",
-                        error_code=str(exc or "auth_failed"),
-                        error_details={"reason": str(exc or "auth_failed")},
-                    )
-                    return True
-
-                # Reuse traffic policy path/method constraints for websocket upgrade path.
-                policy = daemon.svc._traffic_policy_for_engine(engine_id)  # noqa: SLF001
-                allowed_methods = set(str(x).upper() for x in list(policy.get("allowed_methods") or []))
-                if allowed_methods and "GET" not in allowed_methods:
-                    self._send_http_error(
-                        403,
-                        "auth_failed",
-                        error_code="proxy_method_not_allowed",
-                        error_details={"method": "GET"},
-                    )
-                    return True
-                prefixes = [str(x) for x in list(policy.get("allowed_path_prefixes") or ["/"])]
-                if prefixes and not any(proxied_path.startswith(px if px else "/") for px in prefixes):
-                    self._send_http_error(
-                        403,
-                        "auth_failed",
-                        error_code="proxy_path_not_allowed",
-                        error_details={"path": proxied_path},
-                    )
-                    return True
-
-                reg = daemon.svc.get_registration(engine_id) or {}
-                endpoint = str(reg.get("endpoint") or "").strip()
-                if not endpoint:
-                    self._send_http_error(400, "engine endpoint is not registered", error_code="engine_endpoint_not_registered")
-                    return True
-
-                target_url = daemon.svc._join_endpoint_path(endpoint, proxied_path, query=parsed.query)  # noqa: SLF001
-                target = urllib.parse.urlsplit(target_url)
-                scheme = str(target.scheme or "http").lower()
-                ws_scheme = "ws"
-                if scheme in {"https", "wss"}:
-                    ws_scheme = "wss"
-                host = str(target.hostname or "").strip()
-                if not host:
-                    self._send_http_error(400, "invalid_target_endpoint", error_code="invalid_target_endpoint")
-                    return True
-                port = int(target.port or (443 if ws_scheme == "wss" else 80))
-                request_uri = urllib.parse.urlunsplit(("", "", target.path or "/", target.query or "", ""))
-
-                # Build backend upgrade request.
-                raw_headers: List[str] = [
-                    f"GET {request_uri} HTTP/1.1",
-                    f"Host: {host}:{port}" if target.port else f"Host: {host}",
-                    "Upgrade: websocket",
-                    "Connection: Upgrade",
-                    f"Sec-WebSocket-Key: {str(self.headers.get('Sec-WebSocket-Key') or '').strip()}",
-                    f"Sec-WebSocket-Version: {str(self.headers.get('Sec-WebSocket-Version') or '13').strip() or '13'}",
-                ]
-                for hk in ("Sec-WebSocket-Protocol", "Sec-WebSocket-Extensions", "Origin", "User-Agent", "Cookie"):
-                    hv = str(self.headers.get(hk) or "").strip()
-                    if hv:
-                        raw_headers.append(f"{hk}: {hv}")
-                if bool(policy.get("allow_authorization_header", False)):
-                    authz = str(self.headers.get("Authorization") or "").strip()
-                    if authz:
-                        raw_headers.append(f"Authorization: {authz}")
-                backend_req = ("\r\n".join(raw_headers) + "\r\n\r\n").encode("utf-8")
-
-                backend_sock: Optional[socket.socket] = None
-                try:
-                    backend_sock = socket.create_connection((host, port), timeout=10.0)
-                    if ws_scheme == "wss":
-                        ctx = ssl.create_default_context()
-                        backend_sock = ctx.wrap_socket(backend_sock, server_hostname=host)
-                    backend_sock.sendall(backend_req)
-                    backend_resp = self._read_backend_http_response(backend_sock)
-                    if not backend_resp:
-                        self._send_http_error(502, "upstream_ws_handshake_failed", error_code="upstream_ws_handshake_failed")
-                        try:
-                            backend_sock.close()
-                        except Exception:
-                            pass
-                        return True
-                    # Forward upstream handshake response verbatim.
-                    self.connection.sendall(backend_resp)
-                    status_line = backend_resp.split(b"\r\n", 1)[0].decode("latin-1", errors="replace")
-                    if " 101 " not in f" {status_line} ":
-                        try:
-                            backend_sock.close()
-                        except Exception:
-                            pass
-                        return True
-                    self.close_connection = True
-                    self._run_tunnel(self.connection, backend_sock)
-                    try:
-                        backend_sock.close()
-                    except Exception:
-                        pass
-                    return True
-                except Exception:
-                    if backend_sock is not None:
-                        try:
-                            backend_sock.close()
-                        except Exception:
-                            pass
-                    self._send_http_error(502, "upstream_ws_connect_failed", error_code="upstream_ws_connect_failed")
-                    return True
-
             def _handle_proxy(self) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
                 route = daemon._proxy_route(parsed.path)
@@ -513,8 +343,6 @@ class EngineHostHttpIngressDaemon:
                             "capabilities": dict(auth.get("capabilities") or {}),
                         },
                     )
-                    return
-                if self._is_websocket_upgrade() and self._handle_websocket_proxy():
                     return
                 self._handle_proxy()
 
@@ -748,7 +576,6 @@ class EngineHostDaemon:
                 command=list(payload.get("command") or []),
                 cwd=payload.get("cwd"),
                 env=dict(payload.get("env") or {}),
-                endpoint=payload.get("endpoint"),
             )
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
@@ -836,7 +663,7 @@ class EngineHostDaemon:
         if cmd == "inspect-capabilities":
             return svc.inspect_engine_capabilities(
                 str(payload.get("engine_id") or ""),
-                str(payload.get("endpoint") or ""),
+                "",
             )
         if cmd == "logs-tail":
             return svc.logs_tail(
@@ -862,32 +689,40 @@ class EngineHostDaemon:
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
             )
-        if cmd == "proxy-ws-open":
-            return svc.proxy_ws_open(
+        if cmd == "proxy-rpc-call":
+            return svc.proxy_rpc_call(
                 engine_id=str(payload.get("engine_id") or ""),
-                path=str(payload.get("path") or "/"),
-                query=str(payload.get("query") or ""),
-                headers=dict(payload.get("headers") or {}),
+                method=str(payload.get("method") or ""),
+                params=dict(payload.get("params") or {}),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
             )
-        if cmd == "proxy-ws-send":
-            return svc.proxy_ws_send(
-                ws_id=str(payload.get("ws_id") or ""),
-                text=payload.get("text"),
-                data_b64=str(payload.get("data_b64") or ""),
+        if cmd == "proxy-rpc-open":
+            return svc.proxy_rpc_open(
+                engine_id=str(payload.get("engine_id") or ""),
+                method=str(payload.get("method") or ""),
+                params=dict(payload.get("params") or {}),
+                request_id=str(payload.get("request_id") or ""),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
             )
-        if cmd == "proxy-ws-recv":
-            return svc.proxy_ws_recv(
-                ws_id=str(payload.get("ws_id") or ""),
+        if cmd == "proxy-rpc-send":
+            return svc.proxy_rpc_send(
+                engine_id=str(payload.get("engine_id") or ""),
+                stream_id=str(payload.get("stream_id") or ""),
+                message=dict(payload.get("message") or {}),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
-                max_bytes=int(payload.get("max_bytes") or (1024 * 1024)),
             )
-        if cmd == "proxy-ws-close":
-            return svc.proxy_ws_close(
-                ws_id=str(payload.get("ws_id") or ""),
-                code=int(payload.get("code") or 1000),
-                reason=str(payload.get("reason") or ""),
+        if cmd == "proxy-rpc-recv":
+            return svc.proxy_rpc_recv(
+                engine_id=str(payload.get("engine_id") or ""),
+                stream_id=str(payload.get("stream_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 2.0),
+                max_items=int(payload.get("max_items") or 64),
+            )
+        if cmd == "proxy-rpc-close":
+            return svc.proxy_rpc_close(
+                engine_id=str(payload.get("engine_id") or ""),
+                stream_id=str(payload.get("stream_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
             )
         if cmd == "proxy-stream-open":
             return svc.proxy_stream_open(
@@ -924,7 +759,6 @@ class EngineHostDaemon:
                 require_auth=payload.get("require_auth"),
                 traffic_policy=dict(payload.get("traffic_policy") or {}),
                 engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
-                websocket_session_policy=dict(payload.get("websocket_session_policy") or {}),
                 claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
             )
         if cmd == "auth-status":

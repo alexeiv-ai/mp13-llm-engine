@@ -11,7 +11,8 @@ Hosting is a control-plane plus guarded traffic bridge.
   - config-driven worker startup
   - claims/tokens/resource ownership state
 - Traffic bridge:
-  - `proxy-request` forwards HTTP(S) requests to registered worker endpoint
+  - `proxy-request` forwards HTTP-like engine API requests over local IPC
+  - `proxy-rpc-*` provides generic sync/async RPC over local IPC
   - traffic authorization and policy are enforced before forwarding
 
 Workers are still separate processes. Hosting does not expose worker private keys and does not require worker ports to be publicly forwarded.
@@ -233,10 +234,11 @@ Config lifecycle and connect:
 
 Worker traffic bridge:
 - `proxy-request`
-- `proxy-ws-open`
-- `proxy-ws-send`
-- `proxy-ws-recv`
-- `proxy-ws-close`
+- `proxy-rpc-call`
+- `proxy-rpc-open`
+- `proxy-rpc-send`
+- `proxy-rpc-recv`
+- `proxy-rpc-close`
 - `proxy-stream-open`
 - `proxy-stream-send`
 - `proxy-stream-recv`
@@ -267,10 +269,7 @@ Ingress endpoints:
 - `* /proxy/<engine_id>/<path...>`
 - `* /api/engine-host/proxy/<engine_id>/<path...>`
 
-Websocket ingress:
-- Use websocket upgrade on the same proxy routes.
-- Auth/session uses the same traffic token model (`Authorization: Bearer <token>` or `X-Session-Token`).
-- Engine allowlist and traffic path policy are enforced before tunnel creation.
+HTTP ingress is HTTP-only for host API proxy routes.
 
 ## 5.2 Bootstrap auth (first management key)
 
@@ -371,7 +370,7 @@ python -m hosting.engine_host_cli --payload-stdin proxy-request
 `connect-from-config` launches engine instances with host-owned deterministic behavior.
 It does not use client-provided `spawn_command`/`worker_profile` fields.
 
-- default transport: cross-platform local IPC
+- transport: cross-platform local IPC (fixed)
   - Linux: Unix domain socket (`AF_UNIX`)
   - Windows: named pipe (`AF_PIPE`)
 - IPC worker command: `python -m hosting.engine_worker_ipc --ipc-family <AF_UNIX|AF_PIPE> --ipc-address <path_or_pipe>`
@@ -380,66 +379,66 @@ It does not use client-provided `spawn_command`/`worker_profile` fields.
 - host->worker anti-spoofing token:
   - host generates per-engine token
   - token is passed to worker env: `MP13_ENGINE_HOST_TOKEN`
-  - IPC channel auth uses this token as connection authkey
+- IPC channel auth uses this token as connection authkey
 
-Legacy transport mode (HTTP loopback) is still available:
-- set `MP13_HOST_WORKER_TRANSPORT=legacy_http`
-- launch command becomes `python -m mp13_engine --port <ephemeral_port>`
-- host forwards token header on proxied traffic: `X-MP13-Host-Token`
-- websocket pass-through remains available only in this legacy HTTP transport mode
-
-IPC async stream mode (default transport):
-- use `proxy-stream-open/send/recv/close` for async/multiplexed engine API calls
-- each open call returns a `stream_id`
+IPC RPC mode (default transport):
+- sync RPC: `proxy-rpc-call`
+- async RPC lifecycle: `proxy-rpc-open` / `proxy-rpc-recv` / `proxy-rpc-send` / `proxy-rpc-close`
+- `request_id` is required for async RPC and for cancel control messages
 - multiple concurrent `stream_id` sessions are supported per worker
-- typical inference stream flow:
-  - open with `tool="run-inference"` and `arguments={...}`
-  - recv loop until `done=true`
-  - optional send `{"action":"cancel","request_id":"..."}` for cancellation
-  - close when finished
+- `proxy-stream-*` remains as compatibility aliases for engine inference flows
 
 ```powershell
 # optional: pin the Python environment used for engine launch
 $env:MP13_ENGINE_PYTHON='C:\path\to\python.exe'
 
-# default (new): IPC transport
-@'{"config_path":"default","engine_id":"worker_cfg","model_path":"C:\\models\\granite-3.3-2b-instruct"}'@ |
-python -m hosting.engine_host_cli --payload-stdin connect-from-config
-
-# opt-in old transport: HTTP loopback worker
-$env:MP13_HOST_WORKER_TRANSPORT='legacy_http'
 @'{"config_path":"default","engine_id":"worker_cfg","model_path":"C:\\models\\granite-3.3-2b-instruct"}'@ |
 python -m hosting.engine_host_cli --payload-stdin connect-from-config
 ```
 
-### Removing legacy HTTP transport later
-
-When all consumers are migrated to IPC workers and websocket passthrough is no longer required:
-
-1. Stop setting `MP13_HOST_WORKER_TRANSPORT=legacy_http` in all launch scripts/env.
-2. Remove legacy-http branch from `EngineHostService._build_engine_spawn_spec`.
-3. Remove HTTP worker-specific token header injection path used only for loopback HTTP workers.
-4. Remove websocket passthrough commands/routes (`proxy-ws-*`, ingress websocket upgrade) if no longer needed.
-5. Update this document's compatibility notes and examples to IPC-only.
-
-Websocket command-level flow:
+Generic RPC command-level flow (IPC):
 
 ```powershell
-# open
-@'{"engine_id":"worker1","path":"/ws","session_token":"<traffic_token>"}'@ |
-python -m hosting.engine_host_cli --payload-stdin proxy-ws-open
+# sync call
+@'{
+  "engine_id":"worker1",
+  "method":"rpc.describe",
+  "params":{},
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-call
 
-# send text
-@'{"ws_id":"<ws_id>","text":"hello","session_token":"<traffic_token>"}'@ |
-python -m hosting.engine_host_cli --payload-stdin proxy-ws-send
+# async open
+@'{
+  "engine_id":"worker1",
+  "method":"run-inference",
+  "params":{"messages_list":[[{"role":"user","content":"hello"}]],"stream":true},
+  "request_id":"req-1",
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-open
 
-# receive
-@'{"ws_id":"<ws_id>","timeout_seconds":2.0,"session_token":"<traffic_token>"}'@ |
-python -m hosting.engine_host_cli --payload-stdin proxy-ws-recv
+# recv loop
+@'{
+  "engine_id":"worker1",
+  "stream_id":"<stream_id>",
+  "timeout_seconds":2.0,
+  "max_items":64,
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-recv
+
+# optional cancel
+@'{
+  "engine_id":"worker1",
+  "stream_id":"<stream_id>",
+  "message":{"action":"cancel","request_id":"req-1"},
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-send
 
 # close
-@'{"ws_id":"<ws_id>","session_token":"<traffic_token>"}'@ |
-python -m hosting.engine_host_cli --payload-stdin proxy-ws-close
+@'{
+  "engine_id":"worker1",
+  "stream_id":"<stream_id>",
+  "session_token":"<traffic_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-close
 ```
 
 IPC stream command-level flow (default transport):
@@ -512,18 +511,7 @@ Per-engine traffic policy override (HTTP ingress and proxy-request path evaluati
 }'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
 ```
 
-Websocket session policy (command-level `proxy-ws-*` lifecycle):
-
-```powershell
-@'{
-  "websocket_session_policy":{
-    "max_sessions":128,
-    "idle_timeout_seconds":300,
-    "max_lifetime_seconds":3600
-  },
-  "session_token":"<control_token>"
-}'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
-```
+No websocket session policy is exposed. Worker transport is IPC-only.
 
 ## 5.6 Read diagnostics
 
@@ -599,10 +587,9 @@ If daemon is directly exposed on public network:
 
 ## 7. Current Limitations
 
-- `proxy-request` currently supports HTTP(S) only.
-- Native websocket pass-through is currently available in HTTP ingress mode only (not in `proxy-request` command path).
-- Command-level websocket pass-through uses session lifecycle commands (`proxy-ws-open/send/recv/close`), not a single streaming `proxy-request` response.
-- Command-level websocket sessions are in-memory process state and subject to configured GC policy (`websocket_session_policy`).
+- Worker transport is local IPC only (no host-managed remote worker transport).
+- `proxy-request` is a compatibility bridge for HTTP-like engine routes over IPC.
+- Generic worker integrations should prefer `proxy-rpc-*` for sync/async RPC.
 - Metrics are per-process runtime (not persisted across daemon restarts).
 - Host channel credential bootstrap requires wiring `engine_host_key_id` + `engine_host_key_secret`
   (or a pre-issued `engine_host_session_token`) in control settings/profile construction.

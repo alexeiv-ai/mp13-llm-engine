@@ -572,14 +572,13 @@ class EngineHostControlChannel:
         res = self._invoke("get-registration", {"engine_id": str(engine_id)})
         return dict(res or {}) if isinstance(res, dict) else None
 
-    def spawn_process(self, *, engine_id: str, command: List[str], cwd: Optional[str] = None, endpoint: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def spawn_process(self, *, engine_id: str, command: List[str], cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         res = self._invoke(
             "spawn",
             {
                 "engine_id": str(engine_id),
                 "command": [str(x) for x in list(command or [])],
                 "cwd": str(cwd) if cwd else None,
-                "endpoint": str(endpoint) if endpoint else None,
                 "env": dict(env or {}),
             },
         )
@@ -707,12 +706,11 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def inspect_engine_capabilities(self, *, engine_id: str, endpoint: str) -> Dict[str, Any]:
+    def inspect_engine_capabilities(self, *, engine_id: str, endpoint: str = "") -> Dict[str, Any]:
         res = self._invoke(
             "inspect-capabilities",
             {
                 "engine_id": str(engine_id or "").strip(),
-                "endpoint": str(endpoint or "").strip(),
             },
         )
         return dict(res or {})
@@ -767,76 +765,97 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def proxy_ws_open(
+    def proxy_rpc_call(
         self,
         *,
         engine_id: str,
-        path: str = "/",
-        query: str = "",
-        headers: Optional[Dict[str, str]] = None,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
         timeout_seconds: float = 30.0,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "proxy-ws-open",
+            "proxy-rpc-call",
             {
                 "engine_id": str(engine_id or "").strip(),
-                "path": str(path or "/"),
-                "query": str(query or ""),
-                "headers": dict(headers or {}),
+                "method": str(method or ""),
+                "params": dict(params or {}),
                 "timeout_seconds": float(timeout_seconds or 30.0),
             },
         )
         return dict(res or {})
 
-    def proxy_ws_send(
+    def proxy_rpc_open(
         self,
         *,
-        ws_id: str,
-        text: Optional[str] = None,
-        data_b64: str = "",
+        engine_id: str,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        request_id: str,
         timeout_seconds: float = 30.0,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "proxy-ws-send",
+            "proxy-rpc-open",
             {
-                "ws_id": str(ws_id or "").strip(),
-                "text": str(text) if text is not None else None,
-                "data_b64": str(data_b64 or ""),
+                "engine_id": str(engine_id or "").strip(),
+                "method": str(method or ""),
+                "params": dict(params or {}),
+                "request_id": str(request_id or "").strip(),
                 "timeout_seconds": float(timeout_seconds or 30.0),
             },
         )
         return dict(res or {})
 
-    def proxy_ws_recv(
+    def proxy_rpc_send(
         self,
         *,
-        ws_id: str,
+        engine_id: str,
+        stream_id: str,
+        message: Optional[Dict[str, Any]] = None,
         timeout_seconds: float = 30.0,
-        max_bytes: int = 1024 * 1024,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "proxy-ws-recv",
+            "proxy-rpc-send",
             {
-                "ws_id": str(ws_id or "").strip(),
+                "engine_id": str(engine_id or "").strip(),
+                "stream_id": str(stream_id or "").strip(),
+                "message": dict(message or {}),
                 "timeout_seconds": float(timeout_seconds or 30.0),
-                "max_bytes": int(max_bytes or (1024 * 1024)),
             },
         )
         return dict(res or {})
 
-    def proxy_ws_close(
+    def proxy_rpc_recv(
         self,
         *,
-        ws_id: str,
-        code: int = 1000,
-        reason: str = "",
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 2.0,
+        max_items: int = 64,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "proxy-ws-close",
+            "proxy-rpc-recv",
             {
-                "ws_id": str(ws_id or "").strip(),
-                "code": int(code or 1000),
-                "reason": str(reason or ""),
+                "engine_id": str(engine_id or "").strip(),
+                "stream_id": str(stream_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 2.0),
+                "max_items": int(max_items or 64),
+            },
+        )
+        return dict(res or {})
+
+    def proxy_rpc_close(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "proxy-rpc-close",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "stream_id": str(stream_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 10.0),
             },
         )
         return dict(res or {})
@@ -926,7 +945,7 @@ class EngineHostControlChannel:
         require_auth: Optional[bool] = None,
         traffic_policy: Optional[Dict[str, Any]] = None,
         engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
-        websocket_session_policy: Optional[Dict[str, Any]] = None,
+        claim_acl_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"ssh_key": str(ssh_key).strip() if ssh_key else None}
         if require_auth is not None:
@@ -937,8 +956,8 @@ class EngineHostControlChannel:
             payload["engine_traffic_policies"] = {
                 str(k): dict(v or {}) for k, v in dict(engine_traffic_policies or {}).items()
             }
-        if websocket_session_policy is not None:
-            payload["websocket_session_policy"] = dict(websocket_session_policy or {})
+        if claim_acl_policy is not None:
+            payload["claim_acl_policy"] = dict(claim_acl_policy or {})
         res = self._invoke("set-control-config", payload)
         return dict(res or {})
 

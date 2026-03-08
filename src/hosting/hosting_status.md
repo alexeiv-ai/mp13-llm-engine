@@ -1,6 +1,6 @@
 # Hosting Security Refactor Status
 
-Date: 2026-03-06
+Date: 2026-03-08
 
 ## Goal
 
@@ -123,10 +123,6 @@ Implemented:
   - session token via `Authorization: Bearer <token>` or `X-Session-Token`
   - `EngineHostService.authorize_command("proxy-request", payload)` enforces traffic scope and engine allowlist
 - ingress path forwards to `EngineHostService.proxy_request(...)` so traffic policy constraints remain centralized.
-- websocket pass-through in ingress mode:
-  - HTTP Upgrade on proxy routes is authenticated with the same traffic session model
-  - engine allowlist and traffic path policy are enforced before tunnel creation
-  - backend websocket handshake response and frame stream are tunneled bidirectionally
 
 ## 8) Token introspection/audit endpoints
 
@@ -163,7 +159,6 @@ Implemented:
 - applies to:
   - command-level `proxy-request`
   - HTTP ingress proxy routes
-  - HTTP ingress websocket upgrade path checks
 
 ## 10) Session binding to SSH identity/fingerprint
 
@@ -201,7 +196,7 @@ Implemented:
 - responses now include pagination metadata:
   - `offset`, `limit`, `count`, `has_more`, `next_offset`
 
-## 12) Command-level websocket pass-through
+## 12) IPC RPC command surface
 
 Files:
 - `src/hosting/engine_host_service.py`
@@ -210,13 +205,14 @@ Files:
 - `src/hosting/engine_host_channel.py`
 
 Implemented:
-- websocket lifecycle commands:
-  - `proxy-ws-open`
-  - `proxy-ws-send`
-  - `proxy-ws-recv`
-  - `proxy-ws-close`
-- traffic-scope authorization and engine allowlist enforcement for ws commands.
-- policy enforcement uses engine traffic policy resolution for websocket open path.
+- synchronous RPC command:
+  - `proxy-rpc-call`
+- async RPC lifecycle commands:
+  - `proxy-rpc-open`
+  - `proxy-rpc-send`
+  - `proxy-rpc-recv`
+  - `proxy-rpc-close`
+- traffic-scope authorization and engine allowlist enforcement for RPC commands.
 - channel wrappers added for external consumers.
 
 ## 13) Asymmetric key challenge-response authentication
@@ -237,7 +233,7 @@ Implemented:
 - public-key keys cannot use direct `auth-issue-session`; they must use challenge flow.
 - status/key listing now expose challenge/key auth metadata (`challenges_count`, `auth_method`).
 
-## 14) Websocket session GC hardening
+## 14) IPC-only worker transport hardening
 
 Files:
 - `src/hosting/engine_host_service.py`
@@ -246,15 +242,9 @@ Files:
 - `src/hosting/engine_host_channel.py`
 
 Implemented:
-- configurable websocket session policy in control config:
-  - `websocket_session_policy.max_sessions`
-  - `websocket_session_policy.idle_timeout_seconds`
-  - `websocket_session_policy.max_lifetime_seconds`
-- policy is applied to command-level websocket sessions (`proxy-ws-*`):
-  - idle timeout GC
-  - absolute lifetime GC
-  - bounded active session count with oldest-session eviction
-- policy is exposed in `get-control-config` / `set-control-config`.
+- host-managed workers are now IPC-only (no host-managed HTTP/WSS worker transport).
+- websocket command-level pass-through removed from daemon/CLI/channel.
+- control config no longer exposes websocket session policy knobs.
 
 ## 15) Challenge auth telemetry hardening
 
@@ -351,6 +341,7 @@ Implemented:
   - `capabilities.claim_acl_v2`
   - `capabilities.structured_denials_v1`
   - `capabilities.force_override_confirmation_v1`
+  - `capabilities.ipc_rpc_v1`
 - structured denial envelope stability improvements:
   - daemon RPC responses now consistently include `error_code` and `error_details` on parse/auth/access/internal failures
 - transport path consistency:
@@ -358,6 +349,26 @@ Implemented:
 - contract regression coverage:
   - SemVer validation for `auth-status.daemon_version`
   - cross-path equality check between daemon RPC `auth-status` and HTTP ingress `/health`
+
+## 19) ACL Denial Smoke Validation (runtime)
+
+Validation date: 2026-03-08
+
+Executed:
+- direct daemon `_dispatch(...)` smoke script covering ACL regression scenarios equivalent to `tests/test_hosting_daemon_acl.py`
+
+Observed:
+- unauthorized command denial: `session_token_required`
+- shared-claim non-member denial: `engine_shared_claim_not_member`
+- exclusive owner conflict denial: `exclusive_owner_conflict`
+- orphan takeover transition allowed: `orphan_takeover`
+- localhost force-override confirmation gating:
+  - denied without confirmation: `localhost_force_override_confirmation_required`
+  - allowed with confirmation: `force_override`
+- non-localhost shared claim denial: `non_localhost_shared_claim_denied`
+
+Notes:
+- pytest invocation in this environment is currently blocked by filesystem ACL issues around pytest temp/cache dirs, so this run used direct daemon dispatch smoke validation instead.
 
 ## Not Implemented Yet
 
@@ -378,4 +389,4 @@ None (for the currently tracked hosting_status scope).
 
 ## Suggested Next Step
 
-Monitor production behavior and tune challenge/WS policy defaults based on operational telemetry.
+Monitor production behavior and tune challenge/IPC-RPC defaults (stream concurrency/queue limits/cancel behavior) based on operational telemetry.

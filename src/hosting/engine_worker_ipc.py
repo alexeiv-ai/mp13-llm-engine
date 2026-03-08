@@ -1,11 +1,14 @@
 """
-Local engine worker transport over cross-platform IPC.
+Local worker transport over cross-platform IPC.
 
-This worker is host-managed and intended for local-only hosting mode.
-It serves a small HTTP-like request contract over multiprocessing IPC:
-  - /health
-  - /capabilities
-  - /inference (POST JSON)
+Worker contract supports:
+- hello       : capability handshake and limits
+- rpc_call    : synchronous RPC call (method + params)
+- stream_open : open async RPC stream (requires request_id)
+- stream_recv : receive stream events
+- stream_send : control stream (cancel)
+- stream_close: close stream
+- http_request: compatibility shim for /health, /capabilities, /inference
 """
 from __future__ import annotations
 
@@ -16,11 +19,37 @@ import json
 import os
 import queue
 import secrets
+import socket
 import threading
 import traceback
 from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+PROTOCOL_VERSION = 1
+
+
+def _env_int(name: str, default: int, *, lo: int, hi: int) -> int:
+    raw = str(os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+    except Exception:
+        return default
+    return max(lo, min(v, hi))
+
+
+def _limits() -> Dict[str, int]:
+    return {
+        "max_concurrent_streams": _env_int("MP13_WORKER_MAX_CONCURRENT_STREAMS", 128, lo=1, hi=4096),
+        "stream_queue_max_items": _env_int("MP13_WORKER_STREAM_QUEUE_MAX_ITEMS", 2048, lo=16, hi=16384),
+        "max_stream_recv_items": _env_int("MP13_WORKER_MAX_STREAM_RECV_ITEMS", 256, lo=1, hi=4096),
+    }
+
+
+def _contract_name() -> str:
+    return str(os.environ.get("MP13_WORKER_CONTRACT") or "mp13.worker.rpc.v1").strip() or "mp13.worker.rpc.v1"
 
 
 def _json_response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,13 +114,43 @@ async def _run_tool(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "status_code": 200, "payload": out}
 
 
+async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    m = str(method or "").strip()
+    p = dict(params or {})
+    if m in {"rpc.describe", "describe", "capabilities"}:
+        lim = _limits()
+        return {
+            "status": "ok",
+            "protocol_version": PROTOCOL_VERSION,
+            "contract": _contract_name(),
+            "sync_rpc": True,
+            "async_rpc": True,
+            "cancellation": True,
+            "limits": lim,
+        }
+    out = await _run_tool(m, p)
+    if not bool(out.get("ok")):
+        return {"status": "error", "message": str((out.get("payload") or {}).get("message") or "rpc_call_failed")}
+    return {"status": "ok", "result": dict(out.get("payload") or {})}
+
+
 class _StreamSession:
-    def __init__(self, *, stream_id: str, engine_id: str, tool: str, arguments: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        stream_id: str,
+        engine_id: str,
+        method: str,
+        params: Dict[str, Any],
+        request_id: str,
+        queue_max_items: int,
+    ) -> None:
         self.stream_id = str(stream_id)
         self.engine_id = str(engine_id)
-        self.tool = str(tool)
-        self.arguments = dict(arguments or {})
-        self.events: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=2048)
+        self.method = str(method)
+        self.params = dict(params or {})
+        self.request_id = str(request_id)
+        self.events: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=max(16, int(queue_max_items)))
         self.stop_event = threading.Event()
         self.done = False
         self.closed = False
@@ -104,6 +163,7 @@ class _StreamSession:
     def _emit(self, event: Dict[str, Any]) -> None:
         row = dict(event or {})
         row.setdefault("stream_id", self.stream_id)
+        row.setdefault("request_id", self.request_id)
         try:
             self.events.put_nowait(row)
         except queue.Full:
@@ -117,9 +177,9 @@ class _StreamSession:
         from mp13_engine.mp13_engine_api import handle_call_tool, inference_stream_to_dict_stream
 
         try:
-            resp = await handle_call_tool(self.tool, dict(self.arguments or {}))
+            resp = await handle_call_tool(self.method, dict(self.params or {}))
             if str(getattr(resp, "status", "")) != "success":
-                self._emit({"event": "error", "message": str(getattr(resp, "message", "tool failed"))})
+                self._emit({"event": "error", "message": str(getattr(resp, "message", "rpc_failed"))})
                 return
             self._emit(
                 {
@@ -166,27 +226,66 @@ def _stream_pop(stream_id: str) -> Optional[_StreamSession]:
         return _stream_sessions.pop(sid, None)
 
 
-def _stream_create(*, engine_id: str, tool: str, arguments: Dict[str, Any]) -> _StreamSession:
-    sid = secrets.token_hex(12)
-    sess = _StreamSession(stream_id=sid, engine_id=engine_id, tool=tool, arguments=arguments)
+def _stream_create(*, engine_id: str, method: str, params: Dict[str, Any], request_id: str) -> _StreamSession:
+    lim = _limits()
     with _stream_lock:
+        if len(_stream_sessions) >= int(lim["max_concurrent_streams"]):
+            raise RuntimeError("max_concurrent_streams_reached")
+        sid = secrets.token_hex(12)
+        sess = _StreamSession(
+            stream_id=sid,
+            engine_id=engine_id,
+            method=method,
+            params=params,
+            request_id=request_id,
+            queue_max_items=int(lim["stream_queue_max_items"]),
+        )
         _stream_sessions[sid] = sess
     sess.start()
     return sess
 
 
+async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
+    lim = _limits()
+    return {
+        "status": "ok",
+        "protocol_version": PROTOCOL_VERSION,
+        "contract": _contract_name(),
+        "sync_rpc": True,
+        "async_rpc": True,
+        "cancellation": True,
+        "limits": lim,
+    }
+
+
+async def _handle_rpc_call(payload: Dict[str, Any]) -> Dict[str, Any]:
+    method = str(payload.get("method") or "").strip()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if not method:
+        return {"status": "error", "message": "method_required"}
+    return await _rpc_call(method, dict(params or {}))
+
+
 async def _handle_stream_open(payload: Dict[str, Any]) -> Dict[str, Any]:
     engine_id = str(payload.get("engine_id") or "").strip() or str(os.environ.get("MP13_ENGINE_ID") or "engine").strip()
-    tool = str(payload.get("tool") or "run-inference").strip() or "run-inference"
-    arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
-    sess = _stream_create(engine_id=engine_id, tool=tool, arguments=dict(arguments or {}))
-    return {"status": "ok", "stream_id": sess.stream_id, "engine_id": sess.engine_id}
+    method = str(payload.get("method") or payload.get("tool") or "run-inference").strip() or "run-inference"
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else payload.get("arguments")
+    if not isinstance(params, dict):
+        params = {}
+    request_id = str(payload.get("request_id") or (params.get("request_id") if isinstance(params, dict) else "") or "").strip()
+    if not request_id:
+        return {"status": "error", "message": "request_id_required"}
+    try:
+        sess = _stream_create(engine_id=engine_id, method=method, params=dict(params or {}), request_id=request_id)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "ok", "stream_id": sess.stream_id, "engine_id": sess.engine_id, "request_id": request_id}
 
 
 async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
     stream_id = str(payload.get("stream_id") or "").strip()
     timeout_seconds = max(0.0, float(payload.get("timeout_seconds") or 2.0))
-    max_items = max(1, min(int(payload.get("max_items") or 64), 1024))
+    max_items = max(1, min(int(payload.get("max_items") or 64), int(_limits()["max_stream_recv_items"])))
     sess = _stream_get(stream_id)
     if sess is None:
         return {"status": "error", "message": "stream_not_found", "stream_id": stream_id}
@@ -205,7 +304,14 @@ async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
     done = bool(sess.done and sess.events.empty())
     if done:
         _stream_pop(stream_id)
-    return {"status": "ok", "stream_id": stream_id, "engine_id": sess.engine_id, "events": items, "done": done}
+    return {
+        "status": "ok",
+        "stream_id": stream_id,
+        "engine_id": sess.engine_id,
+        "request_id": sess.request_id,
+        "events": items,
+        "done": done,
+    }
 
 
 async def _handle_stream_send(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -216,11 +322,14 @@ async def _handle_stream_send(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "message": "stream_not_found", "stream_id": stream_id}
     action = str(message.get("action") or "").strip().lower()
     if action == "cancel":
-        req_id = str(message.get("request_id") or sess.arguments.get("request_id") or "").strip()
-        if req_id:
-            _ = await _run_tool("cancel-request", {"request_id": req_id})
+        req_id = str(message.get("request_id") or "").strip()
+        if not req_id:
+            return {"status": "error", "message": "request_id_required"}
+        if req_id != sess.request_id:
+            return {"status": "error", "message": "request_id_mismatch", "request_id": req_id}
+        _ = await _run_tool("cancel-request", {"request_id": req_id})
         sess.stop_event.set()
-        return {"status": "ok", "stream_id": stream_id, "accepted": True, "action": "cancel"}
+        return {"status": "ok", "stream_id": stream_id, "accepted": True, "action": "cancel", "request_id": req_id}
     return {"status": "ok", "stream_id": stream_id, "accepted": False, "message": "unsupported_action"}
 
 
@@ -233,7 +342,7 @@ async def _handle_stream_close(payload: Dict[str, Any]) -> Dict[str, Any]:
     sess.stop_event.set()
     if sess.done and sess.events.empty():
         _stream_pop(stream_id)
-    return {"status": "ok", "stream_id": stream_id, "closed": True}
+    return {"status": "ok", "stream_id": stream_id, "closed": True, "request_id": sess.request_id}
 
 
 async def _handle_http_request(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -244,10 +353,21 @@ async def _handle_http_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     body_b64 = str(payload.get("body_b64") or "")
 
     if path == "/health" and method == "GET":
-        return _json_response(200, {"ok": True, "transport": "ipc"})
+        return _json_response(200, {"ok": True, "transport": "ipc", "contract": _contract_name(), "protocol_version": PROTOCOL_VERSION})
 
     if path == "/capabilities" and method == "GET":
-        return _json_response(200, {"health": True, "capabilities": True, "inference": True, "ws": False})
+        return _json_response(200, {
+            "health": True,
+            "capabilities": True,
+            "inference": True,
+            "rpc": True,
+            "async_rpc": True,
+            "cancellation": True,
+            "ws": False,
+            "contract": _contract_name(),
+            "protocol_version": PROTOCOL_VERSION,
+            "limits": _limits(),
+        })
 
     if path == "/inference":
         if method != "POST":
@@ -266,9 +386,56 @@ async def _handle_http_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     return _json_response(404, {"status": "error", "message": "not_found"})
 
 
+def _handle_conn(conn: Any, stop_event: threading.Event) -> None:
+    try:
+        req = conn.recv()
+        if not isinstance(req, dict):
+            conn.send({"status": "error", "message": "invalid_request"})
+            return
+        kind = str(req.get("kind") or "").strip().lower()
+        if kind == "shutdown":
+            conn.send({"status": "ok"})
+            stop_event.set()
+            return
+        if kind == "hello":
+            conn.send(asyncio.run(_handle_hello(req)))
+            return
+        if kind == "rpc_call":
+            conn.send(asyncio.run(_handle_rpc_call(req)))
+            return
+        if kind == "http_request":
+            conn.send(asyncio.run(_handle_http_request(req)))
+            return
+        if kind == "stream_open":
+            conn.send(asyncio.run(_handle_stream_open(req)))
+            return
+        if kind == "stream_recv":
+            conn.send(asyncio.run(_handle_stream_recv(req)))
+            return
+        if kind == "stream_send":
+            conn.send(asyncio.run(_handle_stream_send(req)))
+            return
+        if kind == "stream_close":
+            conn.send(asyncio.run(_handle_stream_close(req)))
+            return
+        conn.send({"status": "error", "message": "unsupported_kind"})
+    except Exception as exc:
+        try:
+            conn.send({"status": "error", "message": f"worker_exception:{exc}"})
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _serve_loop(*, family: str, address: str, authkey: bytes) -> int:
     listener = None
     unix_path = Path(address) if family == "AF_UNIX" else None
+    stop_event = threading.Event()
+    workers: list[threading.Thread] = []
     if unix_path is not None:
         try:
             if unix_path.exists():
@@ -277,47 +444,32 @@ def _serve_loop(*, family: str, address: str, authkey: bytes) -> int:
             pass
     try:
         listener = Listener(address=address, family=family, authkey=authkey)
-        while True:
-            conn = listener.accept()
+        try:
+            raw_sock = getattr(getattr(listener, "_listener", None), "_socket", None)
+            if raw_sock is not None:
+                raw_sock.settimeout(0.5)
+        except Exception:
+            pass
+        while not stop_event.is_set():
             try:
-                req = conn.recv()
-                if not isinstance(req, dict):
-                    conn.send({"status": "error", "message": "invalid_request"})
-                    continue
-                kind = str(req.get("kind") or "").strip().lower()
-                if kind == "shutdown":
-                    conn.send({"status": "ok"})
+                conn = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                if stop_event.is_set():
                     break
-                if kind == "http_request":
-                    out = asyncio.run(_handle_http_request(req))
-                    conn.send(out)
-                    continue
-                if kind == "stream_open":
-                    conn.send(asyncio.run(_handle_stream_open(req)))
-                    continue
-                if kind == "stream_recv":
-                    conn.send(asyncio.run(_handle_stream_recv(req)))
-                    continue
-                if kind == "stream_send":
-                    conn.send(asyncio.run(_handle_stream_send(req)))
-                    continue
-                if kind == "stream_close":
-                    conn.send(asyncio.run(_handle_stream_close(req)))
-                    continue
-                conn.send({"status": "error", "message": "unsupported_kind"})
-            except Exception as exc:
-                conn.send({"status": "error", "message": f"worker_exception:{exc}"})
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                raise
+            t = threading.Thread(target=_handle_conn, args=(conn, stop_event), daemon=True)
+            t.start()
+            workers.append(t)
     finally:
         if listener is not None:
             try:
                 listener.close()
             except Exception:
                 pass
+        for t in workers[-256:]:
+            t.join(timeout=0.5)
         if unix_path is not None:
             try:
                 if unix_path.exists():

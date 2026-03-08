@@ -17,14 +17,8 @@ import sys
 import time
 import hmac
 import base64
-import socket
-import ssl
-import struct
 import tempfile
 from multiprocessing.connection import Client as MPClient
-import urllib.error
-import urllib.parse
-import urllib.request
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,8 +42,6 @@ class EngineHostService:
     """File-backed engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
-    _ws_lock = threading.Lock()
-    _ws_sessions: Optional[Dict[str, Dict[str, Any]]] = None
 
     def __init__(
         self,
@@ -97,13 +89,6 @@ class EngineHostService:
                     "challenge_recent_events": [],
                 },
             }
-
-    @classmethod
-    def _ensure_ws_initialized(cls) -> None:
-        with cls._ws_lock:
-            if isinstance(cls._ws_sessions, dict):
-                return
-            cls._ws_sessions = {}
 
     @classmethod
     def _metrics_proxy_start(cls, engine_id: str, request_bytes: int) -> None:
@@ -279,6 +264,7 @@ class EngineHostService:
             "claim_acl_v2": True,
             "structured_denials_v1": True,
             "force_override_confirmation_v1": True,
+            "ipc_rpc_v1": True,
         }
 
     @staticmethod
@@ -344,11 +330,6 @@ class EngineHostService:
                         "audit_event_limit": 200,
                     },
                     "engine_traffic_policies": {},
-                    "websocket_session_policy": {
-                        "max_sessions": 128,
-                        "idle_timeout_seconds": 300,
-                        "max_lifetime_seconds": 3600,
-                    },
                     "traffic_policy": {
                         "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
                         "allowed_path_prefixes": ["/"],
@@ -396,7 +377,6 @@ class EngineHostService:
                 "config_store_mode": "store_only",
                 "claim_acl_policy": {},
                 "engine_traffic_policies": {},
-                "websocket_session_policy": {},
                 "traffic_policy": {},
             },
         )
@@ -417,7 +397,6 @@ class EngineHostService:
             "audit_event_limit": max(20, min(int(raw_claim_acl.get("audit_event_limit") or 200), 2000)),
         }
         cfg.setdefault("engine_traffic_policies", {})
-        cfg.setdefault("websocket_session_policy", {})
         raw_policy = dict(cfg.get("traffic_policy") or {})
         raw_policy.setdefault("allowed_methods", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
         raw_policy.setdefault("allowed_path_prefixes", ["/"])
@@ -441,8 +420,6 @@ class EngineHostService:
                 continue
             normalized_engine_policies[eid] = self._normalize_traffic_policy(dict(policy or {}))
         cfg["engine_traffic_policies"] = normalized_engine_policies
-        raw_ws = dict(cfg.get("websocket_session_policy") or {})
-        cfg["websocket_session_policy"] = self._normalize_websocket_session_policy(raw_ws)
         auth = dict(cfg.get("auth") or {})
         auth.setdefault("keys", {})
         auth.setdefault("sessions", {})
@@ -658,23 +635,6 @@ class EngineHostService:
         merged = dict(base)
         merged.update(override)
         return self._normalize_traffic_policy(merged)
-
-    @staticmethod
-    def _normalize_websocket_session_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        p = dict(policy or {})
-        max_sessions = max(1, min(int(p.get("max_sessions") or 128), 4096))
-        idle_timeout = max(5, min(int(p.get("idle_timeout_seconds") or 300), 24 * 3600))
-        max_lifetime = max(30, min(int(p.get("max_lifetime_seconds") or 3600), 7 * 24 * 3600))
-        return {
-            "max_sessions": max_sessions,
-            "idle_timeout_seconds": idle_timeout,
-            "max_lifetime_seconds": max_lifetime,
-        }
-
-    def _websocket_session_policy(self) -> Dict[str, Any]:
-        control = self._read_control()
-        cfg = dict(control.get("control_config") or {})
-        return self._normalize_websocket_session_policy(dict(cfg.get("websocket_session_policy") or {}))
 
     def _normalize_config_selector(self, config_path: str) -> str:
         raw = str(config_path or "").strip()
@@ -1588,10 +1548,11 @@ class EngineHostService:
                 raise
             return
         if c in {
-            "proxy-ws-open",
-            "proxy-ws-send",
-            "proxy-ws-recv",
-            "proxy-ws-close",
+            "proxy-rpc-call",
+            "proxy-rpc-open",
+            "proxy-rpc-send",
+            "proxy-rpc-recv",
+            "proxy-rpc-close",
             "proxy-stream-open",
             "proxy-stream-send",
             "proxy-stream-recv",
@@ -1599,11 +1560,17 @@ class EngineHostService:
         }:
             p = dict(payload or {})
             requested_engine = str(p.get("engine_id") or "").strip()
-            if c in {"proxy-ws-send", "proxy-ws-recv", "proxy-ws-close"} and not requested_engine:
-                ws_id = str(p.get("ws_id") or "").strip()
-                sess = self._ws_session_get(ws_id) if ws_id else None
-                requested_engine = str((sess or {}).get("engine_id") or "").strip()
-            if c in {"proxy-stream-open", "proxy-stream-send", "proxy-stream-recv", "proxy-stream-close"} and not requested_engine:
+            if c in {
+                "proxy-rpc-call",
+                "proxy-rpc-open",
+                "proxy-rpc-send",
+                "proxy-rpc-recv",
+                "proxy-rpc-close",
+                "proxy-stream-open",
+                "proxy-stream-send",
+                "proxy-stream-recv",
+                "proxy-stream-close",
+            } and not requested_engine:
                 self._metrics_auth_denied("engine_id_required")
                 raise PermissionError("engine_id_required")
             try:
@@ -1665,6 +1632,11 @@ class EngineHostService:
             "inspect-capabilities",
             "issue-token",
             "issue-resource-token",
+            "proxy-rpc-call",
+            "proxy-rpc-open",
+            "proxy-rpc-send",
+            "proxy-rpc-recv",
+            "proxy-rpc-close",
             "proxy-stream-open",
             "proxy-stream-send",
             "proxy-stream-recv",
@@ -1890,19 +1862,6 @@ class EngineHostService:
         return python or sys.executable
 
     @staticmethod
-    def _allocate_loopback_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
-
-    @staticmethod
-    def _worker_transport_mode() -> str:
-        raw = str(os.environ.get("MP13_HOST_WORKER_TRANSPORT") or "").strip().lower()
-        if raw in {"legacy_http", "http", "http_ws"}:
-            return "legacy_http"
-        return "ipc"
-
-    @staticmethod
     def _allocate_ipc_address(engine_id: str) -> Tuple[str, str]:
         safe_engine = re.sub(r"[^A-Za-z0-9_-]+", "_", str(engine_id or "engine")).strip("_") or "engine"
         nonce = secrets.token_hex(6)
@@ -2013,27 +1972,20 @@ class EngineHostService:
                 ),
                 "error_kind": "engine_not_available",
             }
-        transport = self._worker_transport_mode()
+        transport = "ipc"
         worker_auth_token = secrets.token_urlsafe(24)
         worker_auth_header = "X-MP13-Host-Token"
-        if transport == "legacy_http":
-            port = self._allocate_loopback_port()
-            endpoint = f"http://127.0.0.1:{port}"
-            command = [python, "-m", "mp13_engine", "--port", str(port)]
-            ipc_family = None
-            ipc_address = None
-        else:
-            ipc_family, ipc_address = self._allocate_ipc_address(engine_id)
-            endpoint = "ipc://local"
-            command = [
-                python,
-                "-m",
-                "hosting.engine_worker_ipc",
-                "--ipc-family",
-                str(ipc_family),
-                "--ipc-address",
-                str(ipc_address),
-            ]
+        ipc_family, ipc_address = self._allocate_ipc_address(engine_id)
+        endpoint = "ipc://local"
+        command = [
+            python,
+            "-m",
+            "hosting.engine_worker_ipc",
+            "--ipc-family",
+            str(ipc_family),
+            "--ipc-address",
+            str(ipc_address),
+        ]
         return {
             "command": command,
             "cwd": None,
@@ -2096,11 +2048,9 @@ class EngineHostService:
                 engine_id=eid,
                 command=list(spawn_spec.get("command") or []),
                 cwd=spawn_spec.get("cwd"),
-                endpoint=spawn_spec.get("endpoint"),
                 env=dict(spawn_spec.get("env") or {}),
                 worker_auth_token=str(spawn_spec.get("worker_auth_token") or "").strip() or None,
                 worker_auth_header=str(spawn_spec.get("worker_auth_header") or "").strip() or None,
-                worker_transport=str(spawn_spec.get("worker_transport") or "").strip() or None,
                 worker_ipc_family=str(spawn_spec.get("worker_ipc_family") or "").strip() or None,
                 worker_ipc_address=str(spawn_spec.get("worker_ipc_address") or "").strip() or None,
             )
@@ -2139,9 +2089,6 @@ class EngineHostService:
                 for k, v in engine_policies.items()
             },
             "engine_traffic_policies_count": len(engine_policies),
-            "websocket_session_policy": self._normalize_websocket_session_policy(
-                dict(cfg.get("websocket_session_policy") or {})
-            ),
             "keys_count": len(dict(auth.get("keys") or {})),
             "sessions_count": len(dict(auth.get("sessions") or {})),
         }
@@ -2153,7 +2100,6 @@ class EngineHostService:
         require_auth: Optional[bool] = None,
         traffic_policy: Optional[Dict[str, Any]] = None,
         engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
-        websocket_session_policy: Optional[Dict[str, Any]] = None,
         claim_acl_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         control = self._read_control()
@@ -2165,7 +2111,6 @@ class EngineHostService:
         cfg.setdefault("config_store_mode", "store_only")
         cfg.setdefault("auth", {"keys": {}, "sessions": {}})
         cfg.setdefault("engine_traffic_policies", {})
-        cfg.setdefault("websocket_session_policy", {})
         cfg.setdefault("claim_acl_policy", {"owner_ttl_seconds": 120, "audit_event_limit": 200})
         cfg["traffic_policy"] = self._normalize_traffic_policy(
             dict(cfg.get("traffic_policy") or {}) | dict(traffic_policy or {})
@@ -2179,10 +2124,6 @@ class EngineHostService:
                     continue
                 normalized[eid] = self._normalize_traffic_policy(dict(policy or {}))
             cfg["engine_traffic_policies"] = normalized
-        if websocket_session_policy is not None:
-            cfg["websocket_session_policy"] = self._normalize_websocket_session_policy(
-                dict(websocket_session_policy or {})
-            )
         if claim_acl_policy is not None:
             raw_claim_acl = dict(cfg.get("claim_acl_policy") or {}) | dict(claim_acl_policy or {})
             cfg["claim_acl_policy"] = {
@@ -2206,70 +2147,35 @@ class EngineHostService:
                 for k, v in engine_policies.items()
             },
             "engine_traffic_policies_count": len(engine_policies),
-            "websocket_session_policy": self._normalize_websocket_session_policy(
-                dict(cfg.get("websocket_session_policy") or {})
-            ),
             "keys_count": len(dict(auth.get("keys") or {})),
             "sessions_count": len(dict(auth.get("sessions") or {})),
         }
 
-    @staticmethod
-    def _probe_url(endpoint: str, path: str) -> str:
-        raw = str(endpoint or "").strip()
-        if not raw:
-            return ""
-        parsed = urllib.parse.urlsplit(raw if "://" in raw else f"http://{raw}")
-        p = str(parsed.path or "").strip()
-        if not p or p == "/":
-            p = path
-        elif p.endswith("/"):
-            p = f"{p}{path.lstrip('/')}"
-        return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, p, "", ""))
-
     def inspect_engine_capabilities(self, engine_id: str, endpoint: str) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
-        ep = str(endpoint or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
-        if not ep:
-            raise ValueError("endpoint is required")
-        checks = {
-            "health": self._probe_url(ep, "/health"),
-            "capabilities": self._probe_url(ep, "/capabilities"),
-            "inference": self._probe_url(ep, "/inference"),
-            "ws": self._probe_url(ep, "/ws"),
+        reg = self._find_registration(eid) or {}
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError("ipc transport is required")
+        out = self._ipc_call(reg=reg, payload={"kind": "hello", "engine_id": eid}, timeout_seconds=5.0)
+        if str(out.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(out.get("message") or "inspect_failed"))
+        return {
+            "engine_id": eid,
+            "endpoint": str(reg.get("endpoint") or "ipc://local"),
+            "checked_at": time.time(),
+            "supported": {
+                "health": True,
+                "capabilities": True,
+                "inference": True,
+                "ws": False,
+                "rpc": True,
+                "async_rpc": bool(out.get("async_rpc", True)),
+                "cancellation": bool(out.get("cancellation", True)),
+            },
+            "worker": dict(out or {}),
         }
-        supported: Dict[str, bool] = {}
-        details: Dict[str, Any] = {"engine_id": eid, "endpoint": ep, "checked_at": time.time(), "checks": {}}
-        for key, url in checks.items():
-            ok = False
-            code = None
-            err = None
-            if key == "ws":
-                # ws endpoint probe is heuristic: if URL exists in endpoint contract we expose it as available.
-                ok = bool(url)
-            else:
-                req = urllib.request.Request(url, method="GET")
-                try:
-                    with urllib.request.urlopen(req, timeout=2.5) as resp:  # noqa: S310
-                        code = int(getattr(resp, "status", 200) or 200)
-                        ok = 200 <= code < 500
-                except urllib.error.HTTPError as e:
-                    code = int(e.code)
-                    ok = code in {401, 403, 405}
-                    err = f"http_{e.code}"
-                except Exception as e:
-                    err = str(e)
-            supported[key] = bool(ok)
-            details["checks"][key] = {"ok": bool(ok), "url": url, "status_code": code, "error": err}
-        details["supported"] = supported
-        details["engine_api"] = {
-            "health": bool(supported.get("health")),
-            "capabilities": bool(supported.get("capabilities")),
-            "inference": bool(supported.get("inference")),
-            "ws": bool(supported.get("ws")),
-        }
-        return details
 
     def _find_registration(self, engine_id: str) -> Optional[Dict[str, Any]]:
         eid = str(engine_id or "").strip()
@@ -2309,10 +2215,9 @@ class EngineHostService:
         pid: int,
         command: List[str],
         cwd: Optional[str] = None,
-        endpoint: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
         worker_auth_token: Optional[str] = None,
         worker_auth_header: Optional[str] = None,
-        worker_transport: Optional[str] = None,
         worker_ipc_family: Optional[str] = None,
         worker_ipc_address: Optional[str] = None,
         source: str = "engine_host_spawned",
@@ -2325,13 +2230,14 @@ class EngineHostService:
             "pid": int(pid or 0),
             "command": [str(x) for x in (command or [])],
             "cwd": str(cwd) if cwd else None,
+            "env": {str(k): str(v) for k, v in dict(env or {}).items()},
             "spawned_at": time.time(),
             "owner_host_pid": os.getpid(),
             "source": str(source or "engine_host_spawned"),
-            "endpoint": str(endpoint).strip() if endpoint else None,
+            "endpoint": "ipc://local",
             "worker_auth_token": str(worker_auth_token or "").strip() or None,
             "worker_auth_header": str(worker_auth_header or "").strip() or None,
-            "worker_transport": str(worker_transport or "").strip() or None,
+            "worker_transport": "ipc",
             "worker_ipc_family": str(worker_ipc_family or "").strip() or None,
             "worker_ipc_address": str(worker_ipc_address or "").strip() or None,
             "log_path": str(self._engine_log_path(eid)),
@@ -2348,38 +2254,63 @@ class EngineHostService:
         command: List[str],
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
-        endpoint: Optional[str] = None,
         worker_auth_token: Optional[str] = None,
         worker_auth_header: Optional[str] = None,
-        worker_transport: Optional[str] = None,
         worker_ipc_family: Optional[str] = None,
         worker_ipc_address: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not list(command or []):
             raise ValueError("command is required")
+        eid = str(engine_id or "").strip()
+        if not eid:
+            raise ValueError("engine_id is required")
+        allocated_family, allocated_address = self._allocate_ipc_address(eid)
+        ipc_family = str(worker_ipc_family or "").strip() or allocated_family
+        ipc_address = str(worker_ipc_address or "").strip() or allocated_address
+        auth_token = str(worker_auth_token or "").strip() or secrets.token_urlsafe(24)
+        auth_header = str(worker_auth_header or "").strip() or "X-MP13-Host-Token"
+        base_cmd = [str(x) for x in list(command or []) if str(x).strip()]
+        if "--ipc-family" not in base_cmd:
+            base_cmd.extend(["--ipc-family", ipc_family])
+        if "--ipc-address" not in base_cmd:
+            base_cmd.extend(["--ipc-address", ipc_address])
+        merged_env = dict(os.environ) | {str(k): str(v) for k, v in dict(env or {}).items()}
+        merged_env["MP13_ENGINE_HOST_TOKEN"] = auth_token
+        merged_env["MP13_ENGINE_HOST_TOKEN_HEADER"] = auth_header
+        merged_env["MP13_ENGINE_TRANSPORT"] = "ipc"
+        merged_env["MP13_WORKER_IPC_FAMILY"] = ipc_family
+        merged_env["MP13_WORKER_IPC_ADDRESS"] = ipc_address
         log_path = self._engine_log_path(str(engine_id or ""))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_fp = open(log_path, "ab")
         proc = subprocess.Popen(  # noqa: S603,S607
-            [str(x) for x in command],
+            base_cmd,
             cwd=str(cwd) if cwd else None,
-            env=(dict(os.environ) | {str(k): str(v) for k, v in dict(env or {}).items()}),
+            env=merged_env,
             stdin=subprocess.DEVNULL,
             stdout=log_fp,
             stderr=subprocess.STDOUT,
         )
         log_fp.close()
+        persisted_env = {str(k): str(v) for k, v in dict(env or {}).items()}
+        for key in [
+            "MP13_ENGINE_HOST_TOKEN",
+            "MP13_ENGINE_HOST_TOKEN_HEADER",
+            "MP13_ENGINE_TRANSPORT",
+            "MP13_WORKER_IPC_FAMILY",
+            "MP13_WORKER_IPC_ADDRESS",
+        ]:
+            persisted_env[key] = str(merged_env.get(key) or "")
         return self.register_spawned(
-            engine_id=engine_id,
+            engine_id=eid,
             pid=int(proc.pid),
-            command=[str(x) for x in command],
+            command=base_cmd,
             cwd=cwd,
-            endpoint=endpoint,
-            worker_auth_token=worker_auth_token,
-            worker_auth_header=worker_auth_header,
-            worker_transport=worker_transport,
-            worker_ipc_family=worker_ipc_family,
-            worker_ipc_address=worker_ipc_address,
+            env=persisted_env,
+            worker_auth_token=auth_token,
+            worker_auth_header=auth_header,
+            worker_ipc_family=ipc_family,
+            worker_ipc_address=ipc_address,
         )
 
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:
@@ -2431,9 +2362,9 @@ class EngineHostService:
         command = [str(x) for x in list(entry.get("command") or []) if str(x).strip()]
         cwd = entry.get("cwd")
         endpoint = entry.get("endpoint")
+        env = {str(k): str(v) for k, v in dict(entry.get("env") or {}).items()}
         worker_auth_token = str(entry.get("worker_auth_token") or "").strip() or None
         worker_auth_header = str(entry.get("worker_auth_header") or "").strip() or None
-        worker_transport = str(entry.get("worker_transport") or "").strip() or None
         worker_ipc_family = str(entry.get("worker_ipc_family") or "").strip() or None
         worker_ipc_address = str(entry.get("worker_ipc_address") or "").strip() or None
         if pid > 0 and self._pid_alive(pid):
@@ -2453,7 +2384,7 @@ class EngineHostService:
         proc = subprocess.Popen(  # noqa: S603,S607
             command,
             cwd=str(cwd) if cwd else None,
-            env=dict(os.environ),
+            env=(dict(os.environ) | env),
             stdin=subprocess.DEVNULL,
             stdout=log_fp,
             stderr=subprocess.STDOUT,
@@ -2464,10 +2395,9 @@ class EngineHostService:
             pid=int(proc.pid),
             command=command,
             cwd=str(cwd) if cwd else None,
-            endpoint=str(endpoint) if endpoint else None,
+            env=env,
             worker_auth_token=worker_auth_token,
             worker_auth_header=worker_auth_header,
-            worker_transport=worker_transport,
             worker_ipc_family=worker_ipc_family,
             worker_ipc_address=worker_ipc_address,
         )
@@ -2545,203 +2475,6 @@ class EngineHostService:
             "alive": bool(reg.get("pid")) and self._pid_alive(int(reg.get("pid") or 0)),
         }
 
-    @staticmethod
-    def _join_endpoint_path(endpoint: str, req_path: str, query: str = "") -> str:
-        raw_endpoint = str(endpoint or "").strip()
-        if not raw_endpoint:
-            return ""
-        parsed = urllib.parse.urlsplit(raw_endpoint if "://" in raw_endpoint else f"http://{raw_endpoint}")
-        incoming = str(req_path or "").strip() or "/"
-        if not incoming.startswith("/"):
-            incoming = f"/{incoming}"
-        path = incoming
-        if str(query or "").strip():
-            q = str(query or "").lstrip("?")
-            return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, path, q, ""))
-        return urllib.parse.urlunsplit((parsed.scheme or "http", parsed.netloc, path, "", ""))
-
-    @staticmethod
-    def _to_ws_url(endpoint: str, req_path: str, query: str = "") -> str:
-        base = EngineHostService._join_endpoint_path(endpoint, req_path, query=query)
-        if not base:
-            return ""
-        parsed = urllib.parse.urlsplit(base)
-        scheme = str(parsed.scheme or "http").lower()
-        if scheme in {"ws", "wss"}:
-            ws_scheme = scheme
-        else:
-            ws_scheme = "wss" if scheme == "https" else "ws"
-        return urllib.parse.urlunsplit((ws_scheme, parsed.netloc, parsed.path, parsed.query, ""))
-
-    @staticmethod
-    def _read_until(sock: socket.socket, marker: bytes, *, max_bytes: int = 65536, timeout_seconds: float = 10.0) -> bytes:
-        buf = bytearray()
-        sock.settimeout(max(0.2, float(timeout_seconds or 10.0)))
-        while marker not in buf and len(buf) < max_bytes:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buf.extend(chunk)
-        return bytes(buf)
-
-    @staticmethod
-    def _read_exact(sock: socket.socket, n: int, *, timeout_seconds: float = 10.0) -> bytes:
-        out = bytearray()
-        sock.settimeout(max(0.2, float(timeout_seconds or 10.0)))
-        while len(out) < n:
-            chunk = sock.recv(n - len(out))
-            if not chunk:
-                raise ConnectionError("socket_closed")
-            out.extend(chunk)
-        return bytes(out)
-
-    @staticmethod
-    def _ws_frame_encode(opcode: int, payload: bytes, *, masked: bool = True, fin: bool = True) -> bytes:
-        first = (0x80 if fin else 0x00) | (int(opcode) & 0x0F)
-        plen = len(payload)
-        mask_bit = 0x80 if masked else 0x00
-        if plen < 126:
-            head = bytes([first, mask_bit | plen])
-        elif plen <= 0xFFFF:
-            head = bytes([first, mask_bit | 126]) + struct.pack("!H", plen)
-        else:
-            head = bytes([first, mask_bit | 127]) + struct.pack("!Q", plen)
-        if not masked:
-            return head + payload
-        mask_key = os.urandom(4)
-        masked_payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-        return head + mask_key + masked_payload
-
-    @staticmethod
-    def _ws_frame_read(sock: socket.socket, *, max_bytes: int = 1024 * 1024, timeout_seconds: float = 30.0) -> Dict[str, Any]:
-        head = EngineHostService._read_exact(sock, 2, timeout_seconds=timeout_seconds)
-        b1, b2 = head[0], head[1]
-        fin = bool(b1 & 0x80)
-        opcode = int(b1 & 0x0F)
-        masked = bool(b2 & 0x80)
-        plen = int(b2 & 0x7F)
-        if plen == 126:
-            plen = int(struct.unpack("!H", EngineHostService._read_exact(sock, 2, timeout_seconds=timeout_seconds))[0])
-        elif plen == 127:
-            plen = int(struct.unpack("!Q", EngineHostService._read_exact(sock, 8, timeout_seconds=timeout_seconds))[0])
-        if plen > int(max_bytes or (1024 * 1024)):
-            raise ValueError("websocket_frame_too_large")
-        mask_key = EngineHostService._read_exact(sock, 4, timeout_seconds=timeout_seconds) if masked else b""
-        payload = EngineHostService._read_exact(sock, plen, timeout_seconds=timeout_seconds) if plen > 0 else b""
-        if masked and mask_key:
-            payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-        return {"fin": fin, "opcode": opcode, "payload": payload}
-
-    @classmethod
-    def _ws_session_get(cls, ws_id: str) -> Optional[Dict[str, Any]]:
-        cls._ensure_ws_initialized()
-        with cls._ws_lock:
-            assert isinstance(cls._ws_sessions, dict)
-            sess = cls._ws_sessions.get(str(ws_id or "").strip())
-            return dict(sess or {}) if isinstance(sess, dict) else None
-
-    @classmethod
-    def _ws_session_set(cls, ws_id: str, sess: Dict[str, Any]) -> None:
-        cls._ensure_ws_initialized()
-        with cls._ws_lock:
-            assert isinstance(cls._ws_sessions, dict)
-            cls._ws_sessions[str(ws_id)] = dict(sess or {})
-
-    @classmethod
-    def _ws_session_pop(cls, ws_id: str) -> Optional[Dict[str, Any]]:
-        cls._ensure_ws_initialized()
-        with cls._ws_lock:
-            assert isinstance(cls._ws_sessions, dict)
-            sess = cls._ws_sessions.pop(str(ws_id or "").strip(), None)
-            return dict(sess or {}) if isinstance(sess, dict) else None
-
-    @classmethod
-    def _ws_cleanup(cls, *, policy: Dict[str, Any], now: Optional[float] = None) -> Dict[str, int]:
-        cls._ensure_ws_initialized()
-        ts_now = float(now if now is not None else time.time())
-        idle_limit = int(policy.get("idle_timeout_seconds") or 300)
-        life_limit = int(policy.get("max_lifetime_seconds") or 3600)
-        max_sessions = int(policy.get("max_sessions") or 128)
-        to_close: List[socket.socket] = []
-        removed_idle = 0
-        removed_lifetime = 0
-        removed_cap = 0
-        with cls._ws_lock:
-            assert isinstance(cls._ws_sessions, dict)
-            sessions = cls._ws_sessions
-            for sid, sess in list(sessions.items()):
-                s = dict(sess or {})
-                created_at = float(s.get("created_at") or ts_now)
-                last_io = float(s.get("last_io_at") or created_at)
-                remove_reason = ""
-                if ts_now - created_at > life_limit:
-                    remove_reason = "lifetime"
-                elif ts_now - last_io > idle_limit:
-                    remove_reason = "idle"
-                if remove_reason:
-                    popped = sessions.pop(sid, None)
-                    sock = (popped or {}).get("socket") if isinstance(popped, dict) else None
-                    if isinstance(sock, socket.socket):
-                        to_close.append(sock)
-                    if remove_reason == "idle":
-                        removed_idle += 1
-                    else:
-                        removed_lifetime += 1
-            if len(sessions) > max_sessions:
-                ordered = sorted(
-                    sessions.items(),
-                    key=lambda item: float(((item[1] or {}).get("last_io_at") or 0.0)),
-                )
-                overflow = len(sessions) - max_sessions
-                for sid, _ in ordered[:overflow]:
-                    popped = sessions.pop(sid, None)
-                    sock = (popped or {}).get("socket") if isinstance(popped, dict) else None
-                    if isinstance(sock, socket.socket):
-                        to_close.append(sock)
-                    removed_cap += 1
-        for sock in to_close:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return {
-            "removed_idle": removed_idle,
-            "removed_lifetime": removed_lifetime,
-            "removed_cap": removed_cap,
-        }
-
-    @classmethod
-    def _ws_count(cls) -> int:
-        cls._ensure_ws_initialized()
-        with cls._ws_lock:
-            assert isinstance(cls._ws_sessions, dict)
-            return len(cls._ws_sessions)
-
-    @classmethod
-    def _ws_evict_oldest(cls, *, count: int = 1) -> int:
-        cls._ensure_ws_initialized()
-        to_close: List[socket.socket] = []
-        evicted = 0
-        with cls._ws_lock:
-            assert isinstance(cls._ws_sessions, dict)
-            sessions = cls._ws_sessions
-            ordered = sorted(
-                sessions.items(),
-                key=lambda item: float(((item[1] or {}).get("last_io_at") or 0.0)),
-            )
-            for sid, _ in ordered[: max(0, int(count or 0))]:
-                popped = sessions.pop(sid, None)
-                sock = (popped or {}).get("socket") if isinstance(popped, dict) else None
-                if isinstance(sock, socket.socket):
-                    to_close.append(sock)
-                evicted += 1
-        for sock in to_close:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return evicted
-
     def proxy_request(
         self,
         *,
@@ -2775,17 +2508,16 @@ class EngineHostService:
             )
             raise ValueError("engine endpoint is not registered")
         transport = str(reg.get("worker_transport") or "").strip().lower()
-        url = self._join_endpoint_path(endpoint, path, query=query)
-        if transport != "ipc" and not url:
+        if transport != "ipc":
             self._metrics_proxy_finish(
                 eid,
                 failed=True,
-                error_message="failed to build proxy url",
+                error_message="ipc transport is required",
                 method=m,
                 path=req_path,
                 started_at=req_started_at,
             )
-            raise ValueError("failed to build proxy url")
+            raise ValueError("ipc transport is required")
         traffic_policy = self._traffic_policy_for_engine(eid)
         if not re.fullmatch(r"[A-Z]+", m):
             self._metrics_proxy_finish(
@@ -2864,7 +2596,7 @@ class EngineHostService:
         if worker_auth_header and worker_auth_token:
             # Host-controlled channel proof. Client headers cannot override this.
             req_headers[worker_auth_header] = worker_auth_token
-        if transport == "ipc":
+        try:
             out = self._proxy_request_via_ipc(
                 reg=reg,
                 engine_id=eid,
@@ -2899,86 +2631,6 @@ class EngineHostService:
                 request_bytes=len(body_raw),
             )
             return out
-        req = urllib.request.Request(url, data=body_raw if body_raw else None, method=m, headers=req_headers)
-        policy_lim = max(1024, int(traffic_policy.get("max_response_bytes") or (1024 * 1024)))
-        lim = min(max(1024, int(max_response_bytes or policy_lim)), policy_lim)
-        timeout = max(1.0, float(timeout_seconds or 30.0))
-        resp_allow = set(str(x).lower() for x in list(traffic_policy.get("response_header_allowlist") or []))
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-                status = int(getattr(resp, "status", 200) or 200)
-                response_headers: Dict[str, str] = {}
-                for k, v in dict(getattr(resp, "headers", {}) or {}).items():
-                    key = str(k or "").strip()
-                    if not key:
-                        continue
-                    if resp_allow and key.lower() not in resp_allow:
-                        continue
-                    response_headers[key] = str(v)
-                raw = resp.read(lim + 1)
-                truncated = len(raw) > lim
-                if truncated:
-                    raw = raw[:lim]
-                out_b64 = base64.b64encode(raw).decode("ascii")
-                self._metrics_proxy_finish(
-                    eid,
-                    status_code=status,
-                    response_bytes=len(raw),
-                    http_error=False,
-                    failed=False,
-                    method=m,
-                    path=req_path,
-                    started_at=req_started_at,
-                    truncated=bool(truncated),
-                    request_bytes=len(body_raw),
-                )
-                return {
-                    "engine_id": eid,
-                    "endpoint": endpoint,
-                    "url": url,
-                    "status_code": status,
-                    "headers": response_headers,
-                    "body_b64": out_b64,
-                    "body_size": len(raw),
-                    "truncated": bool(truncated),
-                }
-        except urllib.error.HTTPError as exc:
-            raw = exc.read(lim + 1)
-            truncated = len(raw) > lim
-            if truncated:
-                raw = raw[:lim]
-            out_b64 = base64.b64encode(raw).decode("ascii")
-            response_headers: Dict[str, str] = {}
-            for k, v in dict(exc.headers or {}).items():
-                key = str(k or "").strip()
-                if not key:
-                    continue
-                if resp_allow and key.lower() not in resp_allow:
-                    continue
-                response_headers[key] = str(v)
-            self._metrics_proxy_finish(
-                eid,
-                status_code=int(exc.code),
-                response_bytes=len(raw),
-                http_error=True,
-                method=m,
-                path=req_path,
-                started_at=req_started_at,
-                truncated=bool(truncated),
-                error_message=f"http_{int(exc.code)}",
-                request_bytes=len(body_raw),
-            )
-            return {
-                "engine_id": eid,
-                "endpoint": endpoint,
-                "url": url,
-                "status_code": int(exc.code),
-                "headers": response_headers,
-                "body_b64": out_b64,
-                "body_size": len(raw),
-                "truncated": bool(truncated),
-                "http_error": True,
-            }
         except Exception as exc:
             self._metrics_proxy_finish(
                 eid,
@@ -3006,292 +2658,69 @@ class EngineHostService:
                     proxy["inflight_total"] = max(0, int(proxy.get("inflight_total") or 0) - 1)
                     self._runtime_metrics["proxy"] = proxy
 
-    def proxy_ws_open(
+    def proxy_rpc_call(
         self,
         *,
         engine_id: str,
-        path: str = "/",
-        query: str = "",
-        headers: Optional[Dict[str, str]] = None,
-        timeout_seconds: float = 30.0,
-    ) -> Dict[str, Any]:
-        ws_policy = self._websocket_session_policy()
-        _ = self._ws_cleanup(policy=ws_policy)
-        max_sessions = int(ws_policy.get("max_sessions") or 128)
-        active = self._ws_count()
-        if active >= max_sessions:
-            _ = self._ws_evict_oldest(count=(active - max_sessions + 1))
-        eid = str(engine_id or "").strip()
-        req_path = str(path or "/").strip() or "/"
-        if not req_path.startswith("/"):
-            req_path = f"/{req_path}"
-        if not eid:
-            raise ValueError("engine_id is required")
-        reg = self._find_registration(eid) or {}
-        endpoint = str(reg.get("endpoint") or "").strip()
-        if not endpoint:
-            raise ValueError("engine endpoint is not registered")
-        if str(reg.get("worker_transport") or "").strip().lower() == "ipc":
-            raise ValueError("ipc transport does not support websocket passthrough")
-        ws_url = self._to_ws_url(endpoint, req_path, query=query)
-        if not ws_url:
-            raise ValueError("failed to build websocket url")
-        traffic_policy = self._traffic_policy_for_engine(eid)
-        prefixes = [str(x) for x in list(traffic_policy.get("allowed_path_prefixes") or ["/"])]
-        if prefixes and not any(req_path.startswith(px if px else "/") for px in prefixes):
-            raise PermissionError(f"proxy_path_not_allowed:{req_path}")
-
-        parsed = urllib.parse.urlsplit(ws_url)
-        host = str(parsed.hostname or "").strip()
-        if not host:
-            raise ValueError("invalid websocket host")
-        port = int(parsed.port or (443 if parsed.scheme == "wss" else 80))
-        request_uri = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query or "", ""))
-
-        header_allow = set(str(x).lower() for x in list(traffic_policy.get("request_header_allowlist") or []))
-        allow_authz = bool(traffic_policy.get("allow_authorization_header", False))
-        req_headers: Dict[str, str] = {}
-        for k, v in dict(headers or {}).items():
-            key = str(k or "").strip()
-            if not key:
-                continue
-            low = key.lower()
-            if low == "authorization" and not allow_authz:
-                continue
-            if header_allow and low not in header_allow:
-                continue
-            req_headers[key] = str(v)
-        worker_auth_header = str(reg.get("worker_auth_header") or "").strip()
-        worker_auth_token = str(reg.get("worker_auth_token") or "").strip()
-        if worker_auth_header and worker_auth_token:
-            # Host-controlled channel proof. Client headers cannot override this.
-            req_headers[worker_auth_header] = worker_auth_token
-
-        ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
-        lines = [
-            f"GET {request_uri} HTTP/1.1",
-            f"Host: {host}:{port}" if parsed.port else f"Host: {host}",
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            f"Sec-WebSocket-Key: {ws_key}",
-            "Sec-WebSocket-Version: 13",
-        ]
-        if "Sec-WebSocket-Protocol" in req_headers:
-            lines.append(f"Sec-WebSocket-Protocol: {req_headers['Sec-WebSocket-Protocol']}")
-        if "Origin" in req_headers:
-            lines.append(f"Origin: {req_headers['Origin']}")
-        if "User-Agent" in req_headers:
-            lines.append(f"User-Agent: {req_headers['User-Agent']}")
-        if "Authorization" in req_headers:
-            lines.append(f"Authorization: {req_headers['Authorization']}")
-        raw_req = ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
-
-        sock: Optional[socket.socket] = None
-        try:
-            sock = socket.create_connection((host, port), timeout=max(1.0, float(timeout_seconds or 30.0)))
-            if parsed.scheme == "wss":
-                ctx = ssl.create_default_context()
-                sock = ctx.wrap_socket(sock, server_hostname=host)
-            sock.sendall(raw_req)
-            raw_resp = self._read_until(
-                sock,
-                b"\r\n\r\n",
-                max_bytes=65536,
-                timeout_seconds=max(1.0, float(timeout_seconds or 30.0)),
-            )
-            if b"\r\n\r\n" not in raw_resp:
-                raise RuntimeError("upstream_ws_handshake_failed")
-            head = raw_resp.split(b"\r\n\r\n", 1)[0].decode("latin-1", errors="replace")
-            lines_resp = head.split("\r\n")
-            status_line = lines_resp[0] if lines_resp else ""
-            if " 101 " not in f" {status_line} ":
-                raise RuntimeError(f"upstream_ws_handshake_failed:{status_line}")
-            headers_resp: Dict[str, str] = {}
-            for row in lines_resp[1:]:
-                if ":" not in row:
-                    continue
-                k, v = row.split(":", 1)
-                headers_resp[str(k).strip()] = str(v).strip()
-            accept = str(headers_resp.get("Sec-WebSocket-Accept") or "").strip()
-            expected = base64.b64encode(
-                hashlib.sha1((ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("utf-8")).digest()
-            ).decode("ascii")
-            if not accept or accept != expected:
-                raise RuntimeError("invalid_ws_handshake_accept")
-            ws_id = secrets.token_urlsafe(24)
-            self._ws_session_set(
-                ws_id,
-                {
-                    "engine_id": eid,
-                    "url": ws_url,
-                    "created_at": time.time(),
-                    "last_io_at": time.time(),
-                    "socket": sock,
-                    "closed": False,
-                },
-            )
-            return {
-                "status": "ok",
-                "ws_id": ws_id,
-                "engine_id": eid,
-                "url": ws_url,
-                "created_at": time.time(),
-                "subprotocol": str(headers_resp.get("Sec-WebSocket-Protocol") or "") or None,
-            }
-        except Exception:
-            if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-            raise
-
-    def proxy_ws_send(
-        self,
-        *,
-        ws_id: str,
-        text: Optional[str] = None,
-        data_b64: str = "",
-        timeout_seconds: float = 30.0,
-    ) -> Dict[str, Any]:
-        ws_policy = self._websocket_session_policy()
-        _ = self._ws_cleanup(policy=ws_policy)
-        sid = str(ws_id or "").strip()
-        if not sid:
-            raise ValueError("ws_id is required")
-        sess = self._ws_session_get(sid)
-        if not sess:
-            raise ValueError("ws_session_not_found")
-        sock = sess.get("socket")
-        if not isinstance(sock, socket.socket):
-            raise ValueError("ws_session_invalid_socket")
-        if text is not None and str(data_b64 or "").strip():
-            raise ValueError("provide either text or data_b64, not both")
-        if text is not None:
-            payload = str(text).encode("utf-8")
-            opcode = 0x1
-            kind = "text"
-        else:
-            payload = base64.b64decode(str(data_b64 or "") or "", validate=True) if str(data_b64 or "").strip() else b""
-            opcode = 0x2
-            kind = "binary"
-        frame = self._ws_frame_encode(opcode, payload, masked=True, fin=True)
-        sock.settimeout(max(0.2, float(timeout_seconds or 30.0)))
-        sock.sendall(frame)
-        sess["last_io_at"] = time.time()
-        self._ws_session_set(sid, sess)
-        return {"status": "ok", "ws_id": sid, "sent_kind": kind, "sent_bytes": len(payload)}
-
-    def proxy_ws_recv(
-        self,
-        *,
-        ws_id: str,
-        timeout_seconds: float = 30.0,
-        max_bytes: int = 1024 * 1024,
-    ) -> Dict[str, Any]:
-        ws_policy = self._websocket_session_policy()
-        _ = self._ws_cleanup(policy=ws_policy)
-        sid = str(ws_id or "").strip()
-        if not sid:
-            raise ValueError("ws_id is required")
-        sess = self._ws_session_get(sid)
-        if not sess:
-            raise ValueError("ws_session_not_found")
-        sock = sess.get("socket")
-        if not isinstance(sock, socket.socket):
-            raise ValueError("ws_session_invalid_socket")
-        try:
-            frame = self._ws_frame_read(
-                sock,
-                max_bytes=max(1, int(max_bytes or (1024 * 1024))),
-                timeout_seconds=max(0.2, float(timeout_seconds or 30.0)),
-            )
-        except socket.timeout:
-            return {"status": "timeout", "ws_id": sid}
-        opcode = int(frame.get("opcode") or 0)
-        payload = bytes(frame.get("payload") or b"")
-        sess["last_io_at"] = time.time()
-        self._ws_session_set(sid, sess)
-        if opcode == 0x1:
-            return {"status": "ok", "ws_id": sid, "event": "text", "text": payload.decode("utf-8", errors="replace")}
-        if opcode == 0x2:
-            return {"status": "ok", "ws_id": sid, "event": "binary", "data_b64": base64.b64encode(payload).decode("ascii"), "bytes": len(payload)}
-        if opcode == 0x8:
-            self.proxy_ws_close(ws_id=sid)
-            return {"status": "ok", "ws_id": sid, "event": "close"}
-        if opcode == 0x9:
-            pong = self._ws_frame_encode(0xA, payload, masked=True, fin=True)
-            sock.sendall(pong)
-            return {"status": "ok", "ws_id": sid, "event": "ping"}
-        if opcode == 0xA:
-            return {"status": "ok", "ws_id": sid, "event": "pong"}
-        return {"status": "ok", "ws_id": sid, "event": f"opcode_{opcode}"}
-
-    def proxy_ws_close(
-        self,
-        *,
-        ws_id: str,
-        code: int = 1000,
-        reason: str = "",
-    ) -> Dict[str, Any]:
-        ws_policy = self._websocket_session_policy()
-        _ = self._ws_cleanup(policy=ws_policy)
-        sid = str(ws_id or "").strip()
-        if not sid:
-            raise ValueError("ws_id is required")
-        sess = self._ws_session_pop(sid)
-        if not sess:
-            return {"status": "not_found", "ws_id": sid}
-        sock = sess.get("socket")
-        if isinstance(sock, socket.socket):
-            try:
-                payload = struct.pack("!H", int(code or 1000))
-                if str(reason or "").strip():
-                    payload += str(reason).encode("utf-8", errors="replace")[:123]
-                frame = self._ws_frame_encode(0x8, payload, masked=True, fin=True)
-                sock.sendall(frame)
-            except Exception:
-                pass
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return {"status": "closed", "ws_id": sid}
-
-    def proxy_stream_open(
-        self,
-        *,
-        engine_id: str,
-        tool: str = "run-inference",
-        arguments: Optional[Dict[str, Any]] = None,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
         timeout_seconds: float = 30.0,
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
+        meth = str(method or "").strip()
+        if not meth:
+            raise ValueError("method is required")
         reg = self._find_registration(eid) or {}
         if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-stream is only supported for ipc transport")
+            raise ValueError("proxy-rpc is only supported for ipc transport")
+        out = self._ipc_call(
+            reg=reg,
+            payload={"kind": "rpc_call", "engine_id": eid, "method": meth, "params": dict(params or {})},
+            timeout_seconds=timeout_seconds,
+        )
+        if str(out.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(out.get("message") or "rpc_call_failed"))
+        return dict(out or {})
+
+    def proxy_rpc_open(
+        self,
+        *,
+        engine_id: str,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        request_id: str,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            raise ValueError("engine_id is required")
+        meth = str(method or "").strip()
+        if not meth:
+            raise ValueError("method is required")
+        req_id = str(request_id or "").strip()
+        if not req_id:
+            raise ValueError("request_id is required")
+        reg = self._find_registration(eid) or {}
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError("proxy-rpc is only supported for ipc transport")
         out = self._ipc_call(
             reg=reg,
             payload={
                 "kind": "stream_open",
                 "engine_id": eid,
-                "tool": str(tool or "run-inference"),
-                "arguments": dict(arguments or {}),
+                "method": meth,
+                "params": dict(params or {}),
+                "request_id": req_id,
             },
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":
-            raise RuntimeError(str(out.get("message") or "stream_open_failed"))
-        return {
-            "status": "ok",
-            "engine_id": eid,
-            "stream_id": str(out.get("stream_id") or ""),
-            "worker_transport": "ipc",
-        }
+            raise RuntimeError(str(out.get("message") or "rpc_open_failed"))
+        return {"status": "ok", "engine_id": eid, "stream_id": str(out.get("stream_id") or ""), "request_id": req_id}
 
-    def proxy_stream_send(
+    def proxy_rpc_send(
         self,
         *,
         engine_id: str,
@@ -3307,17 +2736,17 @@ class EngineHostService:
             raise ValueError("stream_id is required")
         reg = self._find_registration(eid) or {}
         if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-stream is only supported for ipc transport")
+            raise ValueError("proxy-rpc is only supported for ipc transport")
         out = self._ipc_call(
             reg=reg,
             payload={"kind": "stream_send", "engine_id": eid, "stream_id": sid, "message": dict(message or {})},
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":
-            raise RuntimeError(str(out.get("message") or "stream_send_failed"))
+            raise RuntimeError(str(out.get("message") or "rpc_send_failed"))
         return dict(out or {})
 
-    def proxy_stream_recv(
+    def proxy_rpc_recv(
         self,
         *,
         engine_id: str,
@@ -3333,7 +2762,7 @@ class EngineHostService:
             raise ValueError("stream_id is required")
         reg = self._find_registration(eid) or {}
         if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-stream is only supported for ipc transport")
+            raise ValueError("proxy-rpc is only supported for ipc transport")
         out = self._ipc_call(
             reg=reg,
             payload={
@@ -3346,10 +2775,10 @@ class EngineHostService:
             timeout_seconds=max(1.0, float(timeout_seconds or 2.0) + 1.0),
         )
         if str(out.get("status") or "").strip().lower() == "error":
-            raise RuntimeError(str(out.get("message") or "stream_recv_failed"))
+            raise RuntimeError(str(out.get("message") or "rpc_recv_failed"))
         return dict(out or {})
 
-    def proxy_stream_close(
+    def proxy_rpc_close(
         self,
         *,
         engine_id: str,
@@ -3364,15 +2793,78 @@ class EngineHostService:
             raise ValueError("stream_id is required")
         reg = self._find_registration(eid) or {}
         if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-stream is only supported for ipc transport")
+            raise ValueError("proxy-rpc is only supported for ipc transport")
         out = self._ipc_call(
             reg=reg,
             payload={"kind": "stream_close", "engine_id": eid, "stream_id": sid},
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":
-            raise RuntimeError(str(out.get("message") or "stream_close_failed"))
+            raise RuntimeError(str(out.get("message") or "rpc_close_failed"))
         return dict(out or {})
+
+    def proxy_stream_open(
+        self,
+        *,
+        engine_id: str,
+        tool: str = "run-inference",
+        arguments: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        args = dict(arguments or {})
+        req_id = str(args.get("request_id") or "").strip() or secrets.token_hex(12)
+        out = self.proxy_rpc_open(
+            engine_id=str(engine_id or ""),
+            method=str(tool or "run-inference"),
+            params=args,
+            request_id=req_id,
+            timeout_seconds=timeout_seconds,
+        )
+        out["worker_transport"] = "ipc"
+        return out
+
+    def proxy_stream_send(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        message: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        return self.proxy_rpc_send(
+            engine_id=str(engine_id or ""),
+            stream_id=str(stream_id or ""),
+            message=dict(message or {}),
+            timeout_seconds=timeout_seconds,
+        )
+
+    def proxy_stream_recv(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 2.0,
+        max_items: int = 64,
+    ) -> Dict[str, Any]:
+        return self.proxy_rpc_recv(
+            engine_id=str(engine_id or ""),
+            stream_id=str(stream_id or ""),
+            timeout_seconds=float(timeout_seconds or 2.0),
+            max_items=int(max_items or 64),
+        )
+
+    def proxy_stream_close(
+        self,
+        *,
+        engine_id: str,
+        stream_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        return self.proxy_rpc_close(
+            engine_id=str(engine_id or ""),
+            stream_id=str(stream_id or ""),
+            timeout_seconds=timeout_seconds,
+        )
 
     def _revoke_engine_tokens(self, control: Dict[str, Any], engine_id: str) -> int:
         tokens = dict(control.get("tokens") or {})
