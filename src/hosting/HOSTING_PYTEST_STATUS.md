@@ -1,94 +1,70 @@
 # Hosting Pytest Status (IPC/RPC Migration)
 
-Date: 2026-03-08
+Date: 2026-03-09
 
 This file lists pytest commands relevant to the IPC-only + RPC lifecycle migration.
-Run these outside sandboxed environments when possible.
 
-## 1) Prerequisites
+## 1) Environment
 
-- Run from repo root.
-- Ensure `PYTHONPATH=src`.
-- Use a writable temp base (`--basetemp`) outside restricted dirs.
+Run from repo root.
 
-Windows PowerShell:
+Use one of these setups:
+
+- Preferred: install package in editable mode, then run pytest without extra env vars.
+- Alternative: if you are not installing the package, set `PYTHONPATH=src` so imports like `from hosting...` resolve.
+
+Windows PowerShell (alternative mode):
 
 ```powershell
 $env:PYTHONPATH = "src"
-$BASE = "C:\\temp\\mp13-pytest"
-New-Item -ItemType Directory -Force $BASE | Out-Null
 ```
 
-Linux/macOS bash:
+Linux/macOS bash (alternative mode):
 
 ```bash
 export PYTHONPATH=src
-BASE=/tmp/mp13-pytest
-mkdir -p "$BASE"
 ```
+
+No other environment variables are required for these tests.
 
 ## 2) Focused ACL Regression (access denied)
 
-```powershell
-pytest tests/test_hosting_daemon_acl.py -q --basetemp "$BASE\\acl" -p no:cacheprovider
-```
-
 ```bash
-pytest tests/test_hosting_daemon_acl.py -q --basetemp "$BASE/acl" -p no:cacheprovider
+pytest tests/test_hosting_daemon_acl.py -q
 ```
 
-Expected high-level behavior:
-- Denials return stable codes like:
-  - `session_token_required`
-  - `engine_shared_claim_not_member`
-  - `exclusive_owner_conflict`
-  - `localhost_force_override_confirmation_required`
-  - `non_localhost_shared_claim_denied`
+Expected denial codes include:
+- `session_token_required`
+- `engine_shared_claim_not_member`
+- `exclusive_owner_conflict`
+- `localhost_force_override_confirmation_required`
+- `non_localhost_shared_claim_denied`
 
 ## 3) Channel/Auth Path
 
-```powershell
-pytest tests/test_engine_host_channel.py -q --basetemp "$BASE\\channel" -p no:cacheprovider
-```
 
 ```bash
-pytest tests/test_engine_host_channel.py -q --basetemp "$BASE/channel" -p no:cacheprovider
+pytest tests/test_engine_host_channel.py -q
 ```
 
-## 4) HTTP Ingress (legacy WS test excluded)
+## 4) HTTP Ingress
 
-The websocket passthrough test is legacy for this round and should be excluded.
-
-```powershell
-pytest tests/test_hosting_http_ingress.py -q --basetemp "$BASE\\ingress" -p no:cacheprovider -k "not websocket"
-```
 
 ```bash
-pytest tests/test_hosting_http_ingress.py -q --basetemp "$BASE/ingress" -p no:cacheprovider -k "not websocket"
+pytest tests/test_hosting_http_ingress.py -q
 ```
 
-## 5) Security Suite (legacy WS lifecycle tests excluded)
+## 5) Security Suite
 
-```powershell
-pytest tests/test_hosting_service_security.py -q --basetemp "$BASE\\security" -p no:cacheprovider -k "not proxy_ws and not websocket"
-```
 
 ```bash
-pytest tests/test_hosting_service_security.py -q --basetemp "$BASE/security" -p no:cacheprovider -k "not proxy_ws and not websocket"
+pytest tests/test_hosting_service_security.py -q
 ```
 
 ## 6) Combined Relevant Run
 
-```powershell
-pytest tests/test_hosting_daemon_acl.py tests/test_engine_host_channel.py tests/test_hosting_http_ingress.py tests/test_hosting_service_security.py -q --basetemp "$BASE\\all" -p no:cacheprovider -k "not proxy_ws and not websocket"
-```
 
 ```bash
-pytest tests/test_hosting_daemon_acl.py tests/test_engine_host_channel.py tests/test_hosting_http_ingress.py tests/test_hosting_service_security.py -q --basetemp "$BASE/all" -p no:cacheprovider -k "not proxy_ws and not websocket"
+pytest tests/test_hosting_daemon_acl.py tests/test_engine_host_channel.py tests/test_hosting_http_ingress.py tests/test_hosting_service_security.py -q
 ```
 
-## 7) If Temp/Cache Permissions Still Fail
-
-- Keep `-p no:cacheprovider`.
-- Move `--basetemp` to another writable location.
-- Avoid repository directories mounted with restrictive ACLs.

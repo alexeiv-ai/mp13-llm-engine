@@ -44,11 +44,9 @@ DEFAULT_HTTP_INGRESS_PORT = 19877
 
 
 def _default_state_dir() -> Path:
-    try:
-        from mp13_engine.mp13_config_paths import get_default_config_dir  # type: ignore
-        return (Path(get_default_config_dir()) / "backend").expanduser().resolve()
-    except Exception:
-        return (Path.home() / ".mp13-llm" / "backend").expanduser().resolve()
+    # Keep hosting bootstrap lightweight: avoid importing mp13_engine package
+    # during module import to prevent unrelated heavy dependency side-effects.
+    return (Path.home() / ".mp13-llm" / "backend").expanduser().resolve()
 
 
 def _default_pid_file() -> Path:
