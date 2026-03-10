@@ -1169,14 +1169,30 @@ class MP13Engine(metaclass=EngineLogContextMeta):
             self.state.effective_stop_tokens = stop_tokens or None
 
             # --- Generate and store the empty system prompt template ---
-            empty_system_prompt_template = format_prompt_messages(
-                logger,
-                example={"messages": [{"role": "system", "content": ""}]},
-                columns=ColumnsConfig(messages="messages"),
-                tokenizer=tokenizer,
-                add_generation_prompt=False
-            ).text
-            logger.debug(f"Generated empty system prompt template: {_safe_log_text(repr(empty_system_prompt_template))}")
+            # Some chat templates (e.g., certain Qwen variants) require a user message and
+            # fail on system-only input. In that case, degrade gracefully and disable
+            # system-prefix stripping instead of failing engine initialization.
+            try:
+                empty_system_prompt_template = format_prompt_messages(
+                    logger,
+                    example={"messages": [{"role": "system", "content": ""}]},
+                    columns=ColumnsConfig(messages="messages"),
+                    tokenizer=tokenizer,
+                    add_generation_prompt=False
+                ).text
+                logger.debug(f"Generated empty system prompt template: {_safe_log_text(repr(empty_system_prompt_template))}")
+            except ValueError as e:
+                err = str(e)
+                if "No user query found in messages" in err:
+                    empty_system_prompt_template = ""
+                    warn_msg = (
+                        "Tokenizer chat template requires a user message for rendering. "
+                        "Disabling empty system-prompt stripping for this model."
+                    )
+                    logger.warning(warn_msg)
+                    init_report["warnings"].append(warn_msg)
+                else:
+                    raise
 
 
             # --- Post-load Quantization Steps ---

@@ -59,6 +59,18 @@ BUILTIN_PROFILES: List[ParserProfile] = [
         result_wrapper_end="\n</tool_response>",
     ),
     ParserProfile(
+        key="qwen-xml",
+        block_start=["<tool_call>"],
+        block_end=["</tool_call>"],
+        hard_stop_patterns=[],
+        payload_mode="qwen_xml",
+        name_field="name",
+        arguments_field="arguments",
+        arguments_may_be_string=True,
+        result_wrapper_start="<tool_response>\n",
+        result_wrapper_end="\n</tool_response>",
+    ),
+    ParserProfile(
         key="mistral",
         block_start=["[TOOL_CALLS]["],
         block_end=["]</s>", "]"], # Order matters: check for longer one first
@@ -294,6 +306,8 @@ def guess_profile_from_template(chat_template: str, model_name: Optional[str]) -
 
     if "<|tool_call|>" in t:
         return _with_template_meta(_clone_profile("granite"))
+    if "<tool_call>" in t and ("<function=" in t or "<parameter=" in t):
+        return _with_template_meta(_clone_profile("qwen-xml"))
     if "<tools>" in t and "<tool_call>" in t:
         return _with_template_meta(_clone_profile("qwen"))
     if "[TOOL_CALLS]" in t and "[ARGS]" in t:
@@ -921,6 +935,16 @@ class UnifiedToolIO:
                         continue
                     if errors:
                         block.parse_errors.extend(errors)
+            if self.profile and self.profile.payload_mode == "qwen_xml":
+                payload_source = block.normalized_block if block.normalized_block else block.raw_block
+                calls, errors = self._parse_qwen_xml_calls(payload_source, block.raw_block)
+                if calls:
+                    block.calls.extend(c for c in calls if c)
+                    if errors:
+                        block.parse_errors.extend(errors)
+                    continue
+                if errors:
+                    block.parse_errors.extend(errors)
             try:
                 payload_source = block.normalized_block if block.normalized_block else block.raw_block
                 payload = _json_loads_loose(payload_source)
@@ -946,6 +970,66 @@ class UnifiedToolIO:
                 for c in block.calls:
                     if c and self.profile.result_requires_id and not c.id:
                         c.id = self._gen_id()
+
+    def _parse_qwen_xml_calls(self, payload_source: str, raw_block: str) -> Tuple[List[ToolCall], List[str]]:
+        """
+        Parse Qwen XML-like tool calls:
+        <function=name>
+          <parameter=arg>value</parameter>
+        </function>
+        """
+        payload = (payload_source or "").strip()
+        if not payload:
+            return [], ["empty_tool_payload"]
+
+        func_re = re.compile(r"<function=([^>\n]+)>\s*(.*?)\s*</function>", re.DOTALL)
+        param_re = re.compile(r"<parameter=([^>\n]+)>\s*(.*?)\s*</parameter>", re.DOTALL)
+
+        calls: List[ToolCall] = []
+        errors: List[str] = []
+        matches = list(func_re.finditer(payload))
+        if not matches:
+            return [], ["qwen_xml_no_function_block_found"]
+
+        for match in matches:
+            raw_name = (match.group(1) or "").strip()
+            func_name = raw_name.strip("\"' ")
+            body = match.group(2) or ""
+            args: Dict[str, Any] = {}
+            func_errors: List[str] = []
+
+            for p_match in param_re.finditer(body):
+                raw_key = (p_match.group(1) or "").strip()
+                key = raw_key.strip("\"' ")
+                value_text = (p_match.group(2) or "").strip()
+                if not key:
+                    func_errors.append("empty_parameter_name")
+                    continue
+                parsed_value: Any = value_text
+                if value_text:
+                    try:
+                        parsed_value = json.loads(value_text)
+                    except Exception:
+                        parsed_value = value_text
+                args[key] = parsed_value
+
+            if not func_name:
+                errors.append("qwen_xml_empty_function_name")
+                continue
+
+            calls.append(
+                ToolCall(
+                    name=func_name,
+                    arguments=args,
+                    result=None,
+                    raw=raw_block,
+                    model_format=self.profile.key if self.profile else "unknown",
+                    parse_errors=func_errors,
+                    action=[],
+                )
+            )
+
+        return calls, errors
 
     def _robust_salvage_parser(self, block: ToolCallBlock):
         """
@@ -1639,6 +1723,52 @@ class UnifiedToolIO:
             primary_block_action = _primary_action(action_override)
             if primary_block_action == ToolCall.Strip:
                 return "" # Strip the entire block
+
+            if p.payload_mode == "qwen_xml":
+                start_marker = p.block_start[0] if p.block_start else ""
+                end_marker = p.block_end[0] if p.block_end else ""
+                rendered_blocks: List[str] = []
+                for c in calls:
+                    call_actions = _get_list(c, "action")
+                    if ToolCall.KeepRaw in call_actions:
+                        raw_payload = _get(c, "raw", "")
+                        if raw_payload:
+                            if start_marker and raw_payload.startswith(start_marker):
+                                return raw_payload
+                            return f"{start_marker}{raw_payload}{end_marker}"
+                        continue
+                    if ToolCall.Strip in call_actions:
+                        continue
+
+                    name = str(_get(c, "name", "") or "").strip()
+                    if not name:
+                        continue
+
+                    raw_args = _get(c, "arguments", {})
+                    cleaned_args = _strip_internal_tool_args(raw_args)
+                    if isinstance(cleaned_args, str):
+                        try:
+                            decoded = json.loads(cleaned_args)
+                            cleaned_args = decoded if isinstance(decoded, dict) else {"value": decoded}
+                        except Exception:
+                            cleaned_args = {"value": cleaned_args}
+                    elif not isinstance(cleaned_args, dict):
+                        cleaned_args = {"value": cleaned_args}
+
+                    xml_lines = [f"<function={name}>"]
+                    for args_name, args_value in cleaned_args.items():
+                        if isinstance(args_value, (dict, list, bool, int, float)) or args_value is None:
+                            serialized_value = json.dumps(args_value, ensure_ascii=False)
+                        else:
+                            serialized_value = str(args_value)
+                        xml_lines.append(f"<parameter={args_name}>")
+                        xml_lines.append(serialized_value)
+                        xml_lines.append("</parameter>")
+                    xml_lines.append("</function>")
+                    xml_payload = "\n".join(xml_lines)
+                    rendered_blocks.append(f"{start_marker}{xml_payload}{end_marker}")
+
+                return "\n".join(rendered_blocks)
 
             serialized_call_dicts = []
             for c in calls: # Use original list to respect Strip action during reconstruction

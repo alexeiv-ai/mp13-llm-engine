@@ -109,7 +109,7 @@ class GlobalEngineConfig(BaseModel):
     """Configuration for initializing the global MP13 engine resources."""
     base_model_name_or_path: str = Field(..., description="Path or Hub ID of the base model")
     instance_id: Optional[str] = Field(None, description="Optional instance ID for the engine. If provided, it will override the default.")
-    tools_parser_profile_key: Optional[str] = Field(None, description="Key for a specific tool parser profile (e.g., 'mistral', 'qwen'). If None, it's inferred from the model's chat template.")
+    tools_parser_profile_key: Optional[str] = Field(None, description="Key for a specific tool parser profile (e.g., 'mistral', 'qwen', 'qwen-xml'). If None, it's inferred from the model's chat template.")
     custom_chat_template: Optional[str] = Field(None, description="Optional chat template string to override the tokenizer's built-in template.")
     initial_engine_mode: EngineMode = Field(EngineMode.INFERENCE, description="Initial mode for the engine after global initialization.")
     no_tools_parse: bool = Field(False, description="If true, disables tool block parsing for all inference requests handled by this engine instance.")

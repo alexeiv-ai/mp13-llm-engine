@@ -62,7 +62,7 @@ torch = [
   { version = "==2.10.0+cu128", source = "pytorch-cu128", markers = "sys_platform == 'win32' and platform_machine == 'x86_64'" }
 ]
 # HF stack anchor (transformers/peft/accelerate should be kept compatible)
-transformers = { version = "==5.0.0rc2", allow-prereleases = true }
+transformers = { git = "https://github.com/huggingface/transformers.git", branch = "main" }
 peft = ">=0.18.0,<0.19.0"
 datasets = "^4.4.2"
 accelerate = ">=1.12.0,<1.13.0"
@@ -91,9 +91,6 @@ prompt-toolkit = "^3.0.51"
 
 [tool.poetry.extras]
 xformers = ["xformers"]
-# Extras are advisory; prefer Poetry groups (`--with te/--with eetq`) for platform markers.
-te = ["transformer-engine"]
-eetq = ["eetq"]
 
 # Triton is required for some features (e.g., mistral3 kernels, HQQ quantization).
 # If you enable `--with flashattn`, Triton is included automatically—no need to also enable `--with triton`.
