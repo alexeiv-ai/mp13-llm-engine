@@ -194,6 +194,64 @@ def _extract_path_arg(argv: list, flag: str, default: Optional[Path]) -> Optiona
     return default
 
 
+def _extract_str_arg(argv: list, flag: str, default: Optional[str]) -> Optional[str]:
+    """Extract a single-value string flag from raw argv without full argparse."""
+    try:
+        idx = argv.index(flag)
+        if idx + 1 < len(argv):
+            return argv[idx + 1]
+    except (ValueError, IndexError):
+        pass
+    return default
+
+
+def _setup_file_logging(log_file: Optional[str]) -> None:
+    """Configure root logger to write to a file and redirect stdout/stderr."""
+    if not log_file:
+        return
+    import logging
+    import time
+    from logging.handlers import RotatingFileHandler
+
+    handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    formatter = logging.Formatter(
+        "%(asctime)s.%(msecs)03d [%(levelname)-8s] %(name)-20s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    if root_logger.hasHandlers():
+        for h in root_logger.handlers[:]:
+            root_logger.removeHandler(h)
+    root_logger.addHandler(handler)
+
+    class _StreamToLogger:
+        def __init__(self, logger_instance, level):
+            self.logger = logger_instance
+            self.level = level
+
+        def write(self, buf):
+            for line in buf.rstrip().splitlines():
+                if line:  # Avoid logging empty lines
+                    self.logger.log(self.level, line.rstrip())
+
+        def flush(self):
+            pass
+
+    sys.stdout = _StreamToLogger(logging.getLogger("STDOUT"), logging.INFO)
+    sys.stderr = _StreamToLogger(logging.getLogger("STDERR"), logging.ERROR)
+
+    logging.info("=" * 80)
+    logging.info("Logging started. stdout and stderr are now redirected to this file.")
+    logging.info("Python: %s", sys.version)
+    logging.info("Platform: %s", sys.platform)
+    logging.info("CLI args: %s", sys.argv)
+    logging.info("=" * 80)
+
+
 # ---------------------------------------------------------------------------
 # Relay mode: bridge stdin/stdout to local daemon TCP socket
 # ---------------------------------------------------------------------------
@@ -353,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             start_daemon_background,
         )
 
+        log_file_str = _extract_str_arg(argv, "--log-file", None)
+        _setup_file_logging(log_file_str)
+
         port = _extract_int_arg(argv, "--port", DEFAULT_DAEMON_PORT)
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
@@ -364,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 result = start_daemon_background(
                     port=port,
                     pid_file=pid_file,
+                    log_file=Path(log_file_str) if log_file_str else None,
                     engines_state_file=engines_state,
                     control_state_file=control_state,
                 )
@@ -391,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             start_http_ingress_background,
         )
 
+        log_file_str = _extract_str_arg(argv, "--log-file", None)
+        _setup_file_logging(log_file_str)
+
         port = _extract_int_arg(argv, "--http-port", DEFAULT_HTTP_INGRESS_PORT)
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
@@ -402,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 result = start_http_ingress_background(
                     port=port,
                     pid_file=pid_file,
+                    log_file=Path(log_file_str) if log_file_str else None,
                     engines_state_file=engines_state,
                     control_state_file=control_state,
                 )

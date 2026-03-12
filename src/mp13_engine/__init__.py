@@ -4,51 +4,73 @@
 # (e.g., ChatGPT, Gemini, Codex) under active human design supervision.
 # Contact: Please open an issue or discussion on GitHub.
 # SPDX-License-Identifier: Apache-2.0
-"""MP13 server package - Unified training and inference server."""
+"""MP13 server package - Unified training and inference server.
 
-import warnings
+This package entrypoint intentionally avoids importing heavy runtime modules
+at import time so utility submodules (for example config path helpers) remain
+cheap to import.
+"""
+
+from __future__ import annotations
+
+import importlib
 import logging as _logging
-_logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(_logging.ERROR)
+import warnings
+from typing import Dict, Tuple
 
+_logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(_logging.ERROR)
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
-from .mp13_config import (
-    APIStatus, GlobalEngineConfig, TrainingConfig, InferenceConfig, InferenceRequest, 
-    InferenceResponse, DatasetFormat, ColumnsConfig, TrainingMode,
-    EngineMode, AdapterConfig, AdapterType, 
-    DatasetConfig, DatasetTags, PreprocessingMode 
-)
-from .mp13_state import (
-    MP13State, TrainingStatus, InferenceStatus, ServerStatus,
-    ConfigurationError, DatasetError, TrainingError, EngineError, 
-    EngineInitializationError, AdapterError, InferenceRequestError, BusyError
-)
-from .mp13_engine_api import handle_call_tool
-from .mp13_engine  import MP13Engine
-from .mp13_engine import logger as logger
-
-# Import PEFT classes but don't re-export them directly
-# This avoids type conflicts
-import peft
-
-# You can decide which components to make directly available
-__all__ = [
+_LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     # Config classes
-    "APIStatus", "GlobalEngineConfig", "TrainingConfig", "InferenceConfig",
-    "InferenceRequest", "InferenceResponse",
-    "TrainingMode", "DatasetFormat", 
-    
+    "APIStatus": ("mp13_config", "APIStatus"),
+    "GlobalEngineConfig": ("mp13_config", "GlobalEngineConfig"),
+    "TrainingConfig": ("mp13_config", "TrainingConfig"),
+    "InferenceConfig": ("mp13_config", "InferenceConfig"),
+    "InferenceRequest": ("mp13_config", "InferenceRequest"),
+    "InferenceResponse": ("mp13_config", "InferenceResponse"),
+    "DatasetFormat": ("mp13_config", "DatasetFormat"),
+    "ColumnsConfig": ("mp13_config", "ColumnsConfig"),
+    "TrainingMode": ("mp13_config", "TrainingMode"),
+    "EngineMode": ("mp13_config", "EngineMode"),
+    "AdapterConfig": ("mp13_config", "AdapterConfig"),
+    "AdapterType": ("mp13_config", "AdapterType"),
+    "DatasetConfig": ("mp13_config", "DatasetConfig"),
+    "DatasetTags": ("mp13_config", "DatasetTags"),
+    "PreprocessingMode": ("mp13_config", "PreprocessingMode"),
     # State classes
-    "MP13State", "TrainingStatus", "InferenceStatus", "ServerStatus",
-    
+    "MP13State": ("mp13_state", "MP13State"),
+    "TrainingStatus": ("mp13_state", "TrainingStatus"),
+    "InferenceStatus": ("mp13_state", "InferenceStatus"),
+    "ServerStatus": ("mp13_state", "ServerStatus"),
     # Error classes
-    "ConfigurationError", "DatasetError", "TrainingError", "EngineError",
-    "EngineInitializationError", "AdapterError", "InferenceRequestError", "BusyError",
-    
-    # Main API
-    "handle_call_tool",
-    
-    # Engine class
-    "MP13Engine", "logger",
-    
-]
+    "ConfigurationError": ("mp13_state", "ConfigurationError"),
+    "DatasetError": ("mp13_state", "DatasetError"),
+    "TrainingError": ("mp13_state", "TrainingError"),
+    "EngineError": ("mp13_state", "EngineError"),
+    "EngineInitializationError": ("mp13_state", "EngineInitializationError"),
+    "AdapterError": ("mp13_state", "AdapterError"),
+    "InferenceRequestError": ("mp13_state", "InferenceRequestError"),
+    "BusyError": ("mp13_state", "BusyError"),
+    # API and engine runtime
+    "handle_call_tool": ("mp13_engine_api", "handle_call_tool"),
+    "MP13Engine": ("mp13_engine", "MP13Engine"),
+    "logger": ("mp13_engine", "logger"),
+}
+
+__all__ = list(_LAZY_EXPORTS.keys())
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = target
+    module = importlib.import_module(f".{module_name}", __name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals().keys()) | set(__all__))

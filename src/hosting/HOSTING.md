@@ -256,11 +256,23 @@ $env:PYTHONPATH='src'
 python -m hosting.engine_host_cli --daemon --background
 ```
 
+Optional diagnostics log file for detached mode:
+
+```powershell
+python -m hosting.engine_host_cli --daemon --background --log-file "$HOME/.mp13-llm/backend/host_daemon.log"
+```
+
 Start dedicated HTTP ingress daemon (for worker API proxy ingress):
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m hosting.engine_host_cli --daemon-http --background
+```
+
+Optional diagnostics log file for detached ingress mode:
+
+```powershell
+python -m hosting.engine_host_cli --daemon-http --background --log-file "$HOME/.mp13-llm/backend/host_daemon_http.log"
 ```
 
 Ingress endpoints:

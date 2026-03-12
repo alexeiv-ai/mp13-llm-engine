@@ -76,6 +76,9 @@ class EngineHostControlChannel:
         self._daemon_port_override: int = int(
             self.control_settings.get("engine_host_daemon_port") or 0
         )
+        self._daemon_log_file: Optional[str] = str(
+            self.control_settings.get("engine_host_daemon_log_file") or ""
+        ).strip() or None
         self._refresh_base_cmd()
 
     @staticmethod
@@ -262,6 +265,7 @@ class EngineHostControlChannel:
                         result = start_daemon_background(
                             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
                             pid_file=Path(pid_file_path) if pid_file_path else None,
+                            log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
                             wait_ready_seconds=wait,
                         )
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
@@ -463,6 +467,7 @@ class EngineHostControlChannel:
         result = start_daemon_background(
             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
             pid_file=Path(pid_file_path) if pid_file_path else None,
+            log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
             wait_ready_seconds=wait_ready_seconds,
         )
         with self._connection_lock:

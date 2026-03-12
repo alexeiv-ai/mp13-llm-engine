@@ -1756,7 +1756,7 @@ class EngineHostService:
         out: List[Dict[str, Any]] = []
         seen: set[str] = set()
         engine_python = self._engine_python_executable()
-        engine_runtime_ok, _engine_runtime_err = self._check_module_available(engine_python, "mp13_engine")
+        engine_runtime_ok, _engine_runtime_err = self._check_module_discoverable(engine_python, "mp13_engine")
         def _config_meta(path_str: str) -> Dict[str, Any]:
             try:
                 _ = self._merge_default_and_selected_config(path_str)
@@ -1829,7 +1829,7 @@ class EngineHostService:
     @staticmethod
     def _check_module_available(python: str, module_name: str) -> Tuple[bool, str]:
         """
-        Check whether *module_name* is importable by *python*.
+        Check whether engine runtime symbols are importable by *python*.
 
         Runs a tiny subprocess so it works even when the calling process lives
         in a different venv (e.g. the docs venv checking the engine venv).
@@ -1837,7 +1837,7 @@ class EngineHostService:
         """
         try:
             result = subprocess.run(  # noqa: S603
-                [python, "-c", f"import {module_name}"],
+                [python, "-c", f"from {module_name} import MP13Engine"],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -1847,6 +1847,35 @@ class EngineHostService:
                 return True, ""
             stderr = (result.stderr or "").strip()
             last_line = stderr.splitlines()[-1] if stderr else "import failed"
+            return False, last_line
+        except FileNotFoundError:
+            return False, f"Python executable not found: {python}"
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _check_module_discoverable(python: str, module_name: str) -> Tuple[bool, str]:
+        """
+        Lightweight module check for UX surfaces (e.g., list-configs).
+
+        Uses importlib.find_spec instead of importing heavy module trees.
+        """
+        probe = (
+            "import importlib.util, sys; "
+            f"sys.exit(0 if importlib.util.find_spec({module_name!r}) else 1)"
+        )
+        try:
+            result = subprocess.run(  # noqa: S603
+                [python, "-c", probe],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, ""
+            stderr = (result.stderr or "").strip()
+            last_line = stderr.splitlines()[-1] if stderr else "module not discoverable"
             return False, last_line
         except FileNotFoundError:
             return False, f"Python executable not found: {python}"
