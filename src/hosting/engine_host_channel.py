@@ -261,6 +261,7 @@ class EngineHostControlChannel:
                         )
                         result = start_daemon_background(
                             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
+                            pid_file=Path(pid_file_path) if pid_file_path else None,
                             wait_ready_seconds=wait,
                         )
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
@@ -461,6 +462,7 @@ class EngineHostControlChannel:
             return {"already_running": True, **self.get_daemon_status()}
         result = start_daemon_background(
             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
+            pid_file=Path(pid_file_path) if pid_file_path else None,
             wait_ready_seconds=wait_ready_seconds,
         )
         with self._connection_lock:
