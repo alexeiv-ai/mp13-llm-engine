@@ -28,7 +28,6 @@ import json
 import logging
 import os
 import secrets
-import socket
 import subprocess
 import sys
 import threading
@@ -96,6 +95,11 @@ class DaemonPidFile:
             if p <= 0:
                 return False
             os.kill(p, 0)
+            return True
+        except SystemError:
+            # On some Windows detached-process code paths, os.kill(pid, 0) can
+            # succeed but still raise SystemError due to interpreter state.
+            # Treat that as alive.
             return True
         except ProcessLookupError:
             return False
@@ -908,7 +912,7 @@ def start_daemon_background(
     proc = subprocess.Popen(argv, **kwargs)  # noqa: S603
     spawned_pid = int(proc.pid)
 
-    # Poll until PID file appears and socket is connectable
+    # Poll until PID file appears and daemon responds to a protocol ping.
     pid_info = DaemonPidFile(pid_file)
     deadline = time.time() + max(1.0, float(wait_ready_seconds))
     while time.time() < deadline:
@@ -919,13 +923,16 @@ def start_daemon_background(
         if not actual_port:
             continue
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1.0)
-            s.connect(("127.0.0.1", actual_port))
-            s.close()
+            from .engine_host_connection import LocalSocketConnection
+
+            conn = LocalSocketConnection(port=actual_port, timeout=1.0, max_reconnect_attempts=1)
+            pong = conn.invoke("__ping__", {})
+            conn.close()
+            if str(pong) != "pong":
+                continue
             info = pid_info.read() or {}
             return {"pid": int(info.get("pid") or spawned_pid), "port": actual_port}
-        except OSError:
+        except Exception:
             continue
 
     raise RuntimeError(
