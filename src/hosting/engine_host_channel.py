@@ -253,8 +253,9 @@ class EngineHostControlChannel:
                 port = self._daemon_port_override or pid_info.get_port()
                 if port and pid_info.is_alive():
                     conn = LocalSocketConnection(port=port, timeout=self._timeout)
-                    self._connection = conn
-                    return conn
+                    if conn.is_alive():
+                        self._connection = conn
+                        return conn
 
                 # Daemon not running: auto-bootstrap if enabled
                 if self._auto_bootstrap_daemon:
@@ -430,23 +431,34 @@ class EngineHostControlChannel:
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
         info = pid_info.read() or {}
+        pid_alive = bool(pid_info.is_alive())
         status: Dict[str, Any] = {
             "pid_file": str(pid_info.path),
             "pid": info.get("pid"),
             "port": info.get("port"),
             "started_at": info.get("started_at"),
-            "alive": pid_info.is_alive(),
+            "pid_alive": pid_alive,
+            "reachable": False,
+            "reachability_error": None,
+            "alive": False,
             "auth_status": None,
             "auth_status_error": None,
         }
-        if not status["alive"]:
+        if not pid_alive:
             return status
         try:
             port = int(info.get("port") or 0)
             if port <= 0:
-                status["auth_status_error"] = "missing_daemon_port"
+                status["reachability_error"] = "missing_daemon_port"
                 return status
             conn = LocalSocketConnection(port=port, timeout=min(self._timeout, 5.0), max_reconnect_attempts=1)
+            pong = conn.invoke("__ping__", {})
+            status["reachable"] = str(pong or "") == "pong"
+            status["alive"] = bool(status["reachable"])
+            if not status["reachable"]:
+                status["reachability_error"] = "daemon_ping_failed"
+                conn.close()
+                return status
             payload: Dict[str, Any] = {}
             if self._session_token:
                 payload["session_token"] = self._session_token
@@ -454,6 +466,9 @@ class EngineHostControlChannel:
             conn.close()
             status["auth_status"] = dict(auth or {}) if isinstance(auth, dict) else None
         except Exception as exc:
+            status["alive"] = False
+            status["reachable"] = False
+            status["reachability_error"] = str(exc)
             status["auth_status_error"] = str(exc)
         return status
 
@@ -574,6 +589,24 @@ class EngineHostControlChannel:
     def discover_running(self) -> List[Dict[str, Any]]:
         res = self._invoke("discover-running", {})
         return list(res or []) if isinstance(res, list) else []
+
+    def discover_running_progress(
+        self,
+        *,
+        include_reachability: bool = True,
+        reachability_timeout_seconds: float = 0.35,
+        prune_stale: bool = True,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "discover-running",
+            {
+                "include_progress": True,
+                "include_reachability": bool(include_reachability),
+                "reachability_timeout_seconds": float(reachability_timeout_seconds or 0.35),
+                "prune_stale": bool(prune_stale),
+            },
+        )
+        return dict(res or {}) if isinstance(res, dict) else {}
 
     def get_registration(self, engine_id: str) -> Optional[Dict[str, Any]]:
         res = self._invoke("get-registration", {"engine_id": str(engine_id)})
@@ -712,6 +745,46 @@ class EngineHostControlChannel:
             },
         )
         return dict(res or {})
+
+    def start_host_operation(
+        self,
+        *,
+        command: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "op-start",
+            {
+                "command": str(command or "").strip(),
+                "payload": dict(payload or {}),
+            },
+        )
+        return dict(res or {}) if isinstance(res, dict) else {}
+
+    def get_host_operation_status(self, *, operation_id: str) -> Dict[str, Any]:
+        res = self._invoke(
+            "op-status",
+            {
+                "operation_id": str(operation_id or "").strip(),
+            },
+        )
+        return dict(res or {}) if isinstance(res, dict) else {}
+
+    def start_connect_from_config(
+        self,
+        *,
+        config_path: str,
+        engine_id: Optional[str] = None,
+        model_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="connect-from-config",
+            payload={
+                "config_path": str(config_path or "default"),
+                "engine_id": str(engine_id).strip() if engine_id else None,
+                "model_path": str(model_path).strip() if model_path else None,
+            },
+        )
 
     def inspect_engine_capabilities(self, *, engine_id: str, endpoint: str = "") -> Dict[str, Any]:
         res = self._invoke(

@@ -434,6 +434,124 @@ class EngineHostDaemon:
         )
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._operations: Dict[str, Dict[str, Any]] = {}
+        self._operations_lock = threading.Lock()
+        self._operations_max_entries = 200
+
+    @staticmethod
+    def _operation_event(stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
+        event: Dict[str, Any] = {
+            "stage": str(stage or "unknown"),
+            "status": str(status or "info"),
+            "message": str(message or ""),
+            "timestamp": time.time(),
+        }
+        if extra:
+            event.update({str(k): v for k, v in extra.items()})
+        return event
+
+    @staticmethod
+    def _operation_public_snapshot(op: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(op or {})
+        out.pop("session_token", None)
+        return out
+
+    def _prune_operations_locked(self) -> None:
+        if len(self._operations) <= self._operations_max_entries:
+            return
+        completed = []
+        for op_id, op in self._operations.items():
+            if bool(op.get("done", False)):
+                completed.append((float(op.get("updated_at") or 0.0), op_id))
+        completed.sort(key=lambda x: x[0])
+        excess = len(self._operations) - self._operations_max_entries
+        for _, op_id in completed[:excess]:
+            self._operations.pop(op_id, None)
+
+    def _create_operation(self, *, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        now = time.time()
+        op_id = secrets.token_urlsafe(12)
+        session_token = str(payload.get("session_token") or "").strip()
+        op: Dict[str, Any] = {
+            "operation_id": op_id,
+            "command": str(command or ""),
+            "status": "running",
+            "stage": "queued",
+            "done": False,
+            "created_at": now,
+            "started_at": None,
+            "completed_at": None,
+            "updated_at": now,
+            "result": None,
+            "error": None,
+            "error_code": None,
+            "progress_events": [
+                self._operation_event("queued", "queued", "Operation queued", command=str(command or ""))
+            ],
+            "session_token": session_token or None,
+        }
+        with self._operations_lock:
+            self._operations[op_id] = op
+            self._prune_operations_locked()
+        return self._operation_public_snapshot(op)
+
+    def _get_operation(self, operation_id: str) -> Optional[Dict[str, Any]]:
+        with self._operations_lock:
+            op = self._operations.get(str(operation_id or ""))
+            if not isinstance(op, dict):
+                return None
+            return dict(op)
+
+    def _replace_operation(self, op: Dict[str, Any]) -> None:
+        op_id = str(op.get("operation_id") or "")
+        if not op_id:
+            return
+        with self._operations_lock:
+            self._operations[op_id] = dict(op)
+            self._prune_operations_locked()
+
+    async def _run_operation(self, operation_id: str, command: str, payload: Dict[str, Any]) -> None:
+        op = self._get_operation(operation_id) or {}
+        if not op:
+            return
+        now = time.time()
+        op["started_at"] = now
+        op["updated_at"] = now
+        op["stage"] = "running"
+        events = list(op.get("progress_events") or [])
+        events.append(self._operation_event("running", "running", "Operation started"))
+        op["progress_events"] = events
+        self._replace_operation(op)
+        try:
+            result = await asyncio.to_thread(self._call_service, command, payload)
+            now = time.time()
+            op = self._get_operation(operation_id) or op
+            op["done"] = True
+            op["status"] = "completed"
+            op["stage"] = "completed"
+            op["result"] = result
+            op["updated_at"] = now
+            op["completed_at"] = now
+            events = list(op.get("progress_events") or [])
+            if isinstance(result, dict) and isinstance(result.get("progress_events"), list):
+                events.extend(list(result.get("progress_events") or []))
+            events.append(self._operation_event("completed", "completed", "Operation completed"))
+            op["progress_events"] = events
+            self._replace_operation(op)
+        except Exception as exc:
+            now = time.time()
+            op = self._get_operation(operation_id) or op
+            op["done"] = True
+            op["status"] = "failed"
+            op["stage"] = "failed"
+            op["error"] = str(exc)
+            op["error_code"] = "operation_failed"
+            op["updated_at"] = now
+            op["completed_at"] = now
+            events = list(op.get("progress_events") or [])
+            events.append(self._operation_event("failed", "failed", str(exc)))
+            op["progress_events"] = events
+            self._replace_operation(op)
 
     async def run(self) -> None:
         """Start server, then write PID file and run until stop event."""
@@ -534,6 +652,95 @@ class EngineHostDaemon:
                 "error_details": {},
             }
 
+        if cmd == "op-start":
+            target_cmd = str(payload.get("command") or "").strip()
+            target_payload = dict(payload.get("payload") or payload.get("command_payload") or {})
+            if not target_cmd:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "command_required",
+                    "error_code": "command_required",
+                    "error_details": {},
+                }
+            if target_cmd in {"__ping__", "__shutdown__", "op-start", "op-status"}:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "unsupported_operation_command",
+                    "error_code": "unsupported_operation_command",
+                    "error_details": {"command": target_cmd},
+                }
+            try:
+                self.svc.authorize_command(target_cmd, target_payload)
+                acl = self.svc.enforce_daemon_claim_policy(
+                    target_cmd,
+                    target_payload,
+                    peer_host=peer_host,
+                    is_localhost=is_localhost,
+                )
+                if not bool(acl.get("ok", False)):
+                    return {
+                        "seq": seq,
+                        "ok": False,
+                        "error": str(acl.get("error") or "access_denied"),
+                        "error_code": str(acl.get("error_code") or "access_denied"),
+                        "error_details": dict(acl.get("error_details") or {}),
+                    }
+                target_payload = dict(acl.get("payload") or target_payload)
+                op_snapshot = self._create_operation(command=target_cmd, payload=target_payload)
+                operation_id = str(op_snapshot.get("operation_id") or "")
+                asyncio.create_task(self._run_operation(operation_id, target_cmd, target_payload))
+                return {"seq": seq, "ok": True, "result": op_snapshot}
+            except PermissionError as exc:
+                code = str(exc or "").strip() or "auth_failed"
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "auth_failed",
+                    "error_code": code,
+                    "error_details": {"reason": code},
+                }
+            except Exception as exc:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "internal_error",
+                    "error_code": "internal_error",
+                    "error_details": {"message": str(exc)},
+                }
+
+        if cmd == "op-status":
+            op_id = str(payload.get("operation_id") or "").strip()
+            if not op_id:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "operation_id_required",
+                    "error_code": "operation_id_required",
+                    "error_details": {},
+                }
+            op = self._get_operation(op_id)
+            if not op:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "operation_not_found",
+                    "error_code": "operation_not_found",
+                    "error_details": {"operation_id": op_id},
+                }
+            required_token = str(op.get("session_token") or "").strip()
+            provided_token = str(payload.get("session_token") or "").strip()
+            if required_token and required_token != provided_token:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "auth_failed",
+                    "error_code": "missing_or_invalid_session_token",
+                    "error_details": {"operation_id": op_id},
+                }
+            return {"seq": seq, "ok": True, "result": self._operation_public_snapshot(op)}
+
         try:
             self.svc.authorize_command(cmd, payload)
             acl = self.svc.enforce_daemon_claim_policy(
@@ -584,7 +791,12 @@ class EngineHostDaemon:
         """Synchronous dispatch to EngineHostService (runs in thread pool)."""
         svc = self.svc
         if cmd == "discover-running":
-            return svc.discover_running()
+            return svc.discover_running(
+                prune_stale=bool(payload.get("prune_stale", True)),
+                include_progress=bool(payload.get("include_progress", False)),
+                include_reachability=bool(payload.get("include_reachability", True)),
+                reachability_timeout_seconds=float(payload.get("reachability_timeout_seconds") or 0.35),
+            )
         if cmd == "spawn":
             return svc.spawn(
                 engine_id=str(payload.get("engine_id") or ""),

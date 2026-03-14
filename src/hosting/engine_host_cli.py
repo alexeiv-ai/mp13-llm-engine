@@ -125,6 +125,12 @@ EXAMPLES_BY_COMMAND = {
     "host-metrics": [
         "python -m hosting.engine_host_cli host-metrics",
     ],
+    "op-start": [
+        "@'{\"command\":\"connect-from-config\",\"payload\":{\"config_path\":\"default\",\"engine_id\":\"worker_cfg\"}}'@ | python -m hosting.engine_host_cli --payload-stdin op-start",
+    ],
+    "op-status": [
+        "@'{\"operation_id\":\"<operation_id>\"}'@ | python -m hosting.engine_host_cli --payload-stdin op-status",
+    ],
 }
 
 
@@ -390,6 +396,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "proxy-stream-recv",
         "proxy-stream-close",
         "host-metrics",
+        "op-start",
+        "op-status",
     ]:
         cp = sp.add_parser(name)
         cp.add_argument("--engine-id", type=str, default="")
@@ -898,6 +906,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "auth-revoke-session":
             _print_ok(svc.auth_revoke_session(str(payload.get("token") or "")))
             return 0
+        if cmd in {"op-start", "op-status"}:
+            _print_error(f"{cmd} requires a running daemon")
+            return 1
         _print_error(f"Unknown command '{cmd}'")
         return 2
     except PermissionError as e:

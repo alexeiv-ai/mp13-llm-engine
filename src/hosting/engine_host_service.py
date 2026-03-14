@@ -262,7 +262,22 @@ class EngineHostService:
             "structured_denials_v1": True,
             "force_override_confirmation_v1": True,
             "ipc_rpc_v1": True,
+            "structured_progress_events_v1": True,
+            "reachability_status_v1": True,
+            "non_blocking_ops_v1": True,
         }
+
+    @staticmethod
+    def _progress_event(stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
+        event: Dict[str, Any] = {
+            "stage": str(stage or "unknown"),
+            "status": str(status or "info"),
+            "message": str(message or ""),
+            "timestamp": time.time(),
+        }
+        if extra:
+            event.update({str(k): v for k, v in extra.items()})
+        return event
 
     @staticmethod
     def _actor_id_from_session_key(key_id: Optional[str]) -> str:
@@ -1108,6 +1123,9 @@ class EngineHostService:
         engine_ids: Optional[List[str]] = None,
         ssh_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        progress_events: List[Dict[str, Any]] = [
+            self._progress_event("bootstrap_handshake.validate_key", "running", "Validating credentials"),
+        ]
         kid = str(key_id or "").strip()
         secret = str(key_secret or "").strip()
         if not kid:
@@ -1134,7 +1152,7 @@ class EngineHostService:
         provided_hash = self._hash_secret(secret)
         if not expected_hash or not hmac.compare_digest(expected_hash, provided_hash):
             raise PermissionError("invalid_key_secret")
-        return self._issue_session_for_key(
+        out = self._issue_session_for_key(
             key_id=kid,
             key_meta=key_meta,
             scope=scope_norm,
@@ -1144,6 +1162,13 @@ class EngineHostService:
             ssh_binding=ssh_binding,
             control=control,
         )
+        progress_events.append(
+            self._progress_event("bootstrap_handshake.issue_session", "completed", "Session issued")
+        )
+        if isinstance(out, dict):
+            out.setdefault("stage", "completed")
+            out.setdefault("progress_events", progress_events)
+        return out
 
     def _issue_session_for_key(
         self,
@@ -1267,6 +1292,9 @@ class EngineHostService:
         engine_ids: Optional[List[str]] = None,
         ssh_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        progress_events: List[Dict[str, Any]] = [
+            self._progress_event("bootstrap_handshake.challenge_prepare", "running", "Preparing challenge"),
+        ]
         kid = str(key_id or "").strip()
         if not kid:
             self._metrics_challenge_event(event="begin_failed", key_id=kid or None, reason="key_id_required")
@@ -1339,7 +1367,7 @@ class EngineHostService:
         control["control_config"] = cfg
         self._write_control(control)
         self._metrics_challenge_event(event="begin", key_id=kid, challenge_id=challenge_id)
-        return {
+        out = {
             "status": "ok",
             "challenge_id": challenge_id,
             "key_id": kid,
@@ -1347,7 +1375,13 @@ class EngineHostService:
             "challenge": challenge_text,
             "expires_at": expires_at,
             "ttl_seconds": ttl,
+            "stage": "challenge_issued",
         }
+        progress_events.append(
+            self._progress_event("bootstrap_handshake.challenge_issued", "completed", "Challenge issued")
+        )
+        out["progress_events"] = progress_events
+        return out
 
     def auth_complete_challenge(
         self,
@@ -1356,6 +1390,9 @@ class EngineHostService:
         signature_ssh: str,
         presented_ssh_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        progress_events: List[Dict[str, Any]] = [
+            self._progress_event("bootstrap_handshake.verify_signature", "running", "Verifying challenge signature"),
+        ]
         cid = str(challenge_id or "").strip()
         sig = str(signature_ssh or "").strip()
         if not cid:
@@ -1433,7 +1470,10 @@ class EngineHostService:
         role = str(key_meta.get("role") or "").strip().lower()
         if role not in {"management", "config", "traffic"}:
             self._metrics_challenge_event(event="complete_failed", key_id=key_id, challenge_id=cid, reason="invalid_role")
-            return {"status": "denied"}
+            progress_events.append(
+                self._progress_event("bootstrap_handshake.issue_session", "failed", "Role is not allowed")
+            )
+            return {"status": "denied", "stage": "failed", "progress_events": progress_events}
         out = self._issue_session_for_key(
             key_id=key_id,
             key_meta=key_meta,
@@ -1445,6 +1485,12 @@ class EngineHostService:
             control=control,
         )
         self._metrics_challenge_event(event="complete_ok", key_id=key_id, challenge_id=cid)
+        progress_events.append(
+            self._progress_event("bootstrap_handshake.issue_session", "completed", "Session issued")
+        )
+        if isinstance(out, dict):
+            out.setdefault("stage", "completed")
+            out.setdefault("progress_events", progress_events)
         return out
 
     def auth_revoke_session(self, token: str) -> Dict[str, Any]:
@@ -1517,6 +1563,8 @@ class EngineHostService:
             "auth-list-issued-tokens",
             "auth-revoke-session",
             "host-metrics",
+            "op-start",
+            "op-status",
         }:
             try:
                 _ = self._validate_session(
@@ -2032,6 +2080,9 @@ class EngineHostService:
         }
 
     def connect_from_config(self, *, config_path: str, engine_id: Optional[str] = None, model_path: Optional[str] = None) -> Dict[str, Any]:
+        progress_events: List[Dict[str, Any]] = [
+            self._progress_event("connect.resolve_config", "running", "Resolving engine config"),
+        ]
         selected = self._resolve_json_config_path(config_path)
         cfg = self._merge_default_and_selected_config(config_path)
         if not isinstance(cfg, dict):
@@ -2048,27 +2099,49 @@ class EngineHostService:
         )
         effective_model_path = str(model_path or configured_model or "").strip() or None
         if not effective_model_path:
+            progress_events.append(
+                self._progress_event("connect.resolve_model", "needs_input", "No model path configured")
+            )
             return {
                 "status": "needs_model",
+                "stage": "needs_model",
                 "engine_id": eid,
                 "config_path": str(selected),
                 "models": self.models_from_config(config_path),
                 "message": "Config loaded but no model is configured. Select a model folder and connect again.",
+                "progress_events": progress_events,
             }
+        progress_events.append(
+            self._progress_event("connect.resolve_model", "completed", "Model selected", model_path=effective_model_path)
+        )
+        progress_events.append(
+            self._progress_event("connect.build_spawn_spec", "running", "Preparing engine spawn spec")
+        )
         spawn_spec = self._build_engine_spawn_spec(
             engine_id=eid,
             config_path=str(selected),
             model_path=str(effective_model_path),
         )
         if spawn_spec.get("error"):
+            progress_events.append(
+                self._progress_event("connect.build_spawn_spec", "failed", str(spawn_spec.get("error") or "spawn spec failed"))
+            )
             return {
                 "status": "failed",
+                "stage": "failed",
                 "engine_id": eid,
                 "config_path": str(selected),
                 "model_path": effective_model_path,
                 "reason": str(spawn_spec.get("error_kind") or "engine_spawn_error"),
                 "message": str(spawn_spec.get("error") or "engine spawn spec build failed"),
+                "progress_events": progress_events,
             }
+        progress_events.append(
+            self._progress_event("connect.build_spawn_spec", "completed", "Spawn spec built")
+        )
+        progress_events.append(
+            self._progress_event("connect.spawn_engine", "running", "Starting engine process")
+        )
         try:
             rec = self.spawn(
                 engine_id=eid,
@@ -2080,21 +2153,31 @@ class EngineHostService:
                 worker_ipc_family=str(spawn_spec.get("worker_ipc_family") or "").strip() or None,
                 worker_ipc_address=str(spawn_spec.get("worker_ipc_address") or "").strip() or None,
             )
+            progress_events.append(
+                self._progress_event("connect.spawn_engine", "completed", "Engine started", engine_id=eid)
+            )
             return {
                 "status": "ok",
+                "stage": "completed",
                 "engine_id": eid,
                 "config_path": str(selected),
                 "model_path": effective_model_path,
                 "managed_engine": rec,
+                "progress_events": progress_events,
             }
         except Exception as e:
+            progress_events.append(
+                self._progress_event("connect.spawn_engine", "failed", str(e))
+            )
             return {
                 "status": "failed",
+                "stage": "failed",
                 "engine_id": eid,
                 "config_path": str(selected),
                 "model_path": effective_model_path,
                 "reason": "spawn_failed",
                 "message": str(e),
+                "progress_events": progress_events,
             }
 
     def get_control_config(self) -> Dict[str, Any]:
@@ -2210,17 +2293,75 @@ class EngineHostService:
                 return dict(row)
         return None
 
-    def discover_running(self, *, prune_stale: bool = True) -> List[Dict[str, Any]]:
+    def _probe_registration_reachability(
+        self,
+        item: Dict[str, Any],
+        *,
+        timeout_seconds: float = 0.35,
+    ) -> Dict[str, Any]:
+        checked_at = time.time()
+        transport = str(item.get("worker_transport") or "").strip().lower()
+        if transport != "ipc":
+            return {
+                "reachable": False,
+                "checked_at": checked_at,
+                "transport": transport or None,
+                "probe": "unsupported_transport",
+                "error": "reachability_probe_not_supported",
+            }
+        try:
+            out = self._ipc_call(
+                reg=item,
+                payload={"kind": "hello", "engine_id": str(item.get("engine_id") or "")},
+                timeout_seconds=max(0.1, float(timeout_seconds or 0.35)),
+            )
+            return {
+                "reachable": str(out.get("status") or "").strip().lower() == "ok",
+                "checked_at": checked_at,
+                "transport": "ipc",
+                "probe": "hello",
+            }
+        except Exception as exc:
+            return {
+                "reachable": False,
+                "checked_at": checked_at,
+                "transport": "ipc",
+                "probe": "hello",
+                "error": str(exc),
+            }
+
+    def discover_running(
+        self,
+        *,
+        prune_stale: bool = True,
+        include_progress: bool = False,
+        include_reachability: bool = True,
+        reachability_timeout_seconds: float = 0.35,
+    ) -> Any:
+        progress_events: List[Dict[str, Any]] = [
+            self._progress_event("discover.read_registry", "running", "Reading managed engine registry"),
+        ]
         rows = self._read_engines()
         out: List[Dict[str, Any]] = []
         stale_ids: List[str] = []
         now = time.time()
+        reachable_count = 0
         for row in rows:
             item = dict(row)
             pid = int(item.get("pid") or 0)
             alive = self._pid_alive(pid)
             item["alive"] = alive
             item["uptime_seconds"] = max(0.0, now - float(item.get("spawned_at") or now))
+            item["reachable"] = False
+            if alive and include_reachability:
+                reachability = self._probe_registration_reachability(
+                    item,
+                    timeout_seconds=reachability_timeout_seconds,
+                )
+                item["reachable"] = bool(reachability.get("reachable", False))
+                item["reachability"] = reachability
+                if item["reachable"]:
+                    reachable_count += 1
             out.append(item)
             if not alive:
                 stale_ids.append(str(item.get("engine_id") or ""))
@@ -2229,6 +2370,23 @@ class EngineHostService:
             self._write_engines(keep)
             out = [x for x in out if x.get("alive")]
         out.sort(key=lambda x: str(x.get("engine_id") or ""))
+        progress_events.append(
+            self._progress_event(
+                "discover.complete",
+                "completed",
+                "Discovery complete",
+                engines=len(out),
+                reachable=reachable_count,
+                stale_pruned=len(stale_ids) if prune_stale else 0,
+            )
+        )
+        if include_progress:
+            return {
+                "status": "ok",
+                "stage": "completed",
+                "engines": out,
+                "progress_events": progress_events,
+            }
         return out
 
     def get_registration(self, engine_id: str) -> Optional[Dict[str, Any]]:
