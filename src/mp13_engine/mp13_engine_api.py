@@ -86,10 +86,13 @@ the application should schedule the `handle_call_tool` calls in separate
 `asyncio.Task`s (e.g., using `asyncio.gather`).
 """
 
+from __future__ import annotations
+
 import asyncio
+import logging
 import traceback
 import threading
-from typing import Dict, Any, Union, Optional, AsyncIterator, Tuple
+from typing import Dict, Any, Union, Optional, AsyncIterator, Tuple, TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -100,12 +103,43 @@ from .mp13_config import (
     FormattedPromptData, TokenCountData, AdapterDetailsData, LoadedAdaptersData, ToolsListData,
     ChunkType
 )
-from .mp13_state import (
-    ServerStatus,
-    ConfigurationError, TrainingError, EngineError, ModeMismatchError,
-    EngineInitializationError, AdapterError, BusyError
-)
-from .mp13_engine import MP13Engine, logger
+
+if TYPE_CHECKING:
+    from .mp13_engine import MP13Engine
+
+logger = logging.getLogger(__name__)
+_MP13_ENGINE_CLASS: Optional[type["MP13Engine"]] = None
+_STATE_SYMBOLS: Optional[Dict[str, Any]] = None
+
+
+def _get_mp13_engine_class() -> type["MP13Engine"]:
+    """Lazily import MP13Engine to avoid pulling transformers on module import."""
+    global _MP13_ENGINE_CLASS, logger
+    if _MP13_ENGINE_CLASS is None:
+        from .mp13_engine import MP13Engine as _RuntimeMP13Engine, logger as engine_logger
+        _MP13_ENGINE_CLASS = _RuntimeMP13Engine
+        logger = engine_logger
+    return _MP13_ENGINE_CLASS
+
+
+def _get_state_symbols() -> Dict[str, Any]:
+    """Lazily import mp13_state symbols to avoid importing mp13_utils/transformers at module import time."""
+    global _STATE_SYMBOLS
+    if _STATE_SYMBOLS is None:
+        from .mp13_state import (
+            ConfigurationError, TrainingError, EngineError, ModeMismatchError,
+            EngineInitializationError, AdapterError, BusyError,
+        )
+        _STATE_SYMBOLS = {
+            "ConfigurationError": ConfigurationError,
+            "TrainingError": TrainingError,
+            "EngineError": EngineError,
+            "ModeMismatchError": ModeMismatchError,
+            "EngineInitializationError": EngineInitializationError,
+            "AdapterError": AdapterError,
+            "BusyError": BusyError,
+        }
+    return _STATE_SYMBOLS
 
 # --- Multi-Engine Management Globals ---
 _api_lock = threading.Lock()
@@ -170,6 +204,7 @@ def get_engine_instance_for_direct_use(alias: Optional[str] = None) -> Optional[
     Returns a specific MP13Engine instance for direct use cases like event subscription.
     If alias is None, returns the default engine. Returns None if not found.
     """
+    EngineError = _get_state_symbols()["EngineError"]
     try:
         return _get_engine(alias)
     except EngineError:
@@ -181,6 +216,7 @@ def _get_engine(alias: Optional[str]) -> MP13Engine:
     This function is central to multi-instance routing.
     Raises: EngineError if the requested instance is not found or not available.
     """
+    EngineError = _get_state_symbols()["EngineError"]
     global _DEFAULT_ENGINE_ALIAS, _ALIAS_TO_ID, _ENGINE_INSTANCES
     with _api_lock:
         target_alias = alias
@@ -213,6 +249,9 @@ async def handle_call_tool(
 
     # --- Engine Lifecycle and Management Tools (do not use _get_engine) ---
     if name == "initialize-engine":
+        state_symbols = _get_state_symbols()
+        ConfigurationError = state_symbols["ConfigurationError"]
+        EngineInitializationError = state_symbols["EngineInitializationError"]
         try:
             config = GlobalEngineConfig(**arguments)
             
@@ -229,7 +268,7 @@ async def handle_call_tool(
                     logger.warning(f"Requested instance_id '{base_alias}' already exists. Using unique alias '{final_alias}'.")
 
                 # 2. Create and store the engine instance
-                engine = MP13Engine(instance_id=final_alias)
+                engine = _get_mp13_engine_class()(instance_id=final_alias)
                 engine_id = id(engine)
                 _ENGINE_INSTANCES[engine_id] = engine
                 _ALIAS_TO_ID[final_alias] = engine_id
@@ -342,6 +381,7 @@ async def handle_call_tool(
 
     # --- All other tools must resolve to a specific engine instance ---
     else:
+        EngineError = _get_state_symbols()["EngineError"]
         try:
             # Pop instance_id so it doesn't get passed to the engine method itself
             instance_alias = arguments.pop("instance_id", None)
@@ -352,6 +392,15 @@ async def handle_call_tool(
             return _create_response(status=APIStatus.ERROR.value, message=f"Unexpected error resolving engine instance: {e}")
 
         # --- Route to the appropriate method on the resolved 'engine' object ---
+        state_symbols = _get_state_symbols()
+        handled_engine_errors = (
+            state_symbols["ConfigurationError"],
+            state_symbols["AdapterError"],
+            state_symbols["TrainingError"],
+            state_symbols["BusyError"],
+            state_symbols["EngineError"],
+            state_symbols["ModeMismatchError"],
+        )
         try:
             if name == "check-set-mode":
                 mode_str = arguments.get("mode")
@@ -453,7 +502,7 @@ async def handle_call_tool(
             else:
                 return _create_response(status=APIStatus.ERROR.value, message=f"Unknown tool name '{name}'.")
 
-        except (ValidationError, ConfigurationError, AdapterError, TrainingError, BusyError, EngineError, ModeMismatchError) as e:
+        except (ValidationError,) + handled_engine_errors as e:
             message, details = _extract_exception_message_and_details(e)
             logger.error(f"[API][{name}] Handled error on engine '{engine.instance_id}': {message}")
             return _create_response(status=APIStatus.ERROR.value, message=message, details=details)

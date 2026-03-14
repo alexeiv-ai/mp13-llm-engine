@@ -17,10 +17,12 @@ if __name__ == '__main__' and __package__ is None:
 import json, re, uuid
 import copy
 import logging
-from typing import Any, Union, AsyncIterator, List, Dict, Any, Optional, Callable,  Iterable, Tuple
+from typing import Any, Union, AsyncIterator, List, Dict, Any, Optional, Callable,  Iterable, Tuple, TYPE_CHECKING
 
-from .mp13_utils import StoringTextIteratorStreamer
 from .mp13_config import ToolCall, ToolCallBlock, ParserProfile
+
+if TYPE_CHECKING:
+    from .mp13_utils import StoringTextIteratorStreamer
 
 DEFAULT_PROFILE = ParserProfile(
     key="unknown",

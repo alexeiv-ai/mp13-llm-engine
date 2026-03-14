@@ -484,7 +484,9 @@ def get_global_toolbox() -> Toolbox:
 def register_tool_callable(
     func: Callable[..., Any],
     *,
-    activate: bool = True,
+    activate: bool = False,
+    guide_content: Optional[Dict[str, List[str]]] = None,
+    guide_description: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     Register a Python callable as a tool before launching the chat loop.
@@ -498,14 +500,19 @@ def register_tool_callable(
         register_tool_callable(current_time)
     """
     toolbox_obj = _ensure_global_toolbox()
-    return toolbox_obj.add_tool_callable(func, activate=activate)
+    return toolbox_obj.add_tool_callable(
+        func,
+        activate=activate,
+        guide_content=guide_content,
+        guide_description=guide_description,
+    )
 
 
 def register_tool_external(
     tool_definition: Dict[str, Any],
     handler: Callable[..., Any],
     *,
-    activate: bool = True,
+    activate: bool = False,
     allow_override: bool = False,
 ) -> Tuple[bool, str]:
     """

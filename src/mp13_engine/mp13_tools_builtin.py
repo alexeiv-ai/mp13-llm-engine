@@ -11,8 +11,11 @@ import codecs
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple, Callable, Union, FrozenSet
 import numpy as np
-import numexpr as ne
 import importlib
+try:
+    import numexpr as ne
+except ModuleNotFoundError:
+    ne = None  # type: ignore
 
 from .mp13_config import RegisteredTool
 from sympy import sympify, symbols, simplify, solve, diff, integrate, SympifyError, I, expand, factor, pi, E, oo, factorial, gamma, atan2
@@ -311,6 +314,8 @@ _ID_RE = re.compile(r"[A-Za-z_]\w*")          # Python identifier pattern
 
 def _discover_allowed() -> FrozenSet[str]:
     """Runtime snapshot of every legal NumExpr symbol (functions + constants)."""
+    if ne is None:
+        return frozenset(_NUMEXPR_MANUAL_CONSTANTS.keys())
     funcs = set(getattr(ne.expressions, "functions", {}).keys())
 
     # constants table moved in 2.11
@@ -468,6 +473,9 @@ def scriptable_calculator(expr: Optional[str] = None, *, variables: Optional[Dic
 
     if not expr:
         raise ValueError("The 'expr' argument is required and could not be recovered from the malformed tool call.")
+
+    if ne is None:
+        raise ModuleNotFoundError("numexpr is required for scriptable_calculator but is not installed.")
 
     try:
         variables = variables or {}

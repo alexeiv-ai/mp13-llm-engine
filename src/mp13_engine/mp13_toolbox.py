@@ -9,20 +9,28 @@ import json
 import time
 import asyncio
 import inspect
+import importlib
 import re, copy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Callable, Union, Set
+from typing import List, Dict, Any, Optional, Tuple, Callable, Union, Set, Sequence
 from typing import TYPE_CHECKING
 
 # Import the Tool model for validation
 from .mp13_config import RegisteredTool, Tool, ToolCall, ToolCallBlock, InferenceResponse
-from .mp13_tools_builtin  import  INTRINSICS_REGISTRY, Guide
 from .mp13_tools_parser import UnifiedToolIO
 
 if TYPE_CHECKING:
     from prompt_toolkit import PromptSession
     from .mp13_state import MP13State
+
+
+def _get_tools_builtin_module():
+    return importlib.import_module(".mp13_tools_builtin", __package__)
+
+
+def _get_intrinsics_registry() -> Dict[str, RegisteredTool]:
+    return _get_tools_builtin_module().INTRINSICS_REGISTRY
 
 
 @dataclass
@@ -172,7 +180,9 @@ class Toolbox:
     """Manages tool definitions for the chat application."""
     _VALID_GLOBAL_MODES = {"advertised", "silent", "disabled"}
 
-    def __init__(self):
+    def __init__(self, with_intrinsics: bool = False, with_intrinsic_guides: bool = False):
+        self.with_intrinsics = bool(with_intrinsics)
+        self.with_intrinsic_guides = bool(with_intrinsic_guides)
         self.tools: Dict[str, Dict[str, Any]] = {}  # User-defined tools from JSON
 #        self.prompt_header: Optional[str] = None
 #        self.prompt_footer: Optional[str] = None
@@ -191,7 +201,8 @@ class Toolbox:
         self.global_tools_mode: str = "advertised"  # advertised | silent | disabled
         self._view_seq: int = 0
 
-        self._initialize_intrinsic_tools()
+        if self.with_intrinsics:
+            self._initialize_intrinsic_tools(include_guides=self.with_intrinsic_guides)
         self._create_default_state() # Initialize with default state
 
     def _normalize_mode(self, mode: Optional[str]) -> str:
@@ -212,19 +223,102 @@ class Toolbox:
         normalized_scopes = [scope.clean() for scope in (scopes or [])]
         return ToolsAccess(toolbox=self, scopes=normalized_scopes, label=label)
 
-    def _initialize_intrinsic_tools(self):
+    def _resolve_intrinsic_targets(self, intrinsic_names: Optional[Union[str, Sequence[str]]]) -> Tuple[Optional[Set[str]], List[str]]:
+        if intrinsic_names is None:
+            return None, []
+        targets = {str(n).strip() for n in ([intrinsic_names] if isinstance(intrinsic_names, str) else intrinsic_names) if str(n).strip()}
+        if not targets:
+            return set(), []
+        registry = _get_intrinsics_registry()
+        known: Set[str] = set()
+        for container in registry.values():
+            known.add(container.name)
+            if container.guide_definition:
+                known.add(container.guide_definition["function"]["name"])
+        missing = sorted([name for name in targets if name not in known])
+        valid_targets = {name for name in targets if name in known}
+        return valid_targets, missing
+
+    def available_intrinsics(self, include_guides: bool = True) -> List[Dict[str, Any]]:
+        """
+        Returns discoverable intrinsic tool metadata for registration UX.
+        """
+        items: List[Dict[str, Any]] = []
+        for container in _get_intrinsics_registry().values():
+            base_def = container.definition or {}
+            base_fn = base_def.get("function", {})
+            items.append({
+                "name": container.name,
+                "is_guide": False,
+                "parent": None,
+                "has_guide": bool(container.guide_definition and container.guide_implementation),
+                "description": base_fn.get("description", ""),
+            })
+            if include_guides and container.guide_definition and container.guide_implementation:
+                guide_name = container.guide_definition.get("function", {}).get("name")
+                if guide_name:
+                    items.append({
+                        "name": guide_name,
+                        "is_guide": True,
+                        "parent": container.name,
+                        "has_guide": False,
+                        "description": container.guide_definition.get("function", {}).get("description", ""),
+                    })
+        return sorted(items, key=lambda x: x["name"])
+
+    def _initialize_intrinsic_tools(
+        self,
+        *,
+        include_guides: bool = False,
+        intrinsic_names: Optional[Union[str, Sequence[str]]] = None,
+    ):
         """Defines the schema and callables for built-in tools."""
+        targets, _ = self._resolve_intrinsic_targets(intrinsic_names)
         # Load intrinsic tools from the central registry and unwrap them.
-        for name, tool_container in INTRINSICS_REGISTRY.items():
-            self.intrinsic_tools[tool_container.name] = tool_container.definition
-            self.intrinsic_tool_callables[tool_container.name] = tool_container.implementation
+        for name, tool_container in _get_intrinsics_registry().items():
+            guide_name = tool_container.guide_definition["function"]["name"] if tool_container.guide_definition else None
+            if targets is not None and tool_container.name not in targets and (not guide_name or guide_name not in targets):
+                continue
+            include_base = (targets is None and tool_container.name not in self.intrinsic_tools) or (targets is not None and tool_container.name in targets)
+            if include_base:
+                self.intrinsic_tools[tool_container.name] = tool_container.definition
+                self.intrinsic_tool_callables[tool_container.name] = tool_container.implementation
             if tool_container.guide_definition and tool_container.guide_implementation:
-                guide_name = tool_container.guide_definition["function"]["name"]
-                self.intrinsic_tools[guide_name] = tool_container.guide_definition
-                self.intrinsic_tool_callables[guide_name] = tool_container.guide_implementation
+                include_this_guide = bool(include_guides)
+                if guide_name and targets is not None and guide_name in targets:
+                    include_this_guide = True
+                if include_this_guide:
+                    guide_name = tool_container.guide_definition["function"]["name"]
+                    self.intrinsic_tools[guide_name] = tool_container.guide_definition
+                    self.intrinsic_tool_callables[guide_name] = tool_container.guide_implementation
 
     def from_dict(self, data: Dict[str, Any], search_scope: Optional[Dict[str, Any]] = None, external_handler: Optional[Callable[..., Any]] = None): # noqa
         """Loads tool state from a dictionary and re-links callables."""
+        self.with_intrinsics = bool(data.get("with_intrinsics", self.with_intrinsics))
+        self.with_intrinsic_guides = bool(data.get("with_intrinsic_guides", self.with_intrinsic_guides))
+        loaded_intrinsic_tools = data.get("loaded_intrinsic_tools")
+
+        if loaded_intrinsic_tools is None:
+            inferred: Set[str] = set(data.get("active_intrinsic_tools", []) or [])
+            inferred.update(data.get("hidden_intrinsic_tools", []) or [])
+            intrinsic_overrides = data.get("intrinsic_overrides", {}) or {}
+            for base_name in intrinsic_overrides.keys():
+                inferred.add(base_name)
+                inferred.add(f"{base_name}_guide")
+            loaded_intrinsic_tools = sorted(inferred) if inferred else None
+            if inferred and "with_intrinsics" not in data:
+                self.with_intrinsics = True
+            if any(str(name).endswith("_guide") for name in inferred) and "with_intrinsic_guides" not in data:
+                self.with_intrinsic_guides = True
+
+        self.intrinsic_tools = {}
+        self.intrinsic_tool_callables = {}
+        if self.with_intrinsics:
+            self._initialize_intrinsic_tools(
+                include_guides=self.with_intrinsic_guides,
+                intrinsic_names=loaded_intrinsic_tools,
+            )
+
         self.tools = data.get("tools", {})
 #        self.prompt_header = data.get("prompt_header")
 #        self.prompt_footer = data.get("prompt_footer")
@@ -234,6 +328,8 @@ class Toolbox:
         self.hidden_tool_names = data.get("hidden_tools", [])
         self.active_intrinsic_tool_names = data.get("active_intrinsic_tools", list(self.intrinsic_tools.keys()))
         self.hidden_intrinsic_tool_names = data.get("hidden_intrinsic_tools", [])
+        self.active_intrinsic_tool_names = [n for n in self.active_intrinsic_tool_names if n in self.intrinsic_tools]
+        self.hidden_intrinsic_tool_names = [n for n in self.hidden_intrinsic_tool_names if n in self.intrinsic_tools]
         self.global_tools_mode = self._normalize_mode(data.get("global_tools_mode", self.global_tools_mode))
 
         # Re-link callables for user-defined tools and determine their type.
@@ -253,6 +349,9 @@ class Toolbox:
             "hidden_tools": self.hidden_tool_names,
             "active_intrinsic_tools": self.active_intrinsic_tool_names,
             "hidden_intrinsic_tools": self.hidden_intrinsic_tool_names,
+            "loaded_intrinsic_tools": sorted(list(self.intrinsic_tools.keys())),
+            "with_intrinsics": self.with_intrinsics,
+            "with_intrinsic_guides": self.with_intrinsic_guides,
             "global_tools_mode": self.global_tools_mode,
         }
 
@@ -313,36 +412,41 @@ class Toolbox:
             }
 
         # Intrinsic tools
-        for tool_container in INTRINSICS_REGISTRY.values():
-            # Process main tool
-            if tool_container.name not in managed_tools:
-                override = self.intrinsic_overrides.get(tool_container.name, {})
-                base_desc = tool_container.definition.get("function", {}).get("description", "No description.")
-                managed_tools[tool_container.name] = {
-                    "description": override.get("description", base_desc),
-                    "type": "intrinsic",
-                    "is_active": tool_container.name in self.active_intrinsic_tool_names,
-                    "is_hidden": tool_container.name in self.hidden_intrinsic_tool_names,
-                    "is_intrinsic": True,
-                    "is_guide": False,
-                    "is_modified": tool_container.name in self.intrinsic_overrides,
-                }
-            # Process guide tool if it exists
-            if tool_container.guide_definition:
-                guide_name = tool_container.guide_definition["function"]["name"]
-                if guide_name not in managed_tools:
-                    # Guides can't be modified directly, but their content comes from the parent tool's override
-                    parent_override = self.intrinsic_overrides.get(tool_container.name, {})
-                    base_guide_desc = tool_container.guide_definition.get("function", {}).get("description", "No description.")
-                    managed_tools[guide_name] = {
-                        "description": parent_override.get("guide_description", base_guide_desc),
+        if self.with_intrinsics:
+            for tool_container in _get_intrinsics_registry().values():
+                guide_name = tool_container.guide_definition["function"]["name"] if tool_container.guide_definition else None
+                has_base = tool_container.name in self.intrinsic_tools
+                has_guide = bool(guide_name and guide_name in self.intrinsic_tools)
+                if not has_base and not has_guide:
+                    continue
+                # Process main tool
+                if has_base and tool_container.name not in managed_tools:
+                    override = self.intrinsic_overrides.get(tool_container.name, {})
+                    base_desc = tool_container.definition.get("function", {}).get("description", "No description.")
+                    managed_tools[tool_container.name] = {
+                        "description": override.get("description", base_desc),
                         "type": "intrinsic",
-                        "is_active": guide_name in self.active_intrinsic_tool_names,
-                        "is_hidden": guide_name in self.hidden_intrinsic_tool_names,
+                        "is_active": tool_container.name in self.active_intrinsic_tool_names,
+                        "is_hidden": tool_container.name in self.hidden_intrinsic_tool_names,
                         "is_intrinsic": True,
-                        "is_guide": True,
-                        "is_modified": tool_container.name in self.intrinsic_overrides, # Guide is modified if parent is
+                        "is_guide": False,
+                        "is_modified": tool_container.name in self.intrinsic_overrides,
                     }
+                # Process guide tool if it exists
+                if tool_container.guide_definition:
+                    if guide_name in self.intrinsic_tools and guide_name not in managed_tools:
+                        # Guides can't be modified directly, but their content comes from the parent tool's override
+                        parent_override = self.intrinsic_overrides.get(tool_container.name, {})
+                        base_guide_desc = tool_container.guide_definition.get("function", {}).get("description", "No description.")
+                        managed_tools[guide_name] = {
+                            "description": parent_override.get("guide_description", base_guide_desc),
+                            "type": "intrinsic",
+                            "is_active": guide_name in self.active_intrinsic_tool_names,
+                            "is_hidden": guide_name in self.hidden_intrinsic_tool_names,
+                            "is_intrinsic": True,
+                            "is_guide": True,
+                            "is_modified": tool_container.name in self.intrinsic_overrides, # Guide is modified if parent is
+                        }
         
         # Add user-defined guides to the list
         for name, definition in self.tools.items():
@@ -374,6 +478,16 @@ class Toolbox:
         active = set(self.active_tool_names or [])
         active.update(self.active_intrinsic_tool_names or [])
         return active
+
+    def _registered_tool_names(self) -> Set[str]:
+        """Returns all currently registered tool/guide names in the toolbox namespace."""
+        names: Set[str] = set(self.tools.keys())
+        names.update(self.intrinsic_tools.keys())
+        for tool_def in self.tools.values():
+            guide_name = tool_def.get("guide_definition", {}).get("function", {}).get("name")
+            if isinstance(guide_name, str) and guide_name:
+                names.add(guide_name)
+        return names
 
     def get_tool(self, name: str) -> Optional[Dict[str, Any]]:
         """Gets the full definition of a tool by name."""
@@ -500,7 +614,7 @@ class Toolbox:
         # For tools defined via the editor or JSON, we register the default handler
         # (which prompts the user for input) as their implementation.
         # We reuse add_tool_external for validation and saving.
-        return self.add_tool_external(new_definition, external_handler, activate=False, allow_override=True)
+        return self.add_tool_external(new_definition, external_handler, activate=None, allow_override=True)
     
     def delete_tool(self, names: Union[str, List[str]]) -> Tuple[bool, str]:
         """Deletes one or more user-defined tools."""
@@ -522,9 +636,6 @@ class Toolbox:
             if name in self.hidden_tool_names: self.hidden_tool_names.remove(name)
             if name in self.user_tool_callables: del self.user_tool_callables[name]
             # Also remove any associated tool footer
-            if name in self.tool_footers:
-                del self.tool_footers[name]
-                print(f"Removed footer for deleted tool '{name}'.")
 
             deleted_count += 1
 
@@ -550,14 +661,14 @@ class Toolbox:
             # We create a temporary structure for the editor.
             temp_def = {
                 "description": override_def.get("description", base_def.get("function", {}).get("description", "")), # type: ignore
-                "tool_footer": self.tool_footers.get(tool_name_to_edit, ""),
                 "guide_content": override_def.get("guide_content", {})
             }
             # If the base tool has a guide and there's no override content yet, pre-populate it.
             if not temp_def["guide_content"]:
                 parent_tool_name = tool_name_to_edit.removesuffix("_guide")
-                if parent_tool_name in INTRINSICS_REGISTRY and INTRINSICS_REGISTRY[parent_tool_name].guide_implementation:
-                    guide_impl = INTRINSICS_REGISTRY[parent_tool_name].guide_implementation
+                registry = _get_intrinsics_registry()
+                if parent_tool_name in registry and registry[parent_tool_name].guide_implementation:
+                    guide_impl = registry[parent_tool_name].guide_implementation
                     if hasattr(guide_impl, "_content_map"):
                         temp_def["guide_content"] = {k: v for k, v in guide_impl._content_map.items() if isinstance(v, list)}
 
@@ -586,7 +697,6 @@ class Toolbox:
             if is_intrinsic_edit:
                 # Simplified editor for intrinsics
                 fields.append({'display': 'Function Description', 'path': ('description',), 'type': 'str'}) # type: ignore
-                fields.append({'display': 'Tool Footer', 'path': ('tool_footer',), 'type': 'str'}) # type: ignore
             else:
                 # Full editor for user-defined tools
                 fields.append({'display': 'Function Name', 'path': ('function', 'name'), 'type': 'str'})
@@ -811,9 +921,6 @@ class Toolbox:
         if is_intrinsic_edit:
             # For intrinsics, we save to the overrides dictionary
             self.intrinsic_overrides[original_name] = {k: v for k, v in temp_def.items() if k != 'tool_footer'} # type: ignore
-            tool_footer = temp_def.get("tool_footer") # type: ignore
-            if tool_footer: self.tool_footers[original_name] = tool_footer # type: ignore
-            elif original_name in self.tool_footers: del self.tool_footers[original_name] # type: ignore
             return True, f"Intrinsic tool '{original_name}' override saved successfully."
 
         # --- Save Logic for user-defined tools ---
@@ -884,7 +991,7 @@ class Toolbox:
 
         return success, msg
 
-    def add_tool_external(self, tool_definition: Dict[str, Any], implementation: Callable[..., Any], activate: bool = True, allow_override: bool = False) -> Tuple[bool, str]: # noqa
+    def add_tool_external(self, tool_definition: Dict[str, Any], implementation: Callable[..., Any], activate: Optional[bool] = False, allow_override: bool = False) -> Tuple[bool, str]: # noqa
         """
         Registers a tool with an explicit definition and a Python callable for execution.
         The tool definition is saved to tools.json, but the callable is only registered at runtime.
@@ -916,6 +1023,9 @@ class Toolbox:
             # Some callables (like certain built-ins) can't be inspected. Assume they don't accept kwargs.
             accepts_kwargs = False
             required_args = []
+        
+        is_update = allow_override and tool_name in self.tools
+        was_active = is_update and tool_name in self.active_tool_names
 
         if not allow_override and tool_name in self.tools:
             return False, f"Tool '{tool_name}' already exists. Use allow_override=True to replace it."
@@ -932,21 +1042,62 @@ class Toolbox:
         tool_definition["_accepts_kwargs"] = accepts_kwargs
         tool_definition["_required_args"] = required_args
 
-        if activate:
-            if tool_name not in self.active_tool_names:
-                self.active_tool_names.append(tool_name)
-            # When a tool is added and activated, also make it shown by default (remove from hidden).
-            if tool_name in self.hidden_tool_names:
-                self.hidden_tool_names.remove(tool_name)
+        # Activation Logic
+        should_be_active = (activate is None and is_update and was_active) or (activate is True)
+        is_active_now = tool_name in self.active_tool_names
+
+        if should_be_active and not is_active_now:
+            self.active_tool_names.append(tool_name)
+        elif not should_be_active and is_active_now:
+            self.active_tool_names.remove(tool_name)
+
+        # Also handle hidden status when explicitly activating
+        if activate is True and tool_name in self.hidden_tool_names:
+            self.hidden_tool_names.remove(tool_name)
+
 
         return True, f"External tool '{tool_name}' registered and saved successfully."
 
-    def add_tool_callable(self, func_or_name: str | Callable[..., Any], search_scope: Optional[Dict[str, Any]] = None, activate: bool = True) -> Tuple[bool, str]:
+    def add_tool_callable(
+        self,
+        func_or_name: str | Callable[..., Any] | Sequence[str],
+        search_scope: Optional[Dict[str, Any]] = None,
+        activate: Optional[bool] = False,
+        *,
+        is_intrinsic: bool = False,
+        include_guides: bool = False,
+        guide_content: Optional[Dict[str, List[str]]] = None,
+        guide_description: Optional[str] = None,
+    ) -> Tuple[bool, str]:
         """
-        Introspects a Python function to create and register a tool definition.
-        This is the "automatic" method. It requires a well-annotated function.
-        Can be called with a function object or its name (if search_scope is provided).
+        Register a callable tool, or intrinsic tool(s) when `is_intrinsic=True`.
+        For user callables, optional `guide_content` can auto-create `<tool>_guide`.
         """
+        if is_intrinsic:
+            if callable(func_or_name):
+                return False, "For intrinsic registration, provide intrinsic name(s), not a callable object."
+            targets_input: Optional[Union[str, Sequence[str]]] = func_or_name
+            targets, missing = self._resolve_intrinsic_targets(targets_input)
+            existing_names = self._registered_tool_names()
+            requested_names = set(targets or set())
+            collisions = sorted([name for name in requested_names if name in existing_names])
+            if collisions:
+                return False, f"Intrinsic registration blocked due to existing tool name(s): {', '.join(collisions)}"
+            existing = set(self.intrinsic_tools.keys())
+            self.with_intrinsics = True
+            self.with_intrinsic_guides = bool(include_guides)
+            self._initialize_intrinsic_tools(include_guides=include_guides, intrinsic_names=targets_input)
+            added = [name for name in self.intrinsic_tools.keys() if name not in existing]
+            if activate:
+                for name in added:
+                    if name not in self.active_intrinsic_tool_names:
+                        self.active_intrinsic_tool_names.append(name)
+            if missing:
+                return True, f"Registered {len(added)} intrinsic tool entries. Unknown intrinsic names skipped: {', '.join(missing)}"
+            if targets is not None and not added:
+                return False, "No intrinsic tools were added for the requested names."
+            return True, f"Registered {len(added)} intrinsic tool entries."
+
         func: Optional[Callable[..., Any]] = None
         if isinstance(func_or_name, str):
             if not search_scope:
@@ -954,6 +1105,8 @@ class Toolbox:
             func = search_scope.get(func_or_name)
             if not func:
                 return False, f"Function '{func_or_name}' not found in the provided scope."
+        elif isinstance(func_or_name, (list, tuple, set)):
+            return False, "For non-intrinsic registration, provide a single callable or function name string."
         else:
             func = func_or_name
 
@@ -961,14 +1114,16 @@ class Toolbox:
             return False, f"Provided object '{func_or_name}' is not a callable function."
 
         tool_name = func.__name__
+        existing_names = self._registered_tool_names()
+        if tool_name in existing_names:
+            return False, f"Tool name '{tool_name}' already exists."
+
         docstring = inspect.getdoc(func) or "No description provided."
         signature = inspect.signature(func)
 
-        # --- Helper to parse parameter descriptions from the docstring ---
         def _parse_param_descriptions(doc: str) -> Dict[str, str]:
             descriptions = {}
             try:
-                # Isolate the 'Args:' section
                 args_section = doc.split("Args:")[1].split("Returns:")[0]
             except IndexError:
                 return {}
@@ -976,8 +1131,8 @@ class Toolbox:
             current_param = None
             for line in args_section.split('\n'):
                 line = line.strip()
-                if not line: continue
-
+                if not line:
+                    continue
                 match = re.match(r"(\w+)\s*\(.*\):\s*(.*)", line)
                 if match:
                     param_name, description = match.groups()
@@ -988,38 +1143,63 @@ class Toolbox:
             return descriptions
 
         param_descriptions = _parse_param_descriptions(docstring)
-        properties = {}
-        required = []
+        properties: Dict[str, Dict[str, str]] = {}
+        required: List[str] = []
         internal_arg_names = {"_tool_args_issue"}
         for param in signature.parameters.values():
-            if param.name in ('self', 'cls'): continue
+            if param.name in ("self", "cls"):
+                continue
             if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
                 continue
             if param.name in internal_arg_names:
                 continue
-            # Basic type mapping
-            param_type = "string" # Default
-            if param.annotation in [int, float]: param_type = "number"
-            if param.annotation is bool: param_type = "boolean"
+            param_type = "string"
+            if param.annotation in [int, float]:
+                param_type = "number"
+            if param.annotation is bool:
+                param_type = "boolean"
 
             param_desc = param_descriptions.get(param.name, "")
             properties[param.name] = {"type": param_type, "description": param_desc}
             if param.default is inspect.Parameter.empty:
                 required.append(param.name)
 
-        tool_def = {"type": "function", "function": {"name": tool_name, "description": docstring, "parameters": {"type": "object", "properties": properties, "required": required}}}
-        # --- Explicitly set the type so it's saved to JSON ---
-        tool_def["_type"] = "callable"
+        tool_def: Dict[str, Any] = {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": docstring,
+                "parameters": {"type": "object", "properties": properties, "required": required},
+            },
+            "_type": "callable",
+        }
 
-        # Allow overriding an existing definition when re-registering a callable
-        success, msg = self.add_tool_external(tool_def, func, activate, allow_override=True)
+        if guide_content:
+            guide_name = f"{tool_name}_guide"
+            if guide_name in existing_names:
+                return False, f"Guide name '{guide_name}' already exists."
+            topics = sorted(list(guide_content.keys()))
+            tool_def["guide_content"] = guide_content
+            tool_def["guide_definition"] = {
+                "type": "function",
+                "function": {
+                    "name": guide_name,
+                    "description": guide_description or f"Provides detailed guidance on using the {tool_name} tool. Use topic='help' to see all topics.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type": "string", "description": "The guidance topic to retrieve.", "enum": ["help"] + topics},
+                            "search": {"type": "string", "description": "An optional substring to filter results."},
+                        },
+                        "required": ["topic"],
+                    },
+                },
+            }
+
+        success, msg = self.add_tool_external(tool_def, func, activate, allow_override=False)
         if success:
-            # Explicitly activate the tool if it's not already active.
-            if tool_name not in self.active_tool_names:
-                self.active_tool_names.append(tool_name)
             return True, f"Callable tool '{tool_name}' registered successfully."
-        else:
-            return False, msg # Pass the original error message through
+        return False, msg
 
     def activate_tool(self, names: Union[str, List[str]]) -> Tuple[bool, str]:
         """Activates one or more tools."""
@@ -1329,16 +1509,36 @@ class Toolbox:
 
     def _execute_user_guide(self, tool_call: ToolCall) -> str:
         """Executes a user-defined guide tool."""
+        def _query_guide_content(content_map: Dict[str, Any], topic: str, search: Optional[str] = None) -> List[str]:
+            topics = sorted(list(content_map.keys()))
+            if topic not in topics and topic != "all":
+                raise ValueError(f"Invalid topic '{topic}'. Available topics are: {topics}")
+
+            topics_to_process = topics if topic == "all" else [topic]
+            results: List[str] = []
+            search_lower = search.lower() if search else None
+
+            for t in topics_to_process:
+                items = content_map.get(t, [])
+                if callable(items):
+                    items = items()
+                if not isinstance(items, list):
+                    continue
+                filtered_items = [item for item in items if not search_lower or (isinstance(item, str) and search_lower in item.lower())]
+                if filtered_items:
+                    results.append(f"--- {t.replace('_', ' ').title()} ---")
+                    results.extend(filtered_items)
+
+            return results or ["No results found for your search criteria."]
+
         for tool_def in self.tools.values():
             if tool_def.get("guide_definition", {}).get("function", {}).get("name") == tool_call.name:
                 guide_content = tool_def.get("guide_content", {})
                 if not guide_content:
                     return "Error: This guide has no content."
-                
-                guide_obj = Guide(guide_content)
                 topic = tool_call.arguments.get("topic", "help")
                 search = tool_call.arguments.get("search")
-                return str(guide_obj.query(topic, search))
+                return str(_query_guide_content(guide_content, topic, search))
         return f"Error: Could not find implementation for user-defined guide '{tool_call.name}'."
 
     async def execute_request_tools(
