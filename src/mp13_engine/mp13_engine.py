@@ -144,9 +144,11 @@ from .mp13_config import (
 from . import mp13_state
 from .mp13_state import (
     MP13State, TrainingStatus, InferenceStatus, ServerStatus, EngineModeState,
+    RequestResource, AggregateInferenceMetrics
+)
+from .mp13_errors import (
     ConfigurationError, DatasetError, TrainingError, EngineError,
     EngineInitializationError, AdapterError, InferenceRequestError, BusyError, ModeMismatchError,
-    RequestResource, AggregateInferenceMetrics
 )
 from .mp13_tools_parser import guess_profile_from_template, profile_for
 from .mp13_utils import (

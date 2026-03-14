@@ -14,7 +14,7 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 # Import from local modules
 from .mp13_config import DatasetFormat, ColumnsConfig, DatasetTags, PreprocessingMode
-from .mp13_state import DatasetError # Keep if used, else remove
+from .mp13_errors import DatasetError
 from .mp13_utils import format_prompt_messages
 
 def get_sft_formatting_func(logger: logging.Logger, formatting: DatasetFormat, columns: ColumnsConfig, tokenizer: Optional[PreTrainedTokenizerBase] = None, tags: Optional[DatasetTags] = None) -> Callable[[Dict[str, Any]], str]:

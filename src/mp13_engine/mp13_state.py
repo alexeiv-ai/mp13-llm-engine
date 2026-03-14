@@ -21,18 +21,18 @@ from peft import PeftMixedModel, PeftModel
 import threading
 
 from .mp13_utils import round_floats
-
-# Define specific exceptions
-class MP13Error(Exception): ...
-class ConfigurationError(MP13Error): pass
-class DatasetError(MP13Error): pass
-class TrainingError(MP13Error): pass
-class EngineError(MP13Error): pass
-class EngineInitializationError(EngineError): pass
-class AdapterError(EngineError): pass
-class InferenceRequestError(EngineError): pass
-class BusyError(MP13Error): pass
-class ModeMismatchError(EngineError): pass
+from .mp13_errors import (
+    MP13Error,
+    ConfigurationError,
+    DatasetError,
+    TrainingError,
+    EngineError,
+    EngineInitializationError,
+    AdapterError,
+    InferenceRequestError,
+    BusyError,
+    ModeMismatchError,
+)
 
 class ServerStatus(Enum):
     """Status of the MP13 engine instance."""

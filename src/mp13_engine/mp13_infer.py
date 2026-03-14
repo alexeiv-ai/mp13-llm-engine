@@ -28,7 +28,8 @@ from transformers.tokenization_utils_base import BatchEncoding
 from peft import PeftModel 
 from peft import PeftMixedModel
 from .mp13_state import MP13State, InferenceMetricsHistoryItem
-from .mp13_state import EngineModeState, InferenceStatus, ServerStatus, ModeMismatchError, EngineError, AdapterError, InferenceRequestError, RequestResource
+from .mp13_state import EngineModeState, InferenceStatus, ServerStatus, RequestResource
+from .mp13_errors import ModeMismatchError, EngineError, AdapterError, InferenceRequestError
 from .mp13_config import InferenceRequest, InferenceResponse, ChunkType, ColumnsConfig, Tool, ToolCallBlock, ParserProfile
 from .mp13_tools_parser import UnifiedToolIO, ToolsParserHelper
 from .mp13_state import MP13State

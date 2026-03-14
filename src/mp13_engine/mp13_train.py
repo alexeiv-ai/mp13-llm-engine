@@ -37,8 +37,11 @@ from .mp13_callbacks import (
 from .mp13_adapter import create_quantization_metadata, quant_display_from_meta
 from . import mp13_state
 from .mp13_state import (
-    TrainingStatus, EngineModeState, BusyError, AdapterError, ModeMismatchError,
-    EngineInitializationError, ConfigurationError, TrainingError
+    TrainingStatus, EngineModeState
+)
+from .mp13_errors import (
+    BusyError, AdapterError, ModeMismatchError,
+    EngineInitializationError, ConfigurationError, TrainingError,
 )
 from .mp13_config import APIStatus, TrainingConfig
 from pathlib import Path
