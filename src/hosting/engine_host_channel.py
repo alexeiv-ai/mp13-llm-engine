@@ -641,19 +641,25 @@ class EngineHostControlChannel:
         engine_id: str,
         *,
         backend_id: Optional[str],
-        exclusive: bool = False,
+        exclusive: Optional[bool] = None,
         force_override: bool = False,
         force_override_confirmation: Optional[str] = None,
+        force_override_reason: Optional[str] = None,
+        force_override_emergency: bool = False,
     ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "engine_id": str(engine_id),
+            "backend_id": backend_id,
+            "force_override": bool(force_override),
+            "force_override_confirmation": force_override_confirmation,
+            "force_override_reason": force_override_reason,
+            "force_override_emergency": bool(force_override_emergency),
+        }
+        if exclusive is not None:
+            payload["exclusive"] = bool(exclusive)
         res = self._invoke(
             "claim-engine",
-            {
-                "engine_id": str(engine_id),
-                "backend_id": backend_id,
-                "exclusive": bool(exclusive),
-                "force_override": bool(force_override),
-                "force_override_confirmation": force_override_confirmation,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -661,18 +667,24 @@ class EngineHostControlChannel:
         self,
         *,
         backend_id: Optional[str],
-        exclusive: bool = False,
+        exclusive: Optional[bool] = None,
         force_override: bool = False,
         force_override_confirmation: Optional[str] = None,
+        force_override_reason: Optional[str] = None,
+        force_override_emergency: bool = False,
     ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "backend_id": backend_id,
+            "force_override": bool(force_override),
+            "force_override_confirmation": force_override_confirmation,
+            "force_override_reason": force_override_reason,
+            "force_override_emergency": bool(force_override_emergency),
+        }
+        if exclusive is not None:
+            payload["exclusive"] = bool(exclusive)
         res = self._invoke(
             "claim-endpoint",
-            {
-                "backend_id": backend_id,
-                "exclusive": bool(exclusive),
-                "force_override": bool(force_override),
-                "force_override_confirmation": force_override_confirmation,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -694,20 +706,26 @@ class EngineHostControlChannel:
         resource_id: str,
         *,
         backend_id: Optional[str],
-        exclusive: bool = False,
+        exclusive: Optional[bool] = None,
         force_override: bool = False,
         force_override_confirmation: Optional[str] = None,
+        force_override_reason: Optional[str] = None,
+        force_override_emergency: bool = False,
     ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "resource_kind": str(resource_kind),
+            "resource_id": str(resource_id),
+            "backend_id": backend_id,
+            "force_override": bool(force_override),
+            "force_override_confirmation": force_override_confirmation,
+            "force_override_reason": force_override_reason,
+            "force_override_emergency": bool(force_override_emergency),
+        }
+        if exclusive is not None:
+            payload["exclusive"] = bool(exclusive)
         res = self._invoke(
             "claim-resource",
-            {
-                "resource_kind": str(resource_kind),
-                "resource_id": str(resource_id),
-                "backend_id": backend_id,
-                "exclusive": bool(exclusive),
-                "force_override": bool(force_override),
-                "force_override_confirmation": force_override_confirmation,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -1018,11 +1036,26 @@ class EngineHostControlChannel:
         res = self._invoke("get-control-config", {})
         return dict(res or {})
 
+    def get_endpoint_mode_effective(self) -> Dict[str, Any]:
+        res = self._invoke("get-endpoint-mode-effective", {})
+        return dict(res or {})
+
+    def set_endpoint_mode_override(self, mode: Optional[str]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if mode is not None:
+            payload["mode"] = str(mode).strip().lower()
+        res = self._invoke("set-endpoint-mode-override", payload)
+        return dict(res or {})
+
     def set_control_config(
         self,
         *,
         ssh_key: Optional[str] = None,
         require_auth: Optional[bool] = None,
+        access_profile: Optional[Dict[str, Any]] = None,
+        endpoint_mode_default: Optional[str] = None,
+        lifecycle_profile: Optional[str] = None,
+        lifecycle_policy: Optional[Dict[str, Any]] = None,
         traffic_policy: Optional[Dict[str, Any]] = None,
         engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
         claim_acl_policy: Optional[Dict[str, Any]] = None,
@@ -1030,6 +1063,14 @@ class EngineHostControlChannel:
         payload: Dict[str, Any] = {"ssh_key": str(ssh_key).strip() if ssh_key else None}
         if require_auth is not None:
             payload["require_auth"] = bool(require_auth)
+        if access_profile is not None:
+            payload["access_profile"] = dict(access_profile or {})
+        if endpoint_mode_default is not None:
+            payload["endpoint_mode_default"] = str(endpoint_mode_default).strip().lower()
+        if lifecycle_profile is not None:
+            payload["lifecycle_profile"] = str(lifecycle_profile).strip().lower()
+        if lifecycle_policy is not None:
+            payload["lifecycle_policy"] = dict(lifecycle_policy or {})
         if traffic_policy is not None:
             payload["traffic_policy"] = dict(traffic_policy or {})
         if engine_traffic_policies is not None:
@@ -1039,6 +1080,10 @@ class EngineHostControlChannel:
         if claim_acl_policy is not None:
             payload["claim_acl_policy"] = dict(claim_acl_policy or {})
         res = self._invoke("set-control-config", payload)
+        return dict(res or {})
+
+    def get_lifecycle_policy_effective(self) -> Dict[str, Any]:
+        res = self._invoke("get-lifecycle-policy-effective", {})
         return dict(res or {})
 
     def auth_status(self) -> Dict[str, Any]:
@@ -1124,6 +1169,29 @@ class EngineHostControlChannel:
                 "allowed_configs": list(allowed_configs or []),
                 "allowed_engines": list(allowed_engines or []),
                 "disabled": bool(disabled),
+            },
+        )
+        return dict(res or {})
+
+    def auth_list_audit_events(
+        self,
+        *,
+        event_type: Optional[str] = None,
+        actor_key_id: Optional[str] = None,
+        target_key_id: Optional[str] = None,
+        result: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "auth-audit-list",
+            {
+                "event_type": str(event_type) if event_type else None,
+                "actor_key_id": str(actor_key_id) if actor_key_id else None,
+                "target_key_id": str(target_key_id) if target_key_id else None,
+                "result": str(result) if result else None,
+                "limit": int(limit),
+                "offset": int(offset),
             },
         )
         return dict(res or {})

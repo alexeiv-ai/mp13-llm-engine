@@ -114,22 +114,33 @@ def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
     if args.host_auth_upsert_key:
         key_id = str(args.host_auth_upsert_key).strip()
         role = str(args.host_auth_role or "").strip().lower()
-        if role not in {"management", "config", "traffic"}:
-            print("host-auth-upsert-key requires --host-auth-role {management|config|traffic}")
+        valid_roles = {
+            "admin",
+            "config_editor",
+            "worker_user",
+            "model_user_with_model_control",
+            "model_user",
+            "diagnostic_user",
+        }
+        if role not in valid_roles:
+            print(
+                "host-auth-upsert-key requires --host-auth-role "
+                "{admin|config_editor|worker_user|model_user_with_model_control|model_user|diagnostic_user}"
+            )
             return 1
         secret = _resolve_host_secret(args)
         if not secret:
             print("Missing key secret. Use --host-auth-secret, --host-auth-secret-env, or --host-auth-secret-stdin.")
             return 1
         allowed_configs = []
-        if role == "config":
+        if role == "config_editor":
             try:
                 allowed_configs = [normalize_hosting_config_selector(x) if x != "*" else "*" for x in _parse_csv_list(args.host_auth_allowed_configs)]
             except ValueError as exc:
                 print(f"Invalid --host-auth-allowed-configs: {exc}")
                 return 1
         allowed_engines = []
-        if role == "traffic":
+        if role in {"worker_user", "model_user_with_model_control", "model_user"}:
             allowed_engines = _parse_csv_list(args.host_auth_allowed_engines)
         out = svc.auth_upsert_key(
             key_id=key_id,
@@ -675,7 +686,15 @@ def main() -> int:
     parser.add_argument("--host-auth-list-keys", action="store_true", help="List host auth keys (without secrets).")
     parser.add_argument("--host-auth-generate-secret", type=int, default=0, metavar="BYTES", help="Generate a random key secret token (BYTES entropy hint).")
     parser.add_argument("--host-auth-upsert-key", type=str, default=None, metavar="KEY_ID", help="Create/update host auth key.")
-    parser.add_argument("--host-auth-role", type=str, default=None, help="Role for --host-auth-upsert-key: management|config|traffic.")
+    parser.add_argument(
+        "--host-auth-role",
+        type=str,
+        default=None,
+        help=(
+            "Role for --host-auth-upsert-key: "
+            "admin|config_editor|worker_user|model_user_with_model_control|model_user|diagnostic_user."
+        ),
+    )
     parser.add_argument("--host-auth-disable-key", action="store_true", help="Mark upserted key as disabled.")
     parser.add_argument("--host-auth-revoke-key", type=str, default=None, metavar="KEY_ID", help="Revoke host auth key by ID.")
     parser.add_argument("--host-auth-issue-session", type=str, default=None, metavar="KEY_ID", help="Issue auth session token using key ID + secret.")
@@ -685,8 +704,13 @@ def main() -> int:
     parser.add_argument("--host-auth-engine-ids", type=str, default="", help="Comma-separated allowed engine IDs for traffic scope.")
     parser.add_argument("--host-auth-revoke-session", type=str, default=None, metavar="TOKEN", help="Revoke session token.")
     parser.add_argument("--host-auth-require-auth", type=str, default=None, help="Set require_auth in host control config (true/false).")
-    parser.add_argument("--host-auth-allowed-configs", type=str, default="", help="Comma-separated allowed configs for config role key.")
-    parser.add_argument("--host-auth-allowed-engines", type=str, default="", help="Comma-separated allowed engine IDs for traffic role key.")
+    parser.add_argument("--host-auth-allowed-configs", type=str, default="", help="Comma-separated allowed configs for config_editor role key.")
+    parser.add_argument(
+        "--host-auth-allowed-engines",
+        type=str,
+        default="",
+        help="Comma-separated allowed engine IDs for worker/model role keys.",
+    )
     parser.add_argument("--host-auth-secret", type=str, default="", help="Key secret (not recommended in shell history).")
     parser.add_argument("--host-auth-secret-env", type=str, default="", help="Environment variable name holding key secret.")
     parser.add_argument("--host-auth-secret-stdin", action="store_true", help="Read key secret from stdin (single line).")

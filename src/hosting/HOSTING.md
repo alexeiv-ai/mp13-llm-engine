@@ -2,6 +2,21 @@
 
 This file documents the current hosting implementation in `src/hosting` and practical usage workflows.
 
+For the hardened security/roles/key-management design (including local vs remote SSH/password scenarios, exclusive/shared ownership semantics, and daemon lifecycle guarantees), see:
+- `src/hosting/hosting_access.md`
+
+For rollout sequencing and implementation tracking, see:
+- `src/hosting/hosting_access_plan.md`
+
+For client migration requirements due to intentional auth/authz breaking changes, see:
+- `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`
+
+Breaking notice:
+- Legacy role names (`management`, `config`, `traffic`) are removed from clean-slate runtime auth paths.
+- Use new roles (`admin`, `config_editor`, `worker_user`, `model_user_with_model_control`, `model_user`, `diagnostic_user`, optional `transport`).
+- Prefer bootstrap/reconfiguration via `python -m hosting.engine_host_cli --hosting-config ...` or `python -m hosting.hosting_config ...`.
+- Legacy role payloads are no longer accepted by runtime auth surfaces.
+
 ## 1. Architecture
 
 Hosting is a control-plane plus guarded traffic bridge.
@@ -20,9 +35,40 @@ Workers are still separate processes. Hosting does not expose worker private key
 ## 2. Security Model
 
 Auth roles:
-- `management`: full control scope
-- `config`: config scope only
-- `traffic`: traffic proxy scope only
+- `admin`
+- `config_editor`
+- `worker_user`
+- `model_user_with_model_control`
+- `model_user`
+- `diagnostic_user`
+- `transport` (orthogonal transport identity)
+
+Transport role constraints:
+- key onboarding must use `auth_method=public_key`
+- transport identity cannot issue command authorization sessions/challenges
+
+Remote bootstrap SSH-binding constraints:
+- if `access_profile.connectivity_mode` is `ssh_tunnel_only` or `truly_remote`:
+  - shared-secret `auth-issue-session` requires `ssh_binding`
+  - public-key `auth-begin-challenge` requires `ssh_binding`
+  - missing binding is denied with `ssh_binding_required_for_remote_connectivity`
+
+Remote command-path SSH-binding constraints:
+- when connectivity mode is non-local, session-backed commands require `_ssh_session_binding`
+- session must include persisted SSH binding metadata
+- unbound legacy sessions are denied in non-local mode (`ssh_binding_required_for_remote_connectivity`)
+
+Admin-only invalidation controls:
+- `auth-revoke-key` and `auth-revoke-session` are admin-only
+- non-admin control roles are denied with `insufficient_role`
+- `auth-audit-list` is admin-only
+
+Auth audit trail:
+- control state now records `auth_audit_events` for:
+  - `auth_upsert_key`
+  - `auth_revoke_key`
+  - `auth_revoke_session`
+- `auth-audit-list` provides paged/filterable query access to these events
 
 Session scopes:
 - `control`
@@ -55,8 +101,14 @@ Daemon-side claim ACL hardening:
 - non-localhost management connection restriction:
   - non-localhost callers cannot create shared claims (`exclusive=false`) for claim commands
 - localhost force override safety:
-  - `force_override=true` requires `force_override_confirmation="CONFIRM_LOCALHOST_FORCE_OVERRIDE"`
-  - applies to localhost claim overrides in daemon command path
+  - `force_override=true` requires `force_override_reason`
+  - localhost non-emergency overrides require:
+    - `force_override_confirmation="CONFIRM_LOCALHOST_FORCE_OVERRIDE"`
+  - localhost emergency overrides (`force_override_emergency=true`) skip confirmation only for:
+    - `stale_owner_unreachable`
+    - `owner_malicious`
+    - `security_incident`
+  - emergency and force-override events are audit-tagged with high severity
 
 ### 2.1 Required Claim/Auth Fields (Daemon Command Path)
 
@@ -67,7 +119,11 @@ Required auth material when `require_auth=true`:
 Claim/ownership payload fields:
 - `exclusive` (`bool`): request exclusive claim mode
 - `force_override` (`bool`, optional): request override against active owner
-- `force_override_confirmation` (`string`, required on localhost force override):
+- `force_override_reason` (`string`, required when `force_override=true`)
+- `force_override_emergency` (`bool`, optional):
+  - when `true`, localhost confirmation is not required
+  - valid only with emergency reason set (`stale_owner_unreachable|owner_malicious|security_incident`)
+- `force_override_confirmation` (`string`, required on localhost non-emergency force override):
   - exact token: `CONFIRM_LOCALHOST_FORCE_OVERRIDE`
 
 Daemon-injected identity/context fields (not caller-controlled in daemon mode):
@@ -107,7 +163,9 @@ Daemon-injected identity/context fields (not caller-controlled in daemon mode):
 - deny conditions:
   - active conflicting owner + no force override
   - non-localhost shared claim attempt
-  - localhost force override without confirmation token
+  - force override missing/invalid reason
+  - localhost non-emergency force override without confirmation token
+  - displaced owner non-claim operation before reclaim (`ownership_changed_reclaim_required`)
 
 ### 2.4 Daemon Denial Contract (Stable Error Taxonomy)
 
@@ -133,6 +191,9 @@ Common `error_code` values:
 - `config_access_denied`
 - `non_localhost_shared_claim_denied`
 - `localhost_force_override_confirmation_required`
+- `force_override_reason_required`
+- `force_override_emergency_reason_invalid`
+- `ownership_changed_reclaim_required`
 - `engine_shared_claim_not_member`
 - `engine_exclusive_conflict`
 - `resource_shared_claim_not_member`
@@ -158,6 +219,7 @@ Event fields:
 - `code`
 - `transition`
 - `mode` (`shared|exclusive`)
+- `severity` (`normal|high`)
 - `owners_before`
 - `owners_after`
 - `details`
@@ -208,6 +270,7 @@ Auth and sessions:
 - `auth-list-keys`
 - `auth-list-sessions`
 - `auth-list-issued-tokens`
+- `auth-audit-list`
 - `auth-upsert-key`
 - `auth-revoke-key`
 - `auth-issue-session`
@@ -225,6 +288,26 @@ with matching values.
 Control config:
 - `get-control-config`
 - `set-control-config`
+- `get-endpoint-mode-effective` (daemon runtime view)
+- `set-endpoint-mode-override` (daemon runtime override, until daemon shutdown)
+- `get-lifecycle-policy-effective` (effective lifecycle/disconnect-survival policy)
+
+`set-control-config` lifecycle fields:
+- `lifecycle_profile`:
+  - `foreground_terminal_bound`
+  - `detached_user_process`
+  - `service_managed`
+- `lifecycle_policy`:
+  - `on_terminal_disconnect`: `stop_daemon|keep_daemon_running`
+  - `terminal_control_enabled`: `bool`
+  - `owner_disconnect_shutdown`: `bool`
+
+Lifecycle enforcement notes:
+- if `owner_disconnect_shutdown=true` and endpoint is exclusively owned, daemon may stop when owner disconnects.
+- foreground profile honors `on_terminal_disconnect` policy; keep-running mode ignores SIGHUP where supported.
+- daemon stop path now runs shutdown-order checkpoints to stop managed engines and release registrations.
+- daemon stop sequence now drains in-flight async operations before managed worker shutdown checkpoints.
+- when `terminal_control_enabled=false`, terminal control paths are denied (`__shutdown__`, runtime endpoint-mode override).
 
 Config lifecycle and connect:
 - `list-configs`
@@ -248,6 +331,35 @@ Diagnostics:
 - `host-metrics`
 
 ## 5. Workflow Examples
+
+## 5.0 Hosting Setup/Reconfigure Wizard
+
+Use the dedicated setup tool before first daemon start (or for reconfiguration):
+
+```powershell
+$env:PYTHONPATH='src'
+python -m hosting.engine_host_cli --hosting-config --interactive
+```
+
+Non-interactive example:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m hosting.hosting_config --mode local_only --endpoint-mode exclusive --lifecycle-profile detached_user_process --key-source import --admin-key-id admin-main --admin-public-key-file "$HOME\\.ssh\\id_ed25519.pub" --require-auth
+```
+
+Diagnostics example:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m hosting.hosting_config --doctor
+```
+
+Generated artifacts:
+- `<default_engine_config_dir>/Hosting/access_control.json`
+- `<default_engine_config_dir>/Hosting/keyring/keys.json`
+- `<default_engine_config_dir>/Hosting/state/client_key_map.json`
+- `<default_engine_config_dir>/Hosting/state/bootstrap_state.json`
 
 ## 5.1 Start daemon
 
@@ -283,7 +395,7 @@ Ingress endpoints:
 
 HTTP ingress is HTTP-only for host API proxy routes.
 
-## 5.2 Bootstrap auth (first management key)
+## 5.2 Bootstrap auth (first admin key)
 
 Check current auth state first (recommended for bootstrap automation):
 
@@ -322,7 +434,7 @@ Public-key bootstrap (asymmetric challenge-response):
   "key_id":"admin-pub",
   "auth_method":"public_key",
   "public_key":"ssh-ed25519 AAAA... user@host",
-  "role":"management"
+  "role":"admin"
 }'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key
 
 @'{"key_id":"admin-pub","scope":"control"}'@ |
@@ -339,7 +451,7 @@ Transport binding assurance:
   includes those binding claims.
 
 ```powershell
-@'{"key_id":"admin-key","key_secret":"CHANGE_ME","role":"management"}'@ |
+@'{"key_id":"admin-key","key_secret":"CHANGE_ME","role":"admin"}'@ |
 python -m hosting.engine_host_cli --payload-stdin auth-upsert-key
 
 @'{"require_auth":true}'@ |
@@ -360,10 +472,10 @@ Use returned token:
 python -m hosting.engine_host_cli --payload-stdin discover-running
 ```
 
-## 5.3 Create traffic key and scoped session
+## 5.3 Create traffic-scoped key and session
 
 ```powershell
-@'{"key_id":"traffic-key","key_secret":"CHANGE_ME","role":"traffic","allowed_engines":["worker1"]}'@ |
+@'{"key_id":"traffic-key","key_secret":"CHANGE_ME","role":"model_user","allowed_engines":["worker1"]}'@ |
 python -m hosting.engine_host_cli --payload-stdin auth-upsert-key
 
 @'{"key_id":"traffic-key","key_secret":"CHANGE_ME","scope":"traffic","ttl_seconds":600,"engine_ids":["worker1"]}'@ |
@@ -392,6 +504,15 @@ It does not use client-provided `spawn_command`/`worker_profile` fields.
   - host generates per-engine token
   - token is passed to worker env: `MP13_ENGINE_HOST_TOKEN`
 - IPC channel auth uses this token as connection authkey
+
+Generic worker profile mode:
+- classify config as generic via `worker_kind`/`worker_type = generic`
+- spawn command from config:
+  - `worker_command` (preferred), or
+  - `spawn.command`
+- generic profile does not require model selection (`model_path` optional/ignored)
+- if command is missing, connect fails with reason `generic_worker_command_missing`
+- runtime policy: engines registered as generic (`worker_profile_class=generic`) deny model-role proxy/rpc traffic (`insufficient_role`)
 
 IPC RPC mode (default transport):
 - sync RPC: `proxy-rpc-call`
@@ -542,7 +663,7 @@ mp13config --host-auth-generate-secret 32
 
 # upsert key using env var to avoid shell history leakage
 $env:MP13_HOST_SECRET="CHANGE_ME"
-mp13config --host-auth-upsert-key admin-key --host-auth-role management --host-auth-secret-env MP13_HOST_SECRET
+mp13config --host-auth-upsert-key admin-key --host-auth-role admin --host-auth-secret-env MP13_HOST_SECRET
 
 # issue session
 mp13config --host-auth-issue-session admin-key --host-auth-scope control --host-auth-secret-env MP13_HOST_SECRET
@@ -564,6 +685,13 @@ python -m hosting.engine_host_cli --payload-stdin auth-list-issued-tokens
 ```
 
 Both endpoints return metadata with redacted `token_preview` values (not full tokens).
+
+Auth audit event query example (admin-only):
+
+```powershell
+@'{"session_token":"<control_token>","event_type":"auth_revoke_key","limit":50,"offset":0}'@ |
+python -m hosting.engine_host_cli --payload-stdin auth-audit-list
+```
 
 Filtering and pagination examples:
 

@@ -34,6 +34,45 @@ DEFAULT_ENGINES_STATE_FILE = DEFAULT_STATE_DIR / "managed_engines.json"
 DEFAULT_CONTROL_STATE_FILE = DEFAULT_STATE_DIR / "engine_host_control.json"
 DAEMON_VERSION = "2.1.0"
 
+ROLE_ADMIN = "admin"
+ROLE_CONFIG_EDITOR = "config_editor"
+ROLE_WORKER_USER = "worker_user"
+ROLE_MODEL_USER_WITH_MODEL_CONTROL = "model_user_with_model_control"
+ROLE_MODEL_USER = "model_user"
+ROLE_DIAGNOSTIC_USER = "diagnostic_user"
+ROLE_TRANSPORT = "transport"
+
+LIFECYCLE_PROFILE_FOREGROUND = "foreground_terminal_bound"
+LIFECYCLE_PROFILE_DETACHED = "detached_user_process"
+LIFECYCLE_PROFILE_SERVICE = "service_managed"
+VALID_LIFECYCLE_PROFILES = {
+    LIFECYCLE_PROFILE_FOREGROUND,
+    LIFECYCLE_PROFILE_DETACHED,
+    LIFECYCLE_PROFILE_SERVICE,
+}
+
+VALID_AUTH_ROLES = {
+    ROLE_ADMIN,
+    ROLE_CONFIG_EDITOR,
+    ROLE_WORKER_USER,
+    ROLE_MODEL_USER_WITH_MODEL_CONTROL,
+    ROLE_MODEL_USER,
+    ROLE_DIAGNOSTIC_USER,
+    ROLE_TRANSPORT,
+}
+
+VALID_FORCE_OVERRIDE_REASONS = {
+    "stale_owner_unreachable",
+    "owner_malicious",
+    "security_incident",
+    "policy_recovery",
+}
+EMERGENCY_FORCE_OVERRIDE_REASONS = {
+    "stale_owner_unreachable",
+    "owner_malicious",
+    "security_incident",
+}
+
 
 class EngineHostService:
     """File-backed engine host service for terminal-command control."""
@@ -265,6 +304,7 @@ class EngineHostService:
             "structured_progress_events_v1": True,
             "reachability_status_v1": True,
             "non_blocking_ops_v1": True,
+            "lifecycle_profiles_v1": True,
         }
 
     @staticmethod
@@ -336,6 +376,14 @@ class EngineHostService:
                     "ssh_key": None,
                     "require_auth": False,
                     "auth": {"keys": {}, "sessions": {}, "challenges": {}},
+                    "access_profile": {"connectivity_mode": "local_only"},
+                    "endpoint_mode_default": "shared",
+                    "lifecycle_profile": LIFECYCLE_PROFILE_DETACHED,
+                    "lifecycle_policy": {
+                        "on_terminal_disconnect": "keep_daemon_running",
+                        "terminal_control_enabled": True,
+                        "owner_disconnect_shutdown": False,
+                    },
                     "config_store_mode": "store_only",
                     "claim_acl_policy": {
                         "owner_ttl_seconds": 120,
@@ -378,6 +426,8 @@ class EngineHostService:
                 "resource_tokens": {},
                 "claim_owner_keepalive": {},
                 "claim_audit_events": [],
+                "ownership_change_notices": {},
+                "auth_audit_events": [],
             },
         )
         payload.setdefault(
@@ -386,6 +436,14 @@ class EngineHostService:
                 "ssh_key": None,
                 "require_auth": False,
                 "auth": {"keys": {}, "sessions": {}, "challenges": {}},
+                "access_profile": {"connectivity_mode": "local_only"},
+                "endpoint_mode_default": "shared",
+                "lifecycle_profile": LIFECYCLE_PROFILE_DETACHED,
+                "lifecycle_policy": {
+                    "on_terminal_disconnect": "keep_daemon_running",
+                    "terminal_control_enabled": True,
+                    "owner_disconnect_shutdown": False,
+                },
                 "config_store_mode": "store_only",
                 "claim_acl_policy": {},
                 "engine_traffic_policies": {},
@@ -399,9 +457,23 @@ class EngineHostService:
         payload.setdefault("resource_tokens", {})
         payload.setdefault("claim_owner_keepalive", {})
         payload.setdefault("claim_audit_events", [])
+        payload.setdefault("ownership_change_notices", {})
+        payload.setdefault("auth_audit_events", [])
         cfg = dict(payload.get("control_config") or {})
         cfg.setdefault("ssh_key", None)
         cfg.setdefault("require_auth", False)
+        cfg.setdefault("access_profile", {"connectivity_mode": "local_only"})
+        cfg.setdefault("endpoint_mode_default", "shared")
+        cfg["lifecycle_profile"] = self._normalize_lifecycle_profile(cfg.get("lifecycle_profile"))
+        cfg["lifecycle_policy"] = self._normalize_lifecycle_policy(
+            cfg["lifecycle_profile"],
+            dict(cfg.get("lifecycle_policy") or {}),
+        )
+        cfg["endpoint_mode_default"] = (
+            "exclusive"
+            if str(cfg.get("endpoint_mode_default") or "").strip().lower() == "exclusive"
+            else "shared"
+        )
         cfg.setdefault("config_store_mode", "store_only")
         raw_claim_acl = dict(cfg.get("claim_acl_policy") or {})
         cfg["claim_acl_policy"] = {
@@ -485,6 +557,86 @@ class EngineHostService:
         keepalive[oid] = time.time()
         control["claim_owner_keepalive"] = keepalive
 
+    def _ownership_change_notice_map(self, control: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        rows: Dict[str, Dict[str, Any]] = {}
+        for key, val in dict(control.get("ownership_change_notices") or {}).items():
+            actor = str(key or "").strip()
+            if not actor:
+                continue
+            meta = dict(val or {})
+            rows[actor] = meta
+        return rows
+
+    def _get_ownership_change_notice(self, control: Dict[str, Any], actor_id: str) -> Optional[Dict[str, Any]]:
+        actor = str(actor_id or "").strip()
+        if not actor:
+            return None
+        rows = self._ownership_change_notice_map(control)
+        notice = dict(rows.get(actor) or {})
+        return notice if notice else None
+
+    def _clear_ownership_change_notice(self, control: Dict[str, Any], actor_id: str) -> None:
+        actor = str(actor_id or "").strip()
+        if not actor:
+            return
+        rows = self._ownership_change_notice_map(control)
+        if actor in rows:
+            rows.pop(actor, None)
+            control["ownership_change_notices"] = rows
+
+    def _record_ownership_change_notices(
+        self,
+        control: Dict[str, Any],
+        *,
+        displaced_owners: List[str],
+        replaced_by: str,
+        scope: str,
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
+        reason: Optional[str],
+        emergency: bool,
+        peer_host: Optional[str],
+        command: str,
+    ) -> None:
+        rows = self._ownership_change_notice_map(control)
+        rep = str(replaced_by or "").strip()
+        now = time.time()
+        for owner in [str(x or "").strip() for x in list(displaced_owners or []) if str(x or "").strip()]:
+            if not owner or owner == rep:
+                continue
+            notice = {
+                "schema_version": 1,
+                "owner_id": owner,
+                "replaced_by": rep,
+                "scope": str(scope or ""),
+                "resource_kind": str(resource_kind or "") or None,
+                "resource_id": str(resource_id or "") or None,
+                "reason": str(reason or "") or None,
+                "emergency": bool(emergency),
+                "changed_at": now,
+                "active": True,
+            }
+            rows[owner] = notice
+            self._append_claim_audit_event(
+                control,
+                event_type="ownership_changed_notice",
+                command=str(command or ""),
+                scope=str(scope or ""),
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                actor_id=rep,
+                decision="grant",
+                code="ownership_changed_notice",
+                transition="force_override",
+                mode=None,
+                peer_host=peer_host,
+                owners_before=[owner],
+                owners_after=[rep],
+                details={"displaced_owner": owner, "force_override_reason": reason, "force_override_emergency": bool(emergency)},
+                severity="high",
+            )
+        control["ownership_change_notices"] = rows
+
     def _is_owner_active(self, control: Dict[str, Any], owner_id: str, *, now: Optional[float] = None) -> bool:
         oid = str(owner_id or "").strip()
         if not oid:
@@ -530,6 +682,7 @@ class EngineHostService:
         owners_before: Optional[List[str]] = None,
         owners_after: Optional[List[str]] = None,
         details: Optional[Dict[str, Any]] = None,
+        severity: Optional[str] = None,
     ) -> None:
         policy = self._claim_acl_policy(control)
         limit = int(policy["audit_event_limit"])
@@ -551,6 +704,7 @@ class EngineHostService:
                 "code": str(code or "unknown"),
                 "transition": str(transition or "") or None,
                 "mode": str(mode or "") or None,
+                "severity": str(severity or "normal").strip().lower() or "normal",
                 "owners_before": sorted(list(set(str(x or "").strip() for x in list(owners_before or []) if str(x or "").strip()))),
                 "owners_after": sorted(list(set(str(x or "").strip() for x in list(owners_after or []) if str(x or "").strip()))),
                 "details": dict(details or {}),
@@ -559,6 +713,35 @@ class EngineHostService:
         if len(rows) > limit:
             rows = rows[-limit:]
         control["claim_audit_events"] = rows
+
+    def _append_auth_audit_event(
+        self,
+        control: Dict[str, Any],
+        *,
+        event_type: str,
+        actor_key_id: Optional[str],
+        target_key_id: Optional[str] = None,
+        target_token_preview: Optional[str] = None,
+        result: str = "ok",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        rows = list(control.get("auth_audit_events") or [])
+        rows.append(
+            {
+                "schema_version": 1,
+                "event_id": secrets.token_urlsafe(10),
+                "timestamp": time.time(),
+                "event_type": str(event_type or "auth_event"),
+                "actor_key_id": str(actor_key_id or "") or None,
+                "target_key_id": str(target_key_id or "") or None,
+                "target_token_preview": str(target_token_preview or "") or None,
+                "result": str(result or "ok"),
+                "details": dict(details or {}),
+            }
+        )
+        if len(rows) > 500:
+            rows = rows[-500:]
+        control["auth_audit_events"] = rows
 
     def _actor_id_from_payload(self, control: Dict[str, Any], payload: Optional[Dict[str, Any]]) -> str:
         p = dict(payload or {})
@@ -571,6 +754,86 @@ class EngineHostService:
             if key_id:
                 return self._actor_id_from_session_key(key_id)
         return self._normalize_backend_id(p.get("backend_id"))
+
+    @staticmethod
+    def _normalize_force_override_reason(reason: Optional[str]) -> str:
+        return str(reason or "").strip().lower()
+
+    @staticmethod
+    def _connectivity_mode(cfg: Dict[str, Any]) -> str:
+        access_profile = dict(cfg.get("access_profile") or {})
+        raw = str(access_profile.get("connectivity_mode") or "local_only").strip().lower()
+        if raw in {"local_only", "ssh_tunnel_only", "truly_remote"}:
+            return raw
+        return "local_only"
+
+    def _requires_ssh_binding(self, cfg: Dict[str, Any]) -> bool:
+        return self._connectivity_mode(cfg) != "local_only"
+
+    def _classify_connect_worker_class(
+        self,
+        *,
+        config_path: str,
+        payload: Optional[Dict[str, Any]],
+    ) -> str:
+        p = dict(payload or {})
+        cfg: Dict[str, Any] = {}
+        try:
+            cfg = self._merge_default_and_selected_config(config_path)
+        except Exception:
+            cfg = {}
+
+        def _norm(v: Any) -> str:
+            return str(v or "").strip().lower()
+
+        hosting_cfg = dict(cfg.get("hosting") or {}) if isinstance(cfg.get("hosting"), dict) else {}
+        marker = _norm(
+            cfg.get("worker_kind")
+            or cfg.get("worker_type")
+            or hosting_cfg.get("worker_kind")
+            or hosting_cfg.get("worker_type")
+        )
+        if marker in {"generic", "non_model", "worker", "generic_worker"}:
+            return "generic"
+        if marker in {"model", "model_engine", "engine"}:
+            return "model"
+
+        worker_command = cfg.get("worker_command")
+        spawn_cfg = dict(cfg.get("spawn") or {}) if isinstance(cfg.get("spawn"), dict) else {}
+        spawn_command = spawn_cfg.get("command")
+        if isinstance(worker_command, list) and worker_command:
+            return "generic"
+        if isinstance(spawn_command, list) and spawn_command:
+            return "generic"
+
+        configured_model = (
+            ((cfg.get("engine_params") or {}).get("base_model_path") if isinstance(cfg.get("engine_params"), dict) else None)
+            or cfg.get("base_model_path")
+            or cfg.get("model")
+            or cfg.get("base_model_name_or_path")
+        )
+        if str(p.get("model_path") or "").strip() or str(configured_model or "").strip():
+            return "model"
+        return "unknown"
+
+    @staticmethod
+    def _normalize_worker_profile_class(value: Optional[str]) -> str:
+        v = str(value or "").strip().lower()
+        if v in {"model", "generic"}:
+            return v
+        return "unknown"
+
+    def _authorize_role_for_engine_profile(self, *, role: str, engine_id: str) -> None:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            return
+        reg = self._find_registration(eid)
+        if not isinstance(reg, dict):
+            return
+        profile = self._normalize_worker_profile_class(str(reg.get("worker_profile_class") or ""))
+        r = str(role or "").strip().lower()
+        if profile == "generic" and r in {ROLE_MODEL_USER, ROLE_MODEL_USER_WITH_MODEL_CONTROL}:
+            raise PermissionError("insufficient_role")
 
     @staticmethod
     def _safe_config_name(value: str) -> str:
@@ -758,6 +1021,194 @@ class EngineHostService:
         token = str(p.get("session_token") or p.get("auth_token") or "").strip()
         return token
 
+    @staticmethod
+    def _role_allowed_scopes(role: str) -> set[str]:
+        r = str(role or "").strip().lower()
+        if r == ROLE_ADMIN:
+            return {"control", "config", "traffic"}
+        if r == ROLE_CONFIG_EDITOR:
+            return {"control", "config", "traffic"}
+        if r == ROLE_WORKER_USER:
+            return {"control", "traffic"}
+        if r == ROLE_MODEL_USER_WITH_MODEL_CONTROL:
+            return {"traffic"}
+        if r == ROLE_MODEL_USER:
+            return {"traffic"}
+        if r == ROLE_DIAGNOSTIC_USER:
+            return {"control"}
+        return set()
+
+    @staticmethod
+    def _commands_allowed_for_role(role: str) -> set[str]:
+        r = str(role or "").strip().lower()
+        all_non_bootstrap = {
+            "discover-running",
+            "spawn",
+            "get-registration",
+            "shutdown",
+            "ensure-running",
+            "remove-registration",
+            "claim-engine",
+            "claim-endpoint",
+            "claim-status",
+            "issue-token",
+            "validate-token",
+            "claim-resource",
+            "resource-claim-status",
+            "issue-resource-token",
+            "validate-resource-token",
+            "inspect-capabilities",
+            "logs-tail",
+            "logs-follow",
+            "get-control-config",
+            "set-control-config",
+            "auth-status",
+            "auth-list-keys",
+            "auth-list-sessions",
+            "auth-list-issued-tokens",
+            "auth-audit-list",
+            "auth-upsert-key",
+            "auth-revoke-key",
+            "auth-issue-session",
+            "auth-begin-challenge",
+            "auth-complete-challenge",
+            "auth-revoke-session",
+            "proxy-request",
+            "proxy-rpc-call",
+            "proxy-rpc-open",
+            "proxy-rpc-send",
+            "proxy-rpc-recv",
+            "proxy-rpc-close",
+            "proxy-stream-open",
+            "proxy-stream-send",
+            "proxy-stream-recv",
+            "proxy-stream-close",
+            "host-metrics",
+            "list-configs",
+            "create-config",
+            "models-from-config",
+            "connect-from-config",
+            "op-start",
+            "op-status",
+            "set-endpoint-mode-override",
+            "get-endpoint-mode-effective",
+            "get-lifecycle-policy-effective",
+        }
+        if r == ROLE_ADMIN:
+            return all_non_bootstrap
+        if r == ROLE_CONFIG_EDITOR:
+            return {
+                "discover-running",
+                "spawn",
+                "get-registration",
+                "shutdown",
+                "ensure-running",
+                "remove-registration",
+                "claim-engine",
+                "claim-status",
+                "issue-token",
+                "validate-token",
+                "claim-resource",
+                "resource-claim-status",
+                "issue-resource-token",
+                "validate-resource-token",
+                "inspect-capabilities",
+                "logs-tail",
+                "logs-follow",
+                "host-metrics",
+                "list-configs",
+                "create-config",
+                "models-from-config",
+                "connect-from-config",
+                "get-control-config",
+                "get-lifecycle-policy-effective",
+                "auth-status",
+            }
+        if r == ROLE_WORKER_USER:
+            return {
+                "discover-running",
+                "spawn",
+                "get-registration",
+                "shutdown",
+                "ensure-running",
+                "remove-registration",
+                "claim-engine",
+                "claim-status",
+                "issue-token",
+                "validate-token",
+                "claim-resource",
+                "resource-claim-status",
+                "issue-resource-token",
+                "validate-resource-token",
+                "inspect-capabilities",
+                "logs-tail",
+                "logs-follow",
+                "host-metrics",
+                "models-from-config",
+                "connect-from-config",
+                "proxy-request",
+                "proxy-rpc-call",
+                "proxy-rpc-open",
+                "proxy-rpc-send",
+                "proxy-rpc-recv",
+                "proxy-rpc-close",
+                "proxy-stream-open",
+                "proxy-stream-send",
+                "proxy-stream-recv",
+                "proxy-stream-close",
+                "auth-status",
+            }
+        if r == ROLE_MODEL_USER_WITH_MODEL_CONTROL:
+            return {
+                "models-from-config",
+                "connect-from-config",
+                "proxy-request",
+                "proxy-rpc-call",
+                "proxy-rpc-open",
+                "proxy-rpc-send",
+                "proxy-rpc-recv",
+                "proxy-rpc-close",
+                "proxy-stream-open",
+                "proxy-stream-send",
+                "proxy-stream-recv",
+                "proxy-stream-close",
+                "auth-status",
+            }
+        if r == ROLE_MODEL_USER:
+            return {
+                "proxy-request",
+                "proxy-rpc-call",
+                "proxy-rpc-open",
+                "proxy-rpc-send",
+                "proxy-rpc-recv",
+                "proxy-rpc-close",
+                "proxy-stream-open",
+                "proxy-stream-send",
+                "proxy-stream-recv",
+                "proxy-stream-close",
+                "auth-status",
+            }
+        if r == ROLE_DIAGNOSTIC_USER:
+            return {
+                "discover-running",
+                "get-registration",
+                "claim-status",
+                "resource-claim-status",
+                "inspect-capabilities",
+                "logs-tail",
+                "logs-follow",
+                "host-metrics",
+                "get-control-config",
+                "get-lifecycle-policy-effective",
+                "auth-status",
+            }
+        return set()
+
+    def _authorize_role_for_command(self, *, role: str, cmd: str) -> None:
+        allowed = self._commands_allowed_for_role(role)
+        if str(cmd or "").strip() not in allowed:
+            raise PermissionError("insufficient_role")
+
     def _validate_session(
         self,
         control: Dict[str, Any],
@@ -777,6 +1228,13 @@ class EngineHostService:
             raise PermissionError("missing_or_invalid_session_token")
         if bool(session.get("revoked", False)):
             raise PermissionError("session_revoked")
+        if self._requires_ssh_binding(cfg):
+            expected_binding = dict(session.get("ssh_binding") or {})
+            if not expected_binding:
+                raise PermissionError("ssh_binding_required_for_remote_connectivity")
+            presented = dict(presented_ssh_binding or {})
+            if not presented:
+                raise PermissionError("ssh_binding_required_for_remote_connectivity")
         expected_binding = dict(session.get("ssh_binding") or {})
         if expected_binding:
             presented = dict(presented_ssh_binding or {})
@@ -792,8 +1250,13 @@ class EngineHostService:
                 raise PermissionError("ssh_binding_mismatch")
         key_role = str(session.get("role") or "").strip().lower()
         scope = str(session.get("scope") or "").strip().lower()
-        if key_role == "management":
+        if key_role == ROLE_ADMIN:
             return session
+        if key_role not in VALID_AUTH_ROLES:
+            raise PermissionError("invalid_role")
+        allowed_scopes = self._role_allowed_scopes(key_role)
+        if required_scope not in allowed_scopes:
+            raise PermissionError("insufficient_scope")
         if scope != required_scope:
             raise PermissionError("insufficient_scope")
         if required_scope == "config":
@@ -999,6 +1462,62 @@ class EngineHostService:
             "tokens": page,
         }
 
+    def auth_list_audit_events(
+        self,
+        *,
+        event_type: Optional[str] = None,
+        actor_key_id: Optional[str] = None,
+        target_key_id: Optional[str] = None,
+        result: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        control = self._read_control()
+        now = time.time()
+        rows: List[Dict[str, Any]] = []
+        event_filter = str(event_type or "").strip().lower()
+        actor_filter = str(actor_key_id or "").strip()
+        target_filter = str(target_key_id or "").strip()
+        result_filter = str(result or "").strip().lower()
+        for item in list(control.get("auth_audit_events") or []):
+            row = dict(item or {})
+            ev = str(row.get("event_type") or "").strip().lower()
+            actor = str(row.get("actor_key_id") or "").strip()
+            target = str(row.get("target_key_id") or "").strip()
+            res = str(row.get("result") or "").strip().lower()
+            if event_filter and ev != event_filter:
+                continue
+            if actor_filter and actor != actor_filter:
+                continue
+            if target_filter and target != target_filter:
+                continue
+            if result_filter and res != result_filter:
+                continue
+            rows.append(row)
+        rows.sort(
+            key=lambda x: (
+                float(x.get("timestamp") or 0.0),
+                str(x.get("event_type") or ""),
+                str(x.get("target_key_id") or ""),
+            ),
+            reverse=True,
+        )
+        total = len(rows)
+        page_offset = max(0, int(offset or 0))
+        page_limit = max(1, min(int(limit or 100), 1000))
+        page = rows[page_offset: page_offset + page_limit]
+        next_offset = page_offset + len(page)
+        return {
+            "timestamp": now,
+            "total_count": total,
+            "offset": page_offset,
+            "limit": page_limit,
+            "count": len(page),
+            "has_more": bool(next_offset < total),
+            "next_offset": next_offset if next_offset < total else None,
+            "events": page,
+        }
+
     def auth_upsert_key(
         self,
         *,
@@ -1018,17 +1537,22 @@ class EngineHostService:
         pubkey = str(public_key or "").strip()
         if not kid:
             raise ValueError("key_id is required")
-        if role_norm not in {"management", "config", "traffic"}:
-            raise ValueError("role must be 'management', 'config', or 'traffic'")
+        if role_norm not in VALID_AUTH_ROLES:
+            raise ValueError(
+                "role must be one of: "
+                + ", ".join(sorted(VALID_AUTH_ROLES))
+            )
         if method not in {"shared_secret", "public_key"}:
             raise ValueError("auth_method must be 'shared_secret' or 'public_key'")
+        if role_norm == ROLE_TRANSPORT and method != "public_key":
+            raise ValueError("transport role requires public_key auth_method")
         if method == "shared_secret" and not secret:
             raise ValueError("key_secret is required for shared_secret auth_method")
         if method == "public_key" and not pubkey:
             raise ValueError("public_key is required for public_key auth_method")
         normalized_allowed: List[str] = []
         normalized_engines: List[str] = []
-        if role_norm == "config":
+        if role_norm == ROLE_CONFIG_EDITOR:
             raw_rows = list(allowed_configs or [])
             if not raw_rows:
                 normalized_allowed = ["*"]
@@ -1043,7 +1567,11 @@ class EngineHostService:
                     normalized_allowed.append(self._normalize_config_selector(rs))
                 if not normalized_allowed:
                     normalized_allowed = ["*"]
-        if role_norm == "traffic":
+        if role_norm in {
+            ROLE_WORKER_USER,
+            ROLE_MODEL_USER_WITH_MODEL_CONTROL,
+            ROLE_MODEL_USER,
+        }:
             raw_engines = list(allowed_engines or [])
             if not raw_engines:
                 normalized_engines = ["*"]
@@ -1078,6 +1606,14 @@ class EngineHostService:
         auth["keys"] = keys
         cfg["auth"] = auth
         control["control_config"] = cfg
+        self._append_auth_audit_event(
+            control,
+            event_type="auth_upsert_key",
+            actor_key_id=None,
+            target_key_id=kid,
+            result="ok",
+            details={"role": role_norm, "auth_method": method, "disabled": bool(disabled)},
+        )
         self._write_control(control)
         return {
             "key_id": kid,
@@ -1109,6 +1645,14 @@ class EngineHostService:
         auth["sessions"] = sessions
         cfg["auth"] = auth
         control["control_config"] = cfg
+        self._append_auth_audit_event(
+            control,
+            event_type="auth_revoke_key",
+            actor_key_id=None,
+            target_key_id=kid,
+            result="ok" if bool(existed) else "not_found",
+            details={"revoked_sessions": revoked_sessions},
+        )
         self._write_control(control)
         return {"key_id": kid, "revoked": bool(existed), "revoked_sessions": revoked_sessions}
 
@@ -1137,6 +1681,8 @@ class EngineHostService:
             raise ValueError("scope must be 'control', 'config', or 'traffic'")
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
+        if self._requires_ssh_binding(cfg) and not dict(ssh_binding or {}):
+            raise PermissionError("ssh_binding_required_for_remote_connectivity")
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_sessions(auth)
         keys = dict(auth.get("keys") or {})
@@ -1190,10 +1736,12 @@ class EngineHostService:
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_sessions(auth)
         role = str(key_meta.get("role") or "").strip().lower()
-        if role == "config" and scope_norm != "config":
-            raise PermissionError("config_role_cannot_issue_non_config_scope")
-        if role == "traffic" and scope_norm != "traffic":
-            raise PermissionError("traffic_role_cannot_issue_non_traffic_scope")
+        if role not in VALID_AUTH_ROLES:
+            raise PermissionError("invalid_role")
+        if role == ROLE_TRANSPORT:
+            raise PermissionError("transport_role_cannot_issue_session")
+        if scope_norm not in self._role_allowed_scopes(role):
+            raise PermissionError("role_cannot_issue_requested_scope")
         allowed_configs: List[str] = []
         allowed_engines: List[str] = []
         key_allowed = set(str(x) for x in list(key_meta.get("allowed_configs") or []))
@@ -1305,6 +1853,9 @@ class EngineHostService:
             raise ValueError("scope must be 'control', 'config', or 'traffic'")
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
+        if self._requires_ssh_binding(cfg) and not dict(ssh_binding or {}):
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="ssh_binding_required_for_remote_connectivity")
+            raise PermissionError("ssh_binding_required_for_remote_connectivity")
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_challenges(auth)
         keys = dict(auth.get("keys") or {})
@@ -1320,12 +1871,15 @@ class EngineHostService:
             self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="auth_method_is_not_public_key")
             raise PermissionError("auth_method_is_not_public_key")
         role = str(key_meta.get("role") or "").strip().lower()
-        if role == "config" and scope_norm != "config":
-            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="config_role_cannot_issue_non_config_scope")
-            raise PermissionError("config_role_cannot_issue_non_config_scope")
-        if role == "traffic" and scope_norm != "traffic":
-            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="traffic_role_cannot_issue_non_traffic_scope")
-            raise PermissionError("traffic_role_cannot_issue_non_traffic_scope")
+        if role not in VALID_AUTH_ROLES:
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="invalid_role")
+            raise PermissionError("invalid_role")
+        if role == ROLE_TRANSPORT:
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="transport_role_cannot_issue_session")
+            raise PermissionError("transport_role_cannot_issue_session")
+        if scope_norm not in self._role_allowed_scopes(role):
+            self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="role_cannot_issue_requested_scope")
+            raise PermissionError("role_cannot_issue_requested_scope")
         challenge_id = secrets.token_urlsafe(18)
         nonce = secrets.token_urlsafe(24)
         issued_at = time.time()
@@ -1468,7 +2022,7 @@ class EngineHostService:
         control["control_config"] = cfg
         self._write_control(control)
         role = str(key_meta.get("role") or "").strip().lower()
-        if role not in {"management", "config", "traffic"}:
+        if role not in VALID_AUTH_ROLES or role == ROLE_TRANSPORT:
             self._metrics_challenge_event(event="complete_failed", key_id=key_id, challenge_id=cid, reason="invalid_role")
             progress_events.append(
                 self._progress_event("bootstrap_handshake.issue_session", "failed", "Role is not allowed")
@@ -1506,6 +2060,14 @@ class EngineHostService:
         auth["sessions"] = sessions
         cfg["auth"] = auth
         control["control_config"] = cfg
+        self._append_auth_audit_event(
+            control,
+            event_type="auth_revoke_session",
+            actor_key_id=None,
+            target_token_preview=self._token_preview(tok),
+            result="ok" if bool(existed) else "not_found",
+            details={},
+        )
         self._write_control(control)
         return {"token": tok, "revoked": bool(existed)}
 
@@ -1520,6 +2082,11 @@ class EngineHostService:
         auth = dict(cfg.get("auth") or {})
         keys_count = len(dict(auth.get("keys") or {}))
         if not require_auth:
+            try:
+                self._validate_require_auth_disabled_safe_profile(cfg)
+            except PermissionError as exc:
+                self._metrics_auth_denied(str(exc))
+                raise
             return
         # Bootstrap: allow key provisioning if no keys are present.
         if c in {"auth-upsert-key", "auth-status"} and keys_count == 0:
@@ -1561,17 +2128,25 @@ class EngineHostService:
             "auth-list-keys",
             "auth-list-sessions",
             "auth-list-issued-tokens",
+            "auth-audit-list",
             "auth-revoke-session",
             "host-metrics",
             "op-start",
             "op-status",
+            "set-endpoint-mode-override",
+            "get-endpoint-mode-effective",
+            "get-lifecycle-policy-effective",
         }:
             try:
-                _ = self._validate_session(
+                session = self._validate_session(
                     control,
                     token,
                     required_scope="control",
                     presented_ssh_binding=presented_ssh_binding,
+                )
+                self._authorize_role_for_command(
+                    role=str((session or {}).get("role") or ""),
+                    cmd=c,
                 )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
@@ -1581,12 +2156,20 @@ class EngineHostService:
             p = dict(payload or {})
             requested_engine = str(p.get("engine_id") or "").strip()
             try:
-                _ = self._validate_session(
+                session = self._validate_session(
                     control,
                     token,
                     required_scope="traffic",
                     requested_engine=requested_engine,
                     presented_ssh_binding=presented_ssh_binding,
+                )
+                self._authorize_role_for_command(
+                    role=str((session or {}).get("role") or ""),
+                    cmd=c,
+                )
+                self._authorize_role_for_engine_profile(
+                    role=str((session or {}).get("role") or ""),
+                    engine_id=requested_engine,
                 )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
@@ -1619,33 +2202,93 @@ class EngineHostService:
                 self._metrics_auth_denied("engine_id_required")
                 raise PermissionError("engine_id_required")
             try:
-                _ = self._validate_session(
+                session = self._validate_session(
                     control,
                     token,
                     required_scope="traffic",
                     requested_engine=requested_engine,
                     presented_ssh_binding=presented_ssh_binding,
                 )
+                self._authorize_role_for_command(
+                    role=str((session or {}).get("role") or ""),
+                    cmd=c,
+                )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
                 raise
             return
-        if c in {"list-configs", "create-config", "models-from-config", "connect-from-config"}:
+        if c in {"list-configs", "create-config"}:
             requested_config = None
             p = dict(payload or {})
-            if c in {"models-from-config", "connect-from-config"}:
-                requested_config = self._normalize_config_selector(str(p.get("config_path") or "default"))
             try:
-                _ = self._validate_session(
+                session = self._validate_session(
                     control,
                     token,
                     required_scope="config",
                     requested_config=requested_config,
                     presented_ssh_binding=presented_ssh_binding,
                 )
+                self._authorize_role_for_command(
+                    role=str((session or {}).get("role") or ""),
+                    cmd=c,
+                )
             except PermissionError as exc:
                 self._metrics_auth_denied(str(exc))
                 raise
+            return
+        if c in {"models-from-config", "connect-from-config"}:
+            p = dict(payload or {})
+            requested_config = self._normalize_config_selector(str(p.get("config_path") or "default"))
+            session = None
+            # Prefer config-scope session; allow traffic-scope for model-oriented roles.
+            for required_scope in ("config", "traffic"):
+                try:
+                    session = self._validate_session(
+                        control,
+                        token,
+                        required_scope=required_scope,
+                        requested_config=requested_config if required_scope == "config" else None,
+                        requested_engine=str(p.get("engine_id") or "").strip() if required_scope == "traffic" else None,
+                        presented_ssh_binding=presented_ssh_binding,
+                    )
+                    break
+                except PermissionError:
+                    session = None
+            if not isinstance(session, dict):
+                self._metrics_auth_denied("insufficient_scope")
+                raise PermissionError("insufficient_scope")
+            try:
+                self._authorize_role_for_command(
+                    role=str((session or {}).get("role") or ""),
+                    cmd=c,
+                )
+            except PermissionError as exc:
+                self._metrics_auth_denied(str(exc))
+                raise
+            if c == "connect-from-config":
+                requested_model_override = str(p.get("model_path") or "").strip()
+                role = str((session or {}).get("role") or "").strip().lower()
+                can_override_model = role in {
+                    ROLE_ADMIN,
+                    ROLE_CONFIG_EDITOR,
+                    ROLE_WORKER_USER,
+                    ROLE_MODEL_USER_WITH_MODEL_CONTROL,
+                }
+                if requested_model_override and not can_override_model:
+                    self._metrics_auth_denied("insufficient_role")
+                    raise PermissionError("insufficient_role")
+                worker_class = self._classify_connect_worker_class(
+                    config_path=requested_config,
+                    payload=p,
+                )
+                can_use_generic_worker = role in {
+                    ROLE_ADMIN,
+                    ROLE_CONFIG_EDITOR,
+                    ROLE_WORKER_USER,
+                }
+                if worker_class == "generic" and not can_use_generic_worker:
+                    self._metrics_auth_denied("insufficient_role")
+                    raise PermissionError("insufficient_role")
             return
         raise PermissionError(f"auth_policy_missing_for_command:{c}")
 
@@ -1666,6 +2309,22 @@ class EngineHostService:
         p["_daemon_peer_host"] = str(peer_host or "") or None
 
         claim_cmds = {"claim-engine", "claim-endpoint", "claim-resource"}
+        owner_notice = self._get_ownership_change_notice(control, actor_id)
+        if owner_notice and c not in claim_cmds:
+            return {
+                "ok": False,
+                "error": "access_denied",
+                "error_code": "ownership_changed_reclaim_required",
+                "error_details": {
+                    "command": c,
+                    "actor_id": actor_id,
+                    "notice": owner_notice,
+                },
+                "payload": p,
+            }
+        endpoint_mode_default = self._endpoint_mode_default(dict(control.get("control_config") or {}))
+        if c in claim_cmds and "exclusive" not in p:
+            p["exclusive"] = bool(endpoint_mode_default == "exclusive")
         sensitive_engine_cmds = {
             "spawn",
             "get-registration",
@@ -1702,6 +2361,36 @@ class EngineHostService:
             }
 
         if c in claim_cmds and bool(p.get("force_override", False)) and is_localhost:
+            reason = self._normalize_force_override_reason(p.get("force_override_reason"))
+            if reason not in VALID_FORCE_OVERRIDE_REASONS:
+                return {
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "force_override_reason_required",
+                    "error_details": {
+                        "command": c,
+                        "actor_id": actor_id,
+                        "allowed_reasons": sorted(list(VALID_FORCE_OVERRIDE_REASONS)),
+                    },
+                    "payload": p,
+                }
+            emergency = bool(p.get("force_override_emergency", False))
+            if emergency and reason not in EMERGENCY_FORCE_OVERRIDE_REASONS:
+                return {
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "force_override_emergency_reason_invalid",
+                    "error_details": {
+                        "command": c,
+                        "actor_id": actor_id,
+                        "allowed_emergency_reasons": sorted(list(EMERGENCY_FORCE_OVERRIDE_REASONS)),
+                    },
+                    "payload": p,
+                }
+            if emergency:
+                p["force_override_reason"] = reason
+                p["force_override_emergency"] = True
+                return {"ok": True, "payload": p}
             confirmation = str(p.get("force_override_confirmation") or "").strip()
             if confirmation != "CONFIRM_LOCALHOST_FORCE_OVERRIDE":
                 return {
@@ -1714,6 +2403,37 @@ class EngineHostService:
                     },
                     "payload": p,
                 }
+            p["force_override_reason"] = reason
+            p["force_override_emergency"] = False
+        if c in claim_cmds and bool(p.get("force_override", False)) and (not is_localhost):
+            reason = self._normalize_force_override_reason(p.get("force_override_reason"))
+            if reason not in VALID_FORCE_OVERRIDE_REASONS:
+                return {
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "force_override_reason_required",
+                    "error_details": {
+                        "command": c,
+                        "actor_id": actor_id,
+                        "allowed_reasons": sorted(list(VALID_FORCE_OVERRIDE_REASONS)),
+                    },
+                    "payload": p,
+                }
+            emergency = bool(p.get("force_override_emergency", False))
+            if emergency and reason not in EMERGENCY_FORCE_OVERRIDE_REASONS:
+                return {
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "force_override_emergency_reason_invalid",
+                    "error_details": {
+                        "command": c,
+                        "actor_id": actor_id,
+                        "allowed_emergency_reasons": sorted(list(EMERGENCY_FORCE_OVERRIDE_REASONS)),
+                    },
+                    "payload": p,
+                }
+            p["force_override_reason"] = reason
+            p["force_override_emergency"] = emergency
 
         if c in sensitive_engine_cmds:
             if c in {"issue-resource-token"} and str(p.get("resource_kind") or "").strip().lower() != "engine":
@@ -2079,6 +2799,58 @@ class EngineHostService:
             },
         }
 
+    def _build_generic_spawn_spec(
+        self,
+        *,
+        engine_id: str,
+        config_path: str,
+        config_payload: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        cfg = dict(config_payload or {})
+        spawn_cfg = dict(cfg.get("spawn") or {}) if isinstance(cfg.get("spawn"), dict) else {}
+        cmd_raw = cfg.get("worker_command")
+        if not (isinstance(cmd_raw, list) and cmd_raw):
+            cmd_raw = spawn_cfg.get("command")
+        if not (isinstance(cmd_raw, list) and cmd_raw):
+            return {
+                "error": "generic worker config is missing worker_command/spawn.command",
+                "error_kind": "generic_worker_command_missing",
+            }
+        command = [str(x) for x in list(cmd_raw) if str(x).strip()]
+        if not command:
+            return {
+                "error": "generic worker command resolved to empty",
+                "error_kind": "generic_worker_command_missing",
+            }
+        selected = Path(str(config_path or "")).expanduser().resolve()
+        config_dir = selected.parent
+        cwd_raw = cfg.get("worker_cwd") or spawn_cfg.get("cwd")
+        cwd = None
+        if str(cwd_raw or "").strip():
+            try:
+                cwd = str(self._resolve_path_token(str(cwd_raw), config_dir=config_dir))
+            except Exception:
+                cwd = str(cwd_raw)
+        env: Dict[str, Any] = {}
+        worker_env = cfg.get("worker_env")
+        spawn_env = spawn_cfg.get("env")
+        if isinstance(worker_env, dict):
+            env.update({str(k): str(v) for k, v in worker_env.items()})
+        if isinstance(spawn_env, dict):
+            env.update({str(k): str(v) for k, v in spawn_env.items()})
+        env.setdefault("MP13_ENGINE_CONFIG_PATH", str(config_path))
+        env.setdefault("MP13_ENGINE_ID", str(engine_id))
+        return {
+            "command": command,
+            "cwd": cwd,
+            "env": env,
+            "worker_transport": str(cfg.get("worker_transport") or "").strip() or None,
+            "worker_ipc_family": str(cfg.get("worker_ipc_family") or "").strip() or None,
+            "worker_ipc_address": str(cfg.get("worker_ipc_address") or "").strip() or None,
+            "worker_auth_token": str(cfg.get("worker_auth_token") or "").strip() or None,
+            "worker_auth_header": str(cfg.get("worker_auth_header") or "").strip() or None,
+        }
+
     def connect_from_config(self, *, config_path: str, engine_id: Optional[str] = None, model_path: Optional[str] = None) -> Dict[str, Any]:
         progress_events: List[Dict[str, Any]] = [
             self._progress_event("connect.resolve_config", "running", "Resolving engine config"),
@@ -2090,38 +2862,55 @@ class EngineHostService:
         base_name = self._safe_config_name(Path(selected).stem or "engine")
         requested = self._safe_config_name(engine_id) if str(engine_id or "").strip() else ""
         eid = self._next_engine_id(requested or base_name)
+        worker_class = self._classify_connect_worker_class(
+            config_path=config_path,
+            payload={"model_path": model_path},
+        )
 
-        configured_model = (
-            ((cfg.get("engine_params") or {}).get("base_model_path") if isinstance(cfg.get("engine_params"), dict) else None)
-            or cfg.get("base_model_path")
-            or cfg.get("model")
-            or cfg.get("base_model_name_or_path")
-        )
-        effective_model_path = str(model_path or configured_model or "").strip() or None
-        if not effective_model_path:
+        effective_model_path: Optional[str] = None
+        if worker_class == "generic":
             progress_events.append(
-                self._progress_event("connect.resolve_model", "needs_input", "No model path configured")
+                self._progress_event("connect.resolve_model", "skipped", "Generic worker profile does not require model selection")
             )
-            return {
-                "status": "needs_model",
-                "stage": "needs_model",
-                "engine_id": eid,
-                "config_path": str(selected),
-                "models": self.models_from_config(config_path),
-                "message": "Config loaded but no model is configured. Select a model folder and connect again.",
-                "progress_events": progress_events,
-            }
-        progress_events.append(
-            self._progress_event("connect.resolve_model", "completed", "Model selected", model_path=effective_model_path)
-        )
+        else:
+            configured_model = (
+                ((cfg.get("engine_params") or {}).get("base_model_path") if isinstance(cfg.get("engine_params"), dict) else None)
+                or cfg.get("base_model_path")
+                or cfg.get("model")
+                or cfg.get("base_model_name_or_path")
+            )
+            effective_model_path = str(model_path or configured_model or "").strip() or None
+            if not effective_model_path:
+                progress_events.append(
+                    self._progress_event("connect.resolve_model", "needs_input", "No model path configured")
+                )
+                return {
+                    "status": "needs_model",
+                    "stage": "needs_model",
+                    "engine_id": eid,
+                    "config_path": str(selected),
+                    "models": self.models_from_config(config_path),
+                    "message": "Config loaded but no model is configured. Select a model folder and connect again.",
+                    "progress_events": progress_events,
+                }
+            progress_events.append(
+                self._progress_event("connect.resolve_model", "completed", "Model selected", model_path=effective_model_path)
+            )
         progress_events.append(
             self._progress_event("connect.build_spawn_spec", "running", "Preparing engine spawn spec")
         )
-        spawn_spec = self._build_engine_spawn_spec(
-            engine_id=eid,
-            config_path=str(selected),
-            model_path=str(effective_model_path),
-        )
+        if worker_class == "generic":
+            spawn_spec = self._build_generic_spawn_spec(
+                engine_id=eid,
+                config_path=str(selected),
+                config_payload=cfg,
+            )
+        else:
+            spawn_spec = self._build_engine_spawn_spec(
+                engine_id=eid,
+                config_path=str(selected),
+                model_path=str(effective_model_path),
+            )
         if spawn_spec.get("error"):
             progress_events.append(
                 self._progress_event("connect.build_spawn_spec", "failed", str(spawn_spec.get("error") or "spawn spec failed"))
@@ -2132,6 +2921,7 @@ class EngineHostService:
                 "engine_id": eid,
                 "config_path": str(selected),
                 "model_path": effective_model_path,
+                "worker_class": worker_class,
                 "reason": str(spawn_spec.get("error_kind") or "engine_spawn_error"),
                 "message": str(spawn_spec.get("error") or "engine spawn spec build failed"),
                 "progress_events": progress_events,
@@ -2152,6 +2942,7 @@ class EngineHostService:
                 worker_auth_header=str(spawn_spec.get("worker_auth_header") or "").strip() or None,
                 worker_ipc_family=str(spawn_spec.get("worker_ipc_family") or "").strip() or None,
                 worker_ipc_address=str(spawn_spec.get("worker_ipc_address") or "").strip() or None,
+                worker_profile_class=worker_class,
             )
             progress_events.append(
                 self._progress_event("connect.spawn_engine", "completed", "Engine started", engine_id=eid)
@@ -2162,6 +2953,7 @@ class EngineHostService:
                 "engine_id": eid,
                 "config_path": str(selected),
                 "model_path": effective_model_path,
+                "worker_class": worker_class,
                 "managed_engine": rec,
                 "progress_events": progress_events,
             }
@@ -2175,6 +2967,7 @@ class EngineHostService:
                 "engine_id": eid,
                 "config_path": str(selected),
                 "model_path": effective_model_path,
+                "worker_class": worker_class,
                 "reason": "spawn_failed",
                 "message": str(e),
                 "progress_events": progress_events,
@@ -2190,6 +2983,13 @@ class EngineHostService:
             "capabilities": self.daemon_capabilities(),
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
+            "access_profile": dict(cfg.get("access_profile") or {"connectivity_mode": "local_only"}),
+            "endpoint_mode_default": str(cfg.get("endpoint_mode_default") or "shared"),
+            "lifecycle_profile": self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
+            "lifecycle_policy": self._normalize_lifecycle_policy(
+                self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
+                dict(cfg.get("lifecycle_policy") or {}),
+            ),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
             "claim_acl_policy": self._claim_acl_policy(control),
             "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
@@ -2202,11 +3002,132 @@ class EngineHostService:
             "sessions_count": len(dict(auth.get("sessions") or {})),
         }
 
+    @staticmethod
+    def _endpoint_mode_default(cfg: Dict[str, Any]) -> str:
+        raw = str(cfg.get("endpoint_mode_default") or "shared").strip().lower()
+        return "exclusive" if raw == "exclusive" else "shared"
+
+    @staticmethod
+    def _normalize_lifecycle_profile(profile: Any) -> str:
+        raw = str(profile or LIFECYCLE_PROFILE_DETACHED).strip().lower()
+        if raw in VALID_LIFECYCLE_PROFILES:
+            return raw
+        return LIFECYCLE_PROFILE_DETACHED
+
+    @staticmethod
+    def _default_lifecycle_policy_for_profile(profile: str) -> Dict[str, Any]:
+        p = str(profile or LIFECYCLE_PROFILE_DETACHED).strip().lower()
+        if p == LIFECYCLE_PROFILE_FOREGROUND:
+            return {
+                "on_terminal_disconnect": "stop_daemon",
+                "terminal_control_enabled": True,
+                "owner_disconnect_shutdown": True,
+            }
+        if p == LIFECYCLE_PROFILE_SERVICE:
+            return {
+                "on_terminal_disconnect": "keep_daemon_running",
+                "terminal_control_enabled": False,
+                "owner_disconnect_shutdown": False,
+            }
+        return {
+            "on_terminal_disconnect": "keep_daemon_running",
+            "terminal_control_enabled": True,
+            "owner_disconnect_shutdown": False,
+        }
+
+    @classmethod
+    def _normalize_lifecycle_policy(cls, profile: str, policy: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(cls._default_lifecycle_policy_for_profile(profile))
+        incoming = dict(policy or {})
+        disconnect = str(incoming.get("on_terminal_disconnect") or "").strip().lower()
+        if disconnect in {"stop_daemon", "keep_daemon_running"}:
+            out["on_terminal_disconnect"] = disconnect
+        if "terminal_control_enabled" in incoming:
+            out["terminal_control_enabled"] = bool(incoming.get("terminal_control_enabled"))
+        if "owner_disconnect_shutdown" in incoming:
+            out["owner_disconnect_shutdown"] = bool(incoming.get("owner_disconnect_shutdown"))
+        return out
+
+    def get_lifecycle_policy_effective(self) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        profile = self._normalize_lifecycle_profile(cfg.get("lifecycle_profile"))
+        policy = self._normalize_lifecycle_policy(profile, dict(cfg.get("lifecycle_policy") or {}))
+        return {
+            "profile": profile,
+            "policy": policy,
+            "effective": {
+                "daemon_survives_terminal_disconnect": (
+                    str(policy.get("on_terminal_disconnect") or "") == "keep_daemon_running"
+                ),
+                "terminal_control_enabled": bool(policy.get("terminal_control_enabled", True)),
+                "owner_disconnect_shutdown": bool(policy.get("owner_disconnect_shutdown", False)),
+            },
+        }
+
+    def resolve_actor_id_from_session_token(self, token: str) -> Optional[str]:
+        tok = str(token or "").strip()
+        if not tok:
+            return None
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+        sessions = dict(auth.get("sessions") or {})
+        session = dict(sessions.get(tok) or {})
+        if not session or bool(session.get("revoked", False)):
+            return None
+        key_id = str(session.get("key_id") or "").strip()
+        if not key_id:
+            return None
+        return self._actor_id_from_session_key(key_id)
+
+    def is_actor_exclusive_endpoint_owner(self, actor_id: str) -> bool:
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return False
+        control = self._read_control()
+        endpoint = dict(control.get("endpoint_claim") or {})
+        owner = str(endpoint.get("exclusive_owner") or "").strip()
+        return bool(owner and owner == aid)
+
+    @staticmethod
+    def _validate_require_auth_disabled_safe_profile(cfg: Dict[str, Any]) -> None:
+        auth = dict(cfg.get("auth") or {})
+        keys = dict(auth.get("keys") or {})
+        sessions = dict(auth.get("sessions") or {})
+        challenges = dict(auth.get("challenges") or {})
+        access_profile = dict(cfg.get("access_profile") or {})
+        connectivity_mode = str(access_profile.get("connectivity_mode") or "local_only").strip().lower()
+        if connectivity_mode != "local_only":
+            raise PermissionError("require_auth_false_only_supported_for_local_only_connectivity")
+        if sessions or challenges:
+            raise PermissionError("require_auth_false_requires_no_active_sessions_or_challenges")
+        if not keys:
+            return
+        if len(keys) > 1:
+            raise PermissionError("require_auth_false_requires_single_admin_key_profile")
+        for meta in keys.values():
+            role = str((meta or {}).get("role") or "").strip().lower()
+            if role != ROLE_ADMIN:
+                raise PermissionError("require_auth_false_requires_admin_only_keys")
+
+    def assert_runtime_policy_safe(self) -> None:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        if bool(cfg.get("require_auth", False)):
+            return
+        self._validate_require_auth_disabled_safe_profile(cfg)
+
     def set_control_config(
         self,
         *,
         ssh_key: Optional[str] = None,
         require_auth: Optional[bool] = None,
+        access_profile: Optional[Dict[str, Any]] = None,
+        endpoint_mode_default: Optional[str] = None,
+        lifecycle_profile: Optional[str] = None,
+        lifecycle_policy: Optional[Dict[str, Any]] = None,
         traffic_policy: Optional[Dict[str, Any]] = None,
         engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
         claim_acl_policy: Optional[Dict[str, Any]] = None,
@@ -2215,8 +3136,42 @@ class EngineHostService:
         cfg = dict(control.get("control_config") or {})
         if ssh_key is not None:
             cfg["ssh_key"] = str(ssh_key).strip() if ssh_key else None
+        cfg["access_profile"] = dict(cfg.get("access_profile") or {"connectivity_mode": "local_only"})
+        cfg["endpoint_mode_default"] = self._endpoint_mode_default(cfg)
+        if access_profile is not None:
+            cfg["access_profile"] = dict(cfg.get("access_profile") or {}) | dict(access_profile or {})
+            cfg["access_profile"]["connectivity_mode"] = str(
+                cfg["access_profile"].get("connectivity_mode") or "local_only"
+            ).strip().lower()
+        if endpoint_mode_default is not None:
+            mode_raw = str(endpoint_mode_default or "").strip().lower()
+            if mode_raw not in {"exclusive", "shared"}:
+                raise ValueError("endpoint_mode_default must be 'exclusive' or 'shared'")
+            cfg["endpoint_mode_default"] = mode_raw
+        else:
+            cfg["endpoint_mode_default"] = self._endpoint_mode_default(cfg)
+        previous_profile = self._normalize_lifecycle_profile(cfg.get("lifecycle_profile"))
+        current_profile = previous_profile
+        if lifecycle_profile is not None:
+            profile_raw = str(lifecycle_profile or "").strip().lower()
+            if profile_raw not in VALID_LIFECYCLE_PROFILES:
+                raise ValueError(
+                    "lifecycle_profile must be one of: "
+                    "foreground_terminal_bound, detached_user_process, service_managed"
+                )
+            current_profile = profile_raw
+        cfg["lifecycle_profile"] = current_profile
+        profile_changed = current_profile != previous_profile
+        existing_policy = {} if profile_changed else dict(cfg.get("lifecycle_policy") or {})
+        cfg["lifecycle_policy"] = self._normalize_lifecycle_policy(
+            current_profile,
+            existing_policy | dict(lifecycle_policy or {}),
+        )
         if require_auth is not None:
-            cfg["require_auth"] = bool(require_auth)
+            requested_require_auth = bool(require_auth)
+            if not requested_require_auth:
+                self._validate_require_auth_disabled_safe_profile(cfg)
+            cfg["require_auth"] = requested_require_auth
         cfg.setdefault("config_store_mode", "store_only")
         cfg.setdefault("auth", {"keys": {}, "sessions": {}})
         cfg.setdefault("engine_traffic_policies", {})
@@ -2248,6 +3203,13 @@ class EngineHostService:
             "capabilities": self.daemon_capabilities(),
             "ssh_key": cfg.get("ssh_key"),
             "require_auth": bool(cfg.get("require_auth", False)),
+            "access_profile": dict(cfg.get("access_profile") or {"connectivity_mode": "local_only"}),
+            "endpoint_mode_default": str(cfg.get("endpoint_mode_default") or "shared"),
+            "lifecycle_profile": self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
+            "lifecycle_policy": self._normalize_lifecycle_policy(
+                self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
+                dict(cfg.get("lifecycle_policy") or {}),
+            ),
             "config_store_mode": str(cfg.get("config_store_mode") or "store_only"),
             "claim_acl_policy": self._claim_acl_policy(control),
             "traffic_policy": self._normalize_traffic_policy(dict(cfg.get("traffic_policy") or {})),
@@ -2404,6 +3366,7 @@ class EngineHostService:
         worker_auth_header: Optional[str] = None,
         worker_ipc_family: Optional[str] = None,
         worker_ipc_address: Optional[str] = None,
+        worker_profile_class: Optional[str] = None,
         source: str = "engine_host_spawned",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
@@ -2424,6 +3387,7 @@ class EngineHostService:
             "worker_transport": "ipc",
             "worker_ipc_family": str(worker_ipc_family or "").strip() or None,
             "worker_ipc_address": str(worker_ipc_address or "").strip() or None,
+            "worker_profile_class": self._normalize_worker_profile_class(worker_profile_class),
             "log_path": str(self._engine_log_path(eid)),
         }
         rows = [r for r in self._read_engines() if str(r.get("engine_id") or "") != eid]
@@ -2442,6 +3406,7 @@ class EngineHostService:
         worker_auth_header: Optional[str] = None,
         worker_ipc_family: Optional[str] = None,
         worker_ipc_address: Optional[str] = None,
+        worker_profile_class: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not list(command or []):
             raise ValueError("command is required")
@@ -2495,6 +3460,7 @@ class EngineHostService:
             worker_auth_header=auth_header,
             worker_ipc_family=ipc_family,
             worker_ipc_address=ipc_address,
+            worker_profile_class=worker_profile_class,
         )
 
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:
@@ -2551,6 +3517,7 @@ class EngineHostService:
         worker_auth_header = str(entry.get("worker_auth_header") or "").strip() or None
         worker_ipc_family = str(entry.get("worker_ipc_family") or "").strip() or None
         worker_ipc_address = str(entry.get("worker_ipc_address") or "").strip() or None
+        worker_profile_class = str(entry.get("worker_profile_class") or "").strip() or None
         if pid > 0 and self._pid_alive(pid):
             return {"status": "running", "engine_id": eid, "pid": pid, "alive": True, "endpoint": endpoint}
         if not command:
@@ -2584,6 +3551,7 @@ class EngineHostService:
             worker_auth_header=worker_auth_header,
             worker_ipc_family=worker_ipc_family,
             worker_ipc_address=worker_ipc_address,
+            worker_profile_class=worker_profile_class,
         )
         return {
             "status": "respawned",
@@ -3073,8 +4041,10 @@ class EngineHostService:
         engine_id: str,
         *,
         backend_id: Optional[str],
-        exclusive: bool = False,
+        exclusive: Optional[bool] = None,
         force_override: bool = False,
+        force_override_reason: Optional[str] = None,
+        force_override_emergency: bool = False,
         actor_id: Optional[str] = None,
         peer_host: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -3083,6 +4053,8 @@ class EngineHostService:
         if not eid:
             raise ValueError("engine_id is required")
         control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        effective_exclusive = bool(exclusive) if exclusive is not None else (self._endpoint_mode_default(cfg) == "exclusive")
         claims = dict(control.get("claims_by_engine") or {})
         claim = dict(claims.get(eid) or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
         owners_before = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
@@ -3098,7 +4070,68 @@ class EngineHostService:
         displaced: List[str] = []
         revoked = 0
         transition = "claimed"
-        if exclusive:
+        reason = self._normalize_force_override_reason(force_override_reason)
+        emergency = bool(force_override_emergency)
+        if bool(force_override):
+            if reason not in VALID_FORCE_OVERRIDE_REASONS:
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-engine",
+                    scope="engine",
+                    resource_kind="engine",
+                    resource_id=eid,
+                    actor_id=bid,
+                    decision="deny",
+                    code="force_override_reason_required",
+                    transition=None,
+                    mode="exclusive" if effective_exclusive else "shared",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"force_override": True, "allowed_reasons": sorted(list(VALID_FORCE_OVERRIDE_REASONS))},
+                    severity="high",
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "force_override_reason_required",
+                    "force override reason is required",
+                    engine_id=eid,
+                    backend_id=bid,
+                    allowed_reasons=sorted(list(VALID_FORCE_OVERRIDE_REASONS)),
+                )
+                out.update({"engine_id": eid, "backend_id": bid, "mode": "exclusive" if effective_exclusive else "shared"})
+                return out
+            if emergency and reason not in EMERGENCY_FORCE_OVERRIDE_REASONS:
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-engine",
+                    scope="engine",
+                    resource_kind="engine",
+                    resource_id=eid,
+                    actor_id=bid,
+                    decision="deny",
+                    code="force_override_emergency_reason_invalid",
+                    transition=None,
+                    mode="exclusive" if effective_exclusive else "shared",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"force_override": True, "force_override_emergency": True, "force_override_reason": reason},
+                    severity="high",
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "force_override_emergency_reason_invalid",
+                    "force override emergency reason is invalid",
+                    engine_id=eid,
+                    backend_id=bid,
+                    allowed_emergency_reasons=sorted(list(EMERGENCY_FORCE_OVERRIDE_REASONS)),
+                )
+                out.update({"engine_id": eid, "backend_id": bid, "mode": "exclusive" if effective_exclusive else "shared"})
+                return out
+        if effective_exclusive:
             blocked_by = sorted([o for o in owners if o != bid])
             if blocked_by and not bool(force_override):
                 self._append_claim_audit_event(
@@ -3117,6 +4150,7 @@ class EngineHostService:
                     owners_before=owners_before,
                     owners_after=owners_before,
                     details={"blocking_owners": blocked_by},
+                    severity="normal",
                 )
                 self._write_control(control)
                 out = self._deny_payload(
@@ -3156,6 +4190,7 @@ class EngineHostService:
                         owners_before=owners_before,
                         owners_after=owners_before,
                         details={"engine_exclusive_owner": previous_exclusive},
+                        severity="normal",
                     )
                     self._write_control(control)
                     out = self._deny_payload(
@@ -3182,6 +4217,20 @@ class EngineHostService:
                 transition = "joined_shared"
         claims[eid] = claim
         control["claims_by_engine"] = claims
+        self._clear_ownership_change_notice(control, bid)
+        if transition == "force_override" and displaced:
+            self._record_ownership_change_notices(
+                control,
+                displaced_owners=displaced,
+                replaced_by=bid,
+                scope="engine",
+                resource_kind="engine",
+                resource_id=eid,
+                reason=reason or None,
+                emergency=emergency,
+                peer_host=peer_host,
+                command="claim-engine",
+            )
         self._touch_claim_owner_keepalive(control, bid)
         self._append_claim_audit_event(
             control,
@@ -3194,36 +4243,48 @@ class EngineHostService:
             decision="grant",
             code="ok",
             transition=transition,
-            mode="exclusive" if exclusive else "shared",
+            mode="exclusive" if effective_exclusive else "shared",
             peer_host=peer_host,
             owners_before=owners_before,
             owners_after=list(claim.get("owners") or []),
-            details={"orphan_owners": orphan_owners, "force_override": bool(force_override)},
+            details={
+                "orphan_owners": orphan_owners,
+                "force_override": bool(force_override),
+                "force_override_reason": reason or None,
+                "force_override_emergency": emergency,
+            },
+            severity="high" if bool(force_override) else "normal",
         )
         self._write_control(control)
         return {
             "scope": "engine",
             "engine_id": eid,
             "backend_id": bid,
-            "mode": "exclusive" if exclusive else "shared",
+            "mode": "exclusive" if effective_exclusive else "shared",
             "owners": list(claim.get("owners") or []),
             "exclusive_owner": claim.get("exclusive_owner"),
             "displaced_backends": displaced,
             "revoked_tokens": revoked,
             "transition": transition,
+            "force_override_reason": reason or None,
+            "force_override_emergency": emergency if bool(force_override) else False,
         }
 
     def claim_endpoint(
         self,
         *,
         backend_id: Optional[str],
-        exclusive: bool = False,
+        exclusive: Optional[bool] = None,
         force_override: bool = False,
+        force_override_reason: Optional[str] = None,
+        force_override_emergency: bool = False,
         actor_id: Optional[str] = None,
         peer_host: Optional[str] = None,
     ) -> Dict[str, Any]:
         bid = str(actor_id or "").strip() or self._normalize_backend_id(backend_id)
         control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        effective_exclusive = bool(exclusive) if exclusive is not None else (self._endpoint_mode_default(cfg) == "exclusive")
         endpoint = dict(control.get("endpoint_claim") or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
         owners_before = [str(x or "").strip() for x in list(endpoint.get("owners") or []) if str(x or "").strip()]
         active_owners, orphan_owners = self._active_and_orphan_owners(control, owners_before)
@@ -3231,7 +4292,66 @@ class EngineHostService:
         displaced: List[str] = []
         revoked = 0
         transition = "claimed"
-        if exclusive:
+        reason = self._normalize_force_override_reason(force_override_reason)
+        emergency = bool(force_override_emergency)
+        if bool(force_override):
+            if reason not in VALID_FORCE_OVERRIDE_REASONS:
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-endpoint",
+                    scope="endpoint",
+                    resource_kind="endpoint",
+                    resource_id="*",
+                    actor_id=bid,
+                    decision="deny",
+                    code="force_override_reason_required",
+                    transition=None,
+                    mode="exclusive" if effective_exclusive else "shared",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"force_override": True, "allowed_reasons": sorted(list(VALID_FORCE_OVERRIDE_REASONS))},
+                    severity="high",
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "force_override_reason_required",
+                    "force override reason is required",
+                    backend_id=bid,
+                    allowed_reasons=sorted(list(VALID_FORCE_OVERRIDE_REASONS)),
+                )
+                out.update({"scope": "endpoint", "backend_id": bid, "mode": "exclusive" if effective_exclusive else "shared"})
+                return out
+            if emergency and reason not in EMERGENCY_FORCE_OVERRIDE_REASONS:
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-endpoint",
+                    scope="endpoint",
+                    resource_kind="endpoint",
+                    resource_id="*",
+                    actor_id=bid,
+                    decision="deny",
+                    code="force_override_emergency_reason_invalid",
+                    transition=None,
+                    mode="exclusive" if effective_exclusive else "shared",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"force_override": True, "force_override_emergency": True, "force_override_reason": reason},
+                    severity="high",
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "force_override_emergency_reason_invalid",
+                    "force override emergency reason is invalid",
+                    backend_id=bid,
+                    allowed_emergency_reasons=sorted(list(EMERGENCY_FORCE_OVERRIDE_REASONS)),
+                )
+                out.update({"scope": "endpoint", "backend_id": bid, "mode": "exclusive" if effective_exclusive else "shared"})
+                return out
+        if effective_exclusive:
             blocked_by = sorted([o for o in owners if o != bid])
             if blocked_by and not bool(force_override):
                 self._append_claim_audit_event(
@@ -3250,6 +4370,7 @@ class EngineHostService:
                     owners_before=owners_before,
                     owners_after=owners_before,
                     details={"blocking_owners": blocked_by},
+                    severity="normal",
                 )
                 self._write_control(control)
                 out = self._deny_payload(
@@ -3289,6 +4410,7 @@ class EngineHostService:
                         owners_before=owners_before,
                         owners_after=owners_before,
                         details={"endpoint_exclusive_owner": previous_exclusive},
+                        severity="normal",
                     )
                     self._write_control(control)
                     out = self._deny_payload(
@@ -3311,6 +4433,20 @@ class EngineHostService:
             else:
                 transition = "joined_shared"
         control["endpoint_claim"] = endpoint
+        self._clear_ownership_change_notice(control, bid)
+        if transition == "force_override" and displaced:
+            self._record_ownership_change_notices(
+                control,
+                displaced_owners=displaced,
+                replaced_by=bid,
+                scope="endpoint",
+                resource_kind="endpoint",
+                resource_id="*",
+                reason=reason or None,
+                emergency=emergency,
+                peer_host=peer_host,
+                command="claim-endpoint",
+            )
         self._touch_claim_owner_keepalive(control, bid)
         self._append_claim_audit_event(
             control,
@@ -3323,22 +4459,30 @@ class EngineHostService:
             decision="grant",
             code="ok",
             transition=transition,
-            mode="exclusive" if exclusive else "shared",
+            mode="exclusive" if effective_exclusive else "shared",
             peer_host=peer_host,
             owners_before=owners_before,
             owners_after=list(endpoint.get("owners") or []),
-            details={"orphan_owners": orphan_owners, "force_override": bool(force_override)},
+            details={
+                "orphan_owners": orphan_owners,
+                "force_override": bool(force_override),
+                "force_override_reason": reason or None,
+                "force_override_emergency": emergency,
+            },
+            severity="high" if bool(force_override) else "normal",
         )
         self._write_control(control)
         return {
             "scope": "endpoint",
             "backend_id": bid,
-            "mode": "exclusive" if exclusive else "shared",
+            "mode": "exclusive" if effective_exclusive else "shared",
             "owners": list(endpoint.get("owners") or []),
             "exclusive_owner": endpoint.get("exclusive_owner"),
             "displaced_backends": displaced,
             "revoked_tokens": revoked,
             "transition": transition,
+            "force_override_reason": reason or None,
+            "force_override_emergency": emergency if bool(force_override) else False,
         }
 
     def get_claim_status(self, engine_id: str) -> Dict[str, Any]:
@@ -3416,8 +4560,10 @@ class EngineHostService:
         resource_id: str,
         *,
         backend_id: Optional[str],
-        exclusive: bool = False,
+        exclusive: Optional[bool] = None,
         force_override: bool = False,
+        force_override_reason: Optional[str] = None,
+        force_override_emergency: bool = False,
         actor_id: Optional[str] = None,
         peer_host: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -3429,12 +4575,16 @@ class EngineHostService:
                 backend_id=backend_id,
                 exclusive=exclusive,
                 force_override=force_override,
+                force_override_reason=force_override_reason,
+                force_override_emergency=force_override_emergency,
                 actor_id=actor_id,
                 peer_host=peer_host,
             )
         bid = str(actor_id or "").strip() or self._normalize_backend_id(backend_id)
         rkey = self._resource_key(rkind, rid)
         control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        effective_exclusive = bool(exclusive) if exclusive is not None else (self._endpoint_mode_default(cfg) == "exclusive")
         claims = dict(control.get("resource_claims") or {})
         claim = dict(claims.get(rkey) or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0})
         owners_before = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
@@ -3443,7 +4593,70 @@ class EngineHostService:
         displaced: List[str] = []
         revoked = 0
         transition = "claimed"
-        if exclusive:
+        reason = self._normalize_force_override_reason(force_override_reason)
+        emergency = bool(force_override_emergency)
+        if bool(force_override):
+            if reason not in VALID_FORCE_OVERRIDE_REASONS:
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-resource",
+                    scope="resource",
+                    resource_kind=rkind,
+                    resource_id=rid,
+                    actor_id=bid,
+                    decision="deny",
+                    code="force_override_reason_required",
+                    transition=None,
+                    mode="exclusive" if effective_exclusive else "shared",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"force_override": True, "allowed_reasons": sorted(list(VALID_FORCE_OVERRIDE_REASONS))},
+                    severity="high",
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "force_override_reason_required",
+                    "force override reason is required",
+                    resource_kind=rkind,
+                    resource_id=rid,
+                    backend_id=bid,
+                    allowed_reasons=sorted(list(VALID_FORCE_OVERRIDE_REASONS)),
+                )
+                out.update({"scope": "resource", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "mode": "exclusive" if effective_exclusive else "shared"})
+                return out
+            if emergency and reason not in EMERGENCY_FORCE_OVERRIDE_REASONS:
+                self._append_claim_audit_event(
+                    control,
+                    event_type="claim_deny",
+                    command="claim-resource",
+                    scope="resource",
+                    resource_kind=rkind,
+                    resource_id=rid,
+                    actor_id=bid,
+                    decision="deny",
+                    code="force_override_emergency_reason_invalid",
+                    transition=None,
+                    mode="exclusive" if effective_exclusive else "shared",
+                    peer_host=peer_host,
+                    owners_before=owners_before,
+                    owners_after=owners_before,
+                    details={"force_override": True, "force_override_emergency": True, "force_override_reason": reason},
+                    severity="high",
+                )
+                self._write_control(control)
+                out = self._deny_payload(
+                    "force_override_emergency_reason_invalid",
+                    "force override emergency reason is invalid",
+                    resource_kind=rkind,
+                    resource_id=rid,
+                    backend_id=bid,
+                    allowed_emergency_reasons=sorted(list(EMERGENCY_FORCE_OVERRIDE_REASONS)),
+                )
+                out.update({"scope": "resource", "resource_kind": rkind, "resource_id": rid, "backend_id": bid, "mode": "exclusive" if effective_exclusive else "shared"})
+                return out
+        if effective_exclusive:
             blocked_by = sorted([o for o in owners if o != bid])
             if blocked_by and not bool(force_override):
                 self._append_claim_audit_event(
@@ -3462,6 +4675,7 @@ class EngineHostService:
                     owners_before=owners_before,
                     owners_after=owners_before,
                     details={"blocking_owners": blocked_by},
+                    severity="normal",
                 )
                 self._write_control(control)
                 out = self._deny_payload(
@@ -3508,6 +4722,7 @@ class EngineHostService:
                         owners_before=owners_before,
                         owners_after=owners_before,
                         details={"resource_exclusive_owner": previous_exclusive},
+                        severity="normal",
                     )
                     self._write_control(control)
                     out = self._deny_payload(
@@ -3534,6 +4749,20 @@ class EngineHostService:
                 transition = "joined_shared"
         claims[rkey] = claim
         control["resource_claims"] = claims
+        self._clear_ownership_change_notice(control, bid)
+        if transition == "force_override" and displaced:
+            self._record_ownership_change_notices(
+                control,
+                displaced_owners=displaced,
+                replaced_by=bid,
+                scope="resource",
+                resource_kind=rkind,
+                resource_id=rid,
+                reason=reason or None,
+                emergency=emergency,
+                peer_host=peer_host,
+                command="claim-resource",
+            )
         self._touch_claim_owner_keepalive(control, bid)
         self._append_claim_audit_event(
             control,
@@ -3546,11 +4775,17 @@ class EngineHostService:
             decision="grant",
             code="ok",
             transition=transition,
-            mode="exclusive" if exclusive else "shared",
+            mode="exclusive" if effective_exclusive else "shared",
             peer_host=peer_host,
             owners_before=owners_before,
             owners_after=list(claim.get("owners") or []),
-            details={"orphan_owners": orphan_owners, "force_override": bool(force_override)},
+            details={
+                "orphan_owners": orphan_owners,
+                "force_override": bool(force_override),
+                "force_override_reason": reason or None,
+                "force_override_emergency": emergency,
+            },
+            severity="high" if bool(force_override) else "normal",
         )
         self._write_control(control)
         return {
@@ -3558,12 +4793,14 @@ class EngineHostService:
             "resource_kind": rkind,
             "resource_id": rid,
             "backend_id": bid,
-            "mode": "exclusive" if exclusive else "shared",
+            "mode": "exclusive" if effective_exclusive else "shared",
             "owners": list(claim.get("owners") or []),
             "exclusive_owner": claim.get("exclusive_owner"),
             "displaced_backends": displaced,
             "revoked_tokens": revoked,
             "transition": transition,
+            "force_override_reason": reason or None,
+            "force_override_emergency": emergency if bool(force_override) else False,
         }
 
     def get_resource_claim_status(self, resource_kind: str, resource_id: str) -> Dict[str, Any]:

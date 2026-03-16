@@ -70,9 +70,9 @@ EXAMPLES_BY_COMMAND = {
         "@'{\"engine_id\":\"worker1\",\"cursor\":0,\"max_bytes\":65536}'@ | python -m hosting.engine_host_cli --payload-stdin logs-follow",
     ],
     "auth-upsert-key": [
-        "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"management\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
-        "@'{\"key_id\":\"traffic-key\",\"key_secret\":\"change_me\",\"role\":\"traffic\",\"allowed_engines\":[\"worker1\",\"worker2\"]}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
-        "@'{\"key_id\":\"admin-pub\",\"auth_method\":\"public_key\",\"public_key\":\"ssh-ed25519 AAAA...\",\"role\":\"management\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
+        "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"admin\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
+        "@'{\"key_id\":\"worker-key\",\"key_secret\":\"change_me\",\"role\":\"worker_user\",\"allowed_engines\":[\"worker1\",\"worker2\"]}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
+        "@'{\"key_id\":\"admin-pub\",\"auth_method\":\"public_key\",\"public_key\":\"ssh-ed25519 AAAA...\",\"role\":\"admin\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
     ],
     "auth-issue-session": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"scope\":\"control\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-issue-session",
@@ -91,6 +91,9 @@ EXAMPLES_BY_COMMAND = {
     ],
     "auth-list-issued-tokens": [
         "python -m hosting.engine_host_cli auth-list-issued-tokens",
+    ],
+    "auth-audit-list": [
+        "python -m hosting.engine_host_cli auth-audit-list",
     ],
     "proxy-request": [
         "@'{\"engine_id\":\"worker1\",\"method\":\"GET\",\"path\":\"/health\",\"session_token\":\"<traffic_session_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-request",
@@ -124,6 +127,16 @@ EXAMPLES_BY_COMMAND = {
     ],
     "host-metrics": [
         "python -m hosting.engine_host_cli host-metrics",
+    ],
+    "set-endpoint-mode-override": [
+        "@'{\"mode\":\"exclusive\",\"session_token\":\"<control_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin set-endpoint-mode-override",
+        "@'{\"mode\":\"default\",\"session_token\":\"<control_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin set-endpoint-mode-override",
+    ],
+    "get-endpoint-mode-effective": [
+        "@'{\"session_token\":\"<control_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin get-endpoint-mode-effective",
+    ],
+    "get-lifecycle-policy-effective": [
+        "@'{\"session_token\":\"<control_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin get-lifecycle-policy-effective",
     ],
     "op-start": [
         "@'{\"command\":\"connect-from-config\",\"payload\":{\"config_path\":\"default\",\"engine_id\":\"worker_cfg\"}}'@ | python -m hosting.engine_host_cli --payload-stdin op-start",
@@ -379,6 +392,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "auth-list-keys",
         "auth-list-sessions",
         "auth-list-issued-tokens",
+        "auth-audit-list",
         "auth-upsert-key",
         "auth-revoke-key",
         "auth-issue-session",
@@ -396,6 +410,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "proxy-stream-recv",
         "proxy-stream-close",
         "host-metrics",
+        "set-endpoint-mode-override",
+        "get-endpoint-mode-effective",
+        "get-lifecycle-policy-effective",
         "op-start",
         "op-status",
     ]:
@@ -423,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _setup_file_logging(log_file_str)
 
         port = _extract_int_arg(argv, "--port", DEFAULT_DAEMON_PORT)
+        runtime_profile = _extract_str_arg(argv, "--runtime-profile", "foreground_terminal_bound")
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         control_state = _extract_path_arg(argv, "--control-state-file", None)
@@ -448,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 pid_file=pid_file,
                 engines_state_file=engines_state,
                 control_state_file=control_state,
+                runtime_profile=str(runtime_profile or "foreground_terminal_bound"),
             )
             return 0
 
@@ -512,6 +531,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 1
 
     # ------------------------------------------------------------------
+    # Mode 2b: --hosting-config  →  run setup/reconfiguration wizard/tool
+    # ------------------------------------------------------------------
+    if "--hosting-config" in argv:
+        from .hosting_config import main as hosting_config_main
+
+        forwarded = [a for a in argv if a != "--hosting-config"]
+        return int(hosting_config_main(forwarded))
+
+    # ------------------------------------------------------------------
     # Mode 3: subcommand  →  parse normally; try daemon first, then direct
     # ------------------------------------------------------------------
     parser = _build_parser()
@@ -574,8 +602,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.claim_engine(
                     str(payload.get("engine_id") or args.engine_id),
                     backend_id=payload.get("backend_id"),
-                    exclusive=bool(payload.get("exclusive", False)),
+                    exclusive=payload.get("exclusive"),
                     force_override=bool(payload.get("force_override", False)),
+                    force_override_reason=payload.get("force_override_reason"),
+                    force_override_emergency=bool(payload.get("force_override_emergency", False)),
                     actor_id=payload.get("_claim_actor_id"),
                     peer_host=payload.get("_daemon_peer_host"),
                 )
@@ -585,8 +615,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(
                 svc.claim_endpoint(
                     backend_id=payload.get("backend_id"),
-                    exclusive=bool(payload.get("exclusive", False)),
+                    exclusive=payload.get("exclusive"),
                     force_override=bool(payload.get("force_override", False)),
+                    force_override_reason=payload.get("force_override_reason"),
+                    force_override_emergency=bool(payload.get("force_override_emergency", False)),
                     actor_id=payload.get("_claim_actor_id"),
                     peer_host=payload.get("_daemon_peer_host"),
                 )
@@ -617,8 +649,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     str(payload.get("resource_kind") or args.resource_kind),
                     str(payload.get("resource_id") or args.resource_id),
                     backend_id=payload.get("backend_id"),
-                    exclusive=bool(payload.get("exclusive", False)),
+                    exclusive=payload.get("exclusive"),
                     force_override=bool(payload.get("force_override", False)),
+                    force_override_reason=payload.get("force_override_reason"),
+                    force_override_emergency=bool(payload.get("force_override_emergency", False)),
                     actor_id=payload.get("_claim_actor_id"),
                     peer_host=payload.get("_daemon_peer_host"),
                 )
@@ -807,6 +841,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "host-metrics":
             _print_ok(svc.get_host_metrics())
             return 0
+        if cmd in {"set-endpoint-mode-override", "get-endpoint-mode-effective"}:
+            _print_error(f"{cmd} requires a running daemon")
+            return 1
         if cmd == "get-control-config":
             _print_ok(svc.get_control_config())
             return 0
@@ -815,11 +852,18 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.set_control_config(
                     ssh_key=payload.get("ssh_key"),
                     require_auth=payload.get("require_auth"),
+                    access_profile=dict(payload.get("access_profile") or {}),
+                    endpoint_mode_default=payload.get("endpoint_mode_default"),
+                    lifecycle_profile=payload.get("lifecycle_profile"),
+                    lifecycle_policy=dict(payload.get("lifecycle_policy") or {}),
                     traffic_policy=dict(payload.get("traffic_policy") or {}),
                     engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
                     claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
                 )
             )
+            return 0
+        if cmd == "get-lifecycle-policy-effective":
+            _print_ok(svc.get_lifecycle_policy_effective())
             return 0
         if cmd == "auth-status":
             _print_ok(svc.auth_status())
@@ -847,6 +891,18 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     resource_id=payload.get("resource_id"),
                     backend_id=payload.get("backend_id"),
                     token_preview_contains=payload.get("token_preview_contains"),
+                    limit=int(payload.get("limit") or 100),
+                    offset=int(payload.get("offset") or 0),
+                )
+            )
+            return 0
+        if cmd == "auth-audit-list":
+            _print_ok(
+                svc.auth_list_audit_events(
+                    event_type=payload.get("event_type"),
+                    actor_key_id=payload.get("actor_key_id"),
+                    target_key_id=payload.get("target_key_id"),
+                    result=payload.get("result"),
                     limit=int(payload.get("limit") or 100),
                     offset=int(payload.get("offset") or 0),
                 )

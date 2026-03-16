@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -163,6 +164,7 @@ class EngineHostHttpIngressDaemon:
             engines_state_file=engines_state_file,
             control_state_file=control_state_file,
         )
+        self.svc.assert_runtime_policy_safe()
         self._server: Optional[http.server.ThreadingHTTPServer] = None
         self._stop_event = threading.Event()
 
@@ -423,6 +425,7 @@ class EngineHostDaemon:
         pid_file: Optional[Path] = None,
         engines_state_file: Optional[Path] = None,
         control_state_file: Optional[Path] = None,
+        runtime_profile: str = "foreground_terminal_bound",
     ):
         from .engine_host_service import EngineHostService
         self.port = int(port or DEFAULT_DAEMON_PORT)
@@ -432,11 +435,20 @@ class EngineHostDaemon:
             engines_state_file=engines_state_file,
             control_state_file=control_state_file,
         )
+        self.svc.assert_runtime_policy_safe()
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._operations: Dict[str, Dict[str, Any]] = {}
         self._operations_lock = threading.Lock()
         self._operations_max_entries = 200
+        self._operation_tasks: set[asyncio.Task] = set()
+        self._operation_tasks_lock = threading.Lock()
+        self._endpoint_mode_runtime_override: Optional[str] = None
+        self._runtime_profile = str(runtime_profile or "foreground_terminal_bound").strip().lower()
+        self._actor_connections: Dict[str, int] = {}
+        self._actor_connections_lock = threading.Lock()
+        self._last_shutdown_checkpoints: Dict[str, Any] = {}
+        self._shutdown_stage_events: List[Dict[str, Any]] = []
 
     @staticmethod
     def _operation_event(stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
@@ -456,6 +468,34 @@ class EngineHostDaemon:
         out.pop("session_token", None)
         return out
 
+    @staticmethod
+    def _is_claim_command(cmd: str) -> bool:
+        c = str(cmd or "").strip()
+        return c in {"claim-engine", "claim-endpoint", "claim-resource"}
+
+    def _effective_endpoint_mode(self) -> Dict[str, str]:
+        cfg = self.svc.get_control_config()
+        default_mode = str(cfg.get("endpoint_mode_default") or "shared").strip().lower()
+        if default_mode not in {"exclusive", "shared"}:
+            default_mode = "shared"
+        override = str(self._endpoint_mode_runtime_override or "").strip().lower()
+        if override not in {"exclusive", "shared"}:
+            override = ""
+        effective = override or default_mode
+        return {
+            "default": default_mode,
+            "runtime_override": override or None,
+            "effective": effective,
+        }
+
+    def _inject_runtime_endpoint_mode(self, cmd: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        p = dict(payload or {})
+        if (not self._is_claim_command(cmd)) or ("exclusive" in p):
+            return p
+        mode = self._effective_endpoint_mode().get("effective") or "shared"
+        p["exclusive"] = bool(mode == "exclusive")
+        return p
+
     def _prune_operations_locked(self) -> None:
         if len(self._operations) <= self._operations_max_entries:
             return
@@ -467,6 +507,153 @@ class EngineHostDaemon:
         excess = len(self._operations) - self._operations_max_entries
         for _, op_id in completed[:excess]:
             self._operations.pop(op_id, None)
+
+    def _record_shutdown_stage(self, stage: str, status: str, message: str, **extra: Any) -> None:
+        event: Dict[str, Any] = {
+            "stage": str(stage or "unknown"),
+            "status": str(status or "info"),
+            "message": str(message or ""),
+            "timestamp": time.time(),
+        }
+        if extra:
+            event.update({str(k): v for k, v in extra.items()})
+        self._shutdown_stage_events.append(event)
+
+    def _terminal_control_enabled(self) -> bool:
+        policy = self.svc.get_lifecycle_policy_effective()
+        eff = dict(policy.get("effective") or {})
+        return bool(eff.get("terminal_control_enabled", True))
+
+    async def _drain_inflight_operations(self, *, timeout_seconds: float = 5.0) -> Dict[str, Any]:
+        with self._operation_tasks_lock:
+            pending = [t for t in list(self._operation_tasks) if (t is not None and not t.done())]
+        if not pending:
+            return {
+                "pending_before": 0,
+                "pending_after": 0,
+                "drained": 0,
+                "timed_out": False,
+                "timeout_seconds": float(timeout_seconds),
+            }
+        done, not_done = await asyncio.wait(
+            pending,
+            timeout=max(0.1, float(timeout_seconds)),
+        )
+        with self._operation_tasks_lock:
+            self._operation_tasks = {t for t in self._operation_tasks if t is not None and not t.done()}
+            pending_after = len(self._operation_tasks)
+        return {
+            "pending_before": len(pending),
+            "pending_after": int(pending_after),
+            "drained": len(done),
+            "timed_out": len(not_done) > 0,
+            "timeout_seconds": float(timeout_seconds),
+        }
+
+    def _execute_shutdown_checkpoints(self) -> Dict[str, Any]:
+        started_at = time.time()
+        report: Dict[str, Any] = {
+            "status": "ok",
+            "started_at": started_at,
+            "completed_at": None,
+            "attempted": 0,
+            "stopped": 0,
+            "failed": 0,
+            "registrations_before": 0,
+            "registrations_after": 0,
+            "results": [],
+            "error": None,
+        }
+        try:
+            rows = self.svc.discover_running(
+                prune_stale=False,
+                include_progress=False,
+                include_reachability=False,
+            )
+            registrations = list(rows or []) if isinstance(rows, list) else []
+            report["registrations_before"] = len(registrations)
+            for row in registrations:
+                engine_id = str((row or {}).get("engine_id") or "").strip()
+                if not engine_id:
+                    continue
+                report["attempted"] = int(report.get("attempted") or 0) + 1
+                try:
+                    out = self.svc.shutdown(engine_id, timeout_seconds=2.0)
+                    status = str((out or {}).get("status") or "")
+                    ok = status in {"stopped", "already_stopped", "not_found", "invalid_pid"}
+                    if ok:
+                        report["stopped"] = int(report.get("stopped") or 0) + 1
+                    else:
+                        report["failed"] = int(report.get("failed") or 0) + 1
+                    report["results"].append(
+                        {
+                            "engine_id": engine_id,
+                            "status": status,
+                            "ok": ok,
+                        }
+                    )
+                except Exception as exc:
+                    report["failed"] = int(report.get("failed") or 0) + 1
+                    report["results"].append(
+                        {
+                            "engine_id": engine_id,
+                            "status": "exception",
+                            "ok": False,
+                            "error": str(exc),
+                        }
+                    )
+            after_rows = self.svc.discover_running(
+                prune_stale=False,
+                include_progress=False,
+                include_reachability=False,
+            )
+            report["registrations_after"] = len(list(after_rows or [])) if isinstance(after_rows, list) else 0
+        except Exception as exc:
+            report["status"] = "failed"
+            report["error"] = str(exc)
+        report["completed_at"] = time.time()
+        self._last_shutdown_checkpoints = report
+        return dict(report)
+
+    def _track_actor_connected(self, actor_id: str) -> None:
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return
+        with self._actor_connections_lock:
+            self._actor_connections[aid] = int(self._actor_connections.get(aid) or 0) + 1
+
+    def _track_actor_disconnected(self, actor_id: str) -> int:
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return 0
+        with self._actor_connections_lock:
+            current = int(self._actor_connections.get(aid) or 0)
+            if current <= 1:
+                self._actor_connections.pop(aid, None)
+                return 0
+            next_count = current - 1
+            self._actor_connections[aid] = next_count
+            return next_count
+
+    def _should_shutdown_on_owner_disconnect(self) -> bool:
+        policy = self.svc.get_lifecycle_policy_effective()
+        eff = dict(policy.get("effective") or {})
+        return bool(eff.get("owner_disconnect_shutdown", False))
+
+    def _apply_owner_disconnect_policy(self, actor_ids: set[str]) -> bool:
+        if not actor_ids:
+            return False
+        if not self._should_shutdown_on_owner_disconnect():
+            return False
+        for actor_id in sorted({str(x or "").strip() for x in actor_ids if str(x or "").strip()}):
+            remaining = self._track_actor_disconnected(actor_id)
+            if remaining > 0:
+                continue
+            if self.svc.is_actor_exclusive_endpoint_owner(actor_id):
+                if self._stop_event is not None:
+                    self._stop_event.set()
+                return True
+        return False
 
     def _create_operation(self, *, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         now = time.time()
@@ -577,12 +764,59 @@ class EngineHostDaemon:
             async with self._server:
                 await self._stop_event.wait()
         finally:
+            try:
+                self._shutdown_stage_events = []
+                self._record_shutdown_stage(
+                    "shutdown.begin",
+                    "running",
+                    "Daemon shutdown sequence started",
+                )
+                self._record_shutdown_stage(
+                    "shutdown.operations_drain",
+                    "running",
+                    "Draining in-flight operations",
+                )
+                drain_report = await self._drain_inflight_operations(timeout_seconds=5.0)
+                self._record_shutdown_stage(
+                    "shutdown.operations_drain",
+                    "completed",
+                    "In-flight operations drain complete",
+                    pending_before=int(drain_report.get("pending_before") or 0),
+                    pending_after=int(drain_report.get("pending_after") or 0),
+                    timed_out=bool(drain_report.get("timed_out", False)),
+                )
+                self._record_shutdown_stage(
+                    "shutdown.managed_workers",
+                    "running",
+                    "Running managed worker shutdown checkpoints",
+                )
+                report = await asyncio.to_thread(self._execute_shutdown_checkpoints)
+                report["operation_drain"] = dict(drain_report)
+                report["shutdown_stages"] = list(self._shutdown_stage_events)
+                self._last_shutdown_checkpoints = dict(report)
+                self._record_shutdown_stage(
+                    "shutdown.managed_workers",
+                    "completed",
+                    "Managed worker shutdown checkpoints complete",
+                    attempted=int(report.get("attempted") or 0),
+                    stopped=int(report.get("stopped") or 0),
+                    failed=int(report.get("failed") or 0),
+                )
+                logger.info(
+                    "Daemon shutdown checkpoints: attempted=%s stopped=%s failed=%s",
+                    report.get("attempted"),
+                    report.get("stopped"),
+                    report.get("failed"),
+                )
+            except Exception as exc:
+                logger.warning("Shutdown checkpoints failed: %s", exc)
             self.pid_file.remove()
             logger.info("EngineHostDaemon stopped")
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         logger.debug("Client connected: %s", peer)
+        connection_actor_ids: set[str] = set()
         try:
             while True:
                 try:
@@ -594,6 +828,21 @@ class EngineHostDaemon:
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
                     continue
+                try:
+                    req_obj = json.loads(raw)
+                    payload_obj = dict((req_obj or {}).get("payload") or {})
+                    tok = str(
+                        payload_obj.get("session_token")
+                        or payload_obj.get("auth_token")
+                        or ""
+                    ).strip()
+                    if tok:
+                        actor_id = self.svc.resolve_actor_id_from_session_token(tok)
+                        if actor_id and actor_id not in connection_actor_ids:
+                            connection_actor_ids.add(actor_id)
+                            self._track_actor_connected(actor_id)
+                except Exception:
+                    pass
                 peer_host = ""
                 try:
                     if isinstance(peer, tuple) and len(peer) >= 1:
@@ -611,6 +860,10 @@ class EngineHostDaemon:
         except Exception as exc:
             logger.warning("Client error %s: %s", peer, exc)
         finally:
+            try:
+                _ = self._apply_owner_disconnect_policy(connection_actor_ids)
+            except Exception:
+                pass
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -639,6 +892,14 @@ class EngineHostDaemon:
             return {"seq": seq, "ok": True, "result": "pong"}
 
         if cmd == "__shutdown__":
+            if not self._terminal_control_enabled():
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "terminal_control_disabled",
+                    "error_details": {"command": "__shutdown__"},
+                }
             token = str(payload.get("shutdown_token") or "")
             if token and token == self.shutdown_token:
                 assert self._stop_event is not None
@@ -651,6 +912,55 @@ class EngineHostDaemon:
                 "error_code": "invalid_shutdown_token",
                 "error_details": {},
             }
+
+        if cmd == "set-endpoint-mode-override":
+            if not self._terminal_control_enabled():
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_code": "terminal_control_disabled",
+                    "error_details": {"command": "set-endpoint-mode-override"},
+                }
+            try:
+                self.svc.authorize_command(cmd, payload)
+            except PermissionError as exc:
+                code = str(exc or "").strip() or "auth_failed"
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "auth_failed",
+                    "error_code": code,
+                    "error_details": {"reason": code},
+                }
+            mode = str(payload.get("mode") or "").strip().lower()
+            if mode in {"", "default", "clear", "none"}:
+                self._endpoint_mode_runtime_override = None
+            elif mode in {"exclusive", "shared"}:
+                self._endpoint_mode_runtime_override = mode
+            else:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "invalid_mode",
+                    "error_code": "invalid_mode",
+                    "error_details": {"message": "mode must be exclusive|shared|default"},
+                }
+            return {"seq": seq, "ok": True, "result": self._effective_endpoint_mode()}
+
+        if cmd == "get-endpoint-mode-effective":
+            try:
+                self.svc.authorize_command(cmd, payload)
+            except PermissionError as exc:
+                code = str(exc or "").strip() or "auth_failed"
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "auth_failed",
+                    "error_code": code,
+                    "error_details": {"reason": code},
+                }
+            return {"seq": seq, "ok": True, "result": self._effective_endpoint_mode()}
 
         if cmd == "op-start":
             target_cmd = str(payload.get("command") or "").strip()
@@ -672,6 +982,7 @@ class EngineHostDaemon:
                     "error_details": {"command": target_cmd},
                 }
             try:
+                target_payload = self._inject_runtime_endpoint_mode(target_cmd, target_payload)
                 self.svc.authorize_command(target_cmd, target_payload)
                 acl = self.svc.enforce_daemon_claim_policy(
                     target_cmd,
@@ -690,7 +1001,13 @@ class EngineHostDaemon:
                 target_payload = dict(acl.get("payload") or target_payload)
                 op_snapshot = self._create_operation(command=target_cmd, payload=target_payload)
                 operation_id = str(op_snapshot.get("operation_id") or "")
-                asyncio.create_task(self._run_operation(operation_id, target_cmd, target_payload))
+                task = asyncio.create_task(self._run_operation(operation_id, target_cmd, target_payload))
+                with self._operation_tasks_lock:
+                    self._operation_tasks.add(task)
+                def _on_done(done_task: asyncio.Task) -> None:
+                    with self._operation_tasks_lock:
+                        self._operation_tasks.discard(done_task)
+                task.add_done_callback(_on_done)
                 return {"seq": seq, "ok": True, "result": op_snapshot}
             except PermissionError as exc:
                 code = str(exc or "").strip() or "auth_failed"
@@ -742,6 +1059,7 @@ class EngineHostDaemon:
             return {"seq": seq, "ok": True, "result": self._operation_public_snapshot(op)}
 
         try:
+            payload = self._inject_runtime_endpoint_mode(cmd, payload)
             self.svc.authorize_command(cmd, payload)
             acl = self.svc.enforce_daemon_claim_policy(
                 cmd,
@@ -819,16 +1137,20 @@ class EngineHostDaemon:
             return svc.claim_engine(
                 str(payload.get("engine_id") or ""),
                 backend_id=payload.get("backend_id"),
-                exclusive=bool(payload.get("exclusive", False)),
+                exclusive=payload.get("exclusive"),
                 force_override=bool(payload.get("force_override", False)),
+                force_override_reason=payload.get("force_override_reason"),
+                force_override_emergency=bool(payload.get("force_override_emergency", False)),
                 actor_id=payload.get("_claim_actor_id"),
                 peer_host=payload.get("_daemon_peer_host"),
             )
         if cmd == "claim-endpoint":
             return svc.claim_endpoint(
                 backend_id=payload.get("backend_id"),
-                exclusive=bool(payload.get("exclusive", False)),
+                exclusive=payload.get("exclusive"),
                 force_override=bool(payload.get("force_override", False)),
+                force_override_reason=payload.get("force_override_reason"),
+                force_override_emergency=bool(payload.get("force_override_emergency", False)),
                 actor_id=payload.get("_claim_actor_id"),
                 peer_host=payload.get("_daemon_peer_host"),
             )
@@ -849,8 +1171,10 @@ class EngineHostDaemon:
                 str(payload.get("resource_kind") or ""),
                 str(payload.get("resource_id") or ""),
                 backend_id=payload.get("backend_id"),
-                exclusive=bool(payload.get("exclusive", False)),
+                exclusive=payload.get("exclusive"),
                 force_override=bool(payload.get("force_override", False)),
+                force_override_reason=payload.get("force_override_reason"),
+                force_override_emergency=bool(payload.get("force_override_emergency", False)),
                 actor_id=payload.get("_claim_actor_id"),
                 peer_host=payload.get("_daemon_peer_host"),
             )
@@ -984,10 +1308,16 @@ class EngineHostDaemon:
             return svc.set_control_config(
                 ssh_key=payload.get("ssh_key"),
                 require_auth=payload.get("require_auth"),
+                access_profile=dict(payload.get("access_profile") or {}),
+                endpoint_mode_default=payload.get("endpoint_mode_default"),
+                lifecycle_profile=payload.get("lifecycle_profile"),
+                lifecycle_policy=dict(payload.get("lifecycle_policy") or {}),
                 traffic_policy=dict(payload.get("traffic_policy") or {}),
                 engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
                 claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
             )
+        if cmd == "get-lifecycle-policy-effective":
+            return svc.get_lifecycle_policy_effective()
         if cmd == "auth-status":
             return svc.auth_status()
         if cmd == "auth-list-keys":
@@ -1008,6 +1338,15 @@ class EngineHostDaemon:
                 resource_id=payload.get("resource_id"),
                 backend_id=payload.get("backend_id"),
                 token_preview_contains=payload.get("token_preview_contains"),
+                limit=int(payload.get("limit") or 100),
+                offset=int(payload.get("offset") or 0),
+            )
+        if cmd == "auth-audit-list":
+            return svc.auth_list_audit_events(
+                event_type=payload.get("event_type"),
+                actor_key_id=payload.get("actor_key_id"),
+                target_key_id=payload.get("target_key_id"),
+                result=payload.get("result"),
                 limit=int(payload.get("limit") or 100),
                 offset=int(payload.get("offset") or 0),
             )
@@ -1062,6 +1401,7 @@ def run_daemon_foreground(
     pid_file: Optional[Path] = None,
     engines_state_file: Optional[Path] = None,
     control_state_file: Optional[Path] = None,
+    runtime_profile: str = "foreground_terminal_bound",
 ) -> None:
     """Start daemon in the foreground (blocks until stopped)."""
     daemon = EngineHostDaemon(
@@ -1069,8 +1409,31 @@ def run_daemon_foreground(
         pid_file=pid_file,
         engines_state_file=engines_state_file,
         control_state_file=control_state_file,
+        runtime_profile=runtime_profile,
     )
+    _apply_foreground_terminal_disconnect_policy(daemon)
     asyncio.run(daemon.run())
+
+
+def _apply_foreground_terminal_disconnect_policy(daemon: EngineHostDaemon) -> str:
+    """
+    Apply terminal-disconnect handling for foreground runtime profile.
+
+    In foreground mode, keep-daemon-running policy ignores SIGHUP where available.
+    """
+    mode = str(daemon._runtime_profile or "").strip().lower()  # noqa: SLF001
+    if mode != "foreground_terminal_bound":
+        return "not_foreground"
+    policy = daemon.svc.get_lifecycle_policy_effective()
+    policy_cfg = dict(policy.get("policy") or {})
+    action = str(policy_cfg.get("on_terminal_disconnect") or "stop_daemon").strip().lower()
+    if action != "keep_daemon_running":
+        return "stop_daemon"
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is None:
+        return "keep_daemon_running_no_sighup"
+    signal.signal(sighup, signal.SIG_IGN)
+    return "keep_daemon_running_ignore_sighup"
 
 
 def run_http_ingress_foreground(
@@ -1110,6 +1473,8 @@ def start_daemon_background(
         "-m",
         "hosting.engine_host_cli",
         "--daemon",
+        "--runtime-profile",
+        "detached_user_process",
         "--port",
         str(port),
     ]
