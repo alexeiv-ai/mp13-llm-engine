@@ -1,6 +1,6 @@
 # Phase 7 Advanced Hardening (Risk-Gated Design)
 
-Date: 2026-03-15
+Date: 2026-03-16
 Status: Draft design (planned, not enabled by default)
 Scope: Post-Phase-8 optional hardening in `src/hosting`
 
@@ -10,6 +10,7 @@ Scope: Post-Phase-8 optional hardening in `src/hosting`
    - key rotation automation + replay-resistance enhancements
    - optional hardware-backed key storage
    - advanced anomaly detection/lockout
+   - optional delegated SSH signing/key-custody model for staged deployment transition
 2. Keep baseline functional flows unchanged for local-only and SSH-tunnel operations.
 3. Require explicit risk/impact analysis before any Phase 7 control is implemented or enabled.
 
@@ -74,7 +75,44 @@ Acceptance gate:
 2. Must include explicit admin override/unlock path.
 3. Must provide observability fields in `auth-audit-list` output.
 
-## 7. Delivery Guardrails
+## 7. Candidate D: Delegated SSH Signing / Key Custody (Optional Transition Model)
+
+Intent:
+1. Support a staged transition from simple local setup to remote-capable operation without requiring each client to hold additional long-lived secrets during early adoption.
+2. Reduce client-side secret sprawl while operators are still learning role/scope/lifecycle complexity.
+
+Model summary:
+1. Hosting may store encrypted private keys (local custody) and perform challenge signing on behalf of authorized local sessions.
+2. Delegation is treated as signer-service behavior, not shared-secret session bootstrap.
+3. Shared-secret bootstrap remains local-only baseline; remote bootstrap remains public-key challenge flow.
+
+Potential transition benefit by scenario:
+1. `local_only`:
+   - can centralize key custody on one controlled host
+   - reduces number of copied secrets across local scripts/clients
+2. `ssh_tunnel_only`:
+   - can reduce accidental client-side key leakage during migration from local workflows
+   - allows users to keep remote auth centralized while they standardize role and session runbooks
+3. `truly_remote`:
+   - benefit is possible but risk increases sharply because delegated signer becomes high-value target
+   - should be considered only with stronger controls (preferably together with Candidate B/C controls)
+
+Primary risks introduced:
+1. Key concentration risk: one host compromise can expose multiple identities.
+2. Privilege amplification risk: delegated signer misuse can authorize actions beyond intended operator context if policy binding is weak.
+3. Lockout/recovery complexity risk: encrypted custody and delegated unlock flow can fail in ways that block operations.
+
+Acceptance gate:
+1. Must remain optional and off by default.
+2. Must define strict policy binding:
+   - per-key allowed roles/scopes
+   - per-scenario enable rules (`local_only` default-allow; non-local explicit opt-in)
+3. Must enforce encrypted-at-rest key custody and audited unlock/sign/export/delete lifecycle.
+4. Must include short unlock TTL and explicit re-auth path for sensitive signing operations.
+5. Must include break-glass recovery and deterministic disable/rollback path.
+6. Must not weaken existing public-key challenge and SSH-binding guarantees in non-local profiles.
+
+## 8. Delivery Guardrails
 
 1. No Phase 7 feature is required for Phase 8-complete baseline operation.
 2. Phase 7 defaults remain disabled until a feature-specific gate review passes.
@@ -83,18 +121,23 @@ Acceptance gate:
    - rollout + rollback
    - test plan + manual validation commands
 
-## 8. Validation Planning (When Implementation Starts)
+## 9. Validation Planning (When Implementation Starts)
 
 1. Unit:
    - rotation state machine and replay-window checks
    - anomaly threshold and lockout release logic
+   - delegated signer policy binding and unlock TTL checks
 2. Integration:
    - daemon/channel/CLI/HTTP parity for new denial or audit paths
+   - delegated signing denied/allowed flows by connectivity profile (`local_only`/`ssh_tunnel_only`/`truly_remote`)
 3. Manual:
    - setup + reconfigure in local/tunnel/remote profiles
    - admin recovery drills (lost key, lockout, rollback)
+   - transition drills: move from client-held keys to delegated signer and back without session/auth regression
 
-## 9. Current Decision
+## 10. Current Decision
 
 1. Keep Phase 7 as `Planned`.
 2. Use this document as the required gate template before implementing any Phase 7 control.
+3. Do not start Phase 7 feasibility review until pre-Phase-7 readiness fixes in `hosting_access.md` and `hosting_access_plan.md` are closed and status-aligned.
+4. Delegated SSH signing is treated as a transition aid candidate, not a baseline requirement.

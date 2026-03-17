@@ -47,37 +47,41 @@ Client impact:
 6. `transport` role key constraints:
    - `transport` keys must use `auth_method=public_key`
    - `transport` keys cannot issue sessions/challenges for command authorization
-7. Remote connectivity auth bootstrap now requires SSH binding:
-   - when `access_profile.connectivity_mode != local_only`, both:
-     - `auth-issue-session` (shared-secret path), and
-     - `auth-begin-challenge` (public-key path)
-     require `ssh_binding`
+7. Shared-secret bootstrap is now local-only:
+   - when `access_profile.connectivity_mode != local_only`:
+     - `auth-issue-session` (shared-secret path) is denied
+     - denial code:
+       - `shared_secret_bootstrap_not_supported_for_remote_connectivity`
+   - non-local bootstrap must use public-key challenge flow.
+   - SSH-target helper channels do not auto-issue shared-secret sessions; use pre-issued session token or explicit challenge flow.
+8. Remote connectivity public-key bootstrap and command path require SSH binding:
+   - for `auth-begin-challenge` in non-local modes, `ssh_binding` is required
    - missing binding is denied with:
      - `ssh_binding_required_for_remote_connectivity`
-8. Remote connectivity command path now enforces SSH binding presence:
+9. Remote connectivity command path now enforces SSH binding presence:
    - for session-backed commands under non-local connectivity:
      - payload must include `_ssh_session_binding`
      - session must have been issued with matching binding
    - legacy unbound sessions are denied after profile flip to non-local mode with:
      - `ssh_binding_required_for_remote_connectivity`
-9. Admin-only invalidation controls are now explicitly role-enforced:
+10. Admin-only invalidation controls are now explicitly role-enforced:
    - `auth-revoke-key` and `auth-revoke-session` require `admin` role
    - lower control roles (for example `config_editor`) are denied with `insufficient_role`
-10. New admin audit query command:
+11. New admin audit query command:
    - `auth-audit-list` exposes paged/filterable auth lifecycle audit events
    - requires `admin` role; non-admin control roles are denied with `insufficient_role`
-11. No-auth (`require_auth=false`) bootstrap command-path tightening:
+12. No-auth (`require_auth=false`) bootstrap command-path tightening:
    - session/challenge issuance commands are now denied when auth is disabled:
      - `auth-issue-session`
      - `auth-begin-challenge`
      - `auth-complete-challenge`
    - denial code:
      - `require_auth_disabled_disallows_session_commands`
-12. No-auth profile drift hardening in `set-control-config`:
+13. No-auth profile drift hardening in `set-control-config`:
    - even when `require_auth` is not present in payload, updates are rejected if resulting profile violates no-auth safe connectivity rule.
    - denial code:
      - `require_auth_false_only_supported_for_local_only_connectivity`
-13. Displaced-owner denial now consistently applies to endpoint-mode runtime control commands until reclaim:
+14. Displaced-owner denial now consistently applies to endpoint-mode runtime control commands until reclaim:
    - denied for displaced owner:
      - `set-endpoint-mode-override`
      - `get-endpoint-mode-effective`
@@ -171,12 +175,20 @@ Claim override payload now requires explicit reason metadata:
      - `stale_owner_unreachable`
      - `owner_malicious`
      - `security_incident`
+4. emergency takeover eligibility predicates are now explicitly enforced:
+   - denial code:
+     - `force_override_emergency_predicate_not_met`
+   - `stale_owner_unreachable`:
+     - denied unless conflicting owner is orphaned (not active)
+   - `owner_malicious` and `security_incident`:
+     - denied unless there is at least one active conflicting owner
 
 Client impact:
 1. Include `force_override_reason` in any override/takeover claim request.
 2. Handle new denial codes:
    - `force_override_reason_required`
    - `force_override_emergency_reason_invalid`
+   - `force_override_emergency_predicate_not_met`
    - `ownership_changed_reclaim_required`
 3. After being displaced by override, non-claim commands are denied until client reclaims ownership (or drops session).
 

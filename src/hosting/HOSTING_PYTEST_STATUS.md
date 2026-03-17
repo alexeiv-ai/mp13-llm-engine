@@ -1,6 +1,6 @@
 # Hosting Pytest Status (IPC/RPC Migration)
 
-Date: 2026-03-14
+Date: 2026-03-16
 
 This file lists pytest commands relevant to the IPC-only + RPC lifecycle migration.
 
@@ -61,6 +61,18 @@ Temp-root policy for this repo:
 
 ## 3) Focused ACL Regression (access denied)
 
+Outside-sandbox rerun policy:
+- `PermissionError: [WinError 5] Access is denied` during pytest temp cleanup in this sandbox is acceptable if:
+  1. attempted command is recorded
+  2. failure reason is recorded
+  3. outside-sandbox rerun result is recorded
+- Required outside-sandbox rerun list for access-control baseline:
+  - `pytest tests/test_hosting_daemon_acl.py -q`
+  - `pytest tests/test_hosting_daemon_pidfile.py -q`
+  - `pytest tests/test_hosting_service_security.py -q`
+  - `pytest tests/test_hosting_http_ingress.py -q`
+  - `pytest tests/test_app_config_host_auth.py -q`
+
 ```bash
 pytest tests/test_hosting_daemon_acl.py -q
 ```
@@ -75,11 +87,13 @@ Expected denial codes include:
 - `localhost_force_override_confirmation_required`
 - `force_override_reason_required`
 - `force_override_emergency_reason_invalid`
+- `force_override_emergency_predicate_not_met`
 - `non_localhost_shared_claim_denied`
 
 Emergency override coverage includes:
 - reason-required denial for force override
 - localhost emergency override grant without confirmation for stale/malicious/security reasons
+- reason-specific predicate denial when emergency reason does not match owner activity/orphan state
 - high-severity claim audit tagging on emergency grant
 - displaced-owner denial until reclaim path (`ownership_changed_reclaim_required`)
 
@@ -89,6 +103,13 @@ Emergency override coverage includes:
 ```bash
 pytest tests/test_engine_host_channel.py -q
 ```
+
+Latest in-sandbox result:
+- `pytest tests/test_engine_host_channel.py -q`
+- `8 passed, 2 warnings`
+- includes updated SSH helper expectation:
+  - SSH mode injects `_ssh_session_binding`
+  - SSH mode does not auto-issue shared-secret session bootstrap
 
 ## 5) HTTP Ingress
 
@@ -180,7 +201,7 @@ Coverage includes:
 - `model_user` denied proxy traffic to registered generic engine profile.
 - `worker_user` allowed proxy traffic to registered generic engine profile.
 - transport role rejects shared-secret onboarding and cannot issue sessions/challenges.
-- non-local connectivity requires `ssh_binding` for session/challenge bootstrap paths.
+- non-local connectivity denies shared-secret session bootstrap (`shared_secret_bootstrap_not_supported_for_remote_connectivity`); public-key challenge bootstrap requires `ssh_binding`.
 - non-local connectivity requires SSH binding on session-backed command path (including legacy unbound-session denial).
 - admin-only key/session invalidation control authorization is enforced (`auth-revoke-key`, `auth-revoke-session`).
 - admin-only auth audit query authorization is enforced (`auth-audit-list`).
@@ -194,7 +215,7 @@ Note:
 - Default test policy now avoids explicit `--basetemp` for this suite.
 - Latest run in this repo: `28 passed, 2 warnings` (warnings are pytest cache ACL warnings).
 - Command:
-  - `pytest tests/test_hosting_auth_roles.py -q`
+  - `$env:PYTEST_DEBUG_TEMPROOT='o:\repos\mp13-llm-engine\.tmp_pytest'; pytest tests/test_hosting_auth_roles.py -q`
 
 ## 11) Setup Script / Migration / Doctor Coverage
 
@@ -216,6 +237,9 @@ Latest run in this repo:
 - `6 passed, 2 warnings` (warnings are pytest cache ACL warnings).
 - command:
   - `pytest tests/test_hosting_config.py -q`
+- doctor output now includes non-blocking readiness probe:
+  - `ssh_keygen_host_path_probe`
+  - validates `ssh-keygen` write behavior under `Hosting/keyring/private`
 
 ## 12) Config-Driven Connect Runtime Coverage
 
@@ -375,3 +399,40 @@ Action:
 - manual outside-sandbox rerun result:
   - `pytest tests/test_hosting_daemon_acl.py -q`
   - `15 passed in 1.10s`
+
+## 18) Emergency Predicate + Shared-Secret Helper Policy Sync (2026-03-16)
+
+Scope:
+1. Emergency takeover predicate denial contract added to docs/tests:
+   - `force_override_emergency_predicate_not_met`
+2. SSH helper path now blocks auto shared-secret bootstrap and keeps SSH binding injection.
+
+Commands attempted in this sandbox:
+1. `$env:PYTEST_DEBUG_TEMPROOT='o:\repos\mp13-llm-engine\.tmp_pytest'; pytest tests/test_hosting_daemon_acl.py -q`
+   - setup-time fixture error:
+     - `PermissionError: [WinError 5] Access is denied`
+     - path: `o:\repos\mp13-llm-engine\.tmp_pytest\pytest-of-me`
+2. `pytest tests/test_engine_host_channel.py -q`
+   - `8 passed, 2 warnings`
+
+Action:
+1. daemon ACL suite must be rerun outside sandbox for baseline evidence update.
+
+## 19) Host-Auth CLI Shared-Secret Guidance Update (2026-03-16)
+
+Scope:
+1. `mp13config --host-auth-issue-session` now prints explicit guidance when denied in non-local connectivity:
+   - shared-secret issue-session is local-only
+   - remote profiles must use public-key challenge flow
+
+Commands attempted in this sandbox:
+1. `pytest tests/test_app_config_host_auth.py -q`
+2. `$env:PYTEST_DEBUG_TEMPROOT='o:\repos\mp13-llm-engine\.tmp_pytest'; pytest tests/test_app_config_host_auth.py -q`
+3. `pytest tests/test_app_config_host_auth.py -q --basetemp o:\repos\mp13-llm-engine\.tmp_pytest_appcfg_new`
+
+Failure reason:
+1. sandbox temp fixture/session cleanup ACL failures (`PermissionError: [WinError 5] Access is denied`) before stable pass/fail evidence can be recorded.
+
+Action:
+1. rerun outside sandbox:
+   - `pytest tests/test_app_config_host_auth.py -q`

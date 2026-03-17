@@ -171,14 +171,24 @@ def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
                 print(f"Invalid --host-auth-config-paths: {exc}")
                 return 1
         engine_ids = _parse_csv_list(args.host_auth_engine_ids) if scope == "traffic" else []
-        out = svc.auth_issue_session(
-            key_id=key_id,
-            key_secret=secret,
-            scope=scope,
-            ttl_seconds=int(args.host_auth_ttl_seconds or 900),
-            config_paths=config_paths,
-            engine_ids=engine_ids,
-        )
+        try:
+            out = svc.auth_issue_session(
+                key_id=key_id,
+                key_secret=secret,
+                scope=scope,
+                ttl_seconds=int(args.host_auth_ttl_seconds or 900),
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+            )
+        except PermissionError as exc:
+            msg = str(exc or "").strip()
+            if msg == "shared_secret_bootstrap_not_supported_for_remote_connectivity":
+                print(
+                    "host-auth-issue-session is local_only for shared-secret keys. "
+                    "For non-local connectivity, use public-key challenge flow (auth-begin-challenge/auth-complete-challenge)."
+                )
+                return 1
+            raise
         print(json.dumps(out, indent=2))
         return 0
 
@@ -697,7 +707,13 @@ def main() -> int:
     )
     parser.add_argument("--host-auth-disable-key", action="store_true", help="Mark upserted key as disabled.")
     parser.add_argument("--host-auth-revoke-key", type=str, default=None, metavar="KEY_ID", help="Revoke host auth key by ID.")
-    parser.add_argument("--host-auth-issue-session", type=str, default=None, metavar="KEY_ID", help="Issue auth session token using key ID + secret.")
+    parser.add_argument(
+        "--host-auth-issue-session",
+        type=str,
+        default=None,
+        metavar="KEY_ID",
+        help="Issue auth session token using key ID + secret (local_only connectivity profile).",
+    )
     parser.add_argument("--host-auth-scope", type=str, default="control", help="Session scope: control|config|traffic.")
     parser.add_argument("--host-auth-ttl-seconds", type=int, default=900, help="Session TTL seconds.")
     parser.add_argument("--host-auth-config-paths", type=str, default="", help="Comma-separated allowed config selectors for config scope.")

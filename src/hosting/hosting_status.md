@@ -464,7 +464,7 @@ Implemented:
    - transport shared-secret upsert is rejected
    - transport role cannot issue sessions/challenges for command auth
 21. Hardened remote auth bootstrap SSH binding requirement:
-   - in non-local connectivity profiles, shared-secret session issuance requires `ssh_binding`
+   - in non-local connectivity profiles, shared-secret session issuance is denied (`shared_secret_bootstrap_not_supported_for_remote_connectivity`)
    - in non-local connectivity profiles, public-key challenge begin requires `ssh_binding`
    - missing binding denied with `ssh_binding_required_for_remote_connectivity`
 22. Hardened non-local command-path SSH binding requirement:

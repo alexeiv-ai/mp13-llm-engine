@@ -496,10 +496,16 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     issues: list[Dict[str, Any]] = []
     checks: list[Dict[str, Any]] = []
 
-    def _record(name: str, ok: bool, details: Optional[Dict[str, Any]] = None) -> None:
+    def _record(
+        name: str,
+        ok: bool,
+        details: Optional[Dict[str, Any]] = None,
+        *,
+        blocking: bool = True,
+    ) -> None:
         entry = {"check": name, "ok": bool(ok), "details": dict(details or {})}
         checks.append(entry)
-        if not ok:
+        if (not ok) and bool(blocking):
             issues.append(entry)
 
     try:
@@ -529,6 +535,47 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
             _record("hosting_root_writable", False, {"path": str(hosting_root), "error": str(exc)})
     else:
         _record("hosting_root_writable", False, {"path": str(hosting_root), "error": "missing_directory"})
+
+    # Readiness probe for Windows/mapped-path keygen behavior.
+    # This check is non-blocking for baseline setup because key import remains valid,
+    # but it must be reviewed before rotation-heavy hardening work.
+    private_dir = (hosting_root / "keyring" / "private").resolve()
+    key_probe_private = (private_dir / ".doctor_keygen_probe_ed25519").resolve()
+    key_probe_public = Path(str(key_probe_private) + ".pub")
+    key_probe_details: Dict[str, Any] = {"path": str(private_dir), "blocking": False}
+    key_probe_ok = False
+    try:
+        private_dir.mkdir(parents=True, exist_ok=True)
+        key_probe_private.unlink(missing_ok=True)
+        key_probe_public.unlink(missing_ok=True)
+        probe = subprocess.run(  # noqa: S603
+            [
+                "ssh-keygen",
+                "-t",
+                "ed25519",
+                "-C",
+                "doctor-probe",
+                "-f",
+                str(key_probe_private),
+                "-N",
+                "",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        key_probe_details["returncode"] = int(probe.returncode)
+        if int(probe.returncode) == 0 and key_probe_private.exists() and key_probe_public.exists():
+            key_probe_ok = True
+        else:
+            key_probe_details["stderr"] = str(probe.stderr or "").strip()
+    except Exception as exc:
+        key_probe_details["error"] = str(exc)
+    finally:
+        key_probe_private.unlink(missing_ok=True)
+        key_probe_public.unlink(missing_ok=True)
+    _record("ssh_keygen_host_path_probe", key_probe_ok, key_probe_details, blocking=False)
 
     try:
         svc = EngineHostService(control_state_file=control_state_path)

@@ -49,7 +49,7 @@ Transport role constraints:
 
 Remote bootstrap SSH-binding constraints:
 - if `access_profile.connectivity_mode` is `ssh_tunnel_only` or `truly_remote`:
-  - shared-secret `auth-issue-session` requires `ssh_binding`
+  - shared-secret `auth-issue-session` is denied with `shared_secret_bootstrap_not_supported_for_remote_connectivity`
   - public-key `auth-begin-challenge` requires `ssh_binding`
   - missing binding is denied with `ssh_binding_required_for_remote_connectivity`
 
@@ -108,6 +108,11 @@ Daemon-side claim ACL hardening:
     - `stale_owner_unreachable`
     - `owner_malicious`
     - `security_incident`
+  - emergency overrides must satisfy reason-specific predicates:
+    - `stale_owner_unreachable` requires orphan conflicting owner (not active)
+    - `owner_malicious` and `security_incident` require active conflicting owner
+  - predicate failure denial code:
+    - `force_override_emergency_predicate_not_met`
   - emergency and force-override events are audit-tagged with high severity
 
 ### 2.1 Required Claim/Auth Fields (Daemon Command Path)
@@ -186,6 +191,7 @@ Common `error_code` values:
 - `session_token_required`
 - `missing_or_invalid_session_token`
 - `session_revoked`
+- `shared_secret_bootstrap_not_supported_for_remote_connectivity`
 - `insufficient_scope`
 - `engine_access_denied`
 - `config_access_denied`
@@ -193,6 +199,7 @@ Common `error_code` values:
 - `localhost_force_override_confirmation_required`
 - `force_override_reason_required`
 - `force_override_emergency_reason_invalid`
+- `force_override_emergency_predicate_not_met`
 - `ownership_changed_reclaim_required`
 - `engine_shared_claim_not_member`
 - `engine_exclusive_conflict`
@@ -665,8 +672,10 @@ mp13config --host-auth-generate-secret 32
 $env:MP13_HOST_SECRET="CHANGE_ME"
 mp13config --host-auth-upsert-key admin-key --host-auth-role admin --host-auth-secret-env MP13_HOST_SECRET
 
-# issue session
+# issue session (local_only connectivity profile)
 mp13config --host-auth-issue-session admin-key --host-auth-scope control --host-auth-secret-env MP13_HOST_SECRET
+
+# note: shared-secret session issuance is local-only (`access_profile.connectivity_mode=local_only`)
 
 # status
 mp13config --host-auth-status

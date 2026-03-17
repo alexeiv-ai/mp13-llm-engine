@@ -335,6 +335,11 @@ class EngineHostControlChannel:
             and self._key_secret
         ):
             try:
+                target_mode = str(self.get_target().get("mode") or "").strip().lower()
+                if target_mode == "ssh":
+                    # Shared-secret auto-bootstrap is local-only by policy; SSH-targeted
+                    # channels must use a pre-issued token or explicit challenge flow.
+                    raise RuntimeError("auto_shared_secret_bootstrap_not_supported_for_ssh_target")
                 ssh_binding = self._current_ssh_session_binding()
                 issued = self._invoke(
                     "auth-issue-session",

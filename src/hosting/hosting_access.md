@@ -1,7 +1,7 @@
 # Hosting Access Design (Security, Roles, Keys, Lifecycle)
 
-Date: 2026-03-14
-Status: Proposed design update (functional-first, security hardening staged)
+Date: 2026-03-16
+Status: Design + implementation-aligned baseline (functional-first, Phase 7 planned)
 Scope: `src/hosting` daemon/channel/auth/claim/lifecycle on Windows and Linux
 
 ## 0. Design policy (breaking change)
@@ -33,6 +33,19 @@ Client migration checklist and breaking payload/role changes are documented in:
    - admin may override temporarily (runtime) or permanently (config)
 6. Root/admin privileges may be unavailable; baseline flow must work in user context.
 7. If local terminal access is fully compromised, local files may be rewritten; design targets containment, auditability, and explicit ownership transitions.
+
+### 2.1 Residual risk boundary (explicit)
+
+1. Local host compromise is out of scope for full prevention in baseline architecture.
+2. Baseline controls primarily provide:
+   - role separation
+   - bounded session/token validity
+   - deterministic ownership transition behavior
+   - auditability for key/session/claim lifecycle actions
+3. Baseline controls do not guarantee:
+   - protection against local credential/key theft after host compromise
+   - protection against local audit/state tampering by a privileged attacker
+4. Phase 7 candidates must be evaluated against this boundary and must not claim full local-compromise prevention.
 
 ## 3. Roles, Hierarchy, and Capabilities
 
@@ -82,8 +95,12 @@ Implementation may internally use scope primitives, but this is not an external 
 ### 4.1 Identity model
 
 1. Primary: SSH public key identities (long-lived).
-2. Secondary: shared secret keys (optional fallback path, not compatibility requirement).
+2. Shared-secret strategy decision:
+   - keep as local-only bootstrap fallback for early/simple local scenarios
+   - do not use for non-local bootstrap or remote-capable connectivity modes
+   - SSH-target helper auto-session issuance via shared-secret is disabled by policy
 3. Access duration: session/token TTL controls, not key expiration.
+4. SSH private-key passphrases are external user/agent controls; hosting does not store or verify those passphrases directly.
 
 ### 4.2 Keyring paradigm
 
@@ -156,53 +173,32 @@ Current implementation note:
 6. daemon endpoint-mode runtime control commands now participate in this displaced-owner denial contract:
    - `set-endpoint-mode-override`
    - `get-endpoint-mode-effective`
+7. Emergency takeover confirmation bypass is currently localhost-only and reason-code constrained.
+8. Emergency eligibility predicates are enforced and denial is explicit:
+   - denial code: `force_override_emergency_predicate_not_met`
+   - `stale_owner_unreachable` requires conflicting owner to be orphaned (not active)
+   - `owner_malicious` and `security_incident` require at least one active conflicting owner
+   - denial details include `predicate`, `active_conflicting_owners`, `orphan_conflicting_owners`
 
-## 6. Auth/AuthZ Current Status (Legacy Snapshot for Rewrite Planning)
+## 6. Auth/AuthZ Current Status (Implementation-Aligned)
 
-Based on current `src/hosting` docs and status files, for rewrite planning only:
+Implementation baseline status:
+1. Phase 1/2/3/4/5/6/8 access-control scope is implemented and validated per `hosting_access_plan.md`.
+2. Clean-slate role model is active across service/daemon/channel/client helper paths.
+3. Endpoint default mode + runtime override + displaced-owner deterministic denial/reclaim behavior are implemented.
+4. Setup + diagnostics flows (`hosting_config`, `--doctor`) and key migration (`.migrated`) are implemented.
+5. Safe-only no-auth policy is enforced at startup and on runtime drift (`set-control-config` partial updates).
+6. Non-local auth bootstrap uses public-key challenge with SSH session binding context.
+7. Shared-secret session issuance (`auth-issue-session`) is local-only and denied for non-local connectivity profiles.
+8. Auth lifecycle audit events and admin audit query command (`auth-audit-list`) are implemented.
+9. Lifecycle profiles/policies, terminal-control gating, and shutdown sequencing/checkpoints are implemented.
+10. Legacy runtime role bridge is removed for cutover scope.
 
-Implemented:
-1. `require_auth` config and session/key primitives.
-2. Scoped authorization (`control/config/traffic`) with session TTL.
-3. Public-key challenge auth support.
-4. SSH binding fields and binding checks for bound sessions/challenges.
-5. Daemon-derived claim actor identity (`key:<key_id>`).
-6. Claim ACL with owner TTL, takeover transitions, and structured denial codes.
-7. Non-localhost shared claim deny behavior in daemon path.
-8. Localhost force-override confirmation token path.
-9. Audit-style claim events and metrics telemetry.
-
-Missing for clean-slate target design:
-1. Full hierarchical role model listed above (beyond current scope roles).
-2. `diagnostic_user` explicit command surface.
-3. Endpoint-level mode defaults + temporary override persistence model.
-   - default + runtime override commands implemented
-   - remaining work: override audit/ownership-notification integration and persistence policy refinements
-4. Full setup-wizard UX and reconfigure diff/apply workflow polish for local/tunnel/remote intent.
-5. Extended troubleshooting artifacts (error catalog/playbooks) beyond initial `--doctor`.
-6. Comprehensive generated-key path validation across constrained Windows filesystem variants.
-
-Implemented note:
-1. `connect-from-config` now classifies worker profile (`model` vs `generic`) and enforces generic worker usage only for `worker_user` (or higher).
-2. Generic worker profile runtime path is now supported in `connect-from-config`:
-   - `worker_kind/worker_type = generic`
-   - spawn command from `worker_command` or `spawn.command`
-   - model selection step is skipped for generic profiles
-3. Traffic/rpc runtime enforcement now applies to generic engine registrations:
-   - `worker_profile_class=generic` engines deny model-role proxy/rpc usage with `insufficient_role`
-4. `transport` role is now hard-gated to `public_key` onboarding only and cannot issue auth sessions/challenges.
-5. In non-local connectivity profiles, auth bootstrap requires SSH binding:
-   - shared-secret `auth_issue_session` requires `ssh_binding`
-   - public-key `auth_begin_challenge` requires `ssh_binding`
-6. In non-local connectivity profiles, command authorization also requires SSH binding context:
-   - presented `_ssh_session_binding` is mandatory
-   - session must contain persisted binding metadata
-   - unbound legacy sessions are denied in non-local mode
-7. Auth lifecycle operations now include explicit audit trail records:
-   - key upsert/revoke and session revoke events are written to `auth_audit_events` in control state.
-8. Admin query surface now includes `auth-audit-list` for paged/filterable access to auth audit events.
-9. Legacy role bridge removal is complete for this cutover scope:
-   - app-level host auth helper (`mp13config`) now accepts only clean-slate role names.
+Remaining baseline gaps before Phase 7 feasibility discussion:
+1. Emergency takeover predicates are now code-enforced and test-mapped; keep operator docs aligned to denial taxonomy.
+2. Troubleshooting artifacts should expand beyond initial `--doctor` into explicit error catalog + playbooks.
+3. Generated-key validation across constrained Windows filesystem variants needs host-path confirmation coverage.
+4. Scenario runbooks must retain explicit minimum controls and escalation triggers (captured in Section 10).
 
 ## 7. `require_auth=false` Safe-Only Policy
 
@@ -233,9 +229,9 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
 
 ### 8.1 Script input intents
 
-1. Local-only clients
-2. SSH tunnel-only remote clients
-3. Truly remote access
+1. `local_only` (local-only clients)
+2. `ssh_tunnel_only` (SSH tunnel-only remote clients)
+3. `truly_remote` (non-loopback direct or proxied remote access)
 
 ### 8.2 Common script outputs
 
@@ -313,25 +309,112 @@ Current implementation note:
    - when `terminal_control_enabled=false`, terminal control paths are denied (`__shutdown__`, runtime endpoint-mode override).
 7. additional profile-hardening remains staged for follow-up.
 
-## 10. Scenario Comparison (Functional First)
+## 10. Scenario Comparison (Functional First, Operator-Oriented)
 
-### 10.1 Local-only (limited impact by design)
+### 10.1 Scenario A: Local-only single-user bootstrap (`local_only`, optional no-auth)
 
-1. simplest ops model
-2. smallest network attack surface
-3. can allow constrained unauth mode under strict safe-only gate
+Intended usage:
+1. single developer/operator on one host
+2. lowest-friction bootstrap and local development
 
-### 10.2 SSH tunnel-only
+Mitigated attack vectors:
+1. accidental remote exposure via safe-only `require_auth=false` gate
+2. unsafe no-auth profile drift through partial config updates
+3. session/challenge abuse when auth is disabled
 
-1. remote usability with loopback-bound daemon
-2. transport exposure minimized
-3. auth still required for multi-role operation
+Unmitigated or weakly mitigated vectors:
+1. local host compromise (key/state/audit file tampering)
+2. misuse by any process with equivalent local user privileges
 
-### 10.3 Truly remote
+Minimum controls to remain in this scenario:
+1. daemon bind remains loopback/local IPC only
+2. endpoint mode remains `exclusive`
+3. single-user admin-only key profile remains enforced
+4. no tunnel/relay/public ingress is enabled
+5. if shared-secret bootstrap is used, keep it local-only and avoid persistent plaintext secret storage
 
-1. highest operational flexibility
-2. highest attack surface
-3. requires strict role separation, enforced auth, and external network controls
+Escalate to next scenario when:
+1. a second user/process identity needs access
+2. remote access is needed
+
+### 10.2 Scenario B: Local-only authenticated multi-role operation
+
+Intended usage:
+1. same host, multiple trusted users/process identities
+2. local least-privilege separation without network exposure
+
+Mitigated attack vectors:
+1. role misuse for config/model/generic-worker actions
+2. unauthorized key/session revocation by non-admin roles
+3. unauthorized model override and generic-worker proxy/rpc usage
+
+Unmitigated or weakly mitigated vectors:
+1. local credential/key theft after host compromise
+2. local denial-of-service by privileged local attacker
+
+Minimum controls to remain in this scenario:
+1. `require_auth=true`
+2. role assignments limited to least privilege (`diagnostic_user`/`model_user`/`worker_user`/`config_editor`/`admin`)
+3. audit review using `auth-audit-list`
+4. keyring filesystem permissions remain restricted to daemon user account
+5. shared-secret usage (if any) remains bootstrap-only and local-only; prefer public-key challenge for durable operator flows
+
+Escalate to next scenario when:
+1. off-host operators need access
+
+### 10.3 Scenario C: SSH tunnel-only remote operation (`ssh_tunnel_only`)
+
+Intended usage:
+1. remote operator access while keeping daemon loopback-bound on host
+2. continuity workflows via detached lifecycle profile
+
+Mitigated attack vectors:
+1. direct non-loopback daemon exposure
+2. non-local auth bootstrap without SSH binding
+3. remote shared-secret bootstrap misuse (non-local `auth-issue-session` is denied)
+4. non-local command use without persisted + presented SSH binding context
+
+Unmitigated or weakly mitigated vectors:
+1. stolen SSH private keys
+2. host compromise on tunnel endpoint
+3. tunnel endpoint operational misconfiguration
+
+Minimum controls to remain in this scenario:
+1. host daemon bind stays loopback-only
+2. SSH tunnel endpoint hardening is applied outside daemon (host/network policy)
+3. short session/token TTL and strict role separation
+4. regular claim/auth audit review for suspicious takeover/auth patterns
+
+Escalate to next scenario when:
+1. direct non-loopback clients or broader remote ingress is required
+
+### 10.4 Scenario D: Truly remote multi-client operation (`truly_remote`)
+
+Intended usage:
+1. persistent remote-serving environment
+2. multi-client/multi-role access with explicit external network controls
+
+Mitigated attack vectors:
+1. role-based privilege escalation attempts within command surfaces
+2. stale-owner lock-in via emergency takeover + deterministic displaced-owner handling
+3. terminal-control abuse when disabled by lifecycle policy
+
+Unmitigated or weakly mitigated vectors:
+1. internet-facing brute-force and credential replay pressure
+2. large-scale auth abuse requiring adaptive controls
+3. sophisticated key compromise scenarios needing rotation/stronger storage
+
+Minimum controls to remain in this scenario:
+1. `require_auth=true` always
+2. strict role separation + admin-only key/session invalidation operations
+3. external firewall/reverse-proxy policy and ingress minimization
+4. operational lifecycle policy review (`service_managed` vs detached profile)
+5. alerting/playbook ownership for auth/claim audit events
+
+Escalate beyond baseline (Phase 7 candidates) when:
+1. threat model includes key replay/rapid credential churn
+2. compliance or assurance requires hardware-backed keys
+3. attack volume requires adaptive lockout/anomaly controls
 
 ## 11. Advanced Hardening and Risk Assessment (Later Stages)
 
@@ -348,3 +431,14 @@ Each must be documented with:
 1. threat introduced/expanded
 2. compensating controls
 3. scope of impact (for example local-only admin-only deployment may not need it)
+
+## 12. Phase 7 Readiness Prerequisites (Before Feasibility Decision)
+
+1. Docs are status-aligned across:
+   - `hosting_access.md`
+   - `hosting_access_plan.md`
+   - `HOSTING_PYTEST_STATUS.md`
+2. Emergency takeover contract includes explicit eligibility predicates and denial semantics.
+3. Validation evidence includes required outside-sandbox reruns for ACL- and lifecycle-sensitive suites when sandbox teardown ACL issues occur.
+4. Generated-key path behavior is validated on host paths where OpenSSH write semantics are supported.
+5. Scenario-specific minimum controls and escalation triggers remain current with implementation.

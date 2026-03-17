@@ -1,6 +1,6 @@
 # Hosting Access Hardening Plan
 
-Date: 2026-03-14
+Date: 2026-03-16
 Status: Living implementation plan (functional-first, security staged)
 
 References:
@@ -149,11 +149,11 @@ Completed in this implementation slice:
    - `pytest tests/test_hosting_auth_roles.py -q --basetemp o:\repos\mp13-llm-engine\.tmp_pytest_role12`
    - result: 15 passed (cache warnings only due workspace ACLs)
 49. Hardened remote auth bootstrap paths to require SSH binding:
-   - non-local `auth_issue_session` now requires `ssh_binding`
-   - non-local `auth_begin_challenge` now requires `ssh_binding`
+   - non-local `auth_issue_session` is denied (`shared_secret_bootstrap_not_supported_for_remote_connectivity`)
+   - non-local `auth_begin_challenge` requires `ssh_binding`
    - missing binding denied with `ssh_binding_required_for_remote_connectivity`
 50. Added role tests for remote SSH-binding bootstrap requirement:
-   - shared-secret session issue denied without binding, allowed with binding
+   - shared-secret session issue denied with or without binding in non-local profiles
    - public-key challenge begin denied without binding, allowed with binding
 51. Revalidated role + setup suites after remote binding hardening:
    - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_config.py -q --basetemp o:\repos\mp13-llm-engine\.tmp_pytest_role_cfg14`
@@ -335,10 +335,59 @@ Completed in this implementation slice:
 102. Manual outside-sandbox rerun for updated daemon ACL suite completed:
    - `pytest tests/test_hosting_daemon_acl.py -q`
    - result: `15 passed in 1.10s`
+103. Shared-secret bootstrap hardening applied for scenario alignment:
+   - non-local connectivity now denies `auth_issue_session` regardless of `ssh_binding`
+   - denial code: `shared_secret_bootstrap_not_supported_for_remote_connectivity`
+   - non-local bootstrap path is public-key challenge only (`auth_begin_challenge` + `auth_complete_challenge`)
+104. Updated role regression coverage for remote bootstrap policy:
+   - remote shared-secret session issuance now denied with/without `ssh_binding`
+   - remote command-path SSH-binding denial coverage preserved via profile-flip session flow
+105. Updated user/client docs to reflect local-only shared-secret bootstrap policy:
+   - `src/hosting/hosting_access.md`
+   - `src/hosting/HOSTING.md`
+   - `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`
+106. Enforced emergency takeover eligibility predicates in daemon claim policy:
+   - new denial code: `force_override_emergency_predicate_not_met`
+   - reason-specific predicate checks:
+     - `stale_owner_unreachable` requires orphan conflicting owner
+     - `owner_malicious` and `security_incident` require active conflicting owner
+107. Added daemon ACL regression tests for emergency predicate enforcement:
+   - deny stale-owner emergency override while conflicting owner remains active
+   - allow stale-owner emergency override when conflicting owner is orphaned
+108. Updated SSH-target channel helper behavior to avoid local-only shared-secret auto bootstrap:
+   - SSH mode now skips auto `auth-issue-session` from shared-secret credentials
+   - SSH mode still injects `_ssh_session_binding` context on commands
+109. Added host-path keygen readiness probe in `hosting_config --doctor`:
+   - non-blocking check: `ssh_keygen_host_path_probe`
+   - validates `ssh-keygen` write behavior under `Hosting/keyring/private`
+   - probe output remains visible for pre-Phase-7 readiness tracking without blocking import-key baseline setup
+110. Updated regression coverage for SSH helper and doctor probe:
+   - `tests/test_engine_host_channel.py` SSH bootstrap expectation aligned to no-auto-shared-secret policy
+   - `tests/test_hosting_config.py` asserts doctor reports `ssh_keygen_host_path_probe`
 
 Notes:
 1. This is an initial vertical slice; full role semantics and lifecycle policy coverage continue in later phases.
 2. In this mapped-drive sandbox, `ssh-keygen` still fails key generation at runtime (`Bad file descriptor` / permission constraints). Current fallback logic is in place, but fully green generated-key validation requires a host path where OpenSSH can write keys successfully.
+
+## 1.2 Pre-Phase-7 readiness fixes (must-close list)
+
+1. Align status language across design and plan docs so implemented baseline does not appear as "missing."
+2. Emergency takeover eligibility predicates explicit + test-mapped:
+   - code/test complete; keep docs/error-catalog wording synchronized.
+3. Keep scenario runbooks explicit on:
+   - mitigated vs unmitigated vectors
+   - minimum controls to remain in scenario
+   - switch-to-next-scenario triggers
+4. Keep residual-risk boundary explicit:
+   - baseline does not claim local-compromise prevention
+5. Maintain a reproducible validation path for suites that may fail sandbox teardown due to ACL constraints.
+6. Generated-key validation on constrained Windows host paths:
+   - doctor probe now records host-path keygen readiness evidence (`ssh_keygen_host_path_probe`)
+   - outside-sandbox host validation reruns remain required for baseline evidence.
+7. Normalize terminology in docs for connectivity intents:
+   - `local_only`
+   - `ssh_tunnel_only`
+   - `truly_remote`
 
 ## 2. Delivery phases
 
@@ -565,6 +614,23 @@ Exit criteria:
 6. Cutover tests:
    - legacy commands/paths fail with explicit deprecation errors (until removed)
    - final build has no active legacy auth code paths
+
+### 4.1 Sandbox validation policy and outside-sandbox reruns
+
+1. In this workspace sandbox, `PermissionError: [WinError 5] Access is denied` during pytest temp cleanup is acceptable when:
+   - attempted command is recorded
+   - failure reason is recorded
+   - outside-sandbox rerun command is documented in `HOSTING_PYTEST_STATUS.md`
+2. Required outside-sandbox reruns for ACL/lifecycle-sensitive coverage:
+   - `pytest tests/test_hosting_daemon_acl.py -q`
+   - `pytest tests/test_hosting_daemon_pidfile.py -q`
+   - `pytest tests/test_hosting_service_security.py -q`
+   - `pytest tests/test_hosting_http_ingress.py -q`
+   - `pytest tests/test_app_config_host_auth.py -q`
+3. Minimum evidence format in status docs:
+   - exact command
+   - pass/fail result summary
+   - execution environment note (`sandbox` vs `outside-sandbox`)
 
 ## 5. Documentation maintenance
 

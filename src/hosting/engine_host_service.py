@@ -759,6 +759,25 @@ class EngineHostService:
     def _normalize_force_override_reason(reason: Optional[str]) -> str:
         return str(reason or "").strip().lower()
 
+    def _emergency_override_predicate(
+        self,
+        *,
+        reason: str,
+        active_conflicting_owners: List[str],
+        orphan_conflicting_owners: List[str],
+    ) -> Optional[str]:
+        if reason == "stale_owner_unreachable":
+            if active_conflicting_owners:
+                return "stale_owner_unreachable_requires_orphan_owner"
+            if not orphan_conflicting_owners:
+                return "stale_owner_unreachable_requires_orphan_owner"
+            return None
+        if reason in {"owner_malicious", "security_incident"}:
+            if not active_conflicting_owners:
+                return "emergency_reason_requires_active_conflicting_owner"
+            return None
+        return "force_override_emergency_reason_invalid"
+
     @staticmethod
     def _connectivity_mode(cfg: Dict[str, Any]) -> str:
         access_profile = dict(cfg.get("access_profile") or {})
@@ -1683,8 +1702,10 @@ class EngineHostService:
         cfg = dict(control.get("control_config") or {})
         if not bool(cfg.get("require_auth", False)):
             raise PermissionError("require_auth_disabled_disallows_session_commands")
-        if self._requires_ssh_binding(cfg) and not dict(ssh_binding or {}):
-            raise PermissionError("ssh_binding_required_for_remote_connectivity")
+        # Shared-secret bootstrap is local-only. Remote-capable profiles must use
+        # public-key challenge flow for session issuance.
+        if self._requires_ssh_binding(cfg):
+            raise PermissionError("shared_secret_bootstrap_not_supported_for_remote_connectivity")
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_sessions(auth)
         keys = dict(auth.get("keys") or {})
@@ -2406,6 +2427,53 @@ class EngineHostService:
                     "payload": p,
                 }
             if emergency:
+                active_conflicting_owners: List[str] = []
+                orphan_conflicting_owners: List[str] = []
+                if c == "claim-endpoint":
+                    endpoint = dict(control.get("endpoint_claim") or {})
+                    owners = [str(x or "").strip() for x in list(endpoint.get("owners") or []) if str(x or "").strip()]
+                    active_owners, orphan_owners = self._active_and_orphan_owners(control, owners)
+                    active_conflicting_owners = sorted([o for o in active_owners if o != actor_id])
+                    orphan_conflicting_owners = sorted([o for o in orphan_owners if o != actor_id])
+                elif c == "claim-engine":
+                    engine_id = str(p.get("engine_id") or "").strip()
+                    claim = dict((control.get("claims_by_engine") or {}).get(engine_id) or {})
+                    owners = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+                    active_owners, orphan_owners = self._active_and_orphan_owners(control, owners)
+                    active_conflicting_owners = sorted([o for o in active_owners if o != actor_id])
+                    orphan_conflicting_owners = sorted([o for o in orphan_owners if o != actor_id])
+                elif c == "claim-resource":
+                    rkind = str(p.get("resource_kind") or "").strip().lower()
+                    rid = str(p.get("resource_id") or "").strip()
+                    if rkind == "engine":
+                        claim = dict((control.get("claims_by_engine") or {}).get(rid) or {})
+                    else:
+                        claim = dict((control.get("resource_claims") or {}).get(self._resource_key(rkind, rid)) or {})
+                    owners = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+                    active_owners, orphan_owners = self._active_and_orphan_owners(control, owners)
+                    active_conflicting_owners = sorted([o for o in active_owners if o != actor_id])
+                    orphan_conflicting_owners = sorted([o for o in orphan_owners if o != actor_id])
+                predicate = self._emergency_override_predicate(
+                    reason=reason,
+                    active_conflicting_owners=active_conflicting_owners,
+                    orphan_conflicting_owners=orphan_conflicting_owners,
+                )
+                if predicate:
+                    return {
+                        "ok": False,
+                        "error": "access_denied",
+                        "error_code": "force_override_emergency_predicate_not_met",
+                        "error_details": {
+                            "command": c,
+                            "actor_id": actor_id,
+                            "reason": reason,
+                            "predicate": predicate,
+                            "active_conflicting_owners": active_conflicting_owners,
+                            "orphan_conflicting_owners": orphan_conflicting_owners,
+                        },
+                        "payload": p,
+                    }
+            if emergency:
                 p["force_override_reason"] = reason
                 p["force_override_emergency"] = True
                 return {"ok": True, "payload": p}
@@ -2450,6 +2518,53 @@ class EngineHostService:
                     },
                     "payload": p,
                 }
+            if emergency:
+                active_conflicting_owners = []
+                orphan_conflicting_owners = []
+                if c == "claim-endpoint":
+                    endpoint = dict(control.get("endpoint_claim") or {})
+                    owners = [str(x or "").strip() for x in list(endpoint.get("owners") or []) if str(x or "").strip()]
+                    active_owners, orphan_owners = self._active_and_orphan_owners(control, owners)
+                    active_conflicting_owners = sorted([o for o in active_owners if o != actor_id])
+                    orphan_conflicting_owners = sorted([o for o in orphan_owners if o != actor_id])
+                elif c == "claim-engine":
+                    engine_id = str(p.get("engine_id") or "").strip()
+                    claim = dict((control.get("claims_by_engine") or {}).get(engine_id) or {})
+                    owners = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+                    active_owners, orphan_owners = self._active_and_orphan_owners(control, owners)
+                    active_conflicting_owners = sorted([o for o in active_owners if o != actor_id])
+                    orphan_conflicting_owners = sorted([o for o in orphan_owners if o != actor_id])
+                elif c == "claim-resource":
+                    rkind = str(p.get("resource_kind") or "").strip().lower()
+                    rid = str(p.get("resource_id") or "").strip()
+                    if rkind == "engine":
+                        claim = dict((control.get("claims_by_engine") or {}).get(rid) or {})
+                    else:
+                        claim = dict((control.get("resource_claims") or {}).get(self._resource_key(rkind, rid)) or {})
+                    owners = [str(x or "").strip() for x in list(claim.get("owners") or []) if str(x or "").strip()]
+                    active_owners, orphan_owners = self._active_and_orphan_owners(control, owners)
+                    active_conflicting_owners = sorted([o for o in active_owners if o != actor_id])
+                    orphan_conflicting_owners = sorted([o for o in orphan_owners if o != actor_id])
+                predicate = self._emergency_override_predicate(
+                    reason=reason,
+                    active_conflicting_owners=active_conflicting_owners,
+                    orphan_conflicting_owners=orphan_conflicting_owners,
+                )
+                if predicate:
+                    return {
+                        "ok": False,
+                        "error": "access_denied",
+                        "error_code": "force_override_emergency_predicate_not_met",
+                        "error_details": {
+                            "command": c,
+                            "actor_id": actor_id,
+                            "reason": reason,
+                            "predicate": predicate,
+                            "active_conflicting_owners": active_conflicting_owners,
+                            "orphan_conflicting_owners": orphan_conflicting_owners,
+                        },
+                        "payload": p,
+                    }
             p["force_override_reason"] = reason
             p["force_override_emergency"] = emergency
 
