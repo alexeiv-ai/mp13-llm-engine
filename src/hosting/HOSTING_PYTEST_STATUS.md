@@ -192,7 +192,7 @@ Coverage includes:
 
 Note:
 - Default test policy now avoids explicit `--basetemp` for this suite.
-- Latest run in this repo: `26 passed, 2 warnings` (warnings are pytest cache ACL warnings).
+- Latest run in this repo: `28 passed, 2 warnings` (warnings are pytest cache ACL warnings).
 - Command:
   - `pytest tests/test_hosting_auth_roles.py -q`
 
@@ -328,3 +328,50 @@ Post-fix reruns (no `--basetemp`):
 
 Warnings note:
 - remaining warnings are pytest cache ACL warnings on `.pytest_cache`; they do not affect test result status.
+
+## 16) Phase 5 Enforcement Tightening (2026-03-15)
+
+Scope:
+1. `set-control-config` now revalidates no-auth safe profile even when `require_auth` is omitted in update payload.
+2. Session/challenge issuance commands are denied when `require_auth=false`:
+   - `auth-issue-session`
+   - `auth-begin-challenge`
+   - `auth-complete-challenge`
+   - denial code: `require_auth_disabled_disallows_session_commands`
+
+New regression tests:
+1. `test_require_auth_false_rejected_when_profile_drifts_without_require_auth_field`
+2. `test_require_auth_false_rejects_session_and_challenge_issue_paths`
+
+Validation commands (no `--basetemp`):
+1. `pytest tests/test_hosting_auth_roles.py -q` -> `28 passed, 2 warnings`
+2. `pytest tests/test_hosting_config.py -q` -> `6 passed, 2 warnings`
+
+Warnings note:
+- warnings are pytest cache ACL warnings in this sandbox and do not change pass/fail status.
+
+## 17) Phase 2 Ownership Enforcement Consistency (2026-03-15)
+
+Scope:
+1. Daemon endpoint-mode special command handlers now enforce displaced-owner claim policy:
+   - `set-endpoint-mode-override`
+   - `get-endpoint-mode-effective`
+2. Displaced owner remains denied on these non-claim commands until reclaim:
+   - `ownership_changed_reclaim_required`
+
+Regression coverage updates:
+1. Extended `test_displaced_owner_is_denied_until_reclaim_then_cleared` to include endpoint-mode command denials.
+
+Sandbox command attempted:
+1. `pytest tests/test_hosting_daemon_acl.py -q`
+   - failed in fixture setup (before test execution) with:
+     - `PermissionError: [WinError 5] Access is denied`
+     - failing path: `C:\Users\me\AppData\Local\Temp\mp13_pytest\pytest-of-me`
+
+Action:
+- command must be rerun manually outside this sandbox.
+- syntax validation in sandbox passed:
+  - `python -m py_compile src/hosting/engine_host_daemon.py tests/test_hosting_daemon_acl.py`
+- manual outside-sandbox rerun result:
+  - `pytest tests/test_hosting_daemon_acl.py -q`
+  - `15 passed in 1.10s`

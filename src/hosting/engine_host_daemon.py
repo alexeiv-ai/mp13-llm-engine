@@ -924,6 +924,21 @@ class EngineHostDaemon:
                 }
             try:
                 self.svc.authorize_command(cmd, payload)
+                acl = self.svc.enforce_daemon_claim_policy(
+                    cmd,
+                    payload,
+                    peer_host=peer_host,
+                    is_localhost=is_localhost,
+                )
+                if not bool(acl.get("ok", False)):
+                    return {
+                        "seq": seq,
+                        "ok": False,
+                        "error": str(acl.get("error") or "access_denied"),
+                        "error_code": str(acl.get("error_code") or "access_denied"),
+                        "error_details": dict(acl.get("error_details") or {}),
+                    }
+                payload = dict(acl.get("payload") or payload)
             except PermissionError as exc:
                 code = str(exc or "").strip() or "auth_failed"
                 return {
@@ -951,6 +966,20 @@ class EngineHostDaemon:
         if cmd == "get-endpoint-mode-effective":
             try:
                 self.svc.authorize_command(cmd, payload)
+                acl = self.svc.enforce_daemon_claim_policy(
+                    cmd,
+                    payload,
+                    peer_host=peer_host,
+                    is_localhost=is_localhost,
+                )
+                if not bool(acl.get("ok", False)):
+                    return {
+                        "seq": seq,
+                        "ok": False,
+                        "error": str(acl.get("error") or "access_denied"),
+                        "error_code": str(acl.get("error_code") or "access_denied"),
+                        "error_details": dict(acl.get("error_details") or {}),
+                    }
             except PermissionError as exc:
                 code = str(exc or "").strip() or "auth_failed"
                 return {

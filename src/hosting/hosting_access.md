@@ -153,6 +153,9 @@ Current implementation note:
    - `security_incident`
 4. claim audit events include `severity`, and force/emergency overrides are tagged `high`.
 5. displaced owners are flagged by ownership-change notice and receive deterministic denial (`ownership_changed_reclaim_required`) on non-claim commands until reclaim.
+6. daemon endpoint-mode runtime control commands now participate in this displaced-owner denial contract:
+   - `set-endpoint-mode-override`
+   - `get-endpoint-mode-effective`
 
 ## 6. Auth/AuthZ Current Status (Legacy Snapshot for Rewrite Planning)
 
@@ -213,6 +216,11 @@ Allowed only when all are true:
 5. No persisted shared sessions/tokens.
 
 When any condition is false, daemon must require auth (`require_auth=true`) or fail startup with explicit error.
+
+Current implementation note:
+1. `set-control-config` now revalidates no-auth safe-profile constraints even when `require_auth` is omitted from update payload.
+2. no-auth mode rejects session/challenge issuance bootstrap paths with:
+   - `require_auth_disabled_disallows_session_commands`
 
 Rationale:
 1. Prevent accidental unauthenticated multi-user or remote exposure.

@@ -649,3 +649,38 @@ Notes:
    - result: 14 passed in 0.86s
    - `pytest tests/test_hosting_http_ingress.py -q --basetemp o:\repos\mp13-llm-engine\.tmp_pytest_phase8_ingress`
    - result: 3 passed in 2.53s
+35. Phase 5 hardening: no-auth config drift is now blocked in `set-control-config` even when `require_auth` is omitted from payload.
+36. Phase 5 hardening: no-auth mode now rejects session/challenge issuance bootstrap paths:
+   - `auth-issue-session`
+   - `auth-begin-challenge`
+   - `auth-complete-challenge`
+   - denial: `require_auth_disabled_disallows_session_commands`
+37. Added role regression coverage for the above hardening:
+   - `test_require_auth_false_rejected_when_profile_drifts_without_require_auth_field`
+   - `test_require_auth_false_rejects_session_and_challenge_issue_paths`
+38. Validation reruns (no explicit `--basetemp`):
+   - `pytest tests/test_hosting_auth_roles.py -q` -> `28 passed, 2 warnings`
+   - `pytest tests/test_hosting_config.py -q` -> `6 passed, 2 warnings`
+39. Phase 2 ownership-enforcement consistency update:
+   - daemon special endpoint-mode handlers now apply displaced-owner claim policy checks.
+   - displaced owners are denied until reclaim for:
+     - `set-endpoint-mode-override`
+     - `get-endpoint-mode-effective`
+   - denial code: `ownership_changed_reclaim_required`
+40. Updated daemon ACL test coverage:
+   - `test_displaced_owner_is_denied_until_reclaim_then_cleared` now asserts endpoint-mode command denial for displaced owner.
+41. Sandbox daemon ACL pytest rerun status:
+   - `pytest tests/test_hosting_daemon_acl.py -q`
+   - blocked in fixture setup by temp-root ACL error:
+     - `PermissionError: [WinError 5] Access is denied`
+     - `C:\Users\me\AppData\Local\Temp\mp13_pytest\pytest-of-me`
+   - command recorded for manual outside-sandbox rerun.
+42. Syntax validation (sandbox): pass
+   - `python -m py_compile src/hosting/engine_host_daemon.py tests/test_hosting_daemon_acl.py`
+43. Manual outside-sandbox rerun for updated daemon ACL suite:
+   - `pytest tests/test_hosting_daemon_acl.py -q`
+   - result: `15 passed in 1.10s`
+44. Pre-Phase-7 baseline freeze:
+   - Phases 0-5 are now formally closed in `hosting_access_plan.md` with exit-criteria evidence mapping.
+   - Phase 6 and Phase 8 remain closed.
+   - Phase 7 remains planned/risk-gated via `hosting_phase7_hardening.md`.

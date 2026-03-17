@@ -1681,6 +1681,8 @@ class EngineHostService:
             raise ValueError("scope must be 'control', 'config', or 'traffic'")
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
+        if not bool(cfg.get("require_auth", False)):
+            raise PermissionError("require_auth_disabled_disallows_session_commands")
         if self._requires_ssh_binding(cfg) and not dict(ssh_binding or {}):
             raise PermissionError("ssh_binding_required_for_remote_connectivity")
         auth = dict(cfg.get("auth") or {})
@@ -1733,6 +1735,8 @@ class EngineHostService:
             raise ValueError("scope must be 'control', 'config', or 'traffic'")
         control_payload = dict(control or self._read_control())
         cfg = dict(control_payload.get("control_config") or {})
+        if not bool(cfg.get("require_auth", False)):
+            raise PermissionError("require_auth_disabled_disallows_session_commands")
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_sessions(auth)
         role = str(key_meta.get("role") or "").strip().lower()
@@ -1853,6 +1857,13 @@ class EngineHostService:
             raise ValueError("scope must be 'control', 'config', or 'traffic'")
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
+        if not bool(cfg.get("require_auth", False)):
+            self._metrics_challenge_event(
+                event="begin_failed",
+                key_id=kid,
+                reason="require_auth_disabled_disallows_session_commands",
+            )
+            raise PermissionError("require_auth_disabled_disallows_session_commands")
         if self._requires_ssh_binding(cfg) and not dict(ssh_binding or {}):
             self._metrics_challenge_event(event="begin_failed", key_id=kid, reason="ssh_binding_required_for_remote_connectivity")
             raise PermissionError("ssh_binding_required_for_remote_connectivity")
@@ -1957,6 +1968,13 @@ class EngineHostService:
             raise ValueError("signature_ssh is required")
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
+        if not bool(cfg.get("require_auth", False)):
+            self._metrics_challenge_event(
+                event="complete_failed",
+                challenge_id=cid,
+                reason="require_auth_disabled_disallows_session_commands",
+            )
+            raise PermissionError("require_auth_disabled_disallows_session_commands")
         auth = dict(cfg.get("auth") or {})
         self._prune_expired_challenges(auth)
         challenges = dict(auth.get("challenges") or {})
@@ -3172,6 +3190,8 @@ class EngineHostService:
             if not requested_require_auth:
                 self._validate_require_auth_disabled_safe_profile(cfg)
             cfg["require_auth"] = requested_require_auth
+        if not bool(cfg.get("require_auth", False)):
+            self._validate_require_auth_disabled_safe_profile(cfg)
         cfg.setdefault("config_store_mode", "store_only")
         cfg.setdefault("auth", {"keys": {}, "sessions": {}})
         cfg.setdefault("engine_traffic_policies", {})

@@ -66,6 +66,23 @@ Client impact:
 10. New admin audit query command:
    - `auth-audit-list` exposes paged/filterable auth lifecycle audit events
    - requires `admin` role; non-admin control roles are denied with `insufficient_role`
+11. No-auth (`require_auth=false`) bootstrap command-path tightening:
+   - session/challenge issuance commands are now denied when auth is disabled:
+     - `auth-issue-session`
+     - `auth-begin-challenge`
+     - `auth-complete-challenge`
+   - denial code:
+     - `require_auth_disabled_disallows_session_commands`
+12. No-auth profile drift hardening in `set-control-config`:
+   - even when `require_auth` is not present in payload, updates are rejected if resulting profile violates no-auth safe connectivity rule.
+   - denial code:
+     - `require_auth_false_only_supported_for_local_only_connectivity`
+13. Displaced-owner denial now consistently applies to endpoint-mode runtime control commands until reclaim:
+   - denied for displaced owner:
+     - `set-endpoint-mode-override`
+     - `get-endpoint-mode-effective`
+   - denial code:
+     - `ownership_changed_reclaim_required`
 
 ## 3. `require_auth=false` now hard-gated
 
@@ -191,3 +208,5 @@ Client/operator impact:
 1. Advanced hardening remains planned/risk-gated and is not enabled by default.
 2. No additional client-breaking contract is introduced by the current Phase 7 draft.
 3. Design reference: `src/hosting/hosting_phase7_hardening.md`.
+4. Pre-Phase-7 baseline freeze note:
+   - Phases 0-5 closure is documentation/status formalization only and does not introduce additional client-breaking changes.

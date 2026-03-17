@@ -302,6 +302,39 @@ Completed in this implementation slice:
    - validation without `--basetemp`:
      - `pytest tests/test_hosting_auth_roles.py -q` -> `26 passed, 2 warnings`
      - `pytest tests/test_hosting_config.py -q` -> `6 passed, 2 warnings`
+95. Phase 5 hardening: blocked no-auth profile drift on partial `set-control-config` updates.
+   - if effective config remains `require_auth=false`, safe-profile validation now runs even when `require_auth` is omitted from payload.
+   - this closes unsafe transition path where connectivity could be flipped to remote without explicitly toggling `require_auth`.
+96. Phase 5 hardening: blocked session/challenge issuance while auth is disabled.
+   - denied commands under `require_auth=false`:
+     - `auth-issue-session`
+     - `auth-begin-challenge`
+     - `auth-complete-challenge`
+   - denial code: `require_auth_disabled_disallows_session_commands`
+97. Added targeted regression coverage for new Phase 5 hardening:
+   - `test_require_auth_false_rejected_when_profile_drifts_without_require_auth_field`
+   - `test_require_auth_false_rejects_session_and_challenge_issue_paths`
+98. Validation reruns (no `--basetemp`):
+   - `pytest tests/test_hosting_auth_roles.py -q` -> `28 passed, 2 warnings`
+   - `pytest tests/test_hosting_config.py -q` -> `6 passed, 2 warnings`
+99. Phase 2 ownership enforcement consistency hardening:
+   - daemon special-case command handlers now apply claim-policy displaced-owner checks for:
+     - `set-endpoint-mode-override`
+     - `get-endpoint-mode-effective`
+   - displaced owners now receive deterministic denial until reclaim: `ownership_changed_reclaim_required`
+100. Added daemon ACL regression coverage for endpoint-mode ownership gating:
+   - extended `test_displaced_owner_is_denied_until_reclaim_then_cleared` to assert denial on:
+     - `set-endpoint-mode-override`
+     - `get-endpoint-mode-effective`
+101. Sandbox validation note for daemon ACL rerun:
+   - command attempted: `pytest tests/test_hosting_daemon_acl.py -q`
+   - failure reason: setup-time tmp fixture error in sandbox temp root discovery:
+     - `PermissionError: [WinError 5] Access is denied`
+     - path: `C:\Users\me\AppData\Local\Temp\mp13_pytest\pytest-of-me`
+   - command recorded in `HOSTING_PYTEST_STATUS.md` for manual outside-sandbox rerun.
+102. Manual outside-sandbox rerun for updated daemon ACL suite completed:
+   - `pytest tests/test_hosting_daemon_acl.py -q`
+   - result: `15 passed in 1.10s`
 
 Notes:
 1. This is an initial vertical slice; full role semantics and lifecycle policy coverage continue in later phases.
@@ -311,7 +344,7 @@ Notes:
 
 ### Phase 0: Contract + status baseline
 
-Status: In progress
+Status: Closed (implementation + validation complete)
 
 Scope:
 1. Freeze target clean-slate contract in docs.
@@ -322,10 +355,16 @@ Scope:
 Exit criteria:
 1. Documentation reflects target breaking-contract accurately.
 2. Legacy-to-target delta is explicit and implementation-ready.
+3. Evidence:
+   - clean-slate contract + status docs in place:
+     - `src/hosting/hosting_access.md`
+     - `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`
+     - `src/hosting/hosting_status.md`
+   - progress update items: 1-12, 87-91
 
 ### Phase 1: Role hierarchy implementation
 
-Status: In progress
+Status: Closed (implementation + validation complete)
 
 Scope:
 1. Implement hierarchy:
@@ -341,10 +380,14 @@ Scope:
 Exit criteria:
 1. Role-command matrix tests pass.
 2. New role model is authoritative and self-contained.
+3. Evidence:
+   - role hierarchy + command authz implemented across service/daemon/channel
+   - role regression coverage in `tests/test_hosting_auth_roles.py`
+   - progress update items: 1-3, 10, 24-25, 36-38, 43-45, 46-60
 
 ### Phase 2: Endpoint mode and ownership semantics
 
-Status: In progress
+Status: Closed (implementation + validation complete)
 
 Scope:
 1. Persist endpoint default mode (`exclusive`/`shared`) in config.
@@ -360,10 +403,16 @@ Scope:
 Exit criteria:
 1. Exclusive/shared behavior is deterministic and test-covered.
 2. Force-override logic covers unavailable-confirmation scenarios safely.
+3. Evidence:
+   - endpoint default + runtime override path implemented
+   - force/emergency override reason codes and high-severity audit implemented
+   - displaced-owner deterministic denial/reclaim flow implemented
+   - endpoint-mode runtime commands now honor displaced-owner denial contract
+   - progress update items: 14-16, 26-35, 99-102
 
 ### Phase 3: Keyring storage and migration
 
-Status: In progress
+Status: Closed (implementation + validation complete)
 
 Scope:
 1. Reserve and enforce `Hosting/` subfolder in default engine config directory.
@@ -374,10 +423,14 @@ Scope:
 Exit criteria:
 1. Migration is idempotent and non-destructive.
 2. No silent key loss; `.migrated` artifacts remain traceable.
+3. Evidence:
+   - `Hosting/` layout + migration metadata/audit implemented
+   - setup tests validate `.migrated` behavior
+   - progress update items: 9, 21-23
 
 ### Phase 4: Setup script and scenario-specific bootstrap
 
-Status: In progress
+Status: Closed (implementation + validation complete)
 
 Scope:
 1. Add user-friendly pre-daemon setup script.
@@ -394,10 +447,16 @@ Exit criteria:
 1. Fresh install can be fully configured before daemon start.
 2. Users get clear external steps for each connectivity scenario.
 3. Script behavior matches `hosting_config_script.md`.
+4. Evidence:
+   - setup/doctor implementation + script spec + docs:
+     - `src/hosting/hosting_config.py`
+     - `src/hosting/hosting_config_script.md`
+   - regression coverage in `tests/test_hosting_config.py`
+   - progress update items: 5-6, 17-23, 69-71
 
 ### Phase 5: `require_auth=false` hard gate
 
-Status: In progress
+Status: Closed (implementation + validation complete)
 
 Scope:
 1. Restrict unauth mode to safe-only profile:
@@ -411,6 +470,17 @@ Scope:
 Exit criteria:
 1. Unsafe unauth combinations are rejected deterministically.
 2. Local bootstrap usability remains simple for safe profile.
+3. Evidence:
+   - runtime safe-profile assertions + command-path enforcement in service/daemon
+   - no-auth drift hardening in partial `set-control-config` updates
+   - no-auth mode rejects session/challenge bootstrap commands
+   - regression coverage:
+     - `test_require_auth_false_rejected_for_non_local_profile`
+     - `test_authorize_command_rejects_unsafe_no_auth_runtime_config`
+     - `test_runtime_policy_assertion_rejects_unsafe_unauth_profile`
+     - `test_require_auth_false_rejected_when_profile_drifts_without_require_auth_field`
+     - `test_require_auth_false_rejects_session_and_challenge_issue_paths`
+   - progress update items: 3, 8, 95-98
 
 ### Phase 6: Lifecycle scenarios and terminal-disconnect behavior
 
