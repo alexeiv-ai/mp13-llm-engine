@@ -643,8 +643,6 @@ class EngineHostDaemon:
     def _apply_owner_disconnect_policy(self, actor_ids: set[str]) -> bool:
         if not actor_ids:
             return False
-        if not self._should_shutdown_on_owner_disconnect():
-            return False
         for actor_id in sorted({str(x or "").strip() for x in actor_ids if str(x or "").strip()}):
             remaining = self._track_actor_disconnected(actor_id)
             if remaining > 0:

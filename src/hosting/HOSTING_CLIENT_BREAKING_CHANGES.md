@@ -92,16 +92,33 @@ Client impact:
 
 Unauth mode is allowed only for safe profile:
 1. `access_profile.connectivity_mode == local_only`
-2. single admin-only key profile
-3. no active sessions/challenges
+2. `endpoint_mode_default == exclusive`
+3. single admin-only key profile
+4. no active sessions/challenges
 
 Client impact:
 1. `set-control-config` may fail when disabling auth in unsafe profile.
 2. Handle new denial codes:
    - `require_auth_false_only_supported_for_local_only_connectivity`
+   - `require_auth_false_requires_exclusive_endpoint_mode`
    - `require_auth_false_requires_no_active_sessions_or_challenges`
    - `require_auth_false_requires_single_admin_key_profile`
    - `require_auth_false_requires_admin_only_keys`
+3. whenever effective `require_auth=false`, `set-control-config` force-coerces `endpoint_mode_default` to `exclusive`.
+4. in daemon mode, claim commands are force-coerced to `exclusive=true` whenever effective `require_auth=false` (caller-provided `exclusive=false` is ignored).
+5. local daemon bootstrap behavior changed for unconfigured hosting:
+   - if local hosting is unconfigured (`keys_count == 0`) and the backend/channel auto-bootstrap path starts the daemon,
+     bootstrap now forces temporary local-only safe defaults before daemon start:
+     - `require_auth=false`
+     - `endpoint_mode_default=exclusive`
+   - clients must treat this as a temporary recovery/bootstrap state, not as steady-state desired configuration.
+6. when that temporary local bootstrap state is detected, clients should warn the operator to configure `hosting_access` as soon as possible.
+7. do not assume persisted `require_auth=true` survives local unconfigured auto-bootstrap unchanged; re-read daemon/control status after bootstrap.
+8. new local-only recovery helper:
+   - `reset-hosting-access`
+   - stops local daemon and clears only auth state from local control state
+   - this helper is intentionally not accessible over daemon RPC/auth command paths
+   - treat it as a local operator recovery shortcut, not as a normal remote/client control API
 
 ## 4. `set-control-config` payload/response extended
 
@@ -116,12 +133,39 @@ New field:
    - `on_terminal_disconnect` (`stop_daemon` or `keep_daemon_running`)
    - `terminal_control_enabled` (`bool`)
    - `owner_disconnect_shutdown` (`bool`)
+   - compatibility note: current daemon owner-disconnect shutdown for exclusive endpoint ownership is enforced regardless of this flag value.
 
 Client impact:
 1. If you own control config management, include/understand `access_profile`.
 2. If you parse `get-control-config`, include/understand `endpoint_mode_default`.
 3. If you parse `get-control-config`, include/understand `lifecycle_profile` and `lifecycle_policy`.
 4. If you parse `get-control-config`, allow and preserve unknown top-level fields.
+
+## 4.5 Local daemon status contract expanded
+
+`get_daemon_status()` now carries more than PID/process liveness when used by local backend/UI clients.
+
+Returned fields now include:
+1. `require_auth`
+2. `keys_count`
+3. `endpoint_mode_default`
+4. `control_config`
+   - local persisted control snapshot fallback, used even when daemon RPC is unreachable
+5. `warnings`
+   - warning list for operator-visible notices
+   - includes temporary local unconfigured bootstrap warning when daemon was started in forced local-only no-auth exclusive mode
+6. `status_event`
+   - change event emitted by polling snapshots when daemon status materially changes
+   - includes PID-file creation/removal/update and reachability transitions
+
+Client impact:
+1. Treat `get_daemon_status()` as the authoritative local status surface for daemon lifecycle plus local hosting bootstrap state.
+2. If daemon RPC is unreachable, continue polling `get_daemon_status()`; do not freeze prior daemon state in UI.
+3. When `status_event` is non-null, refresh daemon/hosting UI state immediately.
+4. If `status_event.reason` indicates PID-file removal/change, treat any cached "daemon running" state as stale.
+5. If `warnings` contains the temporary no-auth bootstrap warning, surface that warning prominently and direct the user to configure `hosting_access`.
+6. Prefer top-level `require_auth` / `keys_count` / `endpoint_mode_default` from `get_daemon_status()` for local daemon cards/status panes, because those fields can still be populated from local control-state fallback when RPC auth/reachability paths fail.
+7. If your product exposes `reset-hosting-access`, label it as local recovery only and do not route it through generic daemon command execution code.
 
 ## 4.1 Endpoint mode behavior update
 
@@ -146,8 +190,8 @@ Client impact:
 ## 4.4 Lifecycle enforcement behavior update
 
 Lifecycle policy is now used by daemon runtime enforcement:
-1. `owner_disconnect_shutdown=true`:
-   - when endpoint is exclusively owned, owner disconnect can trigger daemon shutdown.
+1. exclusive endpoint ownership:
+   - when endpoint is exclusively owned, owner disconnect triggers daemon shutdown (independent of `owner_disconnect_shutdown` value).
 2. foreground terminal profile with terminal-disconnect action:
    - `on_terminal_disconnect=keep_daemon_running` enables SIGHUP-ignore behavior where supported.
 3. daemon stop ordering:
@@ -159,9 +203,7 @@ Lifecycle policy is now used by daemon runtime enforcement:
      - `set-endpoint-mode-override`
 
 Client/operator impact:
-1. For exclusive flows that require daemon continuity, use:
-   - `owner_disconnect_shutdown=false`, and
-   - detached/service lifecycle profiles.
+1. For exclusive flows that require daemon continuity after owner disconnect, do not rely on lifecycle policy toggles; use shared endpoint mode or reconnect/transfer ownership explicitly.
 
 ## 4.2 Force-override payload contract update
 
@@ -214,6 +256,21 @@ Client/operator impact:
 3. Update control-config logic to include `access_profile`.
 4. Update operational runbooks to use `hosting_config` for first-time setup and reconfig.
 5. Validate each client path against intended role (admin/config_editor/worker/model/diagnostic).
+6. Contract-probe client behavior:
+   - do not classify daemon as "too old" only because `daemon_version` is absent/empty in a failed `auth-status` path.
+   - when `require_auth=true` and keys exist, call `auth-status` with a valid session token.
+   - treat `daemon_version=None` as "contract metadata unavailable on this auth/reachability path" until auth/reachability is validated.
+7. For local daemon bootstrap/start UX:
+   - if hosting is unconfigured (`keys_count == 0`), expect temporary forced bootstrap to `require_auth=false` + `endpoint_mode_default=exclusive`
+   - show an explicit warning that `hosting_access` must be configured as soon as possible
+   - after bootstrap/start, refresh state from `get_daemon_status()` instead of trusting only the initial start result or old PID/process state
+8. For local daemon diagnostics UX:
+   - keep polling `get_daemon_status()` even when RPC is unreachable
+   - react to `status_event` so PID-file disappearance or replacement clears stale "daemon running" displays promptly
+9. For local operator recovery UX:
+   - `reset-hosting-access` is available only as a local helper
+   - do not expect it to succeed through daemon RPC, relay mode, or normal authenticated command transport
+   - explain that it clears only auth state, not the rest of hosting control config
 
 ## 7. Phase 7 planning note (no new breaking changes yet)
 

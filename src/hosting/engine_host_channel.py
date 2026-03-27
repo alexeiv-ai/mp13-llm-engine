@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import shlex
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -79,6 +81,7 @@ class EngineHostControlChannel:
         self._daemon_log_file: Optional[str] = str(
             self.control_settings.get("engine_host_daemon_log_file") or ""
         ).strip() or None
+        self._last_daemon_status_fingerprint: Optional[Dict[str, Any]] = None
         self._refresh_base_cmd()
 
     @staticmethod
@@ -201,6 +204,122 @@ class EngineHostControlChannel:
             env["PYTHONPATH"] = src_root if not py_path else f"{src_root}{os.pathsep}{py_path}"
         return env
 
+    def _local_control_state_path(self) -> Optional[Path]:
+        raw = str(self._control_state_file or "").strip()
+        if not raw:
+            return None
+        return Path(raw).expanduser().resolve()
+
+    def _read_local_control_snapshot(self) -> Optional[Dict[str, Any]]:
+        if str(self.get_target().get("mode") or "local") != "local":
+            return None
+        try:
+            from .engine_host_service import EngineHostService
+
+            svc = EngineHostService(control_state_file=self._local_control_state_path())
+            return dict(svc.get_control_config() or {})
+        except Exception as exc:
+            logger.debug("Failed to read local hosting control snapshot: %s", exc)
+            return None
+
+    @staticmethod
+    def _compose_unconfigured_hosting_warning(snapshot: Optional[Dict[str, Any]]) -> Optional[str]:
+        cfg = dict(snapshot or {})
+        if int(cfg.get("keys_count") or 0) != 0:
+            return None
+        if bool(cfg.get("require_auth", True)):
+            return None
+        if str(cfg.get("endpoint_mode_default") or "").strip().lower() != "exclusive":
+            return None
+        return (
+            "Hosting access is not configured yet. The local daemon is running in temporary "
+            "local-only no-auth exclusive mode. Configure hosting_access as soon as possible."
+        )
+
+    @staticmethod
+    def _daemon_status_fingerprint(status: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "pid_file_present": bool(status.get("pid") or status.get("port") or status.get("started_at")),
+            "pid": status.get("pid"),
+            "port": status.get("port"),
+            "started_at": status.get("started_at"),
+            "pid_alive": bool(status.get("pid_alive", False)),
+            "reachable": bool(status.get("reachable", False)),
+        }
+
+    def _daemon_status_event(self, status: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        current = self._daemon_status_fingerprint(status)
+        previous = self._last_daemon_status_fingerprint
+        self._last_daemon_status_fingerprint = dict(current)
+        if previous is None or previous == current:
+            return None
+        reason = "daemon_status_changed"
+        if bool(previous.get("pid_file_present")) and not bool(current.get("pid_file_present")):
+            reason = "pid_file_removed"
+        elif not bool(previous.get("pid_file_present")) and bool(current.get("pid_file_present")):
+            reason = "pid_file_created"
+        elif (
+            previous.get("pid") != current.get("pid")
+            or previous.get("port") != current.get("port")
+            or previous.get("started_at") != current.get("started_at")
+        ):
+            reason = "pid_file_updated"
+        elif previous.get("reachable") != current.get("reachable"):
+            reason = "reachability_changed"
+        return {
+            "event": "daemon_status_changed",
+            "reason": reason,
+            "previous": dict(previous),
+            "current": dict(current),
+        }
+
+    def _finalize_daemon_status(self, status: Dict[str, Any]) -> Dict[str, Any]:
+        snapshot = self._read_local_control_snapshot()
+        warning = self._compose_unconfigured_hosting_warning(snapshot)
+        status["control_config"] = snapshot
+        status["require_auth"] = (
+            bool((status.get("auth_status") or {}).get("require_auth"))
+            if isinstance(status.get("auth_status"), dict) and "require_auth" in dict(status.get("auth_status") or {})
+            else (bool(snapshot.get("require_auth")) if isinstance(snapshot, dict) else None)
+        )
+        status["keys_count"] = (
+            int((status.get("auth_status") or {}).get("keys_count") or 0)
+            if isinstance(status.get("auth_status"), dict) and "keys_count" in dict(status.get("auth_status") or {})
+            else (int(snapshot.get("keys_count") or 0) if isinstance(snapshot, dict) else None)
+        )
+        status["endpoint_mode_default"] = (
+            str(snapshot.get("endpoint_mode_default") or "").strip().lower() if isinstance(snapshot, dict) else None
+        ) or None
+        status["warnings"] = [warning] if warning else []
+        status["status_event"] = self._daemon_status_event(status)
+        return status
+
+    def _prepare_local_unconfigured_bootstrap(self) -> Optional[Dict[str, Any]]:
+        if str(self.get_target().get("mode") or "local") != "local":
+            return None
+        snapshot = self._read_local_control_snapshot()
+        if not isinstance(snapshot, dict):
+            return None
+        if int(snapshot.get("keys_count") or 0) != 0:
+            return snapshot
+        try:
+            from .engine_host_service import EngineHostService
+
+            svc = EngineHostService(control_state_file=self._local_control_state_path())
+            updated = svc.set_control_config(
+                require_auth=False,
+                access_profile={"connectivity_mode": "local_only"},
+                endpoint_mode_default="exclusive",
+            )
+            logger.warning(
+                "Local hosting was unconfigured (keys_count=0); forcing temporary local-only "
+                "no-auth exclusive bootstrap. Configure hosting_access as soon as possible."
+            )
+            return dict(updated or {})
+        except Exception as exc:
+            logger.warning("Failed to prepare local unconfigured hosting bootstrap defaults: %s", exc)
+            return snapshot
+
     # ------------------------------------------------------------------
     # Persistent connection management
     # ------------------------------------------------------------------
@@ -260,6 +379,7 @@ class EngineHostControlChannel:
                 # Daemon not running: auto-bootstrap if enabled
                 if self._auto_bootstrap_daemon:
                     try:
+                        _ = self._prepare_local_unconfigured_bootstrap()
                         wait = float(
                             self.control_settings.get("engine_host_daemon_wait_ready_seconds") or 8.0
                         )
@@ -450,12 +570,12 @@ class EngineHostControlChannel:
             "auth_status_error": None,
         }
         if not pid_alive:
-            return status
+            return self._finalize_daemon_status(status)
         try:
             port = int(info.get("port") or 0)
             if port <= 0:
                 status["reachability_error"] = "missing_daemon_port"
-                return status
+                return self._finalize_daemon_status(status)
             conn = LocalSocketConnection(port=port, timeout=min(self._timeout, 5.0), max_reconnect_attempts=1)
             pong = conn.invoke("__ping__", {})
             status["reachable"] = str(pong or "") == "pong"
@@ -463,7 +583,7 @@ class EngineHostControlChannel:
             if not status["reachable"]:
                 status["reachability_error"] = "daemon_ping_failed"
                 conn.close()
-                return status
+                return self._finalize_daemon_status(status)
             payload: Dict[str, Any] = {}
             if self._session_token:
                 payload["session_token"] = self._session_token
@@ -475,7 +595,7 @@ class EngineHostControlChannel:
             status["reachable"] = False
             status["reachability_error"] = str(exc)
             status["auth_status_error"] = str(exc)
-        return status
+        return self._finalize_daemon_status(status)
 
     def bootstrap_daemon(self, *, wait_ready_seconds: float = 8.0) -> Dict[str, Any]:
         """Start local daemon if not already running. Returns daemon status dict."""
@@ -484,6 +604,7 @@ class EngineHostControlChannel:
         pid_info = DaemonPidFile(pid_file_path)
         if pid_info.is_alive():
             return {"already_running": True, **self.get_daemon_status()}
+        bootstrap_cfg = self._prepare_local_unconfigured_bootstrap()
         result = start_daemon_background(
             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
             pid_file=Path(pid_file_path) if pid_file_path else None,
@@ -492,7 +613,12 @@ class EngineHostControlChannel:
         )
         with self._connection_lock:
             self._connection = None  # Force reconnect on next invoke
-        return {"already_running": False, **result, **self.get_daemon_status()}
+        return {
+            "already_running": False,
+            "bootstrap_control_config": dict(bootstrap_cfg or {}) if isinstance(bootstrap_cfg, dict) else None,
+            **result,
+            **self.get_daemon_status(),
+        }
 
     def stop_daemon(self) -> Dict[str, Any]:
         """Send graceful shutdown signal to local daemon."""
@@ -516,6 +642,58 @@ class EngineHostControlChannel:
             return {"status": "shutdown_sent"}
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
+
+    def reset_hosting_access(self) -> Dict[str, Any]:
+        """
+        Local-only helper: stop local daemon and clear auth state from control config.
+
+        This helper intentionally does not go through daemon RPC/auth surfaces.
+        """
+        if str(self.get_target().get("mode") or "local") != "local":
+            raise ValueError("reset_hosting_access is only valid in local mode")
+        from .engine_host_daemon import DaemonPidFile
+        from .engine_host_service import EngineHostService
+
+        pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
+        pid_info = DaemonPidFile(pid_file_path)
+        daemon_info = dict(pid_info.read() or {})
+        stop_result = self.stop_daemon()
+        pid = int(daemon_info.get("pid") or 0)
+        if pid > 0 and bool(pid_info.is_alive()):
+            try:
+                os.kill(pid, getattr(signal, "SIGTERM", 15))
+            except Exception as exc:
+                stop_result = {"status": "error", "error": str(exc), "forced_kill_attempted": True}
+            else:
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    if not pid_info.is_alive():
+                        break
+                    time.sleep(0.1)
+                stop_result = {
+                    "status": "terminated" if not pid_info.is_alive() else "terminate_timeout",
+                    "forced_kill_attempted": True,
+                    "pid": pid,
+                }
+        if not pid_info.is_alive():
+            pid_info.remove()
+        with self._connection_lock:
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
+        svc = EngineHostService(control_state_file=self._local_control_state_path())
+        reset = svc.reset_hosting_access()
+        return {
+            "status": "ok",
+            "local_helper_only": True,
+            "rpc_accessible": False,
+            "daemon_stop": stop_result,
+            "auth_reset": dict(reset or {}),
+            "daemon_status": self.get_daemon_status(),
+        }
 
     def close_connection(self) -> None:
         """Close and discard the current persistent connection."""

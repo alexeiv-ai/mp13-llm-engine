@@ -1,143 +1,134 @@
-# Phase 7 Advanced Hardening (Risk-Gated Design)
+# Phase 7 Advanced Hardening Evaluation (Scenario-Driven)
 
-Date: 2026-03-16
-Status: Draft design (planned, not enabled by default)
-Scope: Post-Phase-8 optional hardening in `src/hosting`
+Date: 2026-03-22
+Status: Planned and optional (not default-on)
+Scope: Evaluation guidance only for post-Phase-8 hardening in `src/hosting`
 
-## 1. Purpose
+## 1. Goal
 
-1. Preserve Phase 7 exactly as planned in `hosting_access_plan.md`:
-   - key rotation automation + replay-resistance enhancements
-   - optional hardware-backed key storage
-   - advanced anomaly detection/lockout
-   - optional delegated SSH signing/key-custody model for staged deployment transition
-2. Keep baseline functional flows unchanged for local-only and SSH-tunnel operations.
-3. Require explicit risk/impact analysis before any Phase 7 control is implemented or enabled.
+1. Clarify where each Phase 7 control is supported, what value it adds, and what operational overhead it introduces.
+2. Keep baseline operation unchanged for users that do not opt into Phase 7.
+3. Keep risk claims explicit: Phase 7 primarily reduces exposure and improves detection/recovery; it does not claim full protection after local user-compromise.
 
-## 2. Non-Goals
+## 2. Baseline Risk Boundary
 
-1. No default-on hardening changes in this phase draft.
-2. No breaking runtime behavior changes without an approved threat-reduction case.
-3. No expansion of trust assumptions beyond current clean-slate auth/authz model.
+1. Baseline and Phase 7 assume local host compromise under daemon user can bypass many local controls.
+2. Under that condition, Phase 7 value is mostly:
+   - reducing credential lifetime usefulness
+   - reducing replay window and abuse scale
+   - improving tamper/abuse visibility and recovery workflow
+3. No Phase 7 feature is approved as "full elimination" for post-compromise local attacker behavior.
 
-## 3. Risk Gate Contract
+## 3. Supported Scenarios
 
-Every Phase 7 candidate must ship with:
-1. Threat statement:
-   - specific attacker action reduced by the feature
-   - affected deployment profiles (local_only / ssh_tunnel_only / truly_remote)
-2. Impact statement:
-   - operational cost
-   - usability impact
+1. `local_only`
+   - single host usage with lowest overhead
+2. `ssh_tunnel_only`
+   - off-host operators via SSH tunnel while daemon remains loopback-bound
+3. `truly_remote`
+   - direct/proxied non-loopback remote serving with explicit ingress policy
+
+## 4. Hardening Candidates and Value
+
+### 4.1 Candidate A: Key Rotation + Replay Resistance
+
+Threat effect:
+1. Partially mitigates key theft and replay by reducing useful credential lifetime and replay window.
+2. Does not eliminate abuse during active compromise window.
+
+Value by scenario:
+1. `local_only`: low to medium value; mostly for disciplined key hygiene.
+2. `ssh_tunnel_only`: high value; recommended first Phase 7 control.
+3. `truly_remote`: high value; baseline hardening candidate for remote operation.
+
+Human overhead:
+1. Medium.
+2. Requires rotation schedule, overlap policy, and emergency recovery runbook.
+
+### 4.2 Candidate B: Hardware-Backed Key Storage (Optional)
+
+Threat effect:
+1. Partially mitigates export/offline theft of private key material.
+2. Does not eliminate misuse from live authorized session compromise.
+
+Value by scenario:
+1. `local_only`: low unless compliance-driven.
+2. `ssh_tunnel_only`: medium for high-privilege keys.
+3. `truly_remote`: medium to high when assurance/compliance requires stronger key custody.
+
+Human overhead:
+1. High.
+2. Platform capability variance, recovery complexity, and fallback policy management.
+
+### 4.3 Candidate C: Anomaly Detection + Adaptive Lockout
+
+Threat effect:
+1. Partially mitigates brute-force, replay bursts, and suspicious auth/takeover sequences.
+2. Improves detection and response quality.
+3. Does not eliminate attacker success for valid credentials or post-compromise local control.
+
+Value by scenario:
+1. `local_only`: low to medium (false-positive risk may outweigh benefit).
+2. `ssh_tunnel_only`: medium to high when auth pressure exists.
+3. `truly_remote`: high; strongly justified at higher attack volume.
+
+Human overhead:
+1. Medium to high.
+2. Threshold tuning, alert response ownership, unlock procedures, and false-positive handling.
+
+### 4.4 Candidate D: Delegated SSH Signing / Key Custody (Transition Aid)
+
+Threat effect:
+1. Partially mitigates client-side key sprawl.
+2. Introduces concentration risk (delegated signer becomes high-value target).
+3. Does not eliminate compromise risk; may increase blast radius if policy binding is weak.
+
+Value by scenario:
+1. `local_only`: situational transition aid.
+2. `ssh_tunnel_only`: situational migration aid.
+3. `truly_remote`: generally low unless paired with stronger custody and anomaly controls.
+
+Human overhead:
+1. High.
+2. Strict policy binding, unlock TTL lifecycle, break-glass recovery, and rollback readiness.
+
+## 5. Scenario-Based Recommendation Order
+
+1. `local_only`
+   - Default: no Phase 7.
+   - Optional: A only if key hygiene needs improve; C/B/D usually not justified.
+2. `ssh_tunnel_only`
+   - Recommended order: A first, then C (conservative tuning), then B for privileged keys if needed.
+   - D only for temporary migration pain, never as default baseline.
+3. `truly_remote`
+   - Recommended order: A + C as primary.
+   - Add B where assurance/compliance requires it.
+   - D only with strict gate review and explicit blast-radius acceptance.
+
+## 6. Risk Gate Contract (Required Before Enablement)
+
+Each candidate must include:
+1. Threat statement
+   - attacker behavior reduced
+   - scenarios in-scope (`local_only`, `ssh_tunnel_only`, `truly_remote`)
+2. Value statement
+   - what is actually reduced (eliminated vs partially mitigated)
+   - expected measurable outcome
+3. Overhead statement
+   - operator workload (runbook, rotation, tuning, support)
    - failure/lockout blast radius
-3. Rollback plan:
-   - disable path
-   - data/state recovery expectations
-4. Test delta:
-   - new tests required
-   - manual runbook updates required
+4. Rollback and recovery
+   - deterministic disable path
+   - break-glass and state recovery expectations
+5. Test delta
+   - new unit/integration tests
+   - manual validation updates (`hosting_config`, `--doctor`, audit checks)
 
-If any of the above is missing, the feature remains `planned` and disabled.
+If any section is missing, feature remains `planned` and disabled.
 
-## 4. Candidate A: Key Rotation + Replay Resistance
+## 7. Current Decision
 
-Potential controls:
-1. Admin-initiated key rotation workflow with overlap window.
-2. Bounded replay window for challenge/session artifacts.
-3. Server-issued nonce journaling for sensitive command classes.
-
-Acceptance gate:
-1. Must not break existing bootstrap flow in `hosting_config`.
-2. Must define emergency admin recovery for rotated/expired credentials.
-3. Must include deterministic audit entries for rotate/start/commit/abort.
-
-## 5. Candidate B: Hardware-Backed Key Storage (Optional)
-
-Potential controls:
-1. Optional adapter-based key provider (TPM/HSM/OS key vault).
-2. Fallback to current file-based keyring when hardware provider is unavailable.
-3. Explicit capability probe in setup diagnostics.
-
-Acceptance gate:
-1. Must remain optional and off by default.
-2. Must not block existing software-key path.
-3. Must document platform-specific prerequisites and failure modes.
-
-## 6. Candidate C: Anomaly Detection + Adaptive Lockout
-
-Potential controls:
-1. Rate/behavior thresholds on auth failures and ownership takeovers.
-2. Time-boxed lockouts scoped by key/session/source context.
-3. High-severity audit stream for suspicious sequences.
-
-Acceptance gate:
-1. Must have bounded false-positive impact for local dev workflows.
-2. Must include explicit admin override/unlock path.
-3. Must provide observability fields in `auth-audit-list` output.
-
-## 7. Candidate D: Delegated SSH Signing / Key Custody (Optional Transition Model)
-
-Intent:
-1. Support a staged transition from simple local setup to remote-capable operation without requiring each client to hold additional long-lived secrets during early adoption.
-2. Reduce client-side secret sprawl while operators are still learning role/scope/lifecycle complexity.
-
-Model summary:
-1. Hosting may store encrypted private keys (local custody) and perform challenge signing on behalf of authorized local sessions.
-2. Delegation is treated as signer-service behavior, not shared-secret session bootstrap.
-3. Shared-secret bootstrap remains local-only baseline; remote bootstrap remains public-key challenge flow.
-
-Potential transition benefit by scenario:
-1. `local_only`:
-   - can centralize key custody on one controlled host
-   - reduces number of copied secrets across local scripts/clients
-2. `ssh_tunnel_only`:
-   - can reduce accidental client-side key leakage during migration from local workflows
-   - allows users to keep remote auth centralized while they standardize role and session runbooks
-3. `truly_remote`:
-   - benefit is possible but risk increases sharply because delegated signer becomes high-value target
-   - should be considered only with stronger controls (preferably together with Candidate B/C controls)
-
-Primary risks introduced:
-1. Key concentration risk: one host compromise can expose multiple identities.
-2. Privilege amplification risk: delegated signer misuse can authorize actions beyond intended operator context if policy binding is weak.
-3. Lockout/recovery complexity risk: encrypted custody and delegated unlock flow can fail in ways that block operations.
-
-Acceptance gate:
-1. Must remain optional and off by default.
-2. Must define strict policy binding:
-   - per-key allowed roles/scopes
-   - per-scenario enable rules (`local_only` default-allow; non-local explicit opt-in)
-3. Must enforce encrypted-at-rest key custody and audited unlock/sign/export/delete lifecycle.
-4. Must include short unlock TTL and explicit re-auth path for sensitive signing operations.
-5. Must include break-glass recovery and deterministic disable/rollback path.
-6. Must not weaken existing public-key challenge and SSH-binding guarantees in non-local profiles.
-
-## 8. Delivery Guardrails
-
-1. No Phase 7 feature is required for Phase 8-complete baseline operation.
-2. Phase 7 defaults remain disabled until a feature-specific gate review passes.
-3. Documentation-first sequencing:
-   - threat model delta
-   - rollout + rollback
-   - test plan + manual validation commands
-
-## 9. Validation Planning (When Implementation Starts)
-
-1. Unit:
-   - rotation state machine and replay-window checks
-   - anomaly threshold and lockout release logic
-   - delegated signer policy binding and unlock TTL checks
-2. Integration:
-   - daemon/channel/CLI/HTTP parity for new denial or audit paths
-   - delegated signing denied/allowed flows by connectivity profile (`local_only`/`ssh_tunnel_only`/`truly_remote`)
-3. Manual:
-   - setup + reconfigure in local/tunnel/remote profiles
-   - admin recovery drills (lost key, lockout, rollback)
-   - transition drills: move from client-held keys to delegated signer and back without session/auth regression
-
-## 10. Current Decision
-
-1. Keep Phase 7 as `Planned`.
-2. Use this document as the required gate template before implementing any Phase 7 control.
-3. Do not start Phase 7 feasibility review until pre-Phase-7 readiness fixes in `hosting_access.md` and `hosting_access_plan.md` are closed and status-aligned.
-4. Delegated SSH signing is treated as a transition aid candidate, not a baseline requirement.
+1. Phase 7 remains planned and optional.
+2. No candidate is default-on.
+3. Candidate A is the most broadly justified first step for non-local scenarios.
+4. Candidate D remains transition-only and requires strict explicit opt-in.

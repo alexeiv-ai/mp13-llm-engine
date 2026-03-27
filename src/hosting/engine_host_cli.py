@@ -138,6 +138,9 @@ EXAMPLES_BY_COMMAND = {
     "get-lifecycle-policy-effective": [
         "@'{\"session_token\":\"<control_token>\"}'@ | python -m hosting.engine_host_cli --payload-stdin get-lifecycle-policy-effective",
     ],
+    "reset-hosting-access": [
+        "python -m hosting.engine_host_cli reset-hosting-access",
+    ],
     "op-start": [
         "@'{\"command\":\"connect-from-config\",\"payload\":{\"config_path\":\"default\",\"engine_id\":\"worker_cfg\"}}'@ | python -m hosting.engine_host_cli --payload-stdin op-start",
     ],
@@ -413,6 +416,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "set-endpoint-mode-override",
         "get-endpoint-mode-effective",
         "get-lifecycle-policy-effective",
+        "reset-hosting-access",
         "op-start",
         "op-status",
     ]:
@@ -552,10 +556,24 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return 0
     args = parser.parse_args(argv)
     payload = _load_payload(args)
+    cmd_name = str(args.command or "").strip()
+
+    # Local-only recovery helper. Intentionally bypasses daemon RPC/auth surfaces.
+    if cmd_name == "reset-hosting-access":
+        from .engine_host_channel import EngineHostControlChannel
+
+        ch = EngineHostControlChannel(
+            {
+                "engine_host_daemon_auto_bootstrap": False,
+                "engine_host_daemon_pid_file": str(args.pid_file) if args.pid_file else None,
+                "engine_host_control_state_file": str(args.control_state_file) if args.control_state_file else None,
+            }
+        )
+        _print_ok(ch.reset_hosting_access())
+        return 0
 
     # Try sending the command to the running daemon first
     pid_file_arg = getattr(args, "pid_file", None)
-    cmd_name = str(args.command or "").strip()
     if cmd_name and _try_daemon_invoke(cmd_name, payload, pid_file=pid_file_arg):
         return 0
 

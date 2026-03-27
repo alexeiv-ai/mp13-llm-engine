@@ -377,7 +377,7 @@ class EngineHostService:
                     "require_auth": False,
                     "auth": {"keys": {}, "sessions": {}, "challenges": {}},
                     "access_profile": {"connectivity_mode": "local_only"},
-                    "endpoint_mode_default": "shared",
+                    "endpoint_mode_default": "exclusive",
                     "lifecycle_profile": LIFECYCLE_PROFILE_DETACHED,
                     "lifecycle_policy": {
                         "on_terminal_disconnect": "keep_daemon_running",
@@ -437,7 +437,7 @@ class EngineHostService:
                 "require_auth": False,
                 "auth": {"keys": {}, "sessions": {}, "challenges": {}},
                 "access_profile": {"connectivity_mode": "local_only"},
-                "endpoint_mode_default": "shared",
+                "endpoint_mode_default": "exclusive",
                 "lifecycle_profile": LIFECYCLE_PROFILE_DETACHED,
                 "lifecycle_policy": {
                     "on_terminal_disconnect": "keep_daemon_running",
@@ -463,7 +463,7 @@ class EngineHostService:
         cfg.setdefault("ssh_key", None)
         cfg.setdefault("require_auth", False)
         cfg.setdefault("access_profile", {"connectivity_mode": "local_only"})
-        cfg.setdefault("endpoint_mode_default", "shared")
+        cfg.setdefault("endpoint_mode_default", "exclusive")
         cfg["lifecycle_profile"] = self._normalize_lifecycle_profile(cfg.get("lifecycle_profile"))
         cfg["lifecycle_policy"] = self._normalize_lifecycle_policy(
             cfg["lifecycle_profile"],
@@ -474,6 +474,8 @@ class EngineHostService:
             if str(cfg.get("endpoint_mode_default") or "").strip().lower() == "exclusive"
             else "shared"
         )
+        if not bool(cfg.get("require_auth", False)):
+            cfg["endpoint_mode_default"] = "exclusive"
         cfg.setdefault("config_store_mode", "store_only")
         raw_claim_acl = dict(cfg.get("claim_acl_policy") or {})
         cfg["claim_acl_policy"] = {
@@ -2110,6 +2112,37 @@ class EngineHostService:
         self._write_control(control)
         return {"token": tok, "revoked": bool(existed)}
 
+    def reset_hosting_access(self) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        keys = dict(auth.get("keys") or {})
+        sessions = dict(auth.get("sessions") or {})
+        challenges = dict(auth.get("challenges") or {})
+        cfg["auth"] = {"keys": {}, "sessions": {}, "challenges": {}}
+        control["control_config"] = cfg
+        self._append_auth_audit_event(
+            control,
+            event_type="auth_reset_local_helper",
+            actor_key_id=None,
+            target_key_id=None,
+            result="ok",
+            details={
+                "cleared_keys": len(keys),
+                "cleared_sessions": len(sessions),
+                "cleared_challenges": len(challenges),
+            },
+        )
+        self._write_control(control)
+        return {
+            "status": "ok",
+            "cleared_keys": len(keys),
+            "cleared_sessions": len(sessions),
+            "cleared_challenges": len(challenges),
+            "require_auth": bool(cfg.get("require_auth", False)),
+            "control_state_file": str(self.control_state_file),
+        }
+
     def authorize_command(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> None:
         c = str(cmd or "").strip()
         if not c:
@@ -2361,9 +2394,15 @@ class EngineHostService:
                 },
                 "payload": p,
             }
-        endpoint_mode_default = self._endpoint_mode_default(dict(control.get("control_config") or {}))
-        if c in claim_cmds and "exclusive" not in p:
-            p["exclusive"] = bool(endpoint_mode_default == "exclusive")
+        control_cfg = dict(control.get("control_config") or {})
+        require_auth_enabled = bool(control_cfg.get("require_auth", False))
+        endpoint_mode_default = self._endpoint_mode_default(control_cfg)
+        if c in claim_cmds:
+            if not require_auth_enabled:
+                # No-auth mode is intentionally single-client safe.
+                p["exclusive"] = True
+            elif "exclusive" not in p:
+                p["exclusive"] = bool(endpoint_mode_default == "exclusive")
         sensitive_engine_cmds = {
             "spawn",
             "get-registration",
@@ -3234,6 +3273,8 @@ class EngineHostService:
         connectivity_mode = str(access_profile.get("connectivity_mode") or "local_only").strip().lower()
         if connectivity_mode != "local_only":
             raise PermissionError("require_auth_false_only_supported_for_local_only_connectivity")
+        if EngineHostService._endpoint_mode_default(cfg) != "exclusive":
+            raise PermissionError("require_auth_false_requires_exclusive_endpoint_mode")
         if sessions or challenges:
             raise PermissionError("require_auth_false_requires_no_active_sessions_or_challenges")
         if not keys:
@@ -3283,6 +3324,10 @@ class EngineHostService:
             cfg["endpoint_mode_default"] = mode_raw
         else:
             cfg["endpoint_mode_default"] = self._endpoint_mode_default(cfg)
+        if (require_auth is not None and not bool(require_auth)) or (
+            require_auth is None and not bool(cfg.get("require_auth", False))
+        ):
+            cfg["endpoint_mode_default"] = "exclusive"
         previous_profile = self._normalize_lifecycle_profile(cfg.get("lifecycle_profile"))
         current_profile = previous_profile
         if lifecycle_profile is not None:

@@ -30,6 +30,25 @@ VALID_LIFECYCLE_PROFILES = {
 VALID_KEY_SOURCES = {"generate", "import"}
 
 
+CONNECTIVITY_INTENT_GUIDANCE: Dict[str, Dict[str, str]] = {
+    "local_only": {
+        "intent": "Single host usage with no off-host clients.",
+        "provides": "Lowest setup overhead. Optional no-auth is possible only in strict safe profile.",
+        "precautions": "Keep loopback-only bind and exclusive endpoint mode when auth is disabled.",
+    },
+    "ssh_tunnel_only": {
+        "intent": "Remote operators connect through SSH tunnel while daemon stays loopback-bound.",
+        "provides": "Remote reachability without direct non-loopback daemon exposure.",
+        "precautions": "Require auth, maintain SSH key hygiene, and verify tunnel endpoint controls.",
+    },
+    "truly_remote": {
+        "intent": "Persistent direct/proxied remote serving for multiple remote clients.",
+        "provides": "Full remote operations with role separation and explicit ingress controls.",
+        "precautions": "Require auth, enforce strict role boundaries, and apply firewall/proxy policy.",
+    },
+}
+
+
 def _default_paths() -> Tuple[Path, Path]:
     try:
         from mp13_engine.mp13_config_paths import (  # type: ignore
@@ -93,6 +112,153 @@ def _prompt_choice(question: str, valid: set[str], default: str) -> str:
     if not raw:
         return default
     return raw if raw in valid else default
+
+
+def _prompt_menu(question: str, options: Dict[str, str], default: str) -> str:
+    print(question)
+    for key, label in options.items():
+        print(f"  {key}) {label}")
+    raw = input(f"Select [{default}]: ").strip().lower()
+    if not raw:
+        return default
+    return raw if raw in options else default
+
+
+def _wizard_choice_prompt(
+    *,
+    title: str,
+    valid: set[str],
+    current: str,
+    allow_skip: bool = True,
+) -> Tuple[str, str]:
+    print(f"{title}")
+    print(f"  options: {', '.join(sorted(valid))}")
+    nav = " prev=p, skip=s, enter=keep/current" if allow_skip else " prev=p, enter=keep/current"
+    raw = input(f"  current={current}; choose value ({nav}): ").strip().lower()
+    if raw in {"p", "prev"}:
+        return "prev", current
+    if allow_skip and raw in {"s", "skip"}:
+        return "skip", current
+    if not raw:
+        return "next", current
+    if raw in valid:
+        return "next", raw
+    print(f"  invalid choice '{raw}', keeping current value")
+    return "next", current
+
+
+def _wizard_bool_prompt(*, title: str, current: bool, allow_skip: bool = True) -> Tuple[str, bool]:
+    nav = " prev=p, skip=s, enter=keep/current" if allow_skip else " prev=p, enter=keep/current"
+    raw = input(f"{title} current={'yes' if current else 'no'} ({nav}): ").strip().lower()
+    if raw in {"p", "prev"}:
+        return "prev", current
+    if allow_skip and raw in {"s", "skip"}:
+        return "skip", current
+    if not raw:
+        return "next", current
+    if raw in {"y", "yes", "1", "true"}:
+        return "next", True
+    if raw in {"n", "no", "0", "false"}:
+        return "next", False
+    print(f"  invalid boolean '{raw}', keeping current value")
+    return "next", current
+
+
+def _wizard_text_prompt(
+    *,
+    title: str,
+    current: str,
+    allow_skip: bool = True,
+) -> Tuple[str, str]:
+    nav = " prev=p, skip=s, enter=keep/current" if allow_skip else " prev=p, enter=keep/current"
+    raw = input(f"{title} current={current} ({nav}): ").strip()
+    if raw.lower() in {"p", "prev"}:
+        return "prev", current
+    if allow_skip and raw.lower() in {"s", "skip"}:
+        return "skip", current
+    if not raw:
+        return "next", current
+    return "next", raw
+
+
+def _summarize_existing_config(
+    *,
+    control_state_path: Path,
+    access_file: Path,
+    keys_file: Path,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "exists": False,
+        "connectivity_mode": "local_only",
+        "endpoint_mode_default": "exclusive",
+        "lifecycle_profile": "detached_user_process",
+        "require_auth": True,
+        "admin_key_id": "admin-main",
+        "admin_key_count": 0,
+    }
+    access_payload = _read_json(access_file, {})
+    keys_payload = _read_json(keys_file, {"keys": {}})
+    keys = dict(keys_payload.get("keys") or {})
+    summary["admin_key_count"] = len([k for _, k in keys.items() if str((k or {}).get("role") or "") == "admin"])
+    if access_payload:
+        ap = dict(access_payload.get("access_profile") or {})
+        summary["connectivity_mode"] = _normalize_mode(
+            str(ap.get("connectivity_mode") or summary["connectivity_mode"]),
+            summary["connectivity_mode"],
+        )
+        summary["endpoint_mode_default"] = _normalize_endpoint_mode(
+            str(access_payload.get("endpoint_mode_default") or summary["endpoint_mode_default"]),
+            summary["endpoint_mode_default"],
+        )
+        summary["lifecycle_profile"] = _normalize_lifecycle_profile(
+            str(access_payload.get("lifecycle_profile") or summary["lifecycle_profile"]),
+            summary["lifecycle_profile"],
+        )
+        summary["require_auth"] = bool(access_payload.get("require_auth", summary["require_auth"]))
+        summary["admin_key_id"] = str(access_payload.get("bootstrap_admin_key_id") or summary["admin_key_id"])
+        summary["exists"] = True
+    try:
+        svc = EngineHostService(control_state_file=control_state_path)
+        cfg = dict(svc.get_control_config() or {})
+        ap = dict(cfg.get("access_profile") or {})
+        summary["connectivity_mode"] = _normalize_mode(
+            str(ap.get("connectivity_mode") or summary["connectivity_mode"]),
+            summary["connectivity_mode"],
+        )
+        summary["endpoint_mode_default"] = _normalize_endpoint_mode(
+            str(cfg.get("endpoint_mode_default") or summary["endpoint_mode_default"]),
+            summary["endpoint_mode_default"],
+        )
+        summary["lifecycle_profile"] = _normalize_lifecycle_profile(
+            str(cfg.get("lifecycle_profile") or summary["lifecycle_profile"]),
+            summary["lifecycle_profile"],
+        )
+        summary["require_auth"] = bool(cfg.get("require_auth", summary["require_auth"]))
+        summary["exists"] = True
+    except Exception:
+        pass
+    return summary
+
+
+def _print_intent_guidance(mode: str) -> None:
+    g = dict(CONNECTIVITY_INTENT_GUIDANCE.get(mode) or {})
+    print(f"Intent `{mode}`:")
+    print(f"  - usage: {str(g.get('intent') or 'n/a')}")
+    print(f"  - value: {str(g.get('provides') or 'n/a')}")
+    print(f"  - precautions: {str(g.get('precautions') or 'n/a')}")
+
+
+def _apply_permission_hardening(paths: list[Path]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"attempted": [], "errors": []}
+    for p in paths:
+        try:
+            if p.exists():
+                mode = 0o700 if p.is_dir() else 0o600
+                p.chmod(mode)
+                out["attempted"].append({"path": str(p), "mode": oct(mode)})
+        except Exception as exc:
+            out["errors"].append({"path": str(p), "error": str(exc)})
+    return out
 
 
 def _ensure_dirs(hosting_root: Path) -> Dict[str, Path]:
@@ -297,31 +463,215 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     if key_source not in VALID_KEY_SOURCES:
         key_source = "import"
     admin_key_id = str(args.admin_key_id or "").strip() or "admin-main"
+    key_action = "replace"
+    permission_action = "none"
+    setup_scope = "fresh_setup"
+    setup_notes: list[str] = []
+    permission_result: Dict[str, Any] = {"attempted": [], "errors": []}
+
+    existing_summary = _summarize_existing_config(
+        control_state_path=control_state_path,
+        access_file=access_file,
+        keys_file=keys_file,
+    )
 
     if interactive:
-        mode = _prompt_choice("Connectivity mode", VALID_CONNECTIVITY_MODES, mode)
-        endpoint_mode = _prompt_choice("Endpoint mode", VALID_ENDPOINT_MODES, endpoint_mode)
-        lifecycle_profile = _prompt_choice(
-            "Lifecycle profile",
-            VALID_LIFECYCLE_PROFILES,
+        assumed_intent = _normalize_mode(existing_summary.get("connectivity_mode", mode), mode)
+        print("\n=== Hosting Access Setup/Reconfigure ===")
+        print(f"Assumed user intent: {assumed_intent}")
+        _print_intent_guidance(assumed_intent)
+        print("\nCurrent config snapshot:")
+        print(f"  - config exists: {'yes' if existing_summary.get('exists') else 'no'}")
+        print(f"  - connectivity_mode: {existing_summary.get('connectivity_mode')}")
+        print(f"  - endpoint_mode_default: {existing_summary.get('endpoint_mode_default')}")
+        print(f"  - lifecycle_profile: {existing_summary.get('lifecycle_profile')}")
+        print(f"  - require_auth: {bool(existing_summary.get('require_auth'))}")
+        print(f"  - bootstrap admin key_id: {existing_summary.get('admin_key_id')}")
+        print(f"  - admin key entries: {existing_summary.get('admin_key_count')}")
+
+        mode = assumed_intent
+        endpoint_mode = _normalize_endpoint_mode(
+            str(existing_summary.get("endpoint_mode_default") or endpoint_mode),
+            endpoint_mode,
+        )
+        lifecycle_profile = _normalize_lifecycle_profile(
+            str(existing_summary.get("lifecycle_profile") or lifecycle_profile),
             lifecycle_profile,
         )
-        key_source = _prompt_choice("Admin key source", VALID_KEY_SOURCES, key_source)
-        entered_key_id = input(f"Admin key_id [{admin_key_id}]: ").strip()
-        if entered_key_id:
-            admin_key_id = entered_key_id
+        require_auth_seed = bool(existing_summary.get("require_auth", True))
+        admin_key_id = str(existing_summary.get("admin_key_id") or admin_key_id)
+        if bool(existing_summary.get("exists")):
+            key_action = "keep_existing"
 
-    require_auth = _safe_require_auth(
-        connectivity_mode=mode,
-        endpoint_mode=endpoint_mode,
-        requested=args.require_auth,
-    )
-    if interactive and _bool_prompt("Enable require_auth?", require_auth) != require_auth:
-        # Interactive toggle must still obey safe rules.
+        workflow_choice = _prompt_menu(
+            "\nChoose workflow path:",
+            {
+                "1": "Adjust within current intent (config tweaks, key handling, permission hardening)",
+                "2": "Complete reconfiguration under a new intent (full guided steps)",
+            },
+            "1" if bool(existing_summary.get("exists")) else "2",
+        )
+        if workflow_choice == "2":
+            setup_scope = "full_reconfigure_new_intent"
+            print("\nConnectivity intent choices:")
+            for k in sorted(VALID_CONNECTIVITY_MODES):
+                _print_intent_guidance(k)
+            mode = _prompt_choice("Connectivity mode", VALID_CONNECTIVITY_MODES, mode)
+            setup_notes.append("Full reconfigure selected: all grouped steps reviewed.")
+        else:
+            setup_scope = "adjust_within_intent"
+            setup_notes.append("Within-intent adjustment selected.")
+
+        grouped_steps = [
+            "endpoint_mode",
+            "lifecycle_profile",
+            "require_auth",
+            "key_action",
+            "key_source",
+            "admin_key_id",
+            "permission_action",
+        ]
+        step_idx = 0
+        current_require_auth = _safe_require_auth(
+            connectivity_mode=mode,
+            endpoint_mode=endpoint_mode,
+            requested=args.require_auth if args.require_auth is not None else require_auth_seed,
+        )
+        print("\nGrouped configuration steps (type `p` for previous step, `s` to skip current step):")
+        while step_idx < len(grouped_steps):
+            step = grouped_steps[step_idx]
+            if step == "endpoint_mode":
+                print("\n[Group: Access envelope]")
+                cmd, val = _wizard_choice_prompt(
+                    title="Step 1: Endpoint mode",
+                    valid=VALID_ENDPOINT_MODES,
+                    current=endpoint_mode,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next":
+                    endpoint_mode = val
+                    current_require_auth = _safe_require_auth(
+                        connectivity_mode=mode,
+                        endpoint_mode=endpoint_mode,
+                        requested=current_require_auth,
+                    )
+                step_idx += 1
+                continue
+            if step == "lifecycle_profile":
+                cmd, val = _wizard_choice_prompt(
+                    title="Step 2: Lifecycle profile",
+                    valid=VALID_LIFECYCLE_PROFILES,
+                    current=lifecycle_profile,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next":
+                    lifecycle_profile = val
+                step_idx += 1
+                continue
+            if step == "require_auth":
+                print(
+                    "Step 3: Require auth\n"
+                    "  - value: protects multi-user and remote/tunnel workflows.\n"
+                    "  - constraint: no-auth allowed only for local_only + exclusive."
+                )
+                cmd, val = _wizard_bool_prompt(
+                    title="Enable require_auth?",
+                    current=current_require_auth,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next":
+                    current_require_auth = _safe_require_auth(
+                        connectivity_mode=mode,
+                        endpoint_mode=endpoint_mode,
+                        requested=val,
+                    )
+                step_idx += 1
+                continue
+            if step == "key_action":
+                print("\n[Group: Key management]")
+                cmd, val = _wizard_choice_prompt(
+                    title="Step 4: Key handling action",
+                    valid={"keep_existing", "replace"},
+                    current=key_action,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next":
+                    key_action = val
+                step_idx += 1
+                continue
+            if step == "key_source":
+                if key_action == "keep_existing":
+                    step_idx += 1
+                    continue
+                cmd, val = _wizard_choice_prompt(
+                    title="Step 5: Key source for replacement",
+                    valid=VALID_KEY_SOURCES,
+                    current=key_source,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next":
+                    key_source = val
+                step_idx += 1
+                continue
+            if step == "admin_key_id":
+                cmd, val = _wizard_text_prompt(
+                    title="Step 6: Admin key_id",
+                    current=admin_key_id,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next" and str(val).strip():
+                    admin_key_id = str(val).strip()
+                step_idx += 1
+                continue
+            if step == "permission_action":
+                print("\n[Group: Permission hardening]")
+                print("  - none: keep filesystem permissions unchanged")
+                print("  - tighten: best-effort chmod on Hosting folders/files")
+                cmd, val = _wizard_choice_prompt(
+                    title="Step 7: Permission action",
+                    valid={"none", "tighten"},
+                    current=permission_action,
+                )
+                if cmd == "prev":
+                    step_idx = max(0, step_idx - 1)
+                    continue
+                if cmd == "next":
+                    permission_action = val
+                step_idx += 1
+                continue
+
+        require_auth = current_require_auth
+        print("\nPlanned result:")
+        print(f"  - workflow: {setup_scope}")
+        print(f"  - connectivity_mode: {mode}")
+        print(f"  - endpoint_mode_default: {endpoint_mode}")
+        print(f"  - lifecycle_profile: {lifecycle_profile}")
+        print(f"  - require_auth: {require_auth}")
+        print(f"  - key_action: {key_action}")
+        if key_action != "keep_existing":
+            print(f"  - key_source: {key_source}")
+        print(f"  - admin_key_id: {admin_key_id}")
+        print(f"  - permission_action: {permission_action}")
+        _print_intent_guidance(mode)
+        if not _bool_prompt("Apply this configuration now?", True):
+            raise RuntimeError("interactive setup cancelled by user")
+    else:
         require_auth = _safe_require_auth(
             connectivity_mode=mode,
             endpoint_mode=endpoint_mode,
-            requested=not require_auth,
+            requested=args.require_auth,
         )
 
     migration_result = _migrate_legacy_key_files(
@@ -341,29 +691,40 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         else None
     )
 
-    if key_source == "generate":
-        passphrase = str(args.key_passphrase or "")
-        if interactive and not args.key_passphrase:
-            if _bool_prompt("Protect generated private key with passphrase?", False):
-                passphrase = input("Passphrase: ")
-        generated_private, generated_public = _generate_keypair(
-            key_id=admin_key_id,
-            private_dir=dirs["private"],
-            passphrase=passphrase or None,
-        )
-        admin_private_key_path = generated_private
-        admin_public_key_path = generated_public
-        admin_public_key = str(generated_public.read_text(encoding="utf-8")).strip()
-        if interactive:
-            export_private = _bool_prompt("Export generated private key for client use?", export_private)
-        if export_private and export_private_path is not None:
-            export_private_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(generated_private), str(export_private_path))
+    if key_action == "keep_existing":
+        keyring_existing = _read_json(keys_file, {"keys": {}})
+        existing_keys = dict(keyring_existing.get("keys") or {})
+        row = dict(existing_keys.get(admin_key_id) or {})
+        admin_public_key = str(row.get("public_key") or "").strip()
+        if not admin_public_key:
+            raise ValueError(
+                f"key_action=keep_existing requested but key_id={admin_key_id} has no existing public key"
+            )
+        key_source = "import"
     else:
-        admin_public_key = _import_public_key(
-            public_key_file=args.admin_public_key_file,
-            public_key_inline=args.admin_public_key,
-        )
+        if key_source == "generate":
+            passphrase = str(args.key_passphrase or "")
+            if interactive and not args.key_passphrase:
+                if _bool_prompt("Protect generated private key with passphrase?", False):
+                    passphrase = input("Passphrase: ")
+            generated_private, generated_public = _generate_keypair(
+                key_id=admin_key_id,
+                private_dir=dirs["private"],
+                passphrase=passphrase or None,
+            )
+            admin_private_key_path = generated_private
+            admin_public_key_path = generated_public
+            admin_public_key = str(generated_public.read_text(encoding="utf-8")).strip()
+            if interactive:
+                export_private = _bool_prompt("Export generated private key for client use?", export_private)
+            if export_private and export_private_path is not None:
+                export_private_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(generated_private), str(export_private_path))
+        else:
+            admin_public_key = _import_public_key(
+                public_key_file=args.admin_public_key_file,
+                public_key_inline=args.admin_public_key,
+            )
 
     svc = EngineHostService(control_state_file=control_state_path)
     _ = svc.auth_upsert_key(
@@ -395,6 +756,22 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     keyring["updated_at"] = time.time()
     keyring["keys"] = keys
     _write_json(keys_file, keyring)
+
+    if permission_action == "tighten":
+        permission_result = _apply_permission_hardening(
+            [
+                dirs["root"],
+                dirs["keyring"],
+                dirs["private"],
+                dirs["audit"],
+                dirs["state"],
+                access_file,
+                keys_file,
+                mappings_file,
+                bootstrap_state_file,
+                audit_file,
+            ]
+        )
 
     _write_json(
         access_file,
@@ -434,12 +811,16 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "version": 1,
             "updated_at": time.time(),
             "setup": {
+                "setup_scope": setup_scope,
+                "setup_notes": setup_notes,
                 "connectivity_mode": mode,
                 "endpoint_mode_default": endpoint_mode,
                 "lifecycle_profile": lifecycle_profile,
                 "require_auth": require_auth,
                 "admin_key_id": admin_key_id,
                 "key_source": key_source,
+                "key_action": key_action,
+                "permission_action": permission_action,
             },
             "files": {
                 "control_state_file": str(control_state_path),
@@ -482,6 +863,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "admin_private_key_path": str(admin_private_key_path) if admin_private_key_path else None,
         "private_key_exported": bool(export_private),
         "private_key_export_path": str(export_private_path) if export_private_path else None,
+        "setup_scope": setup_scope,
+        "key_action": key_action,
+        "permission_action": permission_action,
+        "permission_result": permission_result,
     }
 
 

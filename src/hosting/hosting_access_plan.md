@@ -198,13 +198,13 @@ Completed in this implementation slice:
    - `pytest tests/test_hosting_auth_roles.py tests/test_engine_host_channel.py -q --basetemp o:\repos\mp13-llm-engine\.tmp_pytest_role_cfg18`
    - result: 34 passed (cache warnings only due workspace ACLs)
 65. Added daemon lifecycle enforcement hooks:
-   - owner-disconnect shutdown enforcement for exclusive endpoint ownership when `lifecycle_policy.owner_disconnect_shutdown=true`
+   - owner-disconnect shutdown enforcement for exclusive endpoint ownership (independent of `lifecycle_policy.owner_disconnect_shutdown`)
    - foreground terminal disconnect policy hook honoring `on_terminal_disconnect` (SIGHUP ignore in keep-running mode where supported)
 66. Wired detached runtime profile hint for background daemon bootstrap:
    - `start_daemon_background` now passes `--runtime-profile detached_user_process`
 67. Added lifecycle enforcement regression tests:
    - daemon pidfile/startup tests for runtime-profile argv + foreground disconnect policy hook
-   - daemon ACL tests for owner-disconnect shutdown enabled/disabled behavior
+   - daemon ACL tests for exclusive-owner disconnect shutdown behavior (including policy-disabled case)
 68. Sandbox execution note for lifecycle enforcement test commands:
    - both relevant pytest commands hit `PermissionError: [WinError 5] Access is denied` during pytest session teardown on basetemp directories in this environment
    - commands and reasons are recorded in `HOSTING_PYTEST_STATUS.md` for manual rerun outside sandbox.

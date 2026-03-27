@@ -76,6 +76,10 @@ Session scopes:
 - `traffic`
 
 When `require_auth=true`, hosting commands require `session_token` in payload (except bootstrap-safe flows and key-based session issuance).
+When `require_auth=false`, hosting is constrained to local-only single-client safety:
+- `endpoint_mode_default` is force-coerced to `exclusive`
+- daemon claim commands are force-coerced to `exclusive=true` even if caller requests shared
+- non-exclusive no-auth profile drift is rejected with `require_auth_false_requires_exclusive_endpoint_mode`
 
 Config path hardening:
 - exposed selectors are limited to:
@@ -191,6 +195,7 @@ Common `error_code` values:
 - `session_token_required`
 - `missing_or_invalid_session_token`
 - `session_revoked`
+- `require_auth_false_requires_exclusive_endpoint_mode`
 - `shared_secret_bootstrap_not_supported_for_remote_connectivity`
 - `insufficient_scope`
 - `engine_access_denied`
@@ -308,9 +313,10 @@ Control config:
   - `on_terminal_disconnect`: `stop_daemon|keep_daemon_running`
   - `terminal_control_enabled`: `bool`
   - `owner_disconnect_shutdown`: `bool`
+  - compatibility note: current daemon owner-disconnect shutdown for exclusive endpoint ownership is enforced regardless of this flag value.
 
 Lifecycle enforcement notes:
-- if `owner_disconnect_shutdown=true` and endpoint is exclusively owned, daemon may stop when owner disconnects.
+- if endpoint is exclusively owned, owner disconnect triggers daemon shutdown (independent of `owner_disconnect_shutdown` value).
 - foreground profile honors `on_terminal_disconnect` policy; keep-running mode ignores SIGHUP where supported.
 - daemon stop path now runs shutdown-order checkpoints to stop managed engines and release registrations.
 - daemon stop sequence now drains in-flight async operations before managed worker shutdown checkpoints.
@@ -427,6 +433,11 @@ python -m hosting.engine_host_cli auth-status
   "roles": []
 }
 ```
+
+Auth-path note:
+- `auth-status` is command-authorized when `require_auth=true` and at least one key exists.
+- missing/invalid session on that path can prevent reading `daemon_version`/`capabilities` even when daemon is alive.
+- treat empty/`None` `daemon_version` as an auth/reachability-path failure first, not as definitive "daemon too old".
 
 Version pinning guidance:
 - pin to a SemVer `daemon_version` (for example `2.1.0`)

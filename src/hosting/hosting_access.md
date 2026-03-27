@@ -131,7 +131,7 @@ Migration rule:
 
 1. `exclusive`
    - one owner identity/session at a time for endpoint-sensitive actions
-   - owner disconnect normally triggers daemon/resource shutdown
+   - exclusive owner disconnect triggers daemon/resource shutdown
 2. `shared`
    - multiple clients by role permissions
    - daemon remains alive until explicit shutdown/policy stop
@@ -148,6 +148,7 @@ Current implementation note:
 3. lifecycle profile baseline is now persisted in control config:
    - `lifecycle_profile` (`foreground_terminal_bound|detached_user_process|service_managed`)
    - `lifecycle_policy` (`on_terminal_disconnect`, `terminal_control_enabled`, `owner_disconnect_shutdown`)
+   - note: current daemon behavior treats exclusive-owner disconnect shutdown as unconditional; `owner_disconnect_shutdown` is retained for compatibility/forward control-surface stability.
 4. effective lifecycle inspection is available via:
    - `get-lifecycle-policy-effective`
 
@@ -193,12 +194,14 @@ Implementation baseline status:
 8. Auth lifecycle audit events and admin audit query command (`auth-audit-list`) are implemented.
 9. Lifecycle profiles/policies, terminal-control gating, and shutdown sequencing/checkpoints are implemented.
 10. Legacy runtime role bridge is removed for cutover scope.
+11. Contract metadata (`daemon_version`, `capabilities`) is exposed by `auth-status`, but retrieval depends on a valid command auth path when auth is enabled.
 
 Remaining baseline gaps before Phase 7 feasibility discussion:
 1. Emergency takeover predicates are now code-enforced and test-mapped; keep operator docs aligned to denial taxonomy.
 2. Troubleshooting artifacts should expand beyond initial `--doctor` into explicit error catalog + playbooks.
 3. Generated-key validation across constrained Windows filesystem variants needs host-path confirmation coverage.
 4. Scenario runbooks must retain explicit minimum controls and escalation triggers (captured in Section 10).
+5. Client-side contract probes must treat missing `daemon_version` as auth/reachability-path failure first (not automatically as daemon-version incompatibility).
 
 ## 7. `require_auth=false` Safe-Only Policy
 
@@ -215,7 +218,11 @@ When any condition is false, daemon must require auth (`require_auth=true`) or f
 
 Current implementation note:
 1. `set-control-config` now revalidates no-auth safe-profile constraints even when `require_auth` is omitted from update payload.
-2. no-auth mode rejects session/challenge issuance bootstrap paths with:
+2. `set-control-config` force-coerces `endpoint_mode_default` to `exclusive` whenever effective `require_auth=false`.
+3. no-auth runtime/profile validation explicitly rejects non-exclusive endpoint defaults with:
+   - `require_auth_false_requires_exclusive_endpoint_mode`
+4. daemon claim-policy path force-coerces claim requests to `exclusive=true` whenever effective `require_auth=false`.
+5. no-auth mode rejects session/challenge issuance bootstrap paths with:
    - `require_auth_disabled_disallows_session_commands`
 
 Rationale:
@@ -257,6 +264,58 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
    - enforce auth, role separation, short token TTL
    - require firewall/network policy setup outside daemon
 
+### 8.4 Taking Ownership Of An Unconfigured Daemon
+
+Preconditions:
+1. The daemon is local to the operator and the caller has local filesystem/process access as the same OS user or an equivalently privileged user.
+2. Access control is considered "not configured" when no admin key has been provisioned yet (`keys_count=0`).
+3. The backend/channel may observe this either:
+   - before daemon start via local control-state inspection
+   - after daemon start via `auth-status`
+4. This state is a bootstrap/recovery state, not a general-purpose bypass state.
+
+Detection guidance for a local client:
+1. If daemon RPC is reachable, call `auth-status`.
+2. If daemon RPC is unreachable, inspect local control status/state through the local backend/channel status surface.
+3. Treat `keys_count=0` as "hosting access is unconfigured".
+4. Clients must not treat arbitrary configured/authenticated daemons as eligible for auth downgrade.
+
+Supported ownership path:
+1. Provision the first admin credential through bootstrap-safe auth setup.
+2. Then issue a control session and continue through normal authenticated control/config flows.
+3. This is the intended recovery/bootstrap path for an unconfigured daemon.
+4. Current local backend/channel implementation also supports a temporary local recovery bootstrap:
+   - if local hosting is unconfigured (`keys_count=0`) and local daemon auto-bootstrap is requested,
+   - bootstrap first forces safe local-only defaults in persisted control config:
+     - `require_auth=false`
+     - `endpoint_mode_default=exclusive`
+   - daemon is then started under that temporary local-only no-auth exclusive profile
+   - clients must warn the operator to configure `hosting_access` as soon as possible after startup
+5. Current local backend/channel implementation also provides a local recovery helper:
+   - `reset_hosting_access`
+   - local-helper only; not available over daemon RPC
+   - stops local daemon, then clears only auth state from local control state
+   - preserves unrelated control config and runtime metadata outside `control_config.auth`
+
+Unsupported client takeover path:
+1. There is no supported daemon command that lets a normal client take full control without first configuring access control.
+2. There is no supported daemon command that lets a normal client flip an already configured/authenticated daemon to `require_auth=false`.
+3. `set-control-config` remains an authenticated admin control operation once auth is active.
+
+Local operator caveat:
+1. If the caller can execute arbitrary local Python or otherwise read/write local state files as the daemon user, the caller is outside the daemon's client trust boundary and effectively has local-operator powers.
+2. In that case the caller may be able to inspect or manipulate daemon state through OS/file/process access, but that is a consequence of local host access, not a supported auth/authz bypass.
+3. This remains within the documented residual-risk boundary for local host compromise.
+
+Local shutdown/restart notes relevant to ownership recovery:
+1. The daemon stop path is `__shutdown__` guarded by `shutdown_token`.
+2. `shutdown_token` is persisted in the daemon PID file (`host_daemon.pid`) alongside `pid` and `port`.
+3. `terminal_control_enabled` is persisted in control state under `control_config.lifecycle_policy.terminal_control_enabled`.
+4. Even with the correct `shutdown_token`, daemon shutdown is denied when `terminal_control_enabled=false`.
+5. The effective terminal-control state should be read via `get-lifecycle-policy-effective`; raw persisted config can also be inspected via `get-control-config`.
+6. `reset_hosting_access` may use local process termination fallback when graceful daemon shutdown is unavailable.
+7. `reset_hosting_access` is intentionally a local-helper shortcut to editing local auth state; it does not traverse daemon auth/RPC command paths.
+
 ## 9. Daemon Lifetime Cycle Scenarios
 
 ### 9.1 Foreground terminal-bound cycle
@@ -291,7 +350,8 @@ Use when:
 
 ### 9.4 Access-config-dependent survival rules
 
-1. Exclusive + owner-disconnect policy: daemon may auto-shutdown.
+1. Exclusive + owner disconnect: daemon auto-shutdown is enforced.
+   - current implementation: exclusive owner disconnect triggers daemon shutdown regardless of `owner_disconnect_shutdown` value.
 2. Shared + valid sessions: daemon stays alive independent of one client terminal.
 3. Service-managed configuration may keep daemon alive across user logouts/reboots.
 4. Policy may require local auth presence in stricter profiles; in service profiles this can be relaxed.
@@ -299,7 +359,7 @@ Use when:
 Current implementation note:
 1. lifecycle profile/policy persistence and normalized effective-policy inspection are implemented.
 2. owner-disconnect enforcement hook is implemented:
-   - when `owner_disconnect_shutdown=true`, exclusive owner disconnect can trigger daemon shutdown.
+   - exclusive owner disconnect triggers daemon shutdown (independent of `owner_disconnect_shutdown` value).
 3. foreground terminal-disconnect behavior now honors lifecycle policy:
    - `on_terminal_disconnect=keep_daemon_running` applies SIGHUP-ignore where supported.
 4. daemon shutdown-order checkpoints are implemented:
@@ -332,6 +392,7 @@ Minimum controls to remain in this scenario:
 3. single-user admin-only key profile remains enforced
 4. no tunnel/relay/public ingress is enabled
 5. if shared-secret bootstrap is used, keep it local-only and avoid persistent plaintext secret storage
+6. if daemon was auto-started from an unconfigured local state using temporary `require_auth=false`, operator must complete `hosting_access` configuration as soon as possible and should not treat the temporary no-auth state as steady-state policy
 
 Escalate to next scenario when:
 1. a second user/process identity needs access
