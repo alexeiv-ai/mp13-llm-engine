@@ -26,12 +26,17 @@ from typing import Any, Dict, List, Optional, Tuple
 def _default_state_dir() -> Path:
     # Keep hosting bootstrap lightweight: avoid importing mp13_engine package
     # during module import to prevent unrelated heavy dependency side-effects.
-    return (Path.home() / ".mp13-llm" / "backend").expanduser().resolve()
+    return (Path.home() / ".mp13-llm" / "hosting" / "state").expanduser().resolve()
+
+
+def _default_hosting_root() -> Path:
+    return (Path.home() / ".mp13-llm" / "hosting").expanduser().resolve()
 
 
 DEFAULT_STATE_DIR = _default_state_dir()
+DEFAULT_HOSTING_ROOT = _default_hosting_root()
 DEFAULT_ENGINES_STATE_FILE = DEFAULT_STATE_DIR / "managed_engines.json"
-DEFAULT_CONTROL_STATE_FILE = DEFAULT_STATE_DIR / "engine_host_control.json"
+DEFAULT_CONTROL_STATE_FILE = DEFAULT_HOSTING_ROOT / "access_control.json"
 DAEMON_VERSION = "2.1.0"
 
 ROLE_ADMIN = "admin"
@@ -86,7 +91,13 @@ class EngineHostService:
         control_state_file: Optional[Path] = None,
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
-        self.control_state_file = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
+        raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
+        if raw_control.suffix:
+            self.hosting_root = raw_control.parent.resolve()
+            self.control_state_file = self.hosting_root / "access_control.json"
+        else:
+            self.hosting_root = raw_control.resolve()
+            self.control_state_file = self.hosting_root / "access_control.json"
         self._ensure_metrics_initialized()
 
     @classmethod
@@ -272,6 +283,7 @@ class EngineHostService:
         snapshot["recommended_mode"] = "daemon"
         snapshot["engines_state_file"] = str(self.engines_state_file)
         snapshot["control_state_file"] = str(self.control_state_file)
+        snapshot["hosting_root"] = str(self.hosting_root)
         snapshot["timestamp"] = time.time()
         return snapshot
 
@@ -367,69 +379,144 @@ class EngineHostService:
             {"version": 1, "updated_at": time.time(), "engines": list(rows or [])},
         )
 
+    @staticmethod
+    def _default_control_payload() -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "control_config": {
+                "ssh_key": None,
+                "require_auth": False,
+                "auth": {"keys": {}, "sessions": {}, "challenges": {}},
+                "access_profile": {"connectivity_mode": "local_only"},
+                "endpoint_mode_default": "exclusive",
+                "lifecycle_profile": LIFECYCLE_PROFILE_DETACHED,
+                "lifecycle_policy": {
+                    "on_terminal_disconnect": "keep_daemon_running",
+                    "terminal_control_enabled": True,
+                    "owner_disconnect_shutdown": False,
+                },
+                "config_store_mode": "store_only",
+                "claim_acl_policy": {
+                    "owner_ttl_seconds": 120,
+                    "audit_event_limit": 200,
+                },
+                "engine_traffic_policies": {},
+                "traffic_policy": {
+                    "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+                    "allowed_path_prefixes": ["/"],
+                    "request_header_allowlist": [
+                        "accept",
+                        "content-type",
+                        "authorization",
+                        "x-request-id",
+                        "x-trace-id",
+                        "x-correlation-id",
+                        "user-agent",
+                    ],
+                    "response_header_allowlist": [
+                        "content-type",
+                        "content-length",
+                        "cache-control",
+                        "etag",
+                        "last-modified",
+                        "x-request-id",
+                        "x-trace-id",
+                        "x-correlation-id",
+                        "date",
+                        "server",
+                    ],
+                    "allow_authorization_header": False,
+                    "max_request_bytes": 1024 * 1024,
+                    "max_response_bytes": 1024 * 1024,
+                },
+            },
+            "claims_by_engine": {},
+            "endpoint_claim": {"owners": [], "exclusive_owner": None, "claimed_at": 0.0},
+            "tokens": {},
+            "resource_claims": {},
+            "resource_tokens": {},
+            "claim_owner_keepalive": {},
+            "claim_audit_events": [],
+            "ownership_change_notices": {},
+            "auth_audit_events": [],
+        }
+
+    def _control_layout(self) -> Dict[str, Path]:
+        return {
+            "root": self.hosting_root,
+            "access_control": self.hosting_root / "access_control.json",
+            "keys": self.hosting_root / "keyring" / "keys.json",
+            "sessions": self.hosting_root / "state" / "sessions.json",
+            "challenges": self.hosting_root / "state" / "challenges.json",
+            "runtime_state": self.hosting_root / "state" / "runtime_state.json",
+            "auth_audit": self.hosting_root / "audit" / "auth_audit.json",
+            "claim_audit": self.hosting_root / "audit" / "claim_audit.json",
+        }
+
     def _read_control(self) -> Dict[str, Any]:
-        payload = self._read_json(
-            self.control_state_file,
+        default_payload = self._default_control_payload()
+        layout = self._control_layout()
+        access_default = dict(default_payload.get("control_config") or {})
+        access_payload = self._read_json(
+            layout["access_control"],
+            {"version": 1, "updated_at": 0.0, "control_config": access_default},
+        )
+        runtime_payload = self._read_json(
+            layout["runtime_state"],
             {
                 "version": 1,
-                "control_config": {
-                    "ssh_key": None,
-                    "require_auth": False,
-                    "auth": {"keys": {}, "sessions": {}, "challenges": {}},
-                    "access_profile": {"connectivity_mode": "local_only"},
-                    "endpoint_mode_default": "exclusive",
-                    "lifecycle_profile": LIFECYCLE_PROFILE_DETACHED,
-                    "lifecycle_policy": {
-                        "on_terminal_disconnect": "keep_daemon_running",
-                        "terminal_control_enabled": True,
-                        "owner_disconnect_shutdown": False,
-                    },
-                    "config_store_mode": "store_only",
-                    "claim_acl_policy": {
-                        "owner_ttl_seconds": 120,
-                        "audit_event_limit": 200,
-                    },
-                    "engine_traffic_policies": {},
-                    "traffic_policy": {
-                        "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
-                        "allowed_path_prefixes": ["/"],
-                        "request_header_allowlist": [
-                            "accept",
-                            "content-type",
-                            "authorization",
-                            "x-request-id",
-                            "x-trace-id",
-                            "x-correlation-id",
-                            "user-agent",
-                        ],
-                        "response_header_allowlist": [
-                            "content-type",
-                            "content-length",
-                            "cache-control",
-                            "etag",
-                            "last-modified",
-                            "x-request-id",
-                            "x-trace-id",
-                            "x-correlation-id",
-                            "date",
-                            "server",
-                        ],
-                        "allow_authorization_header": False,
-                        "max_request_bytes": 1024 * 1024,
-                        "max_response_bytes": 1024 * 1024,
-                    },
-                },
+                "updated_at": 0.0,
                 "claims_by_engine": {},
                 "endpoint_claim": {"owners": [], "exclusive_owner": None, "claimed_at": 0.0},
                 "tokens": {},
                 "resource_claims": {},
                 "resource_tokens": {},
                 "claim_owner_keepalive": {},
-                "claim_audit_events": [],
                 "ownership_change_notices": {},
-                "auth_audit_events": [],
             },
         )
+        keys_payload = self._read_json(layout["keys"], {"version": 1, "updated_at": 0.0, "keys": {}})
+        sessions_payload = self._read_json(layout["sessions"], {"version": 1, "updated_at": 0.0, "sessions": {}})
+        challenges_payload = self._read_json(
+            layout["challenges"],
+            {"version": 1, "updated_at": 0.0, "challenges": {}},
+        )
+        auth_audit_payload = self._read_json(layout["auth_audit"], {"version": 1, "updated_at": 0.0, "events": []})
+        claim_audit_payload = self._read_json(
+            layout["claim_audit"],
+            {"version": 1, "updated_at": 0.0, "events": []},
+        )
+        payload = {
+            "version": 1,
+            "updated_at": max(
+                float(access_payload.get("updated_at") or 0.0),
+                float(runtime_payload.get("updated_at") or 0.0),
+                float(keys_payload.get("updated_at") or 0.0),
+                float(sessions_payload.get("updated_at") or 0.0),
+                float(challenges_payload.get("updated_at") or 0.0),
+                float(auth_audit_payload.get("updated_at") or 0.0),
+                float(claim_audit_payload.get("updated_at") or 0.0),
+            ),
+            "control_config": dict(access_payload.get("control_config") or access_default),
+            "claims_by_engine": dict(runtime_payload.get("claims_by_engine") or {}),
+            "endpoint_claim": dict(
+                runtime_payload.get("endpoint_claim") or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0}
+            ),
+            "tokens": dict(runtime_payload.get("tokens") or {}),
+            "resource_claims": dict(runtime_payload.get("resource_claims") or {}),
+            "resource_tokens": dict(runtime_payload.get("resource_tokens") or {}),
+            "claim_owner_keepalive": dict(runtime_payload.get("claim_owner_keepalive") or {}),
+            "ownership_change_notices": dict(runtime_payload.get("ownership_change_notices") or {}),
+            "claim_audit_events": list(claim_audit_payload.get("events") or []),
+            "auth_audit_events": list(auth_audit_payload.get("events") or []),
+        }
+        cfg = dict(payload.get("control_config") or {})
+        cfg["auth"] = {
+            "keys": dict(keys_payload.get("keys") or {}),
+            "sessions": dict(sessions_payload.get("sessions") or {}),
+            "challenges": dict(challenges_payload.get("challenges") or {}),
+        }
+        payload["control_config"] = cfg
         payload.setdefault(
             "control_config",
             {
@@ -474,8 +561,6 @@ class EngineHostService:
             if str(cfg.get("endpoint_mode_default") or "").strip().lower() == "exclusive"
             else "shared"
         )
-        if not bool(cfg.get("require_auth", False)):
-            cfg["endpoint_mode_default"] = "exclusive"
         cfg.setdefault("config_store_mode", "store_only")
         raw_claim_acl = dict(cfg.get("claim_acl_policy") or {})
         cfg["claim_acl_policy"] = {
@@ -518,7 +603,53 @@ class EngineHostService:
         out = dict(payload or {})
         out["version"] = 1
         out["updated_at"] = time.time()
-        self._write_json(self.control_state_file, out)
+        layout = self._control_layout()
+        cfg = dict(out.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        cfg_without_auth = dict(cfg)
+        cfg_without_auth.pop("auth", None)
+        self._write_json(
+            layout["access_control"],
+            {
+                "version": 1,
+                "updated_at": out["updated_at"],
+                "control_config": cfg_without_auth,
+            },
+        )
+        self._write_json(
+            layout["keys"],
+            {"version": 1, "updated_at": out["updated_at"], "keys": dict(auth.get("keys") or {})},
+        )
+        self._write_json(
+            layout["sessions"],
+            {"version": 1, "updated_at": out["updated_at"], "sessions": dict(auth.get("sessions") or {})},
+        )
+        self._write_json(
+            layout["challenges"],
+            {"version": 1, "updated_at": out["updated_at"], "challenges": dict(auth.get("challenges") or {})},
+        )
+        self._write_json(
+            layout["runtime_state"],
+            {
+                "version": 1,
+                "updated_at": out["updated_at"],
+                "claims_by_engine": dict(out.get("claims_by_engine") or {}),
+                "endpoint_claim": dict(out.get("endpoint_claim") or {}),
+                "tokens": dict(out.get("tokens") or {}),
+                "resource_claims": dict(out.get("resource_claims") or {}),
+                "resource_tokens": dict(out.get("resource_tokens") or {}),
+                "claim_owner_keepalive": dict(out.get("claim_owner_keepalive") or {}),
+                "ownership_change_notices": dict(out.get("ownership_change_notices") or {}),
+            },
+        )
+        self._write_json(
+            layout["auth_audit"],
+            {"version": 1, "updated_at": out["updated_at"], "events": list(out.get("auth_audit_events") or [])},
+        )
+        self._write_json(
+            layout["claim_audit"],
+            {"version": 1, "updated_at": out["updated_at"], "events": list(out.get("claim_audit_events") or [])},
+        )
 
     @staticmethod
     def _claim_scope_key(scope: str, resource_kind: Optional[str], resource_id: Optional[str]) -> str:
@@ -1317,18 +1448,19 @@ class EngineHostService:
         out: List[Dict[str, Any]] = []
         for key_id, meta in dict(auth.get("keys") or {}).items():
             m = dict(meta or {})
-            out.append(
-                {
-                    "key_id": str(key_id),
-                    "role": str(m.get("role") or ""),
-                    "disabled": bool(m.get("disabled", False)),
-                    "auth_method": str(m.get("auth_method") or "shared_secret"),
-                    "created_at": float(m.get("created_at") or 0.0),
-                    "updated_at": float(m.get("updated_at") or 0.0),
-                    "allowed_configs": list(m.get("allowed_configs") or []),
-                    "allowed_engines": list(m.get("allowed_engines") or []),
-                }
-            )
+            row = {
+                "key_id": str(key_id),
+                "role": str(m.get("role") or ""),
+                "disabled": bool(m.get("disabled", False)),
+                "auth_method": str(m.get("auth_method") or "shared_secret"),
+                "allowed_configs": list(m.get("allowed_configs") or []),
+                "allowed_engines": list(m.get("allowed_engines") or []),
+            }
+            if "created_at" in m:
+                row["created_at"] = float(m.get("created_at") or 0.0)
+            if "updated_at" in m:
+                row["updated_at"] = float(m.get("updated_at") or 0.0)
+            out.append(row)
         out.sort(key=lambda x: str(x.get("key_id") or ""))
         return out
 
@@ -1611,15 +1743,28 @@ class EngineHostService:
         cfg = dict(control.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
         keys = dict(auth.get("keys") or {})
-        now = time.time()
         existing = dict(keys.get(kid) or {})
-        keys[kid] = {
+        preserved = {
+            str(k): v
+            for k, v in existing.items()
+            if str(k)
+            not in {
+                "role",
+                "auth_method",
+                "secret_hash",
+                "public_key",
+                "disabled",
+                "allowed_configs",
+                "allowed_engines",
+                "created_at",
+                "updated_at",
+            }
+        }
+        keys[kid] = preserved | {
             "role": role_norm,
             "auth_method": method,
             "secret_hash": self._hash_secret(secret) if method == "shared_secret" else "",
             "public_key": pubkey if method == "public_key" else "",
-            "created_at": float(existing.get("created_at") or now),
-            "updated_at": now,
             "disabled": bool(disabled),
             "allowed_configs": normalized_allowed,
             "allowed_engines": normalized_engines,

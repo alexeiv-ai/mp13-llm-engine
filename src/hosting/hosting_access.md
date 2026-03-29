@@ -106,7 +106,7 @@ Implementation may internally use scope primitives, but this is not an external 
 
 Use a dedicated keyring structure under default config root:
 
-`<default_engine_config_dir>/Hosting/`
+`<default_engine_config_dir>/hosting/`
 
 Suggested contents:
 1. `access_control.json` (role/policy config)
@@ -242,7 +242,7 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
 
 ### 8.2 Common script outputs
 
-1. Create/verify `<default_engine_config_dir>/Hosting/` structure.
+1. Create/verify `<default_engine_config_dir>/hosting/` structure.
 2. Initialize access control config and keyring metadata.
 3. Register first admin SSH public key.
 4. Choose persistent default endpoint mode (`exclusive` or `shared`).
@@ -309,7 +309,7 @@ Local operator caveat:
 
 Local shutdown/restart notes relevant to ownership recovery:
 1. The daemon stop path is `__shutdown__` guarded by `shutdown_token`.
-2. `shutdown_token` is persisted in the daemon PID file (`host_daemon.pid`) alongside `pid` and `port`.
+2. `shutdown_token` is persisted in the daemon PID file (`hosting/state/daemon.pid`) alongside `pid` and `port`.
 3. `terminal_control_enabled` is persisted in control state under `control_config.lifecycle_policy.terminal_control_enabled`.
 4. Even with the correct `shutdown_token`, daemon shutdown is denied when `terminal_control_enabled=false`.
 5. The effective terminal-control state should be read via `get-lifecycle-policy-effective`; raw persisted config can also be inspected via `get-control-config`.

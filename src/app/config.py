@@ -691,7 +691,7 @@ def main() -> int:
     parser.add_argument("--print", dest="print_config", action="store_true", help="Print resolved config as JSON.")
     parser.add_argument("--print-raw", action="store_true", help="Print raw config file content without resolution.")
     parser.add_argument("--print-set", action="store_true", help="Print only keys set in the config file (no defaults).")
-    parser.add_argument("--host-control-state-file", type=str, default=None, help="Path to engine_host_control.json for host auth management.")
+    parser.add_argument("--host-control-state-file", type=str, default=None, help="Path to hosting access-control state for host auth management.")
     parser.add_argument("--host-auth-status", action="store_true", help="Print host auth status from control state.")
     parser.add_argument("--host-auth-list-keys", action="store_true", help="List host auth keys (without secrets).")
     parser.add_argument("--host-auth-generate-secret", type=int, default=0, metavar="BYTES", help="Generate a random key secret token (BYTES entropy hint).")

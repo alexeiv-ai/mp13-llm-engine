@@ -239,7 +239,7 @@ Latest run in this repo:
   - `pytest tests/test_hosting_config.py -q`
 - doctor output now includes non-blocking readiness probe:
   - `ssh_keygen_host_path_probe`
-  - validates `ssh-keygen` write behavior under `Hosting/keyring/private`
+  - validates `ssh-keygen` write behavior under `hosting/keyring`
 
 ## 12) Config-Driven Connect Runtime Coverage
 

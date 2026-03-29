@@ -369,10 +369,13 @@ python -m hosting.hosting_config --doctor
 ```
 
 Generated artifacts:
-- `<default_engine_config_dir>/Hosting/access_control.json`
-- `<default_engine_config_dir>/Hosting/keyring/keys.json`
-- `<default_engine_config_dir>/Hosting/state/client_key_map.json`
-- `<default_engine_config_dir>/Hosting/state/bootstrap_state.json`
+- `<default_engine_config_dir>/hosting/access_control.json`
+- `<default_engine_config_dir>/hosting/keyring/keys.json`
+- `<default_engine_config_dir>/hosting/bootstrap/client_key_map.json`
+- `<default_engine_config_dir>/hosting/bootstrap/bootstrap_state.json`
+- `<default_engine_config_dir>/hosting/state/managed_engines.json`
+- `<default_engine_config_dir>/hosting/state/daemon.pid`
+- `<default_engine_config_dir>/hosting/state/daemon_http.pid`
 
 ## 5.1 Start daemon
 

@@ -72,7 +72,7 @@ Completed in this implementation slice:
    - `pytest tests/test_hosting_config.py -q --basetemp o:\repos\mp13-llm-engine\.tmp_pytest_hosting_config`
    - result: 5 passed (cache warnings only due workspace ACLs)
 23. Added setup bootstrap state artifact:
-   - `Hosting/state/bootstrap_state.json`
+   - `hosting/bootstrap/bootstrap_state.json`
    - includes effective setup profile, key source, and managed file references for lifecycle/debug automation
 24. Added role gate for model override semantics:
    - `connect-from-config` with explicit `model_path` now requires `model_user_with_model_control` or higher
@@ -359,7 +359,7 @@ Completed in this implementation slice:
    - SSH mode still injects `_ssh_session_binding` context on commands
 109. Added host-path keygen readiness probe in `hosting_config --doctor`:
    - non-blocking check: `ssh_keygen_host_path_probe`
-   - validates `ssh-keygen` write behavior under `Hosting/keyring/private`
+   - validates `ssh-keygen` write behavior under `hosting/keyring`
    - probe output remains visible for pre-Phase-7 readiness tracking without blocking import-key baseline setup
 110. Updated regression coverage for SSH helper and doctor probe:
    - `tests/test_engine_host_channel.py` SSH bootstrap expectation aligned to no-auto-shared-secret policy
@@ -464,7 +464,7 @@ Exit criteria:
 Status: Closed (implementation + validation complete)
 
 Scope:
-1. Reserve and enforce `Hosting/` subfolder in default engine config directory.
+1. Reserve and enforce `hosting/` subfolder in default engine config directory.
 2. Introduce keyring layout (`access_control`, `keyring`, `audit`, `state`).
 3. Implement legacy key migration by rename to `.migrated` and import.
 4. Add audit records for migration and key lifecycle events.
@@ -473,7 +473,7 @@ Exit criteria:
 1. Migration is idempotent and non-destructive.
 2. No silent key loss; `.migrated` artifacts remain traceable.
 3. Evidence:
-   - `Hosting/` layout + migration metadata/audit implemented
+   - `hosting/` layout + migration metadata/audit implemented
    - setup tests validate `.migrated` behavior
    - progress update items: 9, 21-23
 
@@ -583,7 +583,7 @@ Exit criteria:
 1. Build role-command authz matrix for the new model.
 2. Add endpoint mode persistence and admin override paths.
 3. Implement stale-owner emergency force-override with audit reason codes.
-4. Implement `Hosting/` keyring structure and legacy `.migrated` flow.
+4. Implement `hosting/` keyring structure and legacy `.migrated` flow.
 5. Add setup script for local/tunnel/remote intents.
 6. Enforce `require_auth=false` safe-only startup policy.
 7. Add lifecycle profile controls and disconnect-survival policy hooks.

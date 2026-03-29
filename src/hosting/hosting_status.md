@@ -431,7 +431,7 @@ Implemented:
    - `tests/test_hosting_config.py`
    - validates setup outputs, safe-profile guardrails, legacy `.migrated` migration flow, and `--doctor` diagnostics behavior
 11. Added setup bootstrap snapshot artifact:
-   - `Hosting/state/bootstrap_state.json`
+   - `hosting/bootstrap/bootstrap_state.json`
    - captures effective setup policy and key/file references for reconfigure and troubleshooting flows
 12. Added model override role semantics:
    - `connect-from-config` with `model_path` override now requires `model_user_with_model_control` or higher

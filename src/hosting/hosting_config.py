@@ -61,12 +61,12 @@ def _default_paths() -> Tuple[Path, Path]:
         return config_dir, control_state
     except Exception:
         config_dir = (Path.home() / ".mp13-llm").expanduser().resolve()
-        control_state = (config_dir / "backend" / "engine_host_control.json").resolve()
+        control_state = (config_dir / "hosting" / "access_control.json").resolve()
         return config_dir, control_state
 
 
 def _hosting_root(default_config_dir: Path) -> Path:
-    return (default_config_dir / "Hosting").resolve()
+    return (default_config_dir / "hosting").resolve()
 
 
 def _read_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
@@ -197,6 +197,8 @@ def _summarize_existing_config(
         "admin_key_count": 0,
     }
     access_payload = _read_json(access_file, {})
+    if "control_config" in access_payload and isinstance(access_payload.get("control_config"), dict):
+        access_payload = dict(access_payload.get("control_config") or {})
     keys_payload = _read_json(keys_file, {"keys": {}})
     keys = dict(keys_payload.get("keys") or {})
     summary["admin_key_count"] = len([k for _, k in keys.items() if str((k or {}).get("role") or "") == "admin"])
@@ -215,7 +217,6 @@ def _summarize_existing_config(
             summary["lifecycle_profile"],
         )
         summary["require_auth"] = bool(access_payload.get("require_auth", summary["require_auth"]))
-        summary["admin_key_id"] = str(access_payload.get("bootstrap_admin_key_id") or summary["admin_key_id"])
         summary["exists"] = True
     try:
         svc = EngineHostService(control_state_file=control_state_path)
@@ -265,9 +266,9 @@ def _ensure_dirs(hosting_root: Path) -> Dict[str, Path]:
     paths = {
         "root": hosting_root,
         "keyring": hosting_root / "keyring",
-        "private": hosting_root / "keyring" / "private",
         "audit": hosting_root / "audit",
         "state": hosting_root / "state",
+        "bootstrap": hosting_root / "bootstrap",
     }
     for p in paths.values():
         p.mkdir(parents=True, exist_ok=True)
@@ -288,9 +289,8 @@ def _import_public_key(*, public_key_file: Optional[str], public_key_inline: Opt
 def _generate_keypair(
     *,
     key_id: str,
-    private_dir: Path,
     passphrase: Optional[str],
-) -> Tuple[Path, Path]:
+) -> Tuple[str, str]:
     def _run_ssh_keygen(dest_private: Path) -> None:
         cmd = [
             "ssh-keygen",
@@ -308,15 +308,8 @@ def _generate_keypair(
             stderr = str(proc.stderr or "").strip()
             raise RuntimeError(f"ssh-keygen failed: {stderr or 'unknown error'}")
 
-    private_path = (private_dir / f"{key_id}_ed25519").resolve()
-    public_path = Path(str(private_path) + ".pub")
-    if private_path.exists() or public_path.exists():
-        raise ValueError(f"key files already exist for key_id={key_id}: {private_path}")
-    private_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Generate in a local temporary directory first, then copy into Hosting keyring.
-    # This avoids ssh-keygen write failures on some mapped/network filesystems.
-    tmp_error: Optional[Exception] = None
+    private_text = ""
+    public_text = ""
     tmpdir = Path(tempfile.mkdtemp(prefix="hosting_keygen_")).resolve()
     try:
         tmp_private = (tmpdir / f"{key_id}_ed25519").resolve()
@@ -324,26 +317,13 @@ def _generate_keypair(
         _run_ssh_keygen(tmp_private)
         if not tmp_private.exists() or not tmp_public.exists():
             raise RuntimeError("ssh-keygen did not produce expected key files")
-        shutil.copy2(str(tmp_private), str(private_path))
-        shutil.copy2(str(tmp_public), str(public_path))
-    except Exception as exc:
-        tmp_error = exc
+        private_text = str(tmp_private.read_text(encoding="utf-8")).strip()
+        public_text = str(tmp_public.read_text(encoding="utf-8")).strip()
     finally:
-        # Some Windows OpenSSH builds set key ACLs that can block recursive delete.
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-    # Fallback to direct generation if temp path cannot be used in constrained runtime.
-    if not private_path.exists() or not public_path.exists():
-        try:
-            _run_ssh_keygen(private_path)
-        except Exception as direct_exc:
-            if tmp_error is not None:
-                raise RuntimeError(f"{direct_exc}; temp_keygen_fallback_error={tmp_error}") from direct_exc
-            raise
-
-    if not private_path.exists() or not public_path.exists():
-        raise RuntimeError("failed to persist generated key files")
-    return private_path, public_path
+    if not private_text or not public_text:
+        raise RuntimeError("failed to generate importable key material")
+    return private_text, public_text
 
 
 def _build_access_control_payload(
@@ -366,6 +346,40 @@ def _build_access_control_payload(
         "bootstrap_admin_key_id": admin_key_id,
         "bootstrap_admin_key_origin": admin_key_origin,
     }
+
+
+def _store_importable_key_record(
+    *,
+    keys_file: Path,
+    key_id: str,
+    role: str,
+    auth_method: str,
+    public_key: str,
+    private_key_openssh: Optional[str] = None,
+    key_source: Optional[str] = None,
+) -> None:
+    payload = _read_json(keys_file, {"version": 1, "keys": {}})
+    keys = dict(payload.get("keys") or {})
+    existing = dict(keys.get(key_id) or {})
+    row = {
+        "role": str(role or "").strip(),
+        "auth_method": str(auth_method or "").strip(),
+        "public_key": str(public_key or "").strip(),
+    }
+    if private_key_openssh:
+        row["private_key_openssh"] = str(private_key_openssh).strip()
+    if key_source:
+        row["key_source"] = str(key_source).strip()
+    preserved = {
+        str(k): v
+        for k, v in existing.items()
+        if str(k) not in {"role", "auth_method", "public_key", "private_key_openssh", "key_source"}
+    }
+    keys[str(key_id)] = preserved | row
+    payload["version"] = 1
+    payload["updated_at"] = time.time()
+    payload["keys"] = keys
+    _write_json(keys_file, payload)
 
 
 def _safe_require_auth(
@@ -450,8 +464,8 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     dirs = _ensure_dirs(hosting_root)
     access_file = dirs["root"] / "access_control.json"
     keys_file = dirs["keyring"] / "keys.json"
-    mappings_file = dirs["state"] / "client_key_map.json"
-    bootstrap_state_file = dirs["state"] / "bootstrap_state.json"
+    mappings_file = dirs["bootstrap"] / "client_key_map.json"
+    bootstrap_state_file = dirs["bootstrap"] / "bootstrap_state.json"
     audit_file = dirs["audit"] / "setup_audit.jsonl"
     migrations_file = dirs["keyring"] / "migrations.json"
 
@@ -682,7 +696,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     )
 
     admin_public_key = ""
-    admin_private_key_path: Optional[Path] = None
+    admin_private_key_text: Optional[str] = None
     admin_public_key_path: Optional[Path] = None
     export_private = bool(args.export_private_key)
     export_private_path = (
@@ -709,17 +723,15 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                     passphrase = input("Passphrase: ")
             generated_private, generated_public = _generate_keypair(
                 key_id=admin_key_id,
-                private_dir=dirs["private"],
                 passphrase=passphrase or None,
             )
-            admin_private_key_path = generated_private
-            admin_public_key_path = generated_public
-            admin_public_key = str(generated_public.read_text(encoding="utf-8")).strip()
+            admin_private_key_text = generated_private
+            admin_public_key = str(generated_public).strip()
             if interactive:
                 export_private = _bool_prompt("Export generated private key for client use?", export_private)
             if export_private and export_private_path is not None:
                 export_private_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(generated_private), str(export_private_path))
+                export_private_path.write_text(str(generated_private), encoding="utf-8")
         else:
             admin_public_key = _import_public_key(
                 public_key_file=args.admin_public_key_file,
@@ -740,31 +752,24 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         endpoint_mode_default=endpoint_mode,
         lifecycle_profile=lifecycle_profile,
     )
-
-    keyring = _read_json(keys_file, {"version": 1, "keys": {}})
-    keys = dict(keyring.get("keys") or {})
-    keys[admin_key_id] = {
-        "role": "admin",
-        "auth_method": "public_key",
-        "public_key": admin_public_key,
-        "private_key_managed_path": str(admin_private_key_path) if admin_private_key_path else None,
-        "private_key_exported": bool(export_private),
-        "private_key_export_path": str(export_private_path) if export_private_path else None,
-        "updated_at": time.time(),
-    }
-    keyring["version"] = 1
-    keyring["updated_at"] = time.time()
-    keyring["keys"] = keys
-    _write_json(keys_file, keyring)
+    _store_importable_key_record(
+        keys_file=keys_file,
+        key_id=admin_key_id,
+        role="admin",
+        auth_method="public_key",
+        public_key=admin_public_key,
+        private_key_openssh=admin_private_key_text,
+        key_source=key_source,
+    )
 
     if permission_action == "tighten":
         permission_result = _apply_permission_hardening(
             [
                 dirs["root"],
                 dirs["keyring"],
-                dirs["private"],
                 dirs["audit"],
                 dirs["state"],
+                dirs["bootstrap"],
                 access_file,
                 keys_file,
                 mappings_file,
@@ -773,17 +778,6 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             ]
         )
 
-    _write_json(
-        access_file,
-        _build_access_control_payload(
-            connectivity_mode=mode,
-            endpoint_mode=endpoint_mode,
-            lifecycle_profile=lifecycle_profile,
-            require_auth=require_auth,
-            admin_key_id=admin_key_id,
-            admin_key_origin=key_source,
-        ),
-    )
     _write_json(
         mappings_file,
         {
@@ -860,7 +854,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "admin_key_id": admin_key_id,
         "legacy_migration": migration_result,
         "admin_public_key_path": str(admin_public_key_path) if admin_public_key_path else None,
-        "admin_private_key_path": str(admin_private_key_path) if admin_private_key_path else None,
+        "admin_private_key_path": None,
         "private_key_exported": bool(export_private),
         "private_key_export_path": str(export_private_path) if export_private_path else None,
         "setup_scope": setup_scope,
@@ -924,13 +918,13 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     # Readiness probe for Windows/mapped-path keygen behavior.
     # This check is non-blocking for baseline setup because key import remains valid,
     # but it must be reviewed before rotation-heavy hardening work.
-    private_dir = (hosting_root / "keyring" / "private").resolve()
-    key_probe_private = (private_dir / ".doctor_keygen_probe_ed25519").resolve()
+    key_probe_dir = (hosting_root / "keyring").resolve()
+    key_probe_private = (key_probe_dir / ".doctor_keygen_probe_ed25519").resolve()
     key_probe_public = Path(str(key_probe_private) + ".pub")
-    key_probe_details: Dict[str, Any] = {"path": str(private_dir), "blocking": False}
+    key_probe_details: Dict[str, Any] = {"path": str(key_probe_dir), "blocking": False}
     key_probe_ok = False
     try:
-        private_dir.mkdir(parents=True, exist_ok=True)
+        key_probe_dir.mkdir(parents=True, exist_ok=True)
         key_probe_private.unlink(missing_ok=True)
         key_probe_public.unlink(missing_ok=True)
         probe = subprocess.run(  # noqa: S603

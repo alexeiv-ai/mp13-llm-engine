@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STATE_DIR = Path.home() / ".mp13-llm" / "gui"
+DEFAULT_STATE_DIR = Path.home() / ".mp13-llm" / "hosting" / "state"
 DEFAULT_STATE_FILE = DEFAULT_STATE_DIR / "managed_engines.json"
 
 

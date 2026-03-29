@@ -38,14 +38,15 @@ Secondary inputs:
 
 Target base directory:
 
-`<default_engine_config_dir>/Hosting/`
+`<default_engine_config_dir>/hosting/`
 
 Managed files:
 1. `access_control.json`
 2. `keyring/keys.json`
 3. `keyring/migrations.json`
 4. `audit/setup_audit.jsonl`
-5. `state/bootstrap_state.json`
+5. `bootstrap/bootstrap_state.json`
+6. `bootstrap/client_key_map.json`
 
 Non-destructive migration:
 1. Legacy key files are renamed to `.migrated`.
@@ -56,7 +57,7 @@ Non-destructive migration:
 ## 4.1 Detect existing state
 
 1. Detect legacy auth/key files.
-2. Detect existing `Hosting/` config.
+2. Detect existing `hosting/` config.
 3. Show summary: new install vs reconfigure.
 
 ## 4.2 Connectivity intent selection

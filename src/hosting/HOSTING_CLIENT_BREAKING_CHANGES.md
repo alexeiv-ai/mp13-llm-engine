@@ -243,9 +243,9 @@ New utility:
 Client/operator impact:
 1. Bootstrap/reconfigure should move to `hosting_config` flow.
 2. Consume generated client mapping file:
-   - `<default_engine_config_dir>/Hosting/state/client_key_map.json`
+   - `<default_engine_config_dir>/hosting/bootstrap/client_key_map.json`
 3. Use bootstrap snapshot for automation/debug:
-   - `<default_engine_config_dir>/Hosting/state/bootstrap_state.json`
+   - `<default_engine_config_dir>/hosting/bootstrap/bootstrap_state.json`
 4. Setup/reconfigure now accepts lifecycle profile selection:
    - `--lifecycle-profile foreground_terminal_bound|detached_user_process|service_managed`
 

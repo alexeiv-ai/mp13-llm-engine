@@ -18,8 +18,13 @@ APP_DIR_NAME = ".mp13-llm"
 DEFAULT_CONFIG_FILENAME = "mp13_config.json"
 HOSTING_CONFIGS_SUBDIR = "backend/configs"
 HOSTING_BACKEND_SUBDIR = "backend"
+HOSTING_ROOT_SUBDIR = "hosting"
+HOSTING_STATE_SUBDIR = "hosting/state"
+HOSTING_BOOTSTRAP_SUBDIR = "hosting/bootstrap"
 HOSTING_ENGINES_STATE_FILENAME = "managed_engines.json"
-HOSTING_CONTROL_STATE_FILENAME = "engine_host_control.json"
+HOSTING_CONTROL_STATE_FILENAME = "access_control.json"
+HOSTING_DAEMON_PID_FILENAME = "daemon.pid"
+HOSTING_DAEMON_HTTP_PID_FILENAME = "daemon_http.pid"
 
 DEFAULT_CATEGORY_DIRS = {
     "models_root_dir": "@project/..",
@@ -149,12 +154,32 @@ def get_hosting_backend_dir() -> Path:
     return (get_default_config_dir() / HOSTING_BACKEND_SUBDIR).resolve()
 
 
+def get_hosting_root_dir() -> Path:
+    return (get_default_config_dir() / HOSTING_ROOT_SUBDIR).resolve()
+
+
+def get_hosting_state_dir() -> Path:
+    return (get_default_config_dir() / HOSTING_STATE_SUBDIR).resolve()
+
+
+def get_hosting_bootstrap_dir() -> Path:
+    return (get_default_config_dir() / HOSTING_BOOTSTRAP_SUBDIR).resolve()
+
+
 def get_hosting_engines_state_path() -> Path:
-    return get_hosting_backend_dir() / HOSTING_ENGINES_STATE_FILENAME
+    return get_hosting_state_dir() / HOSTING_ENGINES_STATE_FILENAME
 
 
 def get_hosting_control_state_path() -> Path:
-    return get_hosting_backend_dir() / HOSTING_CONTROL_STATE_FILENAME
+    return get_hosting_root_dir() / HOSTING_CONTROL_STATE_FILENAME
+
+
+def get_hosting_daemon_pid_path() -> Path:
+    return get_hosting_state_dir() / HOSTING_DAEMON_PID_FILENAME
+
+
+def get_hosting_daemon_http_pid_path() -> Path:
+    return get_hosting_state_dir() / HOSTING_DAEMON_HTTP_PID_FILENAME
 
 
 def normalize_hosting_config_selector(selector: Optional[str]) -> str:

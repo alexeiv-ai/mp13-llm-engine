@@ -46,15 +46,15 @@ DEFAULT_HTTP_INGRESS_PORT = 19877
 def _default_state_dir() -> Path:
     # Keep hosting bootstrap lightweight: avoid importing mp13_engine package
     # during module import to prevent unrelated heavy dependency side-effects.
-    return (Path.home() / ".mp13-llm" / "backend").expanduser().resolve()
+    return (Path.home() / ".mp13-llm" / "hosting" / "state").expanduser().resolve()
 
 
 def _default_pid_file() -> Path:
-    return _default_state_dir() / "host_daemon.pid"
+    return _default_state_dir() / "daemon.pid"
 
 
 def _default_http_pid_file() -> Path:
-    return _default_state_dir() / "host_daemon_http.pid"
+    return _default_state_dir() / "daemon_http.pid"
 
 
 class DaemonPidFile:
