@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import getpass
+import hashlib
 import http.client
 import http.server
 import json
@@ -31,9 +33,12 @@ import secrets
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
+from multiprocessing.connection import Client as MPClient
+from multiprocessing.connection import Listener as MPListener
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -57,22 +62,136 @@ def _default_http_pid_file() -> Path:
     return _default_state_dir() / "daemon_http.pid"
 
 
+def _daemon_local_ipc_endpoint(pid_path: Path) -> Dict[str, str]:
+    resolved = pid_path.expanduser().resolve()
+    suffix = hashlib.sha256(str(resolved).encode("utf-8", errors="ignore")).hexdigest()[:16]
+    if os.name == "nt":
+        return {
+            "transport": "local_ipc",
+            "family": "AF_PIPE",
+            "address": f"\\\\.\\pipe\\mp13-host-daemon-{suffix}",
+        }
+    return {
+        "transport": "local_ipc",
+        "family": "AF_UNIX",
+        "address": str((resolved.parent / f"{resolved.stem}-{suffix}.sock").resolve()),
+    }
+
+
+def _current_windows_account_name() -> str:
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["whoami"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+        raw = str(proc.stdout or "").strip()
+        if raw:
+            return raw
+    except Exception:
+        pass
+    domain = str(os.environ.get("USERDOMAIN") or "").strip()
+    user = str(os.environ.get("USERNAME") or getpass.getuser() or "").strip()
+    if domain and user:
+        return f"{domain}\\{user}"
+    return user
+
+
+def _tighten_windows_acl(path: Path, *, is_dir: bool) -> None:
+    principal = _current_windows_account_name()
+    if not principal:
+        raise RuntimeError("unable to determine current Windows account for ACL hardening")
+    grant_suffix = "(OI)(CI)F" if is_dir else "F"
+    cmd = [
+        "icacls",
+        str(path),
+        "/inheritance:r",
+        "/grant:r",
+        f"{principal}:{grant_suffix}",
+        "SYSTEM:F" if not is_dir else "SYSTEM:(OI)(CI)F",
+        "Administrators:F" if not is_dir else "Administrators:(OI)(CI)F",
+    ]
+    proc = subprocess.run(  # noqa: S603
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=10.0,
+        check=False,
+    )
+    if int(proc.returncode) != 0:
+        stderr = str(proc.stderr or "").strip()
+        raise RuntimeError(stderr or f"icacls failed for {path}")
+
+
+def _secure_state_parent_dir(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        _tighten_windows_acl(path.parent, is_dir=True)
+        return
+    os.chmod(path.parent, 0o700)
+
+
+def _secure_path(path: Path) -> None:
+    if os.name == "nt":
+        _tighten_windows_acl(path, is_dir=False)
+        return
+    os.chmod(path, 0o600)
+
+
+def _atomic_write_secure_json(path: Path, payload: Dict[str, Any]) -> None:
+    _secure_state_parent_dir(path)
+    raw = json.dumps(payload, indent=2)
+    if os.name == "nt":
+        tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(raw, encoding="utf-8")
+        _secure_path(tmp_path)
+        os.replace(tmp_path, path)
+        _secure_path(path)
+        return
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(raw)
+        os.replace(tmp_name, path)
+        _secure_path(path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except Exception:
+            pass
+        raise
+
+
 class DaemonPidFile:
     """Read/write the daemon PID file used for discovery by CLI and channel."""
 
     def __init__(self, path: Optional[Path] = None):
         self.path = (Path(path) if path else _default_pid_file()).expanduser().resolve()
 
-    def write(self, *, pid: int, port: int, shutdown_token: str) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+    def write(
+        self,
+        *,
+        pid: int,
+        port: int,
+        shutdown_token: str,
+        transport: Optional[str] = None,
+        ipc_family: Optional[str] = None,
+        ipc_address: Optional[str] = None,
+    ) -> None:
         payload = {
             "version": 1,
             "pid": int(pid),
             "port": int(port),
             "started_at": time.time(),
             "shutdown_token": str(shutdown_token),
+            "transport": str(transport or "").strip() or None,
+            "ipc_family": str(ipc_family or "").strip() or None,
+            "ipc_address": str(ipc_address or "").strip() or None,
         }
-        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _atomic_write_secure_json(self.path, payload)
 
     def read(self) -> Optional[Dict[str, Any]]:
         try:
@@ -131,6 +250,15 @@ class DaemonPidFile:
         if not info:
             return None
         return str(info.get("shutdown_token") or "").strip() or None
+
+    def get_local_transport(self) -> Dict[str, Optional[str]]:
+        info = self.read() or {}
+        return {
+            "transport": str(info.get("transport") or "").strip() or None,
+            "ipc_family": str(info.get("ipc_family") or "").strip() or None,
+            "ipc_address": str(info.get("ipc_address") or "").strip() or None,
+            "shutdown_token": str(info.get("shutdown_token") or "").strip() or None,
+        }
 
 
 class EngineHostHttpIngressDaemon:
@@ -431,6 +559,8 @@ class EngineHostDaemon:
         self.port = int(port or DEFAULT_DAEMON_PORT)
         self.pid_file = DaemonPidFile(pid_file)
         self.shutdown_token = secrets.token_urlsafe(24)
+        local_transport = _daemon_local_ipc_endpoint(self.pid_file.path)
+        self._local_transport = dict(local_transport)
         self.svc = EngineHostService(
             engines_state_file=engines_state_file,
             control_state_file=control_state_file,
@@ -438,6 +568,11 @@ class EngineHostDaemon:
         self.svc.assert_runtime_policy_safe()
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._local_listener_thread: Optional[threading.Thread] = None
+        self._local_listener_stop = threading.Event()
+        self._local_listener_ready = threading.Event()
+        self._local_listener_error: Optional[str] = None
         self._operations: Dict[str, Dict[str, Any]] = {}
         self._operations_lock = threading.Lock()
         self._operations_max_entries = 200
@@ -449,6 +584,158 @@ class EngineHostDaemon:
         self._actor_connections_lock = threading.Lock()
         self._last_shutdown_checkpoints: Dict[str, Any] = {}
         self._shutdown_stage_events: List[Dict[str, Any]] = []
+
+    def _serve_local_control_client(self, conn: Any) -> None:
+        connection_actor_ids: set[str] = set()
+        try:
+            while not self._local_listener_stop.is_set():
+                try:
+                    req_obj = conn.recv()
+                except EOFError:
+                    break
+                if not isinstance(req_obj, dict):
+                    try:
+                        conn.send(
+                            {
+                                "seq": -1,
+                                "ok": False,
+                                "error": "parse_error",
+                                "error_code": "parse_error",
+                                "error_details": {},
+                            }
+                        )
+                    except Exception:
+                        pass
+                    continue
+                payload_obj = dict(req_obj.get("payload") or {})
+                tok = str(
+                    payload_obj.get("session_token")
+                    or payload_obj.get("auth_token")
+                    or ""
+                ).strip()
+                if tok:
+                    actor_id = self.svc.resolve_actor_id_from_session_token(tok)
+                    if actor_id and actor_id not in connection_actor_ids:
+                        connection_actor_ids.add(actor_id)
+                        self._track_actor_connected(actor_id)
+                raw = json.dumps(req_obj, ensure_ascii=False)
+                loop = self._loop
+                if loop is None:
+                    response = {
+                        "seq": int(req_obj.get("seq") or 0),
+                        "ok": False,
+                        "error": "daemon_loop_unavailable",
+                        "error_code": "daemon_loop_unavailable",
+                        "error_details": {},
+                    }
+                else:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        self._dispatch(raw, peer_host="127.0.0.1"),
+                        loop,
+                    )
+                    response = fut.result(timeout=60.0)
+                conn.send(response)
+                if response.get("result") == "shutting_down" and response.get("ok"):
+                    break
+        except Exception as exc:
+            logger.warning("Local IPC client error: %s", exc)
+        finally:
+            try:
+                _ = self._apply_owner_disconnect_policy(connection_actor_ids)
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _run_local_control_listener(self) -> None:
+        family = str(self._local_transport.get("family") or "").strip() or "AF_UNIX"
+        address = str(self._local_transport.get("address") or "").strip()
+        listener = None
+        try:
+            if family == "AF_UNIX" and address:
+                try:
+                    Path(address).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            listener = MPListener(
+                address=address,
+                family=family,
+                authkey=self.shutdown_token.encode("utf-8", errors="ignore"),
+            )
+            if family == "AF_UNIX" and address:
+                try:
+                    os.chmod(address, 0o600)
+                except Exception:
+                    pass
+            self._local_listener_ready.set()
+            while not self._local_listener_stop.is_set():
+                try:
+                    conn = listener.accept()
+                except Exception:
+                    if self._local_listener_stop.is_set():
+                        break
+                    raise
+                t = threading.Thread(
+                    target=self._serve_local_control_client,
+                    args=(conn,),
+                    daemon=True,
+                )
+                t.start()
+        except Exception as exc:
+            self._local_listener_error = str(exc)
+            self._local_listener_ready.set()
+            logger.warning("Local IPC listener failed: %s", exc)
+        finally:
+            if listener is not None:
+                try:
+                    listener.close()
+                except Exception:
+                    pass
+            if family == "AF_UNIX" and address:
+                try:
+                    Path(address).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    def _start_local_control_listener(self) -> None:
+        self._local_listener_stop.clear()
+        self._local_listener_ready.clear()
+        self._local_listener_error = None
+        self._local_listener_thread = threading.Thread(
+            target=self._run_local_control_listener,
+            daemon=True,
+            name="engine-host-local-ipc",
+        )
+        self._local_listener_thread.start()
+        if not self._local_listener_ready.wait(timeout=5.0):
+            raise RuntimeError("local IPC listener did not become ready")
+        if self._local_listener_error:
+            raise RuntimeError(self._local_listener_error)
+
+    def _stop_local_control_listener(self) -> None:
+        self._local_listener_stop.set()
+        family = str(self._local_transport.get("family") or "").strip()
+        address = str(self._local_transport.get("address") or "").strip()
+        if family and address:
+            try:
+                conn = MPClient(
+                    address=address,
+                    family=family,
+                    authkey=self.shutdown_token.encode("utf-8", errors="ignore"),
+                )
+                try:
+                    conn.send({"seq": 0, "cmd": "__ping__", "payload": {}})
+                except Exception:
+                    pass
+                conn.close()
+            except Exception:
+                pass
+        thread = self._local_listener_thread
+        if thread is not None:
+            thread.join(timeout=5.0)
+        self._local_listener_thread = None
 
     @staticmethod
     def _operation_event(stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
@@ -739,28 +1026,33 @@ class EngineHostDaemon:
             self._replace_operation(op)
 
     async def run(self) -> None:
-        """Start server, then write PID file and run until stop event."""
+        """Start local IPC control listener, then write PID file and run until stop event."""
         self._stop_event = asyncio.Event()
+        self._loop = asyncio.get_running_loop()
         try:
-            self._server = await asyncio.start_server(
-                self._handle_client,
-                "127.0.0.1",
-                self.port,
-                limit=2 ** 20,
-            )
-            # Capture actual bound port before publishing PID file readiness.
+            self._start_local_control_listener()
+            write_kwargs = {
+                "pid": os.getpid(),
+                "port": self.port,
+                "shutdown_token": self.shutdown_token,
+                "transport": str(self._local_transport.get("transport") or ""),
+                "ipc_family": str(self._local_transport.get("family") or ""),
+                "ipc_address": str(self._local_transport.get("address") or ""),
+            }
             try:
-                sockets = list(getattr(self._server, "sockets", []) or [])
-                if sockets:
-                    sockname = sockets[0].getsockname()
-                    if isinstance(sockname, tuple) and len(sockname) >= 2:
-                        self.port = int(sockname[1] or self.port)
-            except Exception:
-                pass
-            self.pid_file.write(pid=os.getpid(), port=self.port, shutdown_token=self.shutdown_token)
-            logger.info("EngineHostDaemon starting on 127.0.0.1:%d", self.port)
-            async with self._server:
-                await self._stop_event.wait()
+                self.pid_file.write(**write_kwargs)
+            except TypeError:
+                self.pid_file.write(
+                    pid=int(write_kwargs["pid"]),
+                    port=int(write_kwargs["port"]),
+                    shutdown_token=str(write_kwargs["shutdown_token"]),
+                )
+            logger.info(
+                "EngineHostDaemon starting on local IPC %s:%s",
+                self._local_transport.get("family"),
+                self._local_transport.get("address"),
+            )
+            await self._stop_event.wait()
         finally:
             try:
                 self._shutdown_stage_events = []
@@ -808,66 +1100,10 @@ class EngineHostDaemon:
                 )
             except Exception as exc:
                 logger.warning("Shutdown checkpoints failed: %s", exc)
+            self._stop_local_control_listener()
             self.pid_file.remove()
+            self._loop = None
             logger.info("EngineHostDaemon stopped")
-
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        peer = writer.get_extra_info("peername")
-        logger.debug("Client connected: %s", peer)
-        connection_actor_ids: set[str] = set()
-        try:
-            while True:
-                try:
-                    line = await asyncio.wait_for(reader.readline(), timeout=300.0)
-                except asyncio.TimeoutError:
-                    break
-                if not line:
-                    break
-                raw = line.decode("utf-8", errors="replace").strip()
-                if not raw:
-                    continue
-                try:
-                    req_obj = json.loads(raw)
-                    payload_obj = dict((req_obj or {}).get("payload") or {})
-                    tok = str(
-                        payload_obj.get("session_token")
-                        or payload_obj.get("auth_token")
-                        or ""
-                    ).strip()
-                    if tok:
-                        actor_id = self.svc.resolve_actor_id_from_session_token(tok)
-                        if actor_id and actor_id not in connection_actor_ids:
-                            connection_actor_ids.add(actor_id)
-                            self._track_actor_connected(actor_id)
-                except Exception:
-                    pass
-                peer_host = ""
-                try:
-                    if isinstance(peer, tuple) and len(peer) >= 1:
-                        peer_host = str(peer[0] or "")
-                except Exception:
-                    peer_host = ""
-                response = await self._dispatch(raw, peer_host=peer_host)
-                writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
-                await writer.drain()
-                # Stop serving this client after __shutdown__ is accepted
-                if response.get("result") == "shutting_down" and response.get("ok"):
-                    break
-        except (ConnectionResetError, BrokenPipeError):
-            pass
-        except Exception as exc:
-            logger.warning("Client error %s: %s", peer, exc)
-        finally:
-            try:
-                _ = self._apply_owner_disconnect_policy(connection_actor_ids)
-            except Exception:
-                pass
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
-            logger.debug("Client disconnected: %s", peer)
 
     async def _dispatch(self, raw_line: str, *, peer_host: Optional[str] = None) -> Dict[str, Any]:
         try:
@@ -1564,7 +1800,15 @@ def start_daemon_background(
                 continue
             from .engine_host_connection import LocalSocketConnection
 
-            conn = LocalSocketConnection(port=actual_port, timeout=1.0, max_reconnect_attempts=1)
+            conn_kwargs: Dict[str, Any] = {
+                "port": actual_port,
+                "timeout": 1.0,
+                "max_reconnect_attempts": 1,
+            }
+            pid_path = getattr(pid_info, "path", None)
+            if pid_path is not None:
+                conn_kwargs["pid_file"] = pid_path
+            conn = LocalSocketConnection(**conn_kwargs)
             pong = conn.invoke("__ping__", {})
             conn.close()
             if str(pong) != "pong":

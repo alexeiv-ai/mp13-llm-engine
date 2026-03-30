@@ -3065,12 +3065,27 @@ class EngineHostService:
             if not isinstance(out, dict):
                 raise RuntimeError("invalid ipc response")
             return dict(out or {})
+        except FileNotFoundError as exc:
+            engine_id = str(reg.get("engine_id") or "").strip() or "unknown"
+            raise RuntimeError(
+                f"worker IPC endpoint is unavailable for engine '{engine_id}' at '{address}'; "
+                "worker process may not be running"
+            ) from exc
         finally:
             if conn is not None:
                 try:
                     conn.close()
                 except Exception:
                     pass
+
+    def _require_ipc_registration(self, engine_id: str, *, command_label: str) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        reg = self._find_registration(eid)
+        if not reg:
+            raise ValueError(f"engine '{eid}' is not registered")
+        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+            raise ValueError(f"{command_label} is only supported for ipc transport")
+        return reg
 
     def _build_engine_spawn_spec(self, *, engine_id: str, config_path: str, model_path: str) -> Dict[str, Any]:
         python = self._engine_python_executable()
@@ -3551,9 +3566,7 @@ class EngineHostService:
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
-        reg = self._find_registration(eid) or {}
-        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("ipc transport is required")
+        reg = self._require_ipc_registration(eid, command_label="inspect-capabilities")
         out = self._ipc_call(reg=reg, payload={"kind": "hello", "engine_id": eid}, timeout_seconds=5.0)
         if str(out.get("status") or "").strip().lower() == "error":
             raise RuntimeError(str(out.get("message") or "inspect_failed"))
@@ -4149,9 +4162,7 @@ class EngineHostService:
         meth = str(method or "").strip()
         if not meth:
             raise ValueError("method is required")
-        reg = self._find_registration(eid) or {}
-        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-rpc is only supported for ipc transport")
+        reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         out = self._ipc_call(
             reg=reg,
             payload={"kind": "rpc_call", "engine_id": eid, "method": meth, "params": dict(params or {})},
@@ -4179,9 +4190,7 @@ class EngineHostService:
         req_id = str(request_id or "").strip()
         if not req_id:
             raise ValueError("request_id is required")
-        reg = self._find_registration(eid) or {}
-        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-rpc is only supported for ipc transport")
+        reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         out = self._ipc_call(
             reg=reg,
             payload={
@@ -4211,9 +4220,7 @@ class EngineHostService:
             raise ValueError("engine_id is required")
         if not sid:
             raise ValueError("stream_id is required")
-        reg = self._find_registration(eid) or {}
-        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-rpc is only supported for ipc transport")
+        reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         out = self._ipc_call(
             reg=reg,
             payload={"kind": "stream_send", "engine_id": eid, "stream_id": sid, "message": dict(message or {})},
@@ -4237,9 +4244,7 @@ class EngineHostService:
             raise ValueError("engine_id is required")
         if not sid:
             raise ValueError("stream_id is required")
-        reg = self._find_registration(eid) or {}
-        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-rpc is only supported for ipc transport")
+        reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         out = self._ipc_call(
             reg=reg,
             payload={
@@ -4268,9 +4273,7 @@ class EngineHostService:
             raise ValueError("engine_id is required")
         if not sid:
             raise ValueError("stream_id is required")
-        reg = self._find_registration(eid) or {}
-        if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
-            raise ValueError("proxy-rpc is only supported for ipc transport")
+        reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         out = self._ipc_call(
             reg=reg,
             payload={"kind": "stream_close", "engine_id": eid, "stream_id": sid},

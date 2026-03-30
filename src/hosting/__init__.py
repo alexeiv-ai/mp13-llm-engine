@@ -5,12 +5,12 @@ Public API — stdlib only at module level, no heavy imports (torch/transformers
 
 Key classes and functions available for import:
     EngineHostService         — file-backed process lifecycle and control-plane state
-    EngineHostDaemon          — asyncio TCP daemon server (127.0.0.1:default 19876)
+    EngineHostDaemon          — local IPC daemon server for control commands
     DaemonPidFile             — read/write/probe the daemon PID file
-    DEFAULT_DAEMON_PORT       — default TCP port (19876)
+    DEFAULT_DAEMON_PORT       — legacy compatibility port metadata (19876)
     run_daemon_foreground()   — start daemon blocking in foreground
     start_daemon_background() — spawn daemon as detached background process
-    LocalSocketConnection     — persistent TCP socket to local daemon
+    LocalSocketConnection     — persistent local daemon connection (IPC with legacy TCP fallback)
     SSHRelayConnection        — persistent SSH subprocess running --relay
     BaseConnection            — abstract base for connection strategies
     ConnectionError           — raised on unrecoverable connection failure

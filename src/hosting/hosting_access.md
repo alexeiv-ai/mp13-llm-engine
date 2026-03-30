@@ -16,7 +16,7 @@ Client migration checklist and breaking payload/role changes are documented in:
 
 ## 1. Goals
 
-1. Harden hosting for local, SSH tunnel, and truly remote scenarios.
+1. Harden hosting for local, SSH relay, and truly remote scenarios.
 2. Keep design usable first; add advanced hardening as opt-in with clear risk tradeoffs.
 3. Define deterministic daemon/resource lifetime for exclusive and shared endpoint modes.
 4. Use SSH-key identities as the primary long-lived identity model; use tokens for bounded access time.
@@ -237,7 +237,7 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
 ### 8.1 Script input intents
 
 1. `local_only` (local-only clients)
-2. `ssh_tunnel_only` (SSH tunnel-only remote clients)
+2. `ssh_tunnel_only` (SSH-mediated remote clients; current implementation uses SSH relay for daemon control)
 3. `truly_remote` (non-loopback direct or proxied remote access)
 
 ### 8.2 Common script outputs
@@ -253,11 +253,11 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
 ### 8.3 External steps by intent
 
 1. Local-only
-   - bind daemon to loopback/local IPC only
+   - bind daemon control to local IPC only
    - optional `require_auth=false` if safe-only gate passes
 2. SSH tunnel-only
-   - bind daemon loopback only on host
-   - establish SSH `-L`/relay path externally
+   - bind daemon control to local IPC only on host
+   - use SSH relay for daemon control
    - enforce auth and SSH-bound session usage
 3. Truly remote
    - explicit non-loopback bind (or reverse proxy) by admin choice
@@ -309,7 +309,7 @@ Local operator caveat:
 
 Local shutdown/restart notes relevant to ownership recovery:
 1. The daemon stop path is `__shutdown__` guarded by `shutdown_token`.
-2. `shutdown_token` is persisted in the daemon PID file (`hosting/state/daemon.pid`) alongside `pid` and `port`.
+2. `shutdown_token` is persisted in the daemon PID file (`hosting/state/daemon.pid`) alongside `pid`, `port`, and local IPC transport metadata.
 3. `terminal_control_enabled` is persisted in control state under `control_config.lifecycle_policy.terminal_control_enabled`.
 4. Even with the correct `shutdown_token`, daemon shutdown is denied when `terminal_control_enabled=false`.
 5. The effective terminal-control state should be read via `get-lifecycle-policy-effective`; raw persisted config can also be inspected via `get-control-config`.
@@ -336,7 +336,7 @@ Use when:
 
 Use when:
 1. shared multi-client operation
-2. SSH tunnel workflows requiring continuity
+2. SSH relay workflows requiring continuity
 
 ### 9.3 Service-managed cycle (optional admin add-on)
 
@@ -387,7 +387,7 @@ Unmitigated or weakly mitigated vectors:
 2. misuse by any process with equivalent local user privileges
 
 Minimum controls to remain in this scenario:
-1. daemon bind remains loopback/local IPC only
+1. daemon control remains local IPC only
 2. endpoint mode remains `exclusive`
 3. single-user admin-only key profile remains enforced
 4. no tunnel/relay/public ingress is enabled
@@ -423,10 +423,10 @@ Minimum controls to remain in this scenario:
 Escalate to next scenario when:
 1. off-host operators need access
 
-### 10.3 Scenario C: SSH tunnel-only remote operation (`ssh_tunnel_only`)
+### 10.3 Scenario C: SSH relay remote operation (`ssh_tunnel_only`)
 
 Intended usage:
-1. remote operator access while keeping daemon loopback-bound on host
+1. remote operator access while keeping daemon control local-IPC-bound on host
 2. continuity workflows via detached lifecycle profile
 
 Mitigated attack vectors:
@@ -437,12 +437,12 @@ Mitigated attack vectors:
 
 Unmitigated or weakly mitigated vectors:
 1. stolen SSH private keys
-2. host compromise on tunnel endpoint
-3. tunnel endpoint operational misconfiguration
+2. host compromise on SSH relay endpoint
+3. SSH relay endpoint operational misconfiguration
 
 Minimum controls to remain in this scenario:
-1. host daemon bind stays loopback-only
-2. SSH tunnel endpoint hardening is applied outside daemon (host/network policy)
+1. host daemon control stays local-IPC-only
+2. SSH relay endpoint hardening is applied outside daemon (host/network policy)
 3. short session/token TTL and strict role separation
 4. regular claim/auth audit review for suspicious takeover/auth patterns
 

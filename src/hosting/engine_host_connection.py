@@ -3,7 +3,7 @@ Persistent connection strategies for EngineHostControlChannel.
 
 Two implementations sharing a common BaseConnection interface:
 
-- LocalSocketConnection: direct TCP socket to 127.0.0.1:<port> (local daemon)
+- LocalSocketConnection: local IPC connection to daemon (with legacy TCP fallback)
 - SSHRelayConnection: persistent SSH subprocess running --relay on the remote host
 
 Both implement:
@@ -22,6 +22,8 @@ import sys
 import tempfile
 import threading
 import time
+from multiprocessing.connection import AuthenticationError
+from multiprocessing.connection import Client as MPClient
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -45,14 +47,14 @@ class BaseConnection:
 
 class LocalSocketConnection(BaseConnection):
     """
-    Direct TCP connection to local daemon on 127.0.0.1:<port>.
+    Direct local connection to daemon.
 
     Thread-safe: uses a lock so concurrent callers are serialized.
-    Reconnects automatically on socket failure (up to max_reconnect_attempts).
+    Reconnects automatically on transport failure (up to max_reconnect_attempts).
 
     Usage::
 
-        conn = LocalSocketConnection(port=19876)
+        conn = LocalSocketConnection(pid_file="~/.mp13-llm/hosting/state/daemon.pid")
         result = conn.invoke("discover-running", {})
         conn.close()
     """
@@ -60,19 +62,33 @@ class LocalSocketConnection(BaseConnection):
     def __init__(
         self,
         *,
-        port: int,
+        port: int = 0,
+        pid_file: Optional[Path] = None,
         timeout: float = 15.0,
         max_reconnect_attempts: int = 3,
     ):
         self._port = int(port)
+        self._pid_file = Path(pid_file).expanduser().resolve() if pid_file else None
         self._timeout = float(timeout or 15.0)
         self._max_reconnect = max(1, int(max_reconnect_attempts or 3))
+        self._conn: Optional[Any] = None
         self._sock: Optional[socket.socket] = None
         self._file: Optional[Any] = None  # socket.makefile("rb")
         self._seq = 0
         self._lock = threading.Lock()
 
-    def _connect(self) -> None:
+    def _load_transport_metadata(self) -> Dict[str, Any]:
+        if self._pid_file is None:
+            return {}
+        try:
+            from .engine_host_daemon import DaemonPidFile
+
+            info = DaemonPidFile(self._pid_file).read() or {}
+            return dict(info or {})
+        except Exception:
+            return {}
+
+    def _connect_legacy_tcp(self) -> None:
         if self._sock is not None:
             try:
                 self._sock.close()
@@ -90,6 +106,28 @@ class LocalSocketConnection(BaseConnection):
         self._sock = s
         self._file = s.makefile("rb")
 
+    def _connect(self) -> str:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+        metadata = self._load_transport_metadata()
+        transport = str(metadata.get("transport") or "").strip().lower()
+        family = str(metadata.get("ipc_family") or "").strip()
+        address = str(metadata.get("ipc_address") or "").strip()
+        shutdown_token = str(metadata.get("shutdown_token") or "").strip()
+        if transport == "local_ipc" and family and address and shutdown_token:
+            self._conn = MPClient(
+                address=address,
+                family=family,
+                authkey=shutdown_token.encode("utf-8", errors="ignore"),
+            )
+            return "ipc"
+        self._connect_legacy_tcp()
+        return "tcp"
+
     def _readline(self) -> str:
         if self._file is None:
             raise ConnectionError("Not connected")
@@ -102,28 +140,47 @@ class LocalSocketConnection(BaseConnection):
         with self._lock:
             self._seq += 1
             seq = self._seq
-            request = json.dumps({"seq": seq, "cmd": cmd, "payload": dict(payload or {})}, ensure_ascii=False) + "\n"
+            request_payload = {"seq": seq, "cmd": cmd, "payload": dict(payload or {})}
+            request = json.dumps(request_payload, ensure_ascii=False) + "\n"
             last_exc: Optional[Exception] = None
             for attempt in range(self._max_reconnect):
                 try:
-                    if self._sock is None:
-                        self._connect()
-                    assert self._sock is not None
-                    self._sock.sendall(request.encode("utf-8"))
-                    raw = self._readline()
-                    resp = json.loads(raw)
+                    mode = "tcp"
+                    if self._conn is None and self._sock is None:
+                        mode = self._connect()
+                    elif self._conn is not None:
+                        mode = "ipc"
+                    if mode == "ipc":
+                        assert self._conn is not None
+                        self._conn.send(dict(request_payload))
+                        resp = self._conn.recv()
+                    else:
+                        assert self._sock is not None
+                        self._sock.sendall(request.encode("utf-8"))
+                        raw = self._readline()
+                        resp = json.loads(raw)
+                    if not isinstance(resp, dict):
+                        raise ConnectionError("Daemon returned invalid response")
                     if not resp.get("ok"):
                         raise RuntimeError(str(resp.get("error") or f"daemon command '{cmd}' failed"))
                     return resp.get("result")
-                except (OSError, BrokenPipeError, ConnectionResetError, ConnectionError) as exc:
+                except (OSError, BrokenPipeError, ConnectionResetError, ConnectionError, EOFError, AuthenticationError) as exc:
                     last_exc = exc
+                    if self._conn is not None:
+                        try:
+                            self._conn.close()
+                        except Exception:
+                            pass
+                    self._conn = None
                     self._sock = None
                     self._file = None
                     if attempt < self._max_reconnect - 1:
                         time.sleep(0.2 * (attempt + 1))
-            raise ConnectionError(
-                f"Failed to reach local daemon on port {self._port}: {last_exc}"
-            ) from last_exc
+            if self._pid_file is not None:
+                raise ConnectionError(
+                    f"Failed to reach local daemon via pid file {self._pid_file}: {last_exc}"
+                ) from last_exc
+            raise ConnectionError(f"Failed to reach local daemon on port {self._port}: {last_exc}") from last_exc
 
     def is_alive(self) -> bool:
         try:
@@ -134,6 +191,12 @@ class LocalSocketConnection(BaseConnection):
 
     def close(self) -> None:
         with self._lock:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
             if self._sock is not None:
                 try:
                     self._sock.close()

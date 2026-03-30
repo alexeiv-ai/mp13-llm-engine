@@ -730,17 +730,14 @@ python -m hosting.engine_host_cli --payload-stdin auth-list-issued-tokens
 
 ## 6. Remote Access Patterns
 
-Two supported SSH patterns:
+Supported SSH pattern:
 
 1. SSH relay (GUI default):
    - `SSHRelayConnection` starts `python -m hosting.engine_host_cli --relay` on the remote host.
-   - The relay process connects to `127.0.0.1:<daemon_port>` on the remote host.
+   - The relay process connects to the remote daemon through local IPC discovered from the daemon PID file.
    - Benefits: no persistent tunnel process, no extra exposed listener, simple on-demand flow.
-
-2. SSH tunnel (advanced option):
-   - Example: `ssh -L 19876:127.0.0.1:19876 user@host`
-   - Then use local-style daemon connection (`LocalSocketConnection`) to forwarded `127.0.0.1:19876`.
-   - Benefits: persistent channel and lower per-operation latency.
+2. SSH forwarded-port control is no longer the supported daemon-control path after local IPC migration.
+   - Use SSH relay instead of `ssh -L ...` to a daemon TCP port.
 
 If daemon is directly exposed on public network:
 - enforce `require_auth=true`
@@ -765,6 +762,7 @@ When another project consumes hosting APIs/channels, use this contract:
    - `get_daemon_status()` should be treated as both process and auth readiness.
    - Returned shape includes:
      - daemon fields: `pid_file`, `pid`, `port`, `started_at`, `alive`
+       - local control transport metadata may also be present in the PID file (`transport`, `ipc_family`, `ipc_address`)
      - auth fields: `auth_status` (same shape as `auth-status`), `auth_status_error`
 
 2. Auth bootstrap check:

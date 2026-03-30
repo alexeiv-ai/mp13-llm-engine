@@ -2,7 +2,7 @@
 Backend-side adapter to interact with engine host.
 
 Primary path: persistent connection to a running EngineHostDaemon.
-  - Local mode (no SSH): LocalSocketConnection via TCP to 127.0.0.1:<port>
+  - Local mode (no SSH): LocalSocketConnection via local IPC discovered from PID file
   - SSH mode:            SSHRelayConnection via SSH subprocess running --relay
 
 Fallback: original per-command subprocess (engine_host_cli) when no daemon is
@@ -371,7 +371,11 @@ class EngineHostControlChannel:
 
                 port = self._daemon_port_override or pid_info.get_port()
                 if port and pid_info.is_alive():
-                    conn = LocalSocketConnection(port=port, timeout=self._timeout)
+                    conn = LocalSocketConnection(
+                        port=port,
+                        pid_file=Path(pid_file_path) if pid_file_path else None,
+                        timeout=self._timeout,
+                    )
                     if conn.is_alive():
                         self._connection = conn
                         return conn
@@ -390,7 +394,11 @@ class EngineHostControlChannel:
                             wait_ready_seconds=wait,
                         )
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
-                        conn = LocalSocketConnection(port=new_port, timeout=self._timeout)
+                        conn = LocalSocketConnection(
+                            port=new_port,
+                            pid_file=Path(pid_file_path) if pid_file_path else None,
+                            timeout=self._timeout,
+                        )
                         self._connection = conn
                         return conn
                     except Exception as exc:
@@ -576,7 +584,12 @@ class EngineHostControlChannel:
             if port <= 0:
                 status["reachability_error"] = "missing_daemon_port"
                 return self._finalize_daemon_status(status)
-            conn = LocalSocketConnection(port=port, timeout=min(self._timeout, 5.0), max_reconnect_attempts=1)
+            conn = LocalSocketConnection(
+                port=port,
+                pid_file=Path(pid_file_path) if pid_file_path else None,
+                timeout=min(self._timeout, 5.0),
+                max_reconnect_attempts=1,
+            )
             pong = conn.invoke("__ping__", {})
             status["reachable"] = str(pong or "") == "pong"
             status["alive"] = bool(status["reachable"])
@@ -634,7 +647,12 @@ class EngineHostControlChannel:
         if not port or not token:
             return {"status": "invalid_pid_file"}
         try:
-            conn = LocalSocketConnection(port=port, timeout=5.0, max_reconnect_attempts=1)
+            conn = LocalSocketConnection(
+                port=port,
+                pid_file=Path(pid_file_path) if pid_file_path else None,
+                timeout=5.0,
+                max_reconnect_attempts=1,
+            )
             conn.invoke("__shutdown__", {"shutdown_token": token})
             conn.close()
             with self._connection_lock:

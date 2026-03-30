@@ -275,44 +275,43 @@ def _setup_file_logging(log_file: Optional[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Relay mode: bridge stdin/stdout to local daemon TCP socket
+# Relay mode: bridge stdin/stdout to local daemon control channel
 # ---------------------------------------------------------------------------
 
-def _run_relay(port: int) -> None:
-    """Bridge sys.stdin.buffer -> daemon TCP socket, daemon -> sys.stdout.buffer."""
-    import socket as _socket
+def _run_relay(pid_file: Optional[Path] = None, port: int = 0) -> None:
+    """Bridge stdin/stdout JSON lines through the local daemon control channel."""
+    from .engine_host_connection import LocalSocketConnection
 
-    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    sock.settimeout(10.0)
-    sock.connect(("127.0.0.1", port))
-    sock.settimeout(None)
-
-    sock_file = sock.makefile("rb")
-
-    def _reader() -> None:
-        try:
-            for line in sock_file:
-                sys.stdout.buffer.write(line)
-                sys.stdout.buffer.flush()
-        except Exception:
-            pass
-
-    t = threading.Thread(target=_reader, daemon=True)
-    t.start()
-
+    conn = LocalSocketConnection(
+        port=int(port or 0),
+        pid_file=pid_file,
+        timeout=10.0,
+        max_reconnect_attempts=1,
+    )
     try:
         for line in sys.stdin.buffer:
             stripped = line.strip()
             if not stripped:
                 continue
-            sock.sendall(stripped + b"\n")
+            try:
+                req = json.loads(stripped.decode("utf-8", errors="replace"))
+                seq = int(req.get("seq") or 0)
+                cmd = str(req.get("cmd") or "").strip()
+                payload = dict(req.get("payload") or {})
+                result = conn.invoke(cmd, payload)
+                resp = {"seq": seq, "ok": True, "result": result}
+            except Exception as exc:
+                resp = {
+                    "seq": int(req.get("seq") or 0) if isinstance(locals().get("req"), dict) else -1,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            sys.stdout.buffer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+            sys.stdout.buffer.flush()
     except (BrokenPipeError, EOFError, OSError):
         pass
     finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +339,12 @@ def _try_daemon_invoke(
     if not port:
         return False
     try:
-        conn = LocalSocketConnection(port=port, timeout=10.0, max_reconnect_attempts=1)
+        conn = LocalSocketConnection(
+            port=port,
+            pid_file=pid_info.path,
+            timeout=10.0,
+            max_reconnect_attempts=1,
+        )
         result = conn.invoke(cmd, payload)
         conn.close()
         _print_ok(result)
@@ -517,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
 
     # ------------------------------------------------------------------
-    # Mode 2: --relay  →  bridge stdin/stdout to local daemon TCP socket
+    # Mode 2: --relay  →  bridge stdin/stdout to local daemon control channel
     # ------------------------------------------------------------------
     if "--relay" in argv:
         from .engine_host_daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
@@ -528,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             pid_info = DaemonPidFile(pid_file)
             port = pid_info.get_port() or DEFAULT_DAEMON_PORT
         try:
-            _run_relay(port=port)
+            _run_relay(pid_file=pid_file, port=port)
             return 0
         except Exception as exc:
             _print_error(str(exc))
