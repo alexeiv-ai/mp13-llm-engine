@@ -1384,6 +1384,7 @@ class EngineHostDaemon:
                 command=list(payload.get("command") or []),
                 cwd=payload.get("cwd"),
                 env=dict(payload.get("env") or {}),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}),
             )
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
@@ -1491,6 +1492,52 @@ class EngineHostDaemon:
                 cursor=int(payload.get("cursor") or 0),
                 max_bytes=int(payload.get("max_bytes") or 65536),
                 max_lines=int(payload.get("max_lines") or 500),
+            )
+        if cmd == "sandbox-fs-list":
+            return svc.sandbox_fs_list(
+                engine_id=str(payload.get("engine_id") or ""),
+                root_id=str(payload.get("root_id") or ""),
+                relative_path=payload.get("relative_path"),
+            )
+        if cmd == "sandbox-fs-read-text":
+            return svc.sandbox_fs_read_text(
+                engine_id=str(payload.get("engine_id") or ""),
+                root_id=str(payload.get("root_id") or ""),
+                relative_path=str(payload.get("relative_path") or ""),
+                encoding=str(payload.get("encoding") or "utf-8"),
+            )
+        if cmd == "sandbox-fs-write-text":
+            return svc.sandbox_fs_write_text(
+                engine_id=str(payload.get("engine_id") or ""),
+                root_id=str(payload.get("root_id") or ""),
+                relative_path=str(payload.get("relative_path") or ""),
+                text=str(payload.get("text") or ""),
+                encoding=str(payload.get("encoding") or "utf-8"),
+                create_parents=bool(payload.get("create_parents", True)),
+            )
+        if cmd == "sandbox-fs-mkdir":
+            return svc.sandbox_fs_mkdir(
+                engine_id=str(payload.get("engine_id") or ""),
+                root_id=str(payload.get("root_id") or ""),
+                relative_path=str(payload.get("relative_path") or ""),
+                parents=bool(payload.get("parents", True)),
+                exist_ok=bool(payload.get("exist_ok", True)),
+            )
+        if cmd == "sandbox-fs-stat":
+            return svc.sandbox_fs_stat(
+                engine_id=str(payload.get("engine_id") or ""),
+                root_id=str(payload.get("root_id") or ""),
+                relative_path=payload.get("relative_path"),
+            )
+        if cmd == "sandbox-http-fetch":
+            return svc.sandbox_http_fetch(
+                engine_id=str(payload.get("engine_id") or ""),
+                url=str(payload.get("url") or ""),
+                method=str(payload.get("method") or "GET"),
+                headers=dict(payload.get("headers") or {}),
+                body_b64=str(payload.get("body_b64") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
             )
         if cmd == "proxy-request":
             return svc.proxy_request(

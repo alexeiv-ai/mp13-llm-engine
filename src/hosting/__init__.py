@@ -16,6 +16,7 @@ Key classes and functions available for import:
     ConnectionError           — raised on unrecoverable connection failure
     EngineHostControlChannel  — command channel with daemon connection + subprocess fallback
     EngineProcessSupervisor   — in-process persisted tracker for managed worker processes
+    WorkerSandboxPolicy       — worker sandbox policy schema
 """
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ from .engine_host_connection import (
 )
 from .engine_host_channel import EngineHostControlChannel
 from .engine_process_supervisor import EngineProcessSupervisor
+from .sandbox import WorkerSandboxPolicy
 
 __all__ = [
     "EngineHostService",
@@ -49,4 +51,5 @@ __all__ = [
     "ConnectionError",
     "EngineHostControlChannel",
     "EngineProcessSupervisor",
+    "WorkerSandboxPolicy",
 ]

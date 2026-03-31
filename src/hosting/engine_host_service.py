@@ -23,6 +23,14 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .sandbox import (
+    BrokeredFilesystem,
+    HostBrokeredHttpClient,
+    WorkerLaunchRequest,
+    WorkerSandboxPolicy,
+    launch_worker_process,
+)
+
 def _default_state_dir() -> Path:
     # Keep hosting bootstrap lightweight: avoid importing mp13_engine package
     # during module import to prevent unrelated heavy dependency side-effects.
@@ -1212,6 +1220,12 @@ class EngineHostService:
             "inspect-capabilities",
             "logs-tail",
             "logs-follow",
+            "sandbox-fs-list",
+            "sandbox-fs-read-text",
+            "sandbox-fs-write-text",
+            "sandbox-fs-mkdir",
+            "sandbox-fs-stat",
+            "sandbox-http-fetch",
             "get-control-config",
             "set-control-config",
             "auth-status",
@@ -1267,6 +1281,12 @@ class EngineHostService:
                 "inspect-capabilities",
                 "logs-tail",
                 "logs-follow",
+                "sandbox-fs-list",
+                "sandbox-fs-read-text",
+                "sandbox-fs-write-text",
+                "sandbox-fs-mkdir",
+                "sandbox-fs-stat",
+                "sandbox-http-fetch",
                 "host-metrics",
                 "list-configs",
                 "create-config",
@@ -1295,6 +1315,12 @@ class EngineHostService:
                 "inspect-capabilities",
                 "logs-tail",
                 "logs-follow",
+                "sandbox-fs-list",
+                "sandbox-fs-read-text",
+                "sandbox-fs-write-text",
+                "sandbox-fs-mkdir",
+                "sandbox-fs-stat",
+                "sandbox-http-fetch",
                 "host-metrics",
                 "models-from-config",
                 "connect-from-config",
@@ -1349,6 +1375,12 @@ class EngineHostService:
                 "inspect-capabilities",
                 "logs-tail",
                 "logs-follow",
+                "sandbox-fs-list",
+                "sandbox-fs-read-text",
+                "sandbox-fs-write-text",
+                "sandbox-fs-mkdir",
+                "sandbox-fs-stat",
+                "sandbox-http-fetch",
                 "host-metrics",
                 "get-control-config",
                 "get-lifecycle-policy-effective",
@@ -2338,6 +2370,12 @@ class EngineHostService:
             "inspect-capabilities",
             "logs-tail",
             "logs-follow",
+            "sandbox-fs-list",
+            "sandbox-fs-read-text",
+            "sandbox-fs-write-text",
+            "sandbox-fs-mkdir",
+            "sandbox-fs-stat",
+            "sandbox-http-fetch",
             "get-control-config",
             "set-control-config",
             "auth-upsert-key",
@@ -2369,7 +2407,7 @@ class EngineHostService:
                 self._metrics_auth_denied(str(exc))
                 raise
             return
-        if c in {"proxy-request"}:
+        if c in {"proxy-request", "sandbox-http-fetch"}:
             p = dict(payload or {})
             requested_engine = str(p.get("engine_id") or "").strip()
             try:
@@ -2556,6 +2594,12 @@ class EngineHostService:
             "remove-registration",
             "logs-tail",
             "logs-follow",
+            "sandbox-fs-list",
+            "sandbox-fs-read-text",
+            "sandbox-fs-write-text",
+            "sandbox-fs-mkdir",
+            "sandbox-fs-stat",
+            "sandbox-http-fetch",
             "inspect-capabilities",
             "issue-token",
             "issue-resource-token",
@@ -3705,6 +3749,8 @@ class EngineHostService:
         worker_ipc_family: Optional[str] = None,
         worker_ipc_address: Optional[str] = None,
         worker_profile_class: Optional[str] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        sandbox_runtime: Optional[Dict[str, Any]] = None,
         source: str = "engine_host_spawned",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
@@ -3726,12 +3772,36 @@ class EngineHostService:
             "worker_ipc_family": str(worker_ipc_family or "").strip() or None,
             "worker_ipc_address": str(worker_ipc_address or "").strip() or None,
             "worker_profile_class": self._normalize_worker_profile_class(worker_profile_class),
+            "sandbox_policy": dict(sandbox_policy or {}) if isinstance(sandbox_policy, dict) else None,
+            "sandbox_runtime": dict(sandbox_runtime or {}) if isinstance(sandbox_runtime, dict) else None,
             "log_path": str(self._engine_log_path(eid)),
         }
         rows = [r for r in self._read_engines() if str(r.get("engine_id") or "") != eid]
         rows.append(record)
         self._write_engines(rows)
         return record
+
+    def _sandbox_fs_for_engine(self, engine_id: str) -> BrokeredFilesystem:
+        reg = self._find_registration(str(engine_id or "").strip())
+        if not reg:
+            raise ValueError("engine_id is not registered")
+        policy = WorkerSandboxPolicy.from_mapping(dict(reg.get("sandbox_policy") or {}))
+        if not policy.enabled:
+            raise PermissionError("sandbox_not_enabled")
+        if not bool(policy.brokered_io.filesystem):
+            raise PermissionError("brokered_filesystem_disabled")
+        return BrokeredFilesystem(policy)
+
+    def _sandbox_http_for_engine(self, engine_id: str) -> HostBrokeredHttpClient:
+        reg = self._find_registration(str(engine_id or "").strip())
+        if not reg:
+            raise ValueError("engine_id is not registered")
+        policy = WorkerSandboxPolicy.from_mapping(dict(reg.get("sandbox_policy") or {}))
+        if not policy.enabled:
+            raise PermissionError("sandbox_not_enabled")
+        if not bool(policy.brokered_io.http):
+            raise PermissionError("brokered_http_disabled")
+        return HostBrokeredHttpClient(policy)
 
     def spawn(
         self,
@@ -3745,6 +3815,7 @@ class EngineHostService:
         worker_ipc_family: Optional[str] = None,
         worker_ipc_address: Optional[str] = None,
         worker_profile_class: Optional[str] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not list(command or []):
             raise ValueError("command is required")
@@ -3768,17 +3839,17 @@ class EngineHostService:
         merged_env["MP13_WORKER_IPC_FAMILY"] = ipc_family
         merged_env["MP13_WORKER_IPC_ADDRESS"] = ipc_address
         log_path = self._engine_log_path(str(engine_id or ""))
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_fp = open(log_path, "ab")
-        proc = subprocess.Popen(  # noqa: S603,S607
-            base_cmd,
-            cwd=str(cwd) if cwd else None,
-            env=merged_env,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fp,
-            stderr=subprocess.STDOUT,
+        normalized_sandbox = WorkerSandboxPolicy.from_mapping(sandbox_policy)
+        launched = launch_worker_process(
+            WorkerLaunchRequest(
+                engine_id=eid,
+                command=base_cmd,
+                cwd=Path(str(cwd)).expanduser().resolve() if cwd else None,
+                env=merged_env,
+                log_path=log_path,
+                sandbox_policy=normalized_sandbox,
+            )
         )
-        log_fp.close()
         persisted_env = {str(k): str(v) for k, v in dict(env or {}).items()}
         for key in [
             "MP13_ENGINE_HOST_TOKEN",
@@ -3787,11 +3858,11 @@ class EngineHostService:
             "MP13_WORKER_IPC_FAMILY",
             "MP13_WORKER_IPC_ADDRESS",
         ]:
-            persisted_env[key] = str(merged_env.get(key) or "")
+            persisted_env[key] = str(launched.persisted_env.get(key) or merged_env.get(key) or "")
         return self.register_spawned(
             engine_id=eid,
-            pid=int(proc.pid),
-            command=base_cmd,
+            pid=int(launched.pid),
+            command=list(launched.command),
             cwd=cwd,
             env=persisted_env,
             worker_auth_token=auth_token,
@@ -3799,6 +3870,8 @@ class EngineHostService:
             worker_ipc_family=ipc_family,
             worker_ipc_address=ipc_address,
             worker_profile_class=worker_profile_class,
+            sandbox_policy=normalized_sandbox.to_dict(),
+            sandbox_runtime=dict(launched.runtime),
         )
 
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:
@@ -3809,6 +3882,81 @@ class EngineHostService:
         if changed:
             self._write_engines(kept)
         return {"engine_id": eid, "removed": changed}
+
+    def sandbox_fs_list(self, *, engine_id: str, root_id: str, relative_path: Optional[str] = None) -> Dict[str, Any]:
+        return self._sandbox_fs_for_engine(engine_id).list_dir(root_id=root_id, relative_path=relative_path)
+
+    def sandbox_fs_read_text(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: str,
+        encoding: str = "utf-8",
+    ) -> Dict[str, Any]:
+        return self._sandbox_fs_for_engine(engine_id).read_text(
+            root_id=root_id,
+            relative_path=relative_path,
+            encoding=encoding,
+        )
+
+    def sandbox_fs_write_text(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: str,
+        text: str,
+        encoding: str = "utf-8",
+        create_parents: bool = True,
+    ) -> Dict[str, Any]:
+        return self._sandbox_fs_for_engine(engine_id).write_text(
+            root_id=root_id,
+            relative_path=relative_path,
+            text=text,
+            encoding=encoding,
+            create_parents=create_parents,
+        )
+
+    def sandbox_fs_mkdir(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: str,
+        parents: bool = True,
+        exist_ok: bool = True,
+    ) -> Dict[str, Any]:
+        return self._sandbox_fs_for_engine(engine_id).mkdir(
+            root_id=root_id,
+            relative_path=relative_path,
+            parents=parents,
+            exist_ok=exist_ok,
+        )
+
+    def sandbox_fs_stat(self, *, engine_id: str, root_id: str, relative_path: Optional[str] = None) -> Dict[str, Any]:
+        return self._sandbox_fs_for_engine(engine_id).stat(root_id=root_id, relative_path=relative_path)
+
+    def sandbox_http_fetch(
+        self,
+        *,
+        engine_id: str,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        body_b64: str = "",
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        out = self._sandbox_http_for_engine(engine_id).fetch(
+            url=url,
+            method=method,
+            headers=headers,
+            body_b64=body_b64,
+            timeout_seconds=timeout_seconds,
+            max_response_bytes=max_response_bytes,
+        )
+        return {"engine_id": str(engine_id or ""), **dict(out or {})}
 
     def shutdown(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         entry = self._find_registration(engine_id)
@@ -3856,6 +4004,7 @@ class EngineHostService:
         worker_ipc_family = str(entry.get("worker_ipc_family") or "").strip() or None
         worker_ipc_address = str(entry.get("worker_ipc_address") or "").strip() or None
         worker_profile_class = str(entry.get("worker_profile_class") or "").strip() or None
+        sandbox_policy_raw = dict(entry.get("sandbox_policy") or {})
         if pid > 0 and self._pid_alive(pid):
             return {"status": "running", "engine_id": eid, "pid": pid, "alive": True, "endpoint": endpoint}
         if not command:
@@ -3867,21 +4016,20 @@ class EngineHostService:
                 "reason": "missing_command_metadata",
                 "endpoint": endpoint,
             }
-        log_path = self._engine_log_path(eid)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_fp = open(log_path, "ab")
-        proc = subprocess.Popen(  # noqa: S603,S607
-            command,
-            cwd=str(cwd) if cwd else None,
-            env=(dict(os.environ) | env),
-            stdin=subprocess.DEVNULL,
-            stdout=log_fp,
-            stderr=subprocess.STDOUT,
+        normalized_sandbox = WorkerSandboxPolicy.from_mapping(sandbox_policy_raw)
+        launched = launch_worker_process(
+            WorkerLaunchRequest(
+                engine_id=eid,
+                command=command,
+                cwd=Path(str(cwd)).expanduser().resolve() if cwd else None,
+                env=(dict(os.environ) | env),
+                log_path=self._engine_log_path(eid),
+                sandbox_policy=normalized_sandbox,
+            )
         )
-        log_fp.close()
         reg = self.register_spawned(
             engine_id=eid,
-            pid=int(proc.pid),
+            pid=int(launched.pid),
             command=command,
             cwd=str(cwd) if cwd else None,
             env=env,
@@ -3890,6 +4038,8 @@ class EngineHostService:
             worker_ipc_family=worker_ipc_family,
             worker_ipc_address=worker_ipc_address,
             worker_profile_class=worker_profile_class,
+            sandbox_policy=normalized_sandbox.to_dict(),
+            sandbox_runtime=dict(launched.runtime),
         )
         return {
             "status": "respawned",

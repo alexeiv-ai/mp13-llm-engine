@@ -436,12 +436,35 @@ def _serve_loop(*, family: str, address: str, authkey: bytes) -> int:
     unix_path = Path(address) if family == "AF_UNIX" else None
     stop_event = threading.Event()
     workers: list[threading.Thread] = []
+    accepted: "queue.Queue[Any]" = queue.Queue()
+    accept_errors: "queue.Queue[BaseException]" = queue.Queue()
+
+    def _accept_loop() -> None:
+        assert listener is not None
+        while not stop_event.is_set():
+            try:
+                conn = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError as exc:
+                if stop_event.is_set():
+                    break
+                accept_errors.put(exc)
+                break
+            except Exception as exc:  # pragma: no cover - defensive edge path
+                if stop_event.is_set():
+                    break
+                accept_errors.put(exc)
+                break
+            accepted.put(conn)
+
     if unix_path is not None:
         try:
             if unix_path.exists():
                 unix_path.unlink()
         except Exception:
             pass
+    accept_thread: Optional[threading.Thread] = None
     try:
         listener = Listener(address=address, family=family, authkey=authkey)
         try:
@@ -450,24 +473,30 @@ def _serve_loop(*, family: str, address: str, authkey: bytes) -> int:
                 raw_sock.settimeout(0.5)
         except Exception:
             pass
+        accept_thread = threading.Thread(target=_accept_loop, daemon=True)
+        accept_thread.start()
         while not stop_event.is_set():
             try:
-                conn = listener.accept()
-            except socket.timeout:
+                if not accept_errors.empty():
+                    raise accept_errors.get()
+                conn = accepted.get(timeout=0.2)
+            except queue.Empty:
                 continue
-            except OSError:
-                if stop_event.is_set():
-                    break
-                raise
             t = threading.Thread(target=_handle_conn, args=(conn, stop_event), daemon=True)
             t.start()
             workers.append(t)
+        try:
+            listener.close()
+        except Exception:
+            pass
     finally:
         if listener is not None:
             try:
                 listener.close()
             except Exception:
                 pass
+        if accept_thread is not None:
+            accept_thread.join(timeout=1.0)
         for t in workers[-256:]:
             t.join(timeout=0.5)
         if unix_path is not None:

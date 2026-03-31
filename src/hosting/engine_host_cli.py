@@ -69,6 +69,12 @@ EXAMPLES_BY_COMMAND = {
     "logs-follow": [
         "@'{\"engine_id\":\"worker1\",\"cursor\":0,\"max_bytes\":65536}'@ | python -m hosting.engine_host_cli --payload-stdin logs-follow",
     ],
+    "sandbox-fs-list": [
+        "@'{\"engine_id\":\"worker1\",\"root_id\":\"rw\",\"relative_path\":\"nested\"}'@ | python -m hosting.engine_host_cli --payload-stdin sandbox-fs-list",
+    ],
+    "sandbox-http-fetch": [
+        "@'{\"engine_id\":\"worker1\",\"url\":\"https://example.com/api/test\",\"method\":\"GET\"}'@ | python -m hosting.engine_host_cli --payload-stdin sandbox-http-fetch",
+    ],
     "auth-upsert-key": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"admin\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
         "@'{\"key_id\":\"worker-key\",\"key_secret\":\"change_me\",\"role\":\"worker_user\",\"allowed_engines\":[\"worker1\",\"worker2\"]}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
@@ -393,6 +399,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "inspect-capabilities",
         "logs-tail",
         "logs-follow",
+        "sandbox-fs-list",
+        "sandbox-fs-read-text",
+        "sandbox-fs-write-text",
+        "sandbox-fs-mkdir",
+        "sandbox-fs-stat",
+        "sandbox-http-fetch",
         "get-control-config",
         "set-control-config",
         "auth-status",
@@ -599,6 +611,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     command=list(payload.get("command") or []),
                     cwd=payload.get("cwd"),
                     env=dict(payload.get("env") or {}),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}),
                 )
             )
             return 0
@@ -754,6 +767,70 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     cursor=int(payload.get("cursor") or 0),
                     max_bytes=int(payload.get("max_bytes") or 65536),
                     max_lines=int(payload.get("max_lines") or 500),
+                )
+            )
+            return 0
+        if cmd == "sandbox-fs-list":
+            _print_ok(
+                svc.sandbox_fs_list(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    root_id=str(payload.get("root_id") or ""),
+                    relative_path=payload.get("relative_path"),
+                )
+            )
+            return 0
+        if cmd == "sandbox-fs-read-text":
+            _print_ok(
+                svc.sandbox_fs_read_text(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    root_id=str(payload.get("root_id") or ""),
+                    relative_path=str(payload.get("relative_path") or ""),
+                    encoding=str(payload.get("encoding") or "utf-8"),
+                )
+            )
+            return 0
+        if cmd == "sandbox-fs-write-text":
+            _print_ok(
+                svc.sandbox_fs_write_text(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    root_id=str(payload.get("root_id") or ""),
+                    relative_path=str(payload.get("relative_path") or ""),
+                    text=str(payload.get("text") or ""),
+                    encoding=str(payload.get("encoding") or "utf-8"),
+                    create_parents=bool(payload.get("create_parents", True)),
+                )
+            )
+            return 0
+        if cmd == "sandbox-fs-mkdir":
+            _print_ok(
+                svc.sandbox_fs_mkdir(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    root_id=str(payload.get("root_id") or ""),
+                    relative_path=str(payload.get("relative_path") or ""),
+                    parents=bool(payload.get("parents", True)),
+                    exist_ok=bool(payload.get("exist_ok", True)),
+                )
+            )
+            return 0
+        if cmd == "sandbox-fs-stat":
+            _print_ok(
+                svc.sandbox_fs_stat(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    root_id=str(payload.get("root_id") or ""),
+                    relative_path=payload.get("relative_path"),
+                )
+            )
+            return 0
+        if cmd == "sandbox-http-fetch":
+            _print_ok(
+                svc.sandbox_http_fetch(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    url=str(payload.get("url") or ""),
+                    method=str(payload.get("method") or "GET"),
+                    headers=dict(payload.get("headers") or {}),
+                    body_b64=str(payload.get("body_b64") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                    max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
                 )
             )
             return 0
