@@ -1,0 +1,455 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import queue
+import socket
+import threading
+import traceback
+from multiprocessing.connection import Listener
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from mp13_engine.mp13_config import ToolCall
+
+from .toolbox_harness import ToolboxWorkerStartupSpec, load_toolbox_from_manifest
+
+PROTOCOL_VERSION = 1
+
+
+def _contract_name() -> str:
+    return str(os.environ.get("MP13_WORKER_CONTRACT") or "mp13.toolbox.rpc.v1").strip() or "mp13.toolbox.rpc.v1"
+
+
+_toolbox_lock = threading.Lock()
+_toolbox_state: Optional[tuple[Any, Dict[str, Any]]] = None
+_startup_spec_lock = threading.Lock()
+_startup_spec: Optional[ToolboxWorkerStartupSpec] = None
+
+
+def _worker_engine_id() -> str:
+    spec = _startup_spec_or_none()
+    if spec and str(spec.worker_id or "").strip():
+        return str(spec.worker_id).strip()
+    return str(os.environ.get("MP13_TOOLBOX_EXECUTOR_ENGINE_ID") or os.environ.get("MP13_ENGINE_ID") or "toolbox").strip() or "toolbox"
+
+
+def _startup_spec_or_none() -> Optional[ToolboxWorkerStartupSpec]:
+    global _startup_spec
+    with _startup_spec_lock:
+        if _startup_spec is not None:
+            return _startup_spec
+        raw = str(os.environ.get("MP13_TOOLBOX_WORKER_SPEC_PATH") or "").strip()
+        if not raw:
+            return None
+        path = Path(raw).expanduser().resolve()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        _startup_spec = ToolboxWorkerStartupSpec.from_dict(dict(payload or {}))
+        return _startup_spec
+
+
+def _host_service():
+    from .engine_host_service import EngineHostService
+
+    spec = _startup_spec_or_none()
+    engines_state_file = (
+        str(spec.engines_state_file or "").strip()
+        if spec is not None
+        else str(os.environ.get("MP13_HOSTING_ENGINES_STATE_FILE") or "").strip()
+    )
+    control_state_file = (
+        str(spec.control_state_file or "").strip()
+        if spec is not None
+        else str(os.environ.get("MP13_HOSTING_CONTROL_STATE_FILE") or "").strip()
+    )
+    return EngineHostService(
+        engines_state_file=Path(engines_state_file).expanduser().resolve() if engines_state_file else None,
+        control_state_file=Path(control_state_file).expanduser().resolve() if control_state_file else None,
+    )
+
+
+def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    svc = _host_service()
+    req = dict(arguments or {})
+    engine_id = str(req.get("engine_id") or _worker_engine_id()).strip() or _worker_engine_id()
+    meth = str(method or "").strip()
+    if meth == "fs.list":
+        return svc.sandbox_fs_list(
+            engine_id=engine_id,
+            root_id=str(req.get("root_id") or ""),
+            relative_path=req.get("relative_path"),
+        )
+    if meth == "fs.read_text":
+        return svc.sandbox_fs_read_text(
+            engine_id=engine_id,
+            root_id=str(req.get("root_id") or ""),
+            relative_path=str(req.get("relative_path") or ""),
+            encoding=str(req.get("encoding") or "utf-8"),
+        )
+    if meth == "fs.write_text":
+        return svc.sandbox_fs_write_text(
+            engine_id=engine_id,
+            root_id=str(req.get("root_id") or ""),
+            relative_path=str(req.get("relative_path") or ""),
+            text=str(req.get("text") or ""),
+            encoding=str(req.get("encoding") or "utf-8"),
+            create_parents=bool(req.get("create_parents", True)),
+        )
+    if meth == "fs.mkdir":
+        return svc.sandbox_fs_mkdir(
+            engine_id=engine_id,
+            root_id=str(req.get("root_id") or ""),
+            relative_path=str(req.get("relative_path") or ""),
+            parents=bool(req.get("parents", True)),
+            exist_ok=bool(req.get("exist_ok", True)),
+        )
+    if meth == "fs.stat":
+        return svc.sandbox_fs_stat(
+            engine_id=engine_id,
+            root_id=str(req.get("root_id") or ""),
+            relative_path=req.get("relative_path"),
+        )
+    if meth == "http.fetch":
+        return svc.sandbox_http_fetch(
+            engine_id=engine_id,
+            url=str(req.get("url") or ""),
+            method=str(req.get("method") or "GET"),
+            headers=dict(req.get("headers") or {}),
+            body_b64=str(req.get("body_b64") or ""),
+            timeout_seconds=float(req.get("timeout_seconds") or 30.0),
+            max_response_bytes=int(req.get("max_response_bytes") or 1024 * 1024),
+        )
+    raise RuntimeError(f"unsupported_host_callback:{meth}")
+
+
+class HostCallbackClient:
+    def __init__(self, *, engine_id: str) -> None:
+        self.engine_id = str(engine_id or "").strip() or _worker_engine_id()
+
+    def call(self, method: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        req = dict(arguments or {})
+        req.setdefault("engine_id", self.engine_id)
+        return _invoke_host_call(str(method or ""), req)
+
+
+class BrokeredFsClient:
+    def __init__(self, *, host: HostCallbackClient) -> None:
+        self.host = host
+
+    def list_dir(self, *, root_id: str, relative_path: Optional[str] = None) -> Dict[str, Any]:
+        return self.host.call("fs.list", {"root_id": str(root_id or ""), "relative_path": relative_path})
+
+    def read_text(self, *, root_id: str, relative_path: str, encoding: str = "utf-8") -> Dict[str, Any]:
+        return self.host.call(
+            "fs.read_text",
+            {"root_id": str(root_id or ""), "relative_path": str(relative_path or ""), "encoding": str(encoding or "utf-8")},
+        )
+
+    def write_text(
+        self,
+        *,
+        root_id: str,
+        relative_path: str,
+        text: str,
+        encoding: str = "utf-8",
+        create_parents: bool = True,
+    ) -> Dict[str, Any]:
+        return self.host.call(
+            "fs.write_text",
+            {
+                "root_id": str(root_id or ""),
+                "relative_path": str(relative_path or ""),
+                "text": str(text or ""),
+                "encoding": str(encoding or "utf-8"),
+                "create_parents": bool(create_parents),
+            },
+        )
+
+    def mkdir(self, *, root_id: str, relative_path: str, parents: bool = True, exist_ok: bool = True) -> Dict[str, Any]:
+        return self.host.call(
+            "fs.mkdir",
+            {
+                "root_id": str(root_id or ""),
+                "relative_path": str(relative_path or ""),
+                "parents": bool(parents),
+                "exist_ok": bool(exist_ok),
+            },
+        )
+
+    def stat(self, *, root_id: str, relative_path: Optional[str] = None) -> Dict[str, Any]:
+        return self.host.call("fs.stat", {"root_id": str(root_id or ""), "relative_path": relative_path})
+
+
+class BrokeredHttpClient:
+    def __init__(self, *, host: HostCallbackClient) -> None:
+        self.host = host
+
+    def fetch(
+        self,
+        *,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        body_b64: str = "",
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        return self.host.call(
+            "http.fetch",
+            {
+                "url": str(url or ""),
+                "method": str(method or "GET"),
+                "headers": dict(headers or {}),
+                "body_b64": str(body_b64 or ""),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "max_response_bytes": int(max_response_bytes or 1024 * 1024),
+            },
+        )
+
+
+class ToolboxExecutionContext:
+    def __init__(self, *, engine_id: str) -> None:
+        self.engine_id = str(engine_id or "").strip() or _worker_engine_id()
+        self.host = HostCallbackClient(engine_id=self.engine_id)
+        self.fs = BrokeredFsClient(host=self.host)
+        self.http = BrokeredHttpClient(host=self.host)
+
+
+def _manifest_path() -> Path:
+    spec = _startup_spec_or_none()
+    if spec and str(spec.manifest_path or "").strip():
+        return Path(str(spec.manifest_path)).expanduser().resolve()
+    raw = str(os.environ.get("MP13_TOOLBOX_MANIFEST_PATH") or "").strip()
+    if not raw:
+        raise RuntimeError("MP13_TOOLBOX_MANIFEST_PATH or MP13_TOOLBOX_WORKER_SPEC_PATH is required")
+    return Path(raw).expanduser().resolve()
+
+
+def _ensure_toolbox() -> tuple[Any, Dict[str, Any]]:
+    global _toolbox_state
+    with _toolbox_lock:
+        if _toolbox_state is None:
+            _toolbox_state = load_toolbox_from_manifest(_manifest_path())
+        return _toolbox_state
+
+
+def _manifest_tool_names(manifest: Dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in list(manifest.get("tools") or []):
+        name = str(dict(item or {}).get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    for item in list(manifest.get("auto_tools") or []):
+        name = str(dict(item or {}).get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    for item in list(manifest.get("active_intrinsic_tool_names") or []):
+        name = str(item or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
+    _, manifest = _ensure_toolbox()
+    tool_names = _manifest_tool_names(manifest)
+    return {
+        "status": "ok",
+        "protocol_version": PROTOCOL_VERSION,
+        "contract": _contract_name(),
+        "sync_rpc": True,
+        "async_rpc": True,
+        "cancellation": False,
+        "tool_names": tool_names,
+        "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
+    }
+
+
+async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    meth = str(method or "").strip()
+    if meth in {"rpc.describe", "describe", "capabilities"}:
+        return await _handle_hello({})
+    if meth == "host.call":
+        host_method = str(params.get("method") or "").strip()
+        if not host_method:
+            return {"status": "error", "message": "host_call_method_required"}
+        arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        try:
+            result = _invoke_host_call(host_method, dict(arguments or {}))
+        except Exception as exc:
+            return {"status": "error", "message": f"host_call_failed:{exc}"}
+        return {"status": "ok", "result": result}
+    toolbox, manifest = _ensure_toolbox()
+    if meth == "toolbox.describe":
+        tool_names = _manifest_tool_names(manifest)
+        return {
+            "status": "ok",
+            "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
+            "bundle": {
+                "bundle_id": manifest.get("bundle_id"),
+                "bundle_revision": manifest.get("bundle_revision"),
+                "manifest_hash": manifest.get("manifest_hash"),
+            },
+            "tool_names": tool_names,
+            "parallel_execution": {
+                "async_within_executor": True,
+                "sandbox_pool": False,
+            },
+        }
+    if meth == "toolbox.execute":
+        raw_call = dict(params.get("tool_call") or {})
+        call = ToolCall.from_dict(raw_call)
+        tool_names = set(_manifest_tool_names(manifest))
+        if call.name not in tool_names:
+            call.error = f"Error: Tool '{call.name}' is not staged in this executor."
+            return {"status": "ok", "tool_call": call.to_dict()}
+        context = ToolboxExecutionContext(engine_id=_worker_engine_id())
+        result = await toolbox.execute(call, context=context, host=context.host, fs=context.fs, http=context.http)
+        if result is not None:
+            call.result = result
+        return {"status": "ok", "tool_call": call.to_dict()}
+    return {"status": "error", "message": f"unsupported_method:{meth}"}
+
+
+async def _handle_rpc_call(payload: Dict[str, Any]) -> Dict[str, Any]:
+    method = str(payload.get("method") or "").strip()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if not method:
+        return {"status": "error", "message": "method_required"}
+    return await _rpc_call(method, dict(params or {}))
+
+
+def _handle_conn(conn: Any, stop_event: threading.Event) -> None:
+    try:
+        req = conn.recv()
+        if not isinstance(req, dict):
+            conn.send({"status": "error", "message": "invalid_request"})
+            return
+        kind = str(req.get("kind") or "").strip().lower()
+        if kind == "shutdown":
+            conn.send({"status": "ok"})
+            stop_event.set()
+            return
+        if kind == "hello":
+            conn.send(asyncio.run(_handle_hello(req)))
+            return
+        if kind == "rpc_call":
+            conn.send(asyncio.run(_handle_rpc_call(req)))
+            return
+        conn.send({"status": "error", "message": "unsupported_kind"})
+    except Exception as exc:
+        try:
+            conn.send({"status": "error", "message": f"worker_exception:{exc}"})
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _serve_loop(*, family: str, address: str, authkey: bytes) -> int:
+    listener = None
+    unix_path = Path(address) if family == "AF_UNIX" else None
+    stop_event = threading.Event()
+    workers: list[threading.Thread] = []
+    accepted: "queue.Queue[Any]" = queue.Queue()
+    accept_errors: "queue.Queue[BaseException]" = queue.Queue()
+
+    def _accept_loop() -> None:
+        assert listener is not None
+        while not stop_event.is_set():
+            try:
+                conn = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError as exc:
+                if stop_event.is_set():
+                    break
+                accept_errors.put(exc)
+                break
+            except Exception as exc:
+                if stop_event.is_set():
+                    break
+                accept_errors.put(exc)
+                break
+            accepted.put(conn)
+
+    if unix_path is not None:
+        try:
+            if unix_path.exists():
+                unix_path.unlink()
+        except Exception:
+            pass
+    accept_thread: Optional[threading.Thread] = None
+    try:
+        _ensure_toolbox()
+        listener = Listener(address=address, family=family, authkey=authkey)
+        try:
+            raw_sock = getattr(getattr(listener, "_listener", None), "_socket", None)
+            if raw_sock is not None:
+                raw_sock.settimeout(0.5)
+        except Exception:
+            pass
+        accept_thread = threading.Thread(target=_accept_loop, daemon=True)
+        accept_thread.start()
+        while not stop_event.is_set():
+            try:
+                if not accept_errors.empty():
+                    raise accept_errors.get()
+                conn = accepted.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            t = threading.Thread(target=_handle_conn, args=(conn, stop_event), daemon=True)
+            t.start()
+            workers.append(t)
+    finally:
+        if listener is not None:
+            try:
+                listener.close()
+            except Exception:
+                pass
+        if accept_thread is not None:
+            accept_thread.join(timeout=1.0)
+        for t in workers[-256:]:
+            t.join(timeout=0.5)
+        if unix_path is not None:
+            try:
+                if unix_path.exists():
+                    unix_path.unlink()
+            except Exception:
+                pass
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ipc-family", required=True, choices=["AF_UNIX", "AF_PIPE"])
+    ap.add_argument("--ipc-address", required=True)
+    args = ap.parse_args()
+
+    auth_token = str(os.environ.get("MP13_ENGINE_HOST_TOKEN") or "").strip()
+    if not auth_token:
+        print("Missing MP13_ENGINE_HOST_TOKEN", flush=True)
+        return 2
+    try:
+        _ensure_toolbox()
+    except Exception:
+        print(traceback.format_exc(), flush=True)
+        return 3
+    return _serve_loop(
+        family=str(args.ipc_family),
+        address=str(args.ipc_address),
+        authkey=auth_token.encode("utf-8", errors="ignore"),
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

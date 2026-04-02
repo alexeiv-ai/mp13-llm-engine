@@ -75,6 +75,12 @@ EXAMPLES_BY_COMMAND = {
     "sandbox-http-fetch": [
         "@'{\"engine_id\":\"worker1\",\"url\":\"https://example.com/api/test\",\"method\":\"GET\"}'@ | python -m hosting.engine_host_cli --payload-stdin sandbox-http-fetch",
     ],
+    "toolbox-describe": [
+        "@'{\"engine_id\":\"toolbox1\"}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-describe",
+    ],
+    "toolbox-execute": [
+        "@'{\"engine_id\":\"toolbox1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
+    ],
     "auth-upsert-key": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"admin\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
         "@'{\"key_id\":\"worker-key\",\"key_secret\":\"change_me\",\"role\":\"worker_user\",\"allowed_engines\":[\"worker1\",\"worker2\"]}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
@@ -405,6 +411,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "sandbox-fs-mkdir",
         "sandbox-fs-stat",
         "sandbox-http-fetch",
+        "toolbox-describe",
+        "toolbox-execute",
         "get-control-config",
         "set-control-config",
         "auth-status",
@@ -612,6 +620,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     cwd=payload.get("cwd"),
                     env=dict(payload.get("env") or {}),
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}),
+                    executor_kind=payload.get("executor_kind"),
+                    bundle=dict(payload.get("bundle") or {}),
+                    environment=dict(payload.get("environment") or {}),
+                    tool_access=dict(payload.get("tool_access") or {}),
+                    capabilities=dict(payload.get("capabilities") or {}),
                 )
             )
             return 0
@@ -831,6 +844,88 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     body_b64=str(payload.get("body_b64") or ""),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                     max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
+                )
+            )
+            return 0
+        if cmd == "toolbox-describe":
+            _print_ok(
+                svc.toolbox_describe(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
+                )
+            )
+            return 0
+        if cmd == "toolbox-execute":
+            _print_ok(
+                svc.toolbox_execute(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    tool_call=dict(payload.get("tool_call") or {}),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
+        if cmd == "toolbox-register-auto":
+            _print_ok(
+                svc.toolbox_register_auto(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    requests=[dict(item or {}) for item in list(payload.get("requests") or [])],
+                    python_executable=str(payload.get("python_executable") or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-unregister-auto":
+            _print_ok(
+                svc.toolbox_unregister_auto(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()],
+                    python_executable=str(payload.get("python_executable") or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-register-intrinsics":
+            _print_ok(
+                svc.toolbox_register_intrinsics(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    intrinsic_tool_names=[str(item or "").strip() for item in list(payload.get("intrinsic_tool_names") or []) if str(item or "").strip()],
+                    include_guides=bool(payload.get("include_guides", False)),
+                    sandbox_profile=dict(payload.get("sandbox_profile") or {}) or None,
+                    python_executable=str(payload.get("python_executable") or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-unregister-intrinsics":
+            _print_ok(
+                svc.toolbox_unregister_intrinsics(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    intrinsic_tool_names=[str(item or "").strip() for item in list(payload.get("intrinsic_tool_names") or []) if str(item or "").strip()],
+                    include_guides=bool(payload.get("include_guides", False)),
+                    python_executable=str(payload.get("python_executable") or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-register-manual":
+            _print_ok(
+                svc.toolbox_register_manual(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    requests=[dict(item or {}) for item in list(payload.get("requests") or [])],
+                    python_executable=str(payload.get("python_executable") or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-unregister-manual":
+            _print_ok(
+                svc.toolbox_unregister_manual(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()],
+                    python_executable=str(payload.get("python_executable") or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
                 )
             )
             return 0

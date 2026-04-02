@@ -37,6 +37,24 @@ from .engine_host_connection import (
 from .engine_host_channel import EngineHostControlChannel
 from .engine_process_supervisor import EngineProcessSupervisor
 from .sandbox import WorkerSandboxPolicy
+from .toolbox_harness import (
+    ToolboxBundleFile,
+    ToolboxBundleAutoTool,
+    ToolboxBundleTool,
+    SandboxProfileSpec,
+    ToolboxEnvironmentSpec,
+    ToolboxEnvironmentManager,
+    ToolboxAutoAssignmentRequest,
+    ToolboxManualAssignmentRequest,
+    ToolboxSandboxAssignment,
+    ToolboxBundleSpec,
+    StagedToolboxBundle,
+    ToolboxBundleStager,
+    ToolboxSandboxOrchestrator,
+    ToolboxHarnessConfig,
+    ToolboxExecutionHarness,
+    SandboxedToolboxFacade,
+)
 
 __all__ = [
     "EngineHostService",
@@ -52,4 +70,20 @@ __all__ = [
     "EngineHostControlChannel",
     "EngineProcessSupervisor",
     "WorkerSandboxPolicy",
+    "ToolboxBundleFile",
+    "ToolboxBundleAutoTool",
+    "ToolboxBundleTool",
+    "SandboxProfileSpec",
+    "ToolboxEnvironmentSpec",
+    "ToolboxEnvironmentManager",
+    "ToolboxAutoAssignmentRequest",
+    "ToolboxManualAssignmentRequest",
+    "ToolboxSandboxAssignment",
+    "ToolboxBundleSpec",
+    "StagedToolboxBundle",
+    "ToolboxBundleStager",
+    "ToolboxSandboxOrchestrator",
+    "ToolboxHarnessConfig",
+    "ToolboxExecutionHarness",
+    "SandboxedToolboxFacade",
 ]

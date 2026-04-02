@@ -1,708 +1,593 @@
-# Hosting Worker Sandbox Spec And Plan
+# Hosting Toolbox Sandbox Spec And Plan
 
-Date: 2026-03-29
-Scope: Windows-first managed worker sandboxing, with explicit unsupported labels and Brokered I/O integration.
+Date: 2026-04-01
+Scope: Windows-first sandboxing for toolbox-compatible executors, not trusted engine instances.
 
 This document is both:
 
-1. a normative specification for sandbox policy shape and enforcement expectations
-2. an implementation plan with phase gates and testable exit criteria
+1. a normative specification for the first sandbox consumer and its enforcement model
+2. an implementation plan with explicit limitations and rollout gates
 
-## 1. Goals
+## 1. Scope Correction
 
-Windows-first sandboxing for generic managed workers should target these outcomes:
+This plan supersedes the earlier generic-worker framing.
 
-1. Limit worker filesystem access to explicit allowed folders.
-2. Prevent write/modify operations against daemon-owned and normal user-profile files by default.
-3. Avoid inheriting parent process handles unless explicitly required.
-4. Allow optional network disablement and future brokered network policy.
-5. Allow optional child-process creation policy.
-6. Keep current hosting daemon and worker RPC architecture usable.
+Normative scope:
 
-Non-goals for the first Windows cut:
+1. Trusted engine instances such as [engine_worker_ipc.py](/o:/repos/mp13-llm-engine/src/hosting/engine_worker_ipc.py) are not the first sandbox target.
+2. The first sandbox consumer is a toolbox-compatible executor process that runs user-provided tool code.
+3. Sandbox lifecycle includes staging and removing Toolbox objects plus supporting Python modules as part of sandbox management.
+4. Sandbox execution may communicate back to the host over existing IPC for brokered operations and control-plane callbacks.
 
-1. Full URL-level network enforcement at the OS boundary.
-2. Strong same-account read isolation for arbitrary user files.
-3. AppContainer, Docker, or VM dependency.
-4. Perfect cross-platform semantic parity.
+Out of scope for the first cut:
 
-## 2. Current Baseline
+1. Sandboxing the main engine instance.
+2. Claiming strong direct-network allowlisting at the OS boundary on Windows.
+3. In-sandbox package installation directly from the public network at execution time.
+4. Arbitrary same-account read isolation on Windows.
 
-Current managed workers are spawned by plain `subprocess.Popen(...)` with configurable `cwd` and `env` in [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py#L3736) and [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py#L3856).
+## 2. Problem Statement
 
-Current baseline properties:
+The relevant dynamic behavior lives in [mp13_toolbox.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_toolbox.py):
 
-1. No worker sandbox policy schema exists.
-2. No Windows restricted token / integrity-level lowering exists.
-3. No Job Object restrictions exist for workers.
-4. No brokered filesystem or brokered HTTP path exists for workers.
-5. No explicit handle-inheritance hardening is enforced for worker spawn.
+1. tools can be added through `add_tool_external(...)` and `add_tool_callable(...)`
+2. tool links can be repaired dynamically through `resolve_tool_link(...)`
+3. user-defined callable implementations are tracked in `user_tool_callables`
+4. tools can be deleted through `delete_tool(...)`
+5. execution permission is checked at call time in `execute(...)`
 
-## 3. Normative Policy Model
+That is useful for trusted in-process operation, but not sufficient as the sandbox authority boundary.
 
-This section is normative.
+Normative conclusion:
 
-### 3.1 Required Top-Level Fields
+1. `Toolbox` remains the logical tool registry and execution contract.
+2. Host sandbox management must become the authority for which user-defined tools are staged into a sandbox executor.
+3. Tool permission checks must not rely only on `Toolbox.execute(...)` inside sandboxed user code.
 
-Any worker sandbox policy must contain these top-level fields:
+Intrinsic tools are part of the same planning surface:
 
-1. `enabled`
-2. `profile`
-3. `filesystem`
-4. `process`
-5. `network`
-6. `brokered_io`
-7. `platform_policy`
+1. [mp13_toolbox.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_toolbox.py) already supports intrinsic discovery and activation through:
+   - `available_intrinsics(...)`
+   - `add_tool_callable(..., is_intrinsic=True, include_guides=...)`
+   - `activate_tool(...)`
+   - `deactivate_tool(...)`
+2. [mp13_tools_builtin.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_tools_builtin.py) defines built-in callable implementations and optional guide tools through `INTRINSICS_REGISTRY`.
+3. Sandbox planning must therefore cover both:
+   - user-staged Python callables
+   - auto-discovered callables loaded from staged modules by name
+   - builtin intrinsic tools and optional intrinsic guide tools
 
-### 3.2 Required Semantics
+## 3. Target Architecture
 
-1. `filesystem.default_access="deny"` means any direct path access not covered by an explicit rule is not trusted by policy.
-2. `platform_status` labels describe implementation support, not user intent.
-3. `supported` means hosting has a concrete enforcement mechanism for that permission on that platform.
-4. `partial` means hosting can reduce risk or enforce only part of the requested semantics.
-5. `unsupported` means hosting must not claim enforcement for that permission on that platform.
-6. `network.allow_hosts` and `network.allow_url_prefixes` are broker-policy inputs, not raw OS firewall rules in the first Windows cut.
-7. `brokered_io.http=true` means HTTP access must be requested over worker RPC and evaluated by hosting policy.
-8. `brokered_io.filesystem=true` means sensitive filesystem access must be requested over worker RPC and evaluated by hosting policy.
+The intended architecture is:
 
-### 3.3 Transport Requirement For Brokered I/O
+1. host daemon
+2. trusted engine worker
+3. one or more sandboxed toolbox executor workers
 
-Brokered I/O must use the existing host-managed worker IPC RPC transport:
+The trusted engine worker may request tool execution, but the actual untrusted tool code runs in the sandbox executor.
 
-1. Windows: named pipe (`AF_PIPE`)
-2. Linux/macOS: Unix socket (`AF_UNIX`)
+### 3.1 Executor Contract
 
-Brokered I/O must not require a new worker-facing HTTP listener.
+The sandbox executor should expose a toolbox execution API over existing IPC:
+
+1. `toolbox.describe`
+2. `toolbox.execute`
+3. `toolbox.cancel` if cancellation is supported
+4. generic host callback RPC:
+   - `host.call`
+5. convenience callback methods wrapped on top of that path:
+   - `fs.list`
+   - `fs.read_text`
+   - `fs.write_text`
+   - `fs.mkdir`
+   - `fs.stat`
+   - `http.fetch`
+
+No separate sandbox-facing HTTP listener should be introduced.
+
+Recommended startup contract:
+
+1. hosting constructs one structured toolbox-worker startup spec
+2. hosting serializes it to a JSON file under hosting-managed state
+3. hosting injects only a pointer such as `MP13_TOOLBOX_WORKER_SPEC_PATH`
+4. worker loads manifest path, scratch root, optional `.venv`, and IPC metadata from that spec
+
+This should be built on the existing generic hosting worker spawn/control/IPC mechanism, not on the trusted engine worker path.
+
+### 3.2 Toolbox Revision Model
+
+User-defined tools should be staged as a host-managed toolbox revision:
+
+1. manifest describing tool names, callable entrypoints, dependency set, and content hash
+2. Python source/modules required by those callables
+3. optional static assets
+4. executor-local writable scratch root kept separate from staged revision content
+
+The host, not the user tool code, owns bundle staging and removal.
+
+For toolbox scope, the revision model must also be able to represent intrinsic-tool activation state, not just staged Python files.
+
+Recommended revision payload:
+
+1. manifest-driven user tool entries:
+   - tool name
+   - declared entrypoint
+   - source file/module mapping
+2. auto-tool discovery entries:
+   - module name
+   - callable name
+   - optional guide content metadata
+3. intrinsic-tool activation entries:
+   - intrinsic names requested
+   - whether intrinsic guides are included
+   - intrinsic override metadata when applicable
+4. toolbox-wide state:
+   - active tool names
+   - hidden tool names
+   - active intrinsic tool names
+   - hidden intrinsic tool names
+
+## 4. Access Gating And Permission Checks
+
+### 4.1 Primary Gate Location
+
+Primary access gating must be implemented on the host before dispatch to the sandbox executor.
 
 Reason:
 
-1. worker IPC transport already exists and is the trusted daemon-to-worker control path
-2. adding a separate local HTTP listener would widen attack surface and duplicate auth/routing logic
-3. brokered `http.fetch` should be implemented as an RPC method over pipe/socket transport, not as raw worker HTTP transport
+1. host is the trust boundary and policy authority
+2. sandbox code may be buggy or malicious
+3. permission denials must happen before untrusted code starts
+4. host already has session/role/access context
 
-### 3.4 Recommended First Policy Shape
+Required host-side checks before `toolbox.execute`:
 
-Recommended first policy shape:
+1. requested sandbox executor is registered and alive
+2. requested tool name is present in the staged manifest for that sandbox
+3. caller/session is authorized to use that tool or toolbox bundle
+4. toolbox scope permits the tool for the current request
+5. sandbox policy allows the requested brokered operations implied by the call
+
+### 4.2 Defense In Depth Inside The Sandbox
+
+Sandbox-side checks are still required, but only as a secondary line:
+
+1. executor loads only callables declared in the staged manifest
+2. executor rejects unknown tool names even if host dispatch is buggy
+3. executor refuses entrypoints outside bundle roots
+4. executor refuses to mutate the active registry from user code unless the host explicitly sends a management command
+
+### 4.3 Toolbox-Level Permission Use
+
+`Toolbox.execute(...)` in [mp13_toolbox.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_toolbox.py) should remain the local execution gate for allowed/active tools, but it must not be the only security check for sandbox use.
+
+Normative rule:
+
+1. `Toolbox.execute(...)` is an execution-time consistency check
+2. host-side sandbox authorization is the real permission gate
+
+## 5. Adding And Removing Tools
+
+### 5.1 Host-Managed Add Flow
+
+Adding tools to a sandbox should work like this:
+
+1. host receives a new tool bundle definition
+2. host validates manifest, entrypoints, dependency metadata, and policy labels
+3. host computes a revision hash
+4. host stages the revision into a managed sandbox root
+5. host resolves or builds the executor `.venv` for that bundle revision
+6. host starts or refreshes the sandbox executor against that exact bundle revision
+7. host updates registration metadata and diagnostics
+
+Important first-cut rule:
+
+1. do not let the sandbox executor discover new user callables from arbitrary ambient Python scope
+2. for sandboxed use, tools should be loaded from a staged bundle manifest, not from ad hoc `search_scope`
+
+Allowed discovery form:
+
+1. host may stage Python modules and explicitly list callable names to discover from those modules
+2. worker may then use `Toolbox.add_tool_callable(callable_name, search_scope=module.__dict__)`
+3. that remains manifest-driven because the host declared both the module and the callable names up front
+
+Intrinsic-tool activation should follow the same host-managed model.
+
+Example: activating builtin calculator tools in a sandbox revision
+
+1. host receives a logical toolbox change such as:
+   - enable `scriptable_calculator`
+   - include `scriptable_calculator_guide`
+2. host records this as toolbox revision state, not as in-sandbox mutation
+3. host stages or updates the revision manifest with:
+   - `with_intrinsics=true`
+   - requested intrinsic names
+   - `with_intrinsic_guides=true` when guides are desired
+4. toolbox executor starts from that revision and materializes the toolbox by:
+   - creating `Toolbox(with_intrinsics=True, with_intrinsic_guides=True)`
+   - restoring revision state through `from_dict(...)` or equivalent startup materialization
+   - loading only the requested intrinsic entries from `INTRINSICS_REGISTRY`
+5. host dispatches `toolbox.execute(name="scriptable_calculator", ...)` only after allowlist checks pass
+
+The same pattern applies to `symbolic_algebra` and its guide tool.
+
+### 5.2 Host-Managed Remove Flow
+
+Removing tools should work like this:
+
+1. host marks the tool or bundle inactive in sandbox management metadata
+2. host stops routing new executions to that tool
+3. host instructs executor to unload or restarts executor without that bundle
+4. host removes staged bundle content when no active sandbox references it
+5. host garbage-collects unused `.venv` directories only after reference checks pass
+
+Normative rule:
+
+1. removal must be host-driven and observable in status/diagnostics
+2. sandbox user code must not delete or replace its own registered tool bundle
+
+### 5.3 Mapping To Current `Toolbox`
+
+Current `Toolbox` operations should be interpreted this way:
+
+1. `add_tool_callable(...)` and `add_tool_external(...)` remain valid for trusted in-process workflows
+2. sandbox-managed user tools should instead be materialized from host-staged manifests
+3. `delete_tool(...)` remains a logical registry mutation, but sandbox staging cleanup belongs to hosting
+4. `resolve_tool_link(...)` is not the sandbox authority path because it depends on ambient Python scope
+5. intrinsic-tool enable/disable operations remain valid logical API operations, but sandboxed execution must persist them into toolbox revision state and roll out a replacement executor revision
+6. `add_tool_callable("name", search_scope=...)` is the preferred sandbox-worker implementation path for auto-discovered user callables loaded from staged modules
+
+## 6. Sandbox Filesystem And `.venv` Strategy
+
+### 6.1 Recommended `.venv` Model
+
+Sandbox executors should use immutable, host-built environments keyed by content.
+
+Recommended shape:
+
+1. one bundle manifest hash
+2. one dependency lock hash
+3. one resolved environment key derived from both
+
+Recommended directories:
+
+1. read-only staged bundle root
+2. read/execute `.venv` root
+3. writable scratch/work root
+4. optional host-controlled cache root outside the sandbox write path
+
+Grounding this in current builtin tools:
+
+1. [mp13_tools_builtin.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_tools_builtin.py) imports:
+   - standard-library modules such as `json`, `re`, and `codecs`
+   - `numpy`
+   - optional `numexpr`
+   - `sympy`
+2. That means intrinsic-tool sandbox environments cannot be treated as “pure stdlib only”.
+3. The first `.venv` spec should therefore distinguish at least:
+   - toolbox runtime base requirements
+   - intrinsic-tool dependency set
+   - staged user-tool dependency set
+4. A sandbox revision that enables `scriptable_calculator` or `symbolic_algebra` must resolve to an environment key that includes the required builtin dependency tier, even if no user-provided dependencies are present.
+
+### 6.2 Locking Strategy
+
+Normative first-cut rules:
+
+1. sandbox `.venv` must be built by the host, not by tool code at runtime
+2. sandbox `.venv` must be treated as immutable after activation
+3. writable runtime state must go to scratch, not to `.venv`
+4. dependency resolution should come from a lockfile or frozen wheel set, not live unconstrained installs
+
+Recommended first cut:
+
+1. host-managed wheelhouse or pinned requirements input
+2. build `.venv` outside the sandbox
+3. stamp manifest and dependency hashes into executor registration metadata
+4. mount or expose `.venv` as read/execute only to the sandbox worker where possible
+
+Recommended environment-key shape:
+
+1. `toolbox_runtime_hash`
+2. `intrinsics_profile_hash`
+3. `user_dependency_lock_hash`
+4. derived `venv_key = hash(toolbox_runtime_hash, intrinsics_profile_hash, user_dependency_lock_hash)`
+
+Example intrinsic profiles:
+
+1. `none`
+   - no intrinsic tools enabled
+2. `calculator`
+   - includes `numpy`
+   - includes `numexpr` when present in the locked environment
+3. `symbolic_math`
+   - includes `sympy`
+4. `calculator+symbolic_math`
+   - includes both dependency groups
+
+The exact grouping can change, but the plan should preserve one rule:
+
+1. enabling intrinsic tools changes environment provenance when those tools require non-stdlib packages
+
+### 6.3 Limitations To Document Explicitly
+
+The plan must not over-claim the `.venv` story.
+
+Known limitations:
+
+1. Windows cannot provide a perfect trusted read allowlist for same-account files in this first cut
+2. Low IL is primarily a write-protection boundary
+3. if `.venv` build requires live network dependency resolution, reproducibility and policy enforcement become weak
+4. mutable `.venv` patching in place makes provenance and rollback harder
+
+Normative recommendation:
+
+1. first trustworthy version should avoid live dependency installs during sandbox execution
+
+## 7. Network Control Model
+
+### 7.1 What We Can Trust In First Cut
+
+Trusted first-cut network policy for sandbox executors:
+
+1. brokered HTTP over host IPC
+2. host-enforced hostname and URL-prefix allowlists on that brokered path
+3. optional “no brokered network” mode
+
+### 7.2 What We Must Not Claim
+
+Do not claim these as fully supported on Windows first cut:
+
+1. direct-socket hostname allowlists
+2. direct-socket URL allowlists
+3. route-specific network enforcement for arbitrary worker traffic
+4. complete outbound block of all possible direct egress without additional OS/network infrastructure
+
+### 7.3 Selected Route Clarification
+
+If “selected route” means brokered outbound HTTP through the host:
+
+1. that is in scope
+2. host can enforce host/prefix policy there
+3. status should be `supported` for brokered HTTP policy only
+
+If “selected route” means direct worker networking through a particular NIC, proxy, or OS route:
+
+1. that is not a trustworthy first Windows promise
+2. it should remain `partial` or `unsupported` unless an explicit WFP/firewall/proxy enforcement layer is added
+
+### 7.4 Communication Back To Host
+
+Sandbox execution may need host callbacks for:
+
+1. brokered filesystem
+2. brokered HTTP
+3. structured logs
+4. cancellation/progress events
+5. future capability requests
+
+Normative rule:
+
+1. all such callbacks must stay on existing IPC transport
+2. no new sandbox-facing local web server should be added
+
+Recommended callback request example:
 
 ```json
 {
-  "sandbox": {
-    "enabled": true,
-    "profile": "generic_worker_v1",
-    "platform_policy": {
-      "windows": {
-        "integrity_level": "low",
-        "restricted_token": true,
-        "job_object": true
-      },
-      "linux": {
-        "launcher": "bwrap"
-      }
-    },
-    "filesystem": {
-      "default_access": "deny",
-      "rules": [
-        {
-          "path": "C:\\\\workers\\\\venvs\\\\gw1",
-          "access": ["read", "execute"],
-          "platform_status": {
-            "windows": "partial",
-            "linux": "supported"
-          }
-        },
-        {
-          "path": "C:\\\\workers\\\\scratch\\\\gw1",
-          "access": ["read", "write"],
-          "platform_status": {
-            "windows": "partial",
-            "linux": "supported"
-          }
-        },
-        {
-          "path": "C:\\\\Users\\\\me\\\\.mp13-llm\\\\hosting",
-          "access": [],
-          "platform_status": {
-            "windows": "supported",
-            "linux": "supported"
-          }
-        }
-      ]
-    },
-    "process": {
-      "allow_subprocess": false,
-      "inherit_parent_handles": false,
-      "platform_status": {
-        "windows": {
-          "allow_subprocess": "partial",
-          "inherit_parent_handles": "supported"
-        },
-        "linux": {
-          "allow_subprocess": "supported",
-          "inherit_parent_handles": "supported"
-        }
-      }
-    },
-    "network": {
-      "mode": "disabled",
-      "allow_hosts": [],
-      "allow_url_prefixes": [],
-      "platform_status": {
-        "windows": {
-          "disabled": "partial",
-          "allow_hosts": "unsupported",
-          "allow_url_prefixes": "unsupported"
-        },
-        "linux": {
-          "disabled": "supported",
-          "allow_hosts": "unsupported",
-          "allow_url_prefixes": "unsupported"
-        }
-      }
-    },
-    "brokered_io": {
-      "filesystem": true,
-      "http": true,
-      "subprocess": false
+  "kind": "rpc_call",
+  "method": "host.call",
+  "params": {
+    "method": "fs.read_text",
+    "arguments": {
+      "root_id": "tool_data",
+      "relative_path": "config.json"
     }
   }
 }
 ```
 
-### 3.5 Recommended Python Structures
+## 8. Policy Model For Toolbox Sandboxes
 
-Recommended Python-side structures:
+Existing sandbox policy fields remain useful, but the semantics shift from “generic worker” to “toolbox executor”.
 
-```python
-from dataclasses import dataclass, field
-from typing import Literal, Optional
+Additional recommended metadata:
 
-PlatformSupport = Literal["supported", "partial", "unsupported"]
-FsAccess = Literal["read", "write", "execute"]
-IntegrityLevel = Literal["untrusted", "low", "medium"]
-NetworkMode = Literal["disabled", "direct", "brokered_only"]
+1. `executor_kind`
+   - `toolbox_executor_v1`
+2. `bundle`
+   - `bundle_id`
+   - `bundle_revision`
+   - `manifest_hash`
+3. `environment`
+   - `venv_key`
+   - `venv_lock_hash`
+   - `venv_mutable=false`
+4. `tool_access`
+   - allowed tool names
+   - advertised tool names if needed for describe flows
+5. `capabilities`
+   - `brokered_filesystem`
+   - `brokered_http`
+   - `dynamic_reload`
 
+## 9. Revised Platform Support Matrix
 
-@dataclass
-class SandboxFsRule:
-    path: str
-    access: list[FsAccess] = field(default_factory=list)
-    windows_status: PlatformSupport = "partial"
-    linux_status: PlatformSupport = "supported"
+### 9.1 Windows
 
-
-@dataclass
-class SandboxProcessPolicy:
-    allow_subprocess: bool = False
-    inherit_parent_handles: bool = False
-    windows_allow_subprocess_status: PlatformSupport = "partial"
-    windows_inherit_parent_handles_status: PlatformSupport = "supported"
-    linux_allow_subprocess_status: PlatformSupport = "supported"
-    linux_inherit_parent_handles_status: PlatformSupport = "supported"
-
-
-@dataclass
-class SandboxNetworkPolicy:
-    mode: NetworkMode = "disabled"
-    allow_hosts: list[str] = field(default_factory=list)
-    allow_url_prefixes: list[str] = field(default_factory=list)
-    windows_disabled_status: PlatformSupport = "partial"
-    windows_host_allowlist_status: PlatformSupport = "unsupported"
-    windows_url_allowlist_status: PlatformSupport = "unsupported"
-    linux_disabled_status: PlatformSupport = "supported"
-    linux_host_allowlist_status: PlatformSupport = "unsupported"
-    linux_url_allowlist_status: PlatformSupport = "unsupported"
-
-
-@dataclass
-class WindowsSandboxPolicy:
-    restricted_token: bool = True
-    integrity_level: IntegrityLevel = "low"
-    job_object: bool = True
-
-
-@dataclass
-class BrokeredIoPolicy:
-    filesystem: bool = True
-    http: bool = True
-    subprocess: bool = False
-
-
-@dataclass
-class WorkerSandboxPolicy:
-    enabled: bool = False
-    profile: str = "generic_worker_v1"
-    filesystem_rules: list[SandboxFsRule] = field(default_factory=list)
-    process: SandboxProcessPolicy = field(default_factory=SandboxProcessPolicy)
-    network: SandboxNetworkPolicy = field(default_factory=SandboxNetworkPolicy)
-    windows: WindowsSandboxPolicy = field(default_factory=WindowsSandboxPolicy)
-    brokered_io: BrokeredIoPolicy = field(default_factory=BrokeredIoPolicy)
-```
-
-### 3.6 Normative Direct-vs-Brokered Meaning
-
-Policy interpretation rules:
-
-1. Direct filesystem access on Windows is only trusted for write-protection outcomes explicitly marked `supported`.
-2. Folder allowlist semantics on Windows must be treated as `partial` unless the access happens through brokered operations.
-3. Hostname and URL allowlists must be treated as `unsupported` for direct worker networking in the first Windows cut.
-4. Hostname and URL allowlists may be treated as `supported` only for brokered `http.fetch` after hosting-side validation is implemented.
-
-## 4. Platform Support Matrix
-
-### 4.1 Windows
-
-| Permission / Control | Status | Notes |
+| Capability | Status | Notes |
 |---|---|---|
-| deny parent handle inheritance | supported | use `close_fds=True`, non-inheritable handles, narrow stdio passing |
-| deny child processes | partial | Job Object and child-process policy help, but not full semantic parity across versions |
-| deny writes to normal medium-integrity user files | supported | lower worker to Low IL |
-| deny reads from normal medium-integrity user files | unsupported | integrity level does not block read-up by default |
-| arbitrary folder allowlist with trusted enforcement | partial | requires ACL preparation plus low IL and/or brokering; same-account reads remain weak |
-| network disabled | partial | practical via firewall/WFP-style controls or broker-only design, but not trivial in-process |
-| allowed hostnames for direct worker networking | unsupported | needs broker or external mediation |
-| allowed HTTP URLs for direct worker networking | unsupported | needs broker or external mediation |
-| allowed hostnames for brokered `http.fetch` | planned_supported | enforced by daemon policy after Brokered I/O phase |
-| allowed HTTP URLs for brokered `http.fetch` | planned_supported | enforced by daemon policy after Brokered I/O phase |
-| protect daemon files from worker write | supported | daemon state remains medium-integrity and ACL-restricted |
-| protect daemon files from worker read | partial | ACLs can help, but same-account readable files remain readable unless explicitly denied |
+| deny parent handle inheritance | supported | existing spawn hygiene work |
+| deny writes to medium-integrity host files | supported | Low IL boundary |
+| direct same-account read isolation | unsupported | not solved by Low IL |
+| immutable host-built `.venv` exposure | partial | can be made practical, but trusted read isolation remains weak |
+| brokered filesystem policy | supported | host policy decision point |
+| brokered HTTP host/prefix allowlists | supported | on broker path only |
+| direct worker networking disabled | partial | trustworthy only with stronger OS/network controls |
+| direct worker hostname/URL allowlists | unsupported | do not claim without mediation |
+| selected-route direct network enforcement | unsupported | not a first-cut promise |
 
-### 4.2 Linux
+### 9.2 Linux
 
-| Permission / Control | Status | Notes |
+| Capability | Status | Notes |
 |---|---|---|
-| deny parent handle inheritance | supported | standard spawn hygiene |
-| deny child processes | supported | seccomp / launcher policy |
-| filesystem allowlist | supported | `bwrap` / mount namespace model |
-| network disabled | supported | namespace isolation |
-| allowed hostnames for direct worker networking | unsupported | needs broker |
-| allowed HTTP URLs for direct worker networking | unsupported | needs broker |
-| allowed hostnames for brokered `http.fetch` | planned_supported | enforced by daemon policy after Brokered I/O phase |
-| allowed HTTP URLs for brokered `http.fetch` | planned_supported | enforced by daemon policy after Brokered I/O phase |
-
-## 5. Evaluation Of The Low Integrity Advice
-
-Advice under review:
-
-> A process running at a Low or Untrusted integrity level is automatically prevented by the Windows OS from writing to or modifying files at the default Medium integrity level.
-
-Assessment:
-
-1. This advice is substantially correct for the write/modify case.
-2. It does contradict the earlier narrower statement that restricted token + Job Object alone is not enough.
-3. The important correction is:
-   - restricted token + Job Object alone are not enough
-   - Low Integrity Level adds a real Windows boundary against write-up
-
-What Low IL does help with:
-
-1. Preventing writes, metadata modification, and DACL-like mutation attempts against standard medium-integrity user files.
-2. Preventing worker modification of daemon-owned medium-integrity state files even when same-account DACLs would otherwise allow write.
-3. Providing a meaningful first Windows containment layer without AppContainer.
-
-What Low IL does not solve:
-
-1. It does not reliably block reads from medium-integrity files.
-2. It does not provide URL/hostname policy.
-3. It does not provide a general folder allowlist by itself.
-4. It does not replace handle-inheritance hardening.
-5. It does not replace brokered I/O if direct access must be policy-mediated.
-
-Revised Windows conclusion:
-
-1. Low IL should be part of the first Windows sandbox design.
-2. Restricted token + Low IL + Job Object is a sensible Windows-first starter.
-3. Brokered I/O is still needed for:
-   - path allowlist semantics
-   - URL/host allowlists
-   - reducing read exposure
-
-## 6. Windows-First Design
-
-### 6.1 Spawn Model
-
-Managed worker launch should move from plain `subprocess.Popen(...)` to a sandbox-aware launcher:
-
-1. Build effective `WorkerSandboxPolicy`.
-2. Prepare worker-specific scratch and allowed directories.
-3. Spawn worker with:
-   - `close_fds=True`
-   - minimal env
-   - no inherited stdin
-   - explicit stdout/stderr sinks only
-4. On Windows:
-   - create restricted token
-   - lower token integrity level to Low
-   - attach process to Job Object
-   - pass only explicitly intended handles
-
-Normative requirement:
-
-1. Worker launch must preserve the current worker RPC contract over `AF_PIPE`.
-2. Sandboxing must not require changing worker-facing control transport from pipe/socket RPC to HTTP.
-
-### 6.2 Folder Protection Strategy
-
-For Windows-first scope:
-
-1. Protect daemon state and config by keeping them medium-integrity and ACL-restricted.
-2. Give workers one explicit writable scratch root.
-3. Treat direct worker reads outside declared roots as unsupported for strong enforcement.
-4. Route sensitive file access through Brokered I/O instead of trying to enforce all path rules by token tricks alone.
-
-### 6.3 Handle Inheritance Strategy
-
-Required baseline:
-
-1. `close_fds=True` on worker spawn where supported.
-2. Ensure any IPC/log handles are created non-inheritable unless explicitly needed.
-3. Do not hand parent daemon control handles to worker.
-4. Review `stdout`/`stderr` redirection objects so they do not accidentally widen inherited-handle surface.
-
-## 7. Brokered I/O Design
-
-Brokered I/O is the policy enforcement layer for actions that Windows Low IL and Job Object do not express well.
-
-### 7.1 Brokering Principles
-
-1. Worker gets a minimal direct filesystem view.
-2. Worker requests sensitive file or HTTP actions over host IPC.
-3. Daemon evaluates request against `WorkerSandboxPolicy`.
-4. Daemon performs allowed operations and returns structured results.
-
-Normative transport rule:
-
-1. Brokered I/O requests are worker RPC methods sent over existing worker IPC transport.
-2. `proxy-rpc-*` on the host side remains the bridge for async/sync worker RPC.
-3. No separate broker HTTP port is added between daemon and worker.
-
-### 7.2 Brokered Filesystem API
-
-Proposed worker RPC surface:
-
-1. `fs.list`
-2. `fs.read_text`
-3. `fs.read_bytes`
-4. `fs.write_text`
-5. `fs.write_bytes`
-6. `fs.mkdir`
-7. `fs.stat`
-
-Each request should carry:
-
-1. `capability_id` or logical root id
-2. `relative_path`
-3. operation-specific payload
-
-Daemon-side policy:
-
-1. logical roots map to configured real paths
-2. read/write/execute policy is evaluated before host access
-3. path normalization must reject traversal outside root
-
-Example:
-
-```json
-{
-  "kind": "rpc",
-  "method": "fs.read_text",
-  "arguments": {
-    "root_id": "worker_input",
-    "relative_path": "task/config.json"
-  }
-}
-```
-
-Normative validation rules:
-
-1. `root_id` must resolve to one configured logical root only.
-2. `relative_path` must reject traversal outside root after normalization.
-3. brokered `write_*` methods must fail if root policy does not include `write`.
-4. brokered `read_*` methods must fail if root policy does not include `read`.
-
-### 7.3 Brokered HTTP API
-
-What brokered HTTP achieves:
-
-1. It moves outbound HTTP authorization from worker code to the hosting daemon.
-2. It gives hosting one policy decision point for:
-   - whether network access is allowed at all
-   - which hosts are allowed
-   - which URL prefixes are allowed
-   - which request headers are allowed to leave the host
-   - how large request and response bodies may be
-3. It prevents worker code from unilaterally deciding where sensitive HTTP traffic goes when policy requires broker-only networking.
-4. It makes host/URL restrictions meaningful on Windows, where direct worker networking does not have a strong native allowlist mechanism in this first cut.
-5. It preserves the existing worker RPC transport model by using the current pipe/socket channel instead of introducing a second network-facing control surface.
-
-What brokered HTTP does not achieve by itself:
-
-1. It does not magically disable all direct worker networking unless the platform sandbox also blocks or meaningfully restricts that direct path.
-2. It does not provide a raw OS firewall equivalent for arbitrary worker sockets in the first Windows cut.
-3. It does not make the worker unable to read arbitrary same-account files.
-4. It does not by itself prove anything about remote vs local origin of the final outbound request; it only centralizes policy enforcement in hosting.
-5. It does not replace the need for direct-network status labels to remain `partial` or `unsupported` where the OS boundary is weak.
-
-Proposed worker RPC surface:
-
-1. `http.fetch`
-
-Payload:
-
-1. `method`
-2. `url`
-3. `headers`
-4. `body`
-5. optional timeout
-
-Daemon-side checks:
-
-1. only allow when `network.mode == brokered_only`
-2. match URL against allowlisted host / prefix rules
-3. strip disallowed headers
-4. apply body and response size caps
-5. perform the outbound request on behalf of the worker only after policy passes
-
-Normative worker-behavior rule:
-
-1. If a worker profile declares `network.mode == brokered_only`, worker code must treat brokered `http.fetch` as the supported HTTP path.
-2. Hosting must not describe direct worker HTTP egress as equivalent to brokered `http.fetch`.
-3. A worker that bypasses brokered HTTP and attempts direct network egress is outside policy and must not be treated as complying with URL/host restrictions.
-
-Normative transport note:
-
-1. `http.fetch` is an RPC method over worker IPC pipe/socket transport.
-2. It is not worker-side direct HTTP egress.
-3. It is not a new daemon<->worker HTTP tunnel.
-
-### 7.4 Brokered Subprocess API
-
-Do not implement in first cut.
-
-Status:
-
-1. Windows: unsupported
-2. Linux: unsupported
-
-Rationale:
-
-1. subprocess brokering complicates capability model significantly
-2. first cut should prefer `allow_subprocess=false`
-
-## 8. Prerequisites
-
-### 8.1 Code And Runtime
-
-1. Introduce `WorkerSandboxPolicy` structures in hosting.
-2. Add spawn-spec fields for sandbox policy.
-3. Add a dedicated Windows worker launcher module.
-4. Add brokered RPC methods in daemon and worker IPC layer.
-5. Add path normalization and policy evaluation helpers.
-6. Add policy-to-registration serialization so diagnostics can report effective sandbox status.
-
-### 8.2 Windows OS Primitives
-
-1. Create restricted token helper.
-2. Apply Low Integrity Level SID to worker token.
-3. Create and attach Job Object.
-4. Confirm spawned process inherits no unintended handles.
-5. Optional later: firewall/WFP integration for stronger network disablement.
-
-### 8.3 Testing
-
-1. Unit tests for policy normalization and support labeling.
-2. Windows-only tests for:
-   - worker at Low IL cannot modify medium-integrity protected file
-   - parent handles are not inherited
-   - Job Object assignment succeeds
-3. Integration tests for brokered filesystem RPC.
-4. Negative tests for path traversal and denied brokered operations.
-
-## 9. Implementation Plan
-
-This section is normative for rollout order.
-
-Each phase below has:
-
-1. required implementation steps
-2. minimum exit criteria
-3. a testable outcome
-
-### Phase 1: Policy Schema And Status Labels
-
-1. Add policy dataclasses / JSON schema for worker sandbox.
-2. Add platform support labels to every permission field.
-3. Persist policy in managed worker registration metadata.
-
-Deliverable:
-
-1. sandbox policy can be declared, normalized, inspected, and surfaced in diagnostics
+| filesystem containment with dedicated launcher | planned_supported | `bwrap` path not implemented yet |
+| immutable host-built `.venv` exposure | planned_supported | mount/namespace model is stronger |
+| brokered filesystem policy | planned_supported | same IPC contract |
+| brokered HTTP host/prefix allowlists | planned_supported | same IPC contract |
+| direct network disablement | planned_supported | namespace model |
+
+## 10. Implementation Plan
+
+### Phase 1: Scope Correction And Policy Terminology
+
+1. Update docs/status to say trusted engine workers are not sandbox targets.
+2. Rename the first consumer to toolbox sandbox executor.
+3. Record Windows/network/.venv limitations explicitly.
 
 Exit criteria:
 
-1. a worker registration can persist normalized sandbox policy
-2. diagnostics can show `supported|partial|unsupported` per permission family
-3. unsupported direct-network allowlist fields are surfaced explicitly, not implied
+1. no status doc claims the real engine worker is the production sandbox target
+2. plan clearly places sandboxing around toolbox executors
 
-Testable outcome:
+### Phase 2: Host-Side Sandbox Registry And Authorization
 
-1. unit test proves policy normalization and status labeling for Windows and Linux examples
-
-### Phase 2: Windows Spawn Hygiene
-
-1. Add `close_fds=True` and explicit non-inheritable handle setup.
-2. Audit worker stdout/stderr/log redirection for handle inheritance.
-3. Add tests proving worker does not inherit daemon handles by default.
-
-Deliverable:
-
-1. supported `inherit_parent_handles=false`
+1. Add sandbox bundle metadata model.
+2. Add host-side authorization checks before sandbox dispatch.
+3. Define manifest-driven tool inventory for executor registration.
 
 Exit criteria:
 
-1. worker spawn uses `close_fds=True` where applicable
-2. no unintended inheritable handles are observed in worker
-3. current worker logging and IPC remain functional
+1. host can say which tools are staged in which sandbox
+2. unauthorized tool execution is denied before sandbox code starts
 
-Testable outcome:
+### Phase 3: Bundle Staging And Removal
 
-1. Windows test proves worker cannot use inherited parent handles and still answers RPC health/hello over pipe
-
-### Phase 3: Windows Restricted Token + Low IL + Job Object
-
-1. Create restricted token launcher.
-2. Apply Low Integrity Level to worker token.
-3. Launch worker under that token.
-4. Attach worker to Job Object.
-5. Add tests against medium-integrity protected files.
-
-Deliverable:
-
-1. supported `deny writes to medium-integrity daemon/user files`
+1. Add host-managed bundle staging root.
+2. Add add/remove lifecycle for staged bundles.
+3. Add executor restart or reload semantics tied to bundle revision.
 
 Exit criteria:
 
-1. worker runs with restricted token
-2. worker runs at Low IL
-3. worker is assigned to Job Object
-4. worker can still service existing pipe RPC requests
-5. worker cannot modify a medium-integrity protected file owned by the daemon user
+1. adding a tool means staging a new bundle revision
+2. removing a tool stops new dispatch and cleans staged state when safe
 
-Testable outcome:
+Current implementation note:
 
-1. Windows integration test proves a sandboxed worker can answer pipe RPC `hello`
-2. the same worker fails to modify a daemon-owned medium-integrity file
+1. staged revisions now support:
+   - manual `ToolboxBundleTool` entries
+   - auto-discovered `Toolbox.add_tool_callable(...)` entries from staged modules
+   - intrinsic-tool revision state
 
-First minimal outcome that can be tested end-to-end:
+### Phase 4: Immutable `.venv` Management
 
-1. A managed worker spawned with:
-   - `inherit_parent_handles=false`
-   - `restricted_token=true`
-   - `integrity_level=low`
-   - `job_object=true`
-2. still responds over existing `AF_PIPE` RPC
-3. cannot modify daemon-owned medium-integrity files
-
-This is the first required milestone before Brokered I/O work starts.
-
-### Phase 4: Brokered Filesystem I/O
-
-1. Add brokered filesystem RPC methods.
-2. Add logical root mapping and root-relative path policy.
-3. Give workers only minimal direct writable scratch path.
-4. Move sensitive file access examples to broker path.
-
-Deliverable:
-
-1. practical filesystem allowlist model for Windows-first generic workers
+1. Define lockfile/wheelhouse input.
+2. Define intrinsic dependency profiles based on builtin tool imports.
+3. Build `.venv` out of band under host control.
+4. Register executor with `venv_key` and provenance metadata.
 
 Exit criteria:
 
-1. worker can perform `fs.read_*` and `fs.write_*` only through brokered RPC for declared logical roots
-2. traversal outside logical root is denied
-3. direct same-account read semantics remain documented as partial/unsupported where applicable
+1. sandbox execution does not mutate `.venv`
+2. status can report bundle and environment hashes
+3. intrinsic-tool activation is reflected in environment provenance, not just tool metadata
 
-Testable outcome:
+### Phase 5: Toolbox Executor IPC Contract
 
-1. integration test proves brokered read/write succeeds inside declared root and fails outside it
-
-### Phase 5: Brokered HTTP
-
-1. Add brokered `http.fetch`.
-2. Enforce host/prefix allowlists there.
-3. Keep direct network as disabled or unsupported under policy labels.
-
-Deliverable:
-
-1. supported host/URL policy via broker, not via raw OS sandbox
+1. Add `toolbox.describe`
+2. Add `toolbox.execute`
+3. Add optional `toolbox.cancel`
+4. Add generic `host.call`
+5. Keep brokered `fs.*` and `http.fetch` on the same IPC transport through that callback path
 
 Exit criteria:
 
-1. worker `http.fetch` goes over existing worker RPC pipe/socket transport
-2. daemon enforces host/prefix allowlists
-3. direct worker networking remains `partial` or `unsupported` according to platform matrix
+1. toolbox execution can be requested over existing pipe/socket RPC
+2. sandbox callbacks to host remain on existing IPC transport
+3. toolbox-side execution context can expose simple callback helpers without exposing worker lifecycle details
 
-Testable outcome:
+### Phase 5A: Logical Toolbox Routing Across Sandbox Specs
 
-1. integration test proves allowed brokered URL succeeds and denied URL is rejected before network egress
-
-### Phase 6: Linux Backend
-
-1. Add `bwrap` launcher backend.
-2. Map same policy schema onto Linux support labels.
-3. Keep unsupported fields explicitly marked when no direct Linux equivalent exists.
-
-Deliverable:
-
-1. cross-platform policy schema with intentionally different enforcement backends
+1. Add sandbox-profile metadata for staged tool entries.
+2. Allow one logical toolbox to span multiple sandbox executor pools.
+3. Route each tool call to the correct pool based on tool name and sandbox profile.
+4. Retire direct single-executor assumptions from higher-level toolbox APIs.
 
 Exit criteria:
 
-1. same policy schema can be normalized on Linux
-2. Linux backend marks direct filesystem/network support accurately
-3. brokered RPC methods stay transport-compatible with existing worker IPC
+1. user can attach a permissions/dependency spec to a callable registration request
+2. hosting can assign that callable to an existing sandbox profile or stage a new one
+3. one logical toolbox can expose tools backed by different sandbox specs without user-managed routing
 
-Testable outcome:
+Current implementation note:
 
-1. Linux integration test proves `bwrap` worker still serves existing IPC RPC and brokered filesystem methods
+1. the first assignment slice now exists through:
+   - `SandboxProfileSpec`
+   - `ToolboxAutoAssignmentRequest`
+   - `ToolboxSandboxOrchestrator`
+2. profile ids can now be derived deterministically from required imports and sandbox policy
+3. orchestration can now group requests by profile, stage one revision per profile, and spawn routed executor registrations under one logical toolbox id
+4. persistent lifecycle now has a first host-service slice through `EngineHostService.toolbox_register_auto(...)`
+5. removal lifecycle now also has a first host-service slice through `EngineHostService.toolbox_unregister_auto(...)`
+6. daemon/control-channel/CLI surfaces now expose the same high-level registration and removal operations
+7. environment identity now has a first host-managed slice through:
+   - `ToolboxEnvironmentSpec`
+   - `ToolboxEnvironmentManager`
+8. environment metadata is now derived from toolbox runtime hash, intrinsic profile, required imports, and optional dependency lock hash
+9. host now creates toolbox environment roots with stdlib `venv`, spawns workers via the environment Python executable, and reuses those roots by `venv_key`
+10. unreferenced toolbox environment roots can now be garbage-collected from hosting state
+11. staged toolbox executor registrations now carry `venv_key`, `venv_path`, `python_executable`, `venv_lock_hash`, `intrinsics_profile_id`, and `required_imports`
+12. host-side register/unregister now performs a first readiness-gated cutover by waiting for new executors to answer `toolbox.describe` before retiring replaced registrations
+13. successful cutovers now persist basic rollout metadata (`ready_at`, `warmup_ms`) per profile and return it from register/unregister operations
+14. successful cutovers now also append to a bounded per-profile `rollout_history`
+15. a first higher-level user-facing facade now exists through `SandboxedToolboxFacade`, hiding common auto-callable request construction on top of the service/channel methods
+16. that facade can now also stage a real module-backed Python callable through `register_python_callable(...)`
+17. that facade can now also register and unregister builtin intrinsic tools through sandbox hosting
+18. that facade can now also register and unregister explicit manual tool definitions backed by Python implementations
+19. remaining work is about richer rollout policies, stronger garbage-collection semantics, broader facade coverage, and locked immutable dependency installation/provenance, not the basic routing model itself
 
-## 10. Recommended First Cut
+### Phase 6: Windows First Enforcement Slice
 
-Recommended Windows-first MVP:
+1. Reuse current restricted-token / Low IL / Job Object launcher work for toolbox executor workers.
+2. Preserve existing IPC contract.
+3. Validate write-up denial and handle inheritance controls.
 
-1. policy schema with support labels
-2. `inherit_parent_handles=false`
-3. restricted token
-4. Low Integrity Level
-5. Job Object
-6. one writable scratch dir
-7. brokered filesystem RPC
+Exit criteria:
 
-Do not block MVP on:
+1. sandbox executor still answers IPC requests
+2. sandbox executor cannot modify medium-integrity host files
 
-1. raw URL allowlists
-2. raw hostname allowlists
-3. full direct-read sandboxing of same-account files
-4. child-process broker support
+### Phase 7: Brokered Filesystem And HTTP For Toolbox Executors
 
-Required first acceptance slice:
+1. Attach logical roots to toolbox executor bundles and scratch space.
+2. Enforce brokered HTTP allowlists for executor callbacks.
+3. Keep direct network claims explicitly limited.
 
-1. Windows-only
-2. existing worker pipe RPC remains working
-3. no inherited daemon handles
-4. worker cannot modify daemon-owned medium-integrity files
+Exit criteria:
 
-If this slice does not pass, the design must not claim Windows sandbox support yet.
+1. toolbox executor can only use approved brokered roots and URLs through host checks
+2. status clearly distinguishes brokered support from direct-network limitations
 
-## 11. Final Recommendation
+### Phase 8: Linux Backend
 
-Windows-first sandboxing is worth doing if framed correctly:
+1. Add Linux sandbox launcher backend.
+2. Map the same toolbox executor contract onto Linux.
 
-1. Low IL is a real and useful write-protection boundary.
-2. It should be combined with restricted token and Job Object.
-3. Brokered I/O is still needed for practical allowlist semantics.
-4. The first trustworthy Windows promise should be:
-   - worker cannot modify daemon and normal medium-integrity files
-   - worker does not inherit parent handles
-   - worker sensitive file/network access must go through daemon broker over existing pipe/socket RPC transport
+Exit criteria:
 
-That is a coherent starter design without Docker or AppContainer.
+1. same host-side bundle and authorization model works on Linux
+2. Linux support labels are updated honestly
+
+## 11. Recommended First Trustworthy Promise
+
+The first trustworthy promise should be:
+
+1. trusted engine workers are not sandboxed
+2. user-defined toolbox callables can run in a separate sandbox executor
+3. host decides which tools are staged and callable
+4. sandbox executor cannot modify normal medium-integrity host files on Windows
+5. sandbox executor filesystem and HTTP access must go through brokered host policy for the supported path
+6. direct-network restrictions beyond the broker path remain partial or unsupported unless stronger OS/network enforcement is added
+
+That is a coherent first design and does not over-claim the Windows boundary.

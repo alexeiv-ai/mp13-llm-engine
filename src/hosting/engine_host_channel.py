@@ -1037,6 +1037,284 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def sandbox_fs_list(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-fs-list",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "root_id": str(root_id or "").strip(),
+                "relative_path": relative_path,
+            },
+        )
+        return dict(res or {})
+
+    def sandbox_fs_read_text(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: str,
+        encoding: str = "utf-8",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-fs-read-text",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "root_id": str(root_id or "").strip(),
+                "relative_path": str(relative_path or ""),
+                "encoding": str(encoding or "utf-8"),
+            },
+        )
+        return dict(res or {})
+
+    def sandbox_fs_write_text(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: str,
+        text: str,
+        encoding: str = "utf-8",
+        create_parents: bool = True,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-fs-write-text",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "root_id": str(root_id or "").strip(),
+                "relative_path": str(relative_path or ""),
+                "text": str(text or ""),
+                "encoding": str(encoding or "utf-8"),
+                "create_parents": bool(create_parents),
+            },
+        )
+        return dict(res or {})
+
+    def sandbox_fs_mkdir(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: str,
+        parents: bool = True,
+        exist_ok: bool = True,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-fs-mkdir",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "root_id": str(root_id or "").strip(),
+                "relative_path": str(relative_path or ""),
+                "parents": bool(parents),
+                "exist_ok": bool(exist_ok),
+            },
+        )
+        return dict(res or {})
+
+    def sandbox_fs_stat(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-fs-stat",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "root_id": str(root_id or "").strip(),
+                "relative_path": relative_path,
+            },
+        )
+        return dict(res or {})
+
+    def sandbox_http_fetch(
+        self,
+        *,
+        engine_id: str,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        body_b64: str = "",
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-http-fetch",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "url": str(url or ""),
+                "method": str(method or "GET"),
+                "headers": dict(headers or {}),
+                "body_b64": str(body_b64 or ""),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "max_response_bytes": int(max_response_bytes or 1024 * 1024),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_describe(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-describe",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 10.0),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_execute(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_call: Dict[str, Any],
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-execute",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_call": dict(tool_call or {}),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_register_auto(
+        self,
+        *,
+        toolbox_id: str,
+        requests: list[Dict[str, Any]],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-register-auto",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "requests": [dict(item or {}) for item in list(requests or [])],
+                "python_executable": str(python_executable or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_unregister_auto(
+        self,
+        *,
+        toolbox_id: str,
+        tool_keys: list[str],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-unregister-auto",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()],
+                "python_executable": str(python_executable or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_register_intrinsics(
+        self,
+        *,
+        toolbox_id: str,
+        intrinsic_tool_names: list[str],
+        include_guides: bool = False,
+        sandbox_profile: Optional[Dict[str, Any]] = None,
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-register-intrinsics",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "intrinsic_tool_names": [str(item or "").strip() for item in list(intrinsic_tool_names or []) if str(item or "").strip()],
+                "include_guides": bool(include_guides),
+                "sandbox_profile": dict(sandbox_profile or {}) or None,
+                "python_executable": str(python_executable or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_unregister_intrinsics(
+        self,
+        *,
+        toolbox_id: str,
+        intrinsic_tool_names: list[str],
+        include_guides: bool = False,
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-unregister-intrinsics",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "intrinsic_tool_names": [str(item or "").strip() for item in list(intrinsic_tool_names or []) if str(item or "").strip()],
+                "include_guides": bool(include_guides),
+                "python_executable": str(python_executable or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_register_manual(
+        self,
+        *,
+        toolbox_id: str,
+        requests: list[Dict[str, Any]],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-register-manual",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "requests": [dict(item or {}) for item in list(requests or [])],
+                "python_executable": str(python_executable or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_unregister_manual(
+        self,
+        *,
+        toolbox_id: str,
+        tool_keys: list[str],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-unregister-manual",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()],
+                "python_executable": str(python_executable or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
     def proxy_request(
         self,
         *,
