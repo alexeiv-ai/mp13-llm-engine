@@ -53,6 +53,7 @@ from .toolbox_harness import (
     ToolboxSandboxOrchestrator,
     ToolboxHarnessConfig,
     ToolboxExecutionHarness,
+    HostedToolBoxRef,
     SandboxedToolboxFacade,
 )
 
@@ -85,5 +86,6 @@ __all__ = [
     "ToolboxSandboxOrchestrator",
     "ToolboxHarnessConfig",
     "ToolboxExecutionHarness",
+    "HostedToolBoxRef",
     "SandboxedToolboxFacade",
 ]

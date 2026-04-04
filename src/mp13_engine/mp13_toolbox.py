@@ -176,6 +176,26 @@ class ToolBoxRef:
         return
 
 
+@dataclass
+class ToolCallGate:
+    outcome: str
+    tool_name: str
+    reason: str
+    executable: bool
+    requires_confirmation: bool = False
+    backend: str = "native"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "outcome": str(self.outcome or "").strip() or "denied",
+            "tool_name": str(self.tool_name or "").strip(),
+            "reason": str(self.reason or "").strip() or "denied",
+            "executable": bool(self.executable),
+            "requires_confirmation": bool(self.requires_confirmation),
+            "backend": str(self.backend or "native").strip() or "native",
+        }
+
+
 class Toolbox:
     """Manages tool definitions for the chat application."""
     _VALID_GLOBAL_MODES = {"advertised", "silent", "disabled"}
@@ -1367,6 +1387,63 @@ class Toolbox:
                 return True
         return False
 
+    def gate_call(self, name: str, tools_view: Optional[ToolsView] = None) -> ToolCallGate:
+        tool_name = str(name or "").strip()
+        if not tool_name:
+            return ToolCallGate(
+                outcome="denied",
+                tool_name="",
+                reason="tool_name_required",
+                executable=False,
+            )
+        tool_def = self.get_tool(tool_name)
+        if not tool_def:
+            return ToolCallGate(
+                outcome="denied",
+                tool_name=tool_name,
+                reason="tool_not_defined",
+                executable=False,
+            )
+        if tools_view and not tools_view.is_allowed(tool_name):
+            return ToolCallGate(
+                outcome="denied",
+                tool_name=tool_name,
+                reason="blocked_in_scope",
+                executable=False,
+            )
+        if self.global_tools_mode == "disabled" and not tools_view:
+            return ToolCallGate(
+                outcome="denied",
+                tool_name=tool_name,
+                reason="all_tools_disabled",
+                executable=False,
+            )
+        is_intrinsic = tool_name in self.intrinsic_tools
+        if not tools_view:
+            is_active = (is_intrinsic and tool_name in self.active_intrinsic_tool_names) or (
+                not is_intrinsic and tool_name in self.active_tool_names
+            )
+            if not is_active:
+                return ToolCallGate(
+                    outcome="denied",
+                    tool_name=tool_name,
+                    reason="tool_not_active",
+                    executable=False,
+                )
+        if self.is_executable(tool_name, tools_view=tools_view):
+            return ToolCallGate(
+                outcome="allowed",
+                tool_name=tool_name,
+                reason="allowed",
+                executable=True,
+            )
+        return ToolCallGate(
+            outcome="unavailable_backend",
+            tool_name=tool_name,
+            reason="tool_has_no_executable_implementation",
+            executable=False,
+        )
+
     async def execute(self, tool_call: ToolCall, tools_view: Optional[ToolsView] = None, **kwargs: Any) -> Optional[str]:
         """
         Finds and executes the implementation for a tool call.
@@ -1379,30 +1456,23 @@ class Toolbox:
         - `tool_call`: The ToolCall object being executed.
         """
         tool_name = tool_call.name
-        tool_def = self.get_tool(tool_name)
-
-        # Find the callable implementation based on the tool's type.
-        callable_func: Optional[Callable[..., Any]] = None
-        is_intrinsic = tool_name in self.intrinsic_tools
-
-        if not tool_def:
-            tool_call.error = f"Error: Tool '{tool_name}' is not defined."
+        gate = self.gate_call(tool_name, tools_view=tools_view)
+        if gate.outcome != "allowed":
+            if gate.reason == "tool_not_defined":
+                tool_call.error = f"Error: Tool '{tool_name}' is not defined."
+            elif gate.reason == "blocked_in_scope":
+                tool_call.error = f"Error: Tool '{tool_name}' is not permitted in the current scope."
+            elif gate.reason == "all_tools_disabled":
+                tool_call.error = "Error: All tools are currently disabled."
+            elif gate.reason == "tool_not_active":
+                tool_call.error = f"Error: Tool '{tool_name}' is not active."
+            else:
+                tool_call.error = f"Error: Tool '{tool_name}' is defined but has no executable implementation."
             return None
 
-        # --- NEW: Check if the tool is active before execution ---
-        if tools_view:
-            if not tools_view.is_allowed(tool_name):
-                tool_call.error = f"Error: Tool '{tool_name}' is not permitted in the current scope."
-                return None
-        else:
-            if self.global_tools_mode == "disabled":
-                tool_call.error = "Error: All tools are currently disabled."
-                return None
-            is_active = (is_intrinsic and tool_name in self.active_intrinsic_tool_names) or \
-                        (not is_intrinsic and tool_name in self.active_tool_names)
-            if not is_active:
-                tool_call.error = f"Error: Tool '{tool_name}' is not active."
-                return None
+        tool_def = self.get_tool(tool_name)
+        callable_func: Optional[Callable[..., Any]] = None
+        is_intrinsic = tool_name in self.intrinsic_tools
 
         if is_intrinsic:
             callable_func = self.intrinsic_tool_callables.get(tool_name)

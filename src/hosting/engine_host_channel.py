@@ -1176,6 +1176,23 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def toolbox_gate(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-gate",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_name": str(tool_name or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def toolbox_execute(
         self,
         *,
@@ -1311,6 +1328,226 @@ class EngineHostControlChannel:
                 "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()],
                 "python_executable": str(python_executable or "").strip() or None,
                 "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_description_list(self) -> Dict[str, Any]:
+        res = self._invoke("toolbox-environment-list", {})
+        return dict(res or {})
+
+    def toolbox_environment_description_upsert(
+        self,
+        *,
+        name: str,
+        base_env_name: Optional[str] = None,
+        extra_packages: Optional[list[str]] = None,
+        allow_online_install: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-upsert",
+            {
+                "name": str(name or "").strip(),
+                "base_env_name": str(base_env_name or "").strip() or None,
+                "extra_packages": [str(item or "").strip() for item in list(extra_packages or []) if str(item or "").strip()],
+                "allow_online_install": bool(allow_online_install),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_description_clone(
+        self,
+        *,
+        source_name: str,
+        target_name: str,
+        extra_packages: Optional[list[str]] = None,
+        allow_online_install: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-clone",
+            {
+                "source_name": str(source_name or "").strip(),
+                "target_name": str(target_name or "").strip(),
+                "extra_packages": [str(item or "").strip() for item in list(extra_packages or []) if str(item or "").strip()] if extra_packages is not None else None,
+                "allow_online_install": allow_online_install if allow_online_install is not None else None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_resolve_requirements(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-resolve",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_apply(
+        self,
+        *,
+        environment_name: str,
+        toolbox_ids: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-apply",
+            {
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_realize(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-realize",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_sync_description(
+        self,
+        *,
+        toolbox_id: str,
+        source_environment_name: str,
+        target_environment_name: Optional[str] = None,
+        tool_keys: Optional[list[str]] = None,
+        apply: bool = False,
+        realize: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-sync",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "source_environment_name": str(source_environment_name or "base").strip() or "base",
+                "target_environment_name": str(target_environment_name or "").strip() or None,
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+                "apply": bool(apply),
+                "realize": bool(realize),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_prepare_install(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-prepare-install",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_lock_install(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-lock-install",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_verify_install_lock(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-verify-install-lock",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_resolve_install_lock(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+        allow_resolution: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-resolve-install-lock",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+                "allow_resolution": bool(allow_resolution),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_verify_install_receipt(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-verify-install-receipt",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_environment_execute_install(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[list[str]] = None,
+        allow_execution: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-execute-install",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "environment_name": str(environment_name or "base").strip() or "base",
+                "tool_keys": [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+                "allow_execution": bool(allow_execution),
             },
         )
         return dict(res or {})

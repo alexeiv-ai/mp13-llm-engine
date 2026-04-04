@@ -6,15 +6,18 @@ import importlib
 import inspect
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import venv
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from mp13_engine.mp13_config import ToolCall
-from mp13_engine.mp13_toolbox import Toolbox
+from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
+from mp13_engine.mp13_toolbox import Toolbox, ToolsView
+from mp13_engine.mp13_tools_parser import UnifiedToolIO
 
 
 def _stable_json(payload: Any) -> str:
@@ -114,6 +117,7 @@ class ToolboxBundleAutoTool:
 @dataclass
 class SandboxProfileSpec:
     profile_id: str = ""
+    environment_name: str = ""
     required_imports: List[str] = field(default_factory=list)
     sandbox_policy: Dict[str, Any] = field(default_factory=dict)
 
@@ -135,6 +139,7 @@ class SandboxProfileSpec:
 
     def profile_fingerprint(self) -> str:
         payload = {
+            "environment_name": str(self.environment_name or "").strip() or "base",
             "required_imports": self.normalized_required_imports(),
             "sandbox_policy": dict(self.sandbox_policy or {}),
         }
@@ -163,6 +168,7 @@ class SandboxProfileSpec:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "profile_id": self.normalized_profile_id(),
+            "environment_name": str(self.environment_name or "").strip() or "base",
             "required_imports": self.normalized_required_imports(),
             "sandbox_policy": dict(self.sandbox_policy or {}),
         }
@@ -172,6 +178,7 @@ class SandboxProfileSpec:
         row = dict(payload or {})
         return cls(
             profile_id=str(row.get("profile_id") or "").strip(),
+            environment_name=str(row.get("environment_name") or "base").strip() or "base",
             required_imports=[str(item or "").strip() for item in list(row.get("required_imports") or []) if str(item or "").strip()],
             sandbox_policy=dict(row.get("sandbox_policy") or {}),
         )
@@ -433,6 +440,8 @@ class ToolboxEnvironmentSpec:
     venv_key: str
     venv_path: str
     python_executable: str = ""
+    environment_name: str = "base"
+    environment_description_hash: str = ""
     venv_lock_hash: Optional[str] = None
     toolbox_runtime_hash: str = "toolbox-executor-v1"
     intrinsics_profile_id: str = "none"
@@ -444,6 +453,8 @@ class ToolboxEnvironmentSpec:
             "venv_key": str(self.venv_key or "").strip(),
             "venv_path": str(self.venv_path or "").strip(),
             "python_executable": str(self.python_executable or "").strip(),
+            "environment_name": str(self.environment_name or "base").strip() or "base",
+            "environment_description_hash": str(self.environment_description_hash or "").strip() or None,
             "venv_lock_hash": str(self.venv_lock_hash or "").strip() or None,
             "toolbox_runtime_hash": str(self.toolbox_runtime_hash or "toolbox-executor-v1").strip() or "toolbox-executor-v1",
             "intrinsics_profile_id": str(self.intrinsics_profile_id or "none").strip() or "none",
@@ -458,6 +469,8 @@ class ToolboxEnvironmentSpec:
             venv_key=str(row.get("venv_key") or "").strip(),
             venv_path=str(row.get("venv_path") or "").strip(),
             python_executable=str(row.get("python_executable") or "").strip(),
+            environment_name=str(row.get("environment_name") or "base").strip() or "base",
+            environment_description_hash=str(row.get("environment_description_hash") or "").strip() or None,
             venv_lock_hash=str(row.get("venv_lock_hash") or "").strip() or None,
             toolbox_runtime_hash=str(row.get("toolbox_runtime_hash") or "toolbox-executor-v1").strip() or "toolbox-executor-v1",
             intrinsics_profile_id=str(row.get("intrinsics_profile_id") or "none").strip() or "none",
@@ -472,10 +485,87 @@ class ToolboxEnvironmentManager:
         self.environments_root = (self.hosting_root / "toolbox_venvs").resolve()
 
     @staticmethod
+    def normalize_environment_description(
+        payload: Optional[Dict[str, Any]],
+        *,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        row = dict(payload or {})
+        env_name = str(name or row.get("name") or "base").strip() or "base"
+        base_env_name = str(row.get("base_env_name") or ("base" if env_name != "base" else "")).strip()
+        extra_packages: List[str] = []
+        seen: set[str] = set()
+        for item in list(row.get("extra_packages") or []):
+            pkg = str(item or "").strip()
+            if pkg and pkg not in seen:
+                seen.add(pkg)
+                extra_packages.append(pkg)
+        return {
+            "name": env_name,
+            "base_env_name": base_env_name or None,
+            "extra_packages": extra_packages,
+            "allow_online_install": bool(row.get("allow_online_install", False)),
+        }
+
+    @classmethod
+    def environment_description_hash(cls, payload: Optional[Dict[str, Any]], *, name: Optional[str] = None) -> str:
+        normalized = cls.normalize_environment_description(payload, name=name)
+        return cls._fingerprint_payload(normalized)[:16]
+
+    @classmethod
+    def resolve_environment_description(
+        cls,
+        payload_by_name: Dict[str, Dict[str, Any]],
+        *,
+        name: str,
+    ) -> Dict[str, Any]:
+        env_name = str(name or "base").strip() or "base"
+        seen_stack: set[str] = set()
+        lineage: List[str] = []
+        merged_packages: List[str] = []
+        merged_seen: set[str] = set()
+        allow_online_install = False
+
+        current = env_name
+        while current:
+            normalized = cls.normalize_environment_description(
+                dict(payload_by_name.get(current) or {}),
+                name=current,
+            )
+            if current in seen_stack:
+                raise ValueError(f"environment description cycle detected at '{current}'")
+            seen_stack.add(current)
+            lineage.append(current)
+            for item in list(normalized.get("extra_packages") or []):
+                pkg = str(item or "").strip()
+                if pkg and pkg not in merged_seen:
+                    merged_seen.add(pkg)
+                    merged_packages.append(pkg)
+            allow_online_install = bool(allow_online_install or normalized.get("allow_online_install", False))
+            base_env_name = str(normalized.get("base_env_name") or "").strip()
+            current = base_env_name if base_env_name and base_env_name != normalized["name"] else ""
+
+        direct = cls.normalize_environment_description(dict(payload_by_name.get(env_name) or {}), name=env_name)
+        return {
+            "name": env_name,
+            "base_env_name": direct.get("base_env_name"),
+            "extra_packages": list(direct.get("extra_packages") or []),
+            "allow_online_install": bool(direct.get("allow_online_install", False)),
+            "effective_extra_packages": merged_packages,
+            "effective_allow_online_install": allow_online_install,
+            "lineage": lineage,
+        }
+
+    @staticmethod
     def _fingerprint_payload(payload: Dict[str, Any]) -> str:
         return _sha256_text(_stable_json(payload))
 
-    def environment_spec_for_bundle(self, staged: "StagedToolboxBundle") -> ToolboxEnvironmentSpec:
+    def environment_spec_for_bundle(
+        self,
+        staged: "StagedToolboxBundle",
+        *,
+        environment_description: Optional[Dict[str, Any]] = None,
+    ) -> ToolboxEnvironmentSpec:
         manifest = dict(staged.manifest or {})
         sandbox_profile = SandboxProfileSpec.from_dict(dict(manifest.get("sandbox_profile") or {}))
         intrinsic_tool_names = list(manifest.get("intrinsic_tool_names") or [])
@@ -483,9 +573,28 @@ class ToolboxEnvironmentManager:
         dependency_lock_hash = str(manifest.get("dependency_lock_hash") or "").strip() or None
         required_imports = sandbox_profile.normalized_required_imports()
         toolbox_runtime_hash = "toolbox-executor-v1"
+        environment_name = str(sandbox_profile.environment_name or "base").strip() or "base"
+        input_desc = dict(environment_description or {})
+        raw_desc = self.normalize_environment_description(input_desc, name=environment_name)
+        effective_extra_packages = [
+            str(item or "").strip()
+            for item in list(input_desc.get("effective_extra_packages") or raw_desc.get("extra_packages") or [])
+            if str(item or "").strip()
+        ]
+        env_desc = {
+            "name": environment_name,
+            "base_env_name": raw_desc.get("base_env_name"),
+            "extra_packages": effective_extra_packages,
+            "allow_online_install": bool(
+                input_desc.get("effective_allow_online_install", raw_desc.get("allow_online_install", False))
+            ),
+        }
+        env_desc_hash = self.environment_description_hash(env_desc, name=environment_name)
         venv_key = self._fingerprint_payload(
             {
                 "toolbox_runtime_hash": toolbox_runtime_hash,
+                "environment_name": environment_name,
+                "environment_description_hash": env_desc_hash,
                 "intrinsics_profile_id": intrinsics_profile_id,
                 "required_imports": required_imports,
                 "dependency_lock_hash": dependency_lock_hash,
@@ -503,6 +612,8 @@ class ToolboxEnvironmentManager:
             venv_key=venv_key,
             venv_path=venv_path,
             python_executable=str(self.python_executable_path(venv_root)),
+            environment_name=environment_name,
+            environment_description_hash=env_desc_hash,
             venv_lock_hash=venv_lock_hash,
             toolbox_runtime_hash=toolbox_runtime_hash,
             intrinsics_profile_id=intrinsics_profile_id,
@@ -526,11 +637,612 @@ class ToolboxEnvironmentManager:
             venv.EnvBuilder(with_pip=False, system_site_packages=True).create(str(target))
         spec.python_executable = str(self.python_executable_path(target))
         metadata_path = target / "environment.json"
-        metadata_path.write_text(json.dumps(spec.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        metadata = self.read_environment_metadata(spec) if metadata_path.exists() else {}
+        metadata.update(spec.to_dict())
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return spec
 
-    def ensure_for_bundle(self, staged: "StagedToolboxBundle") -> ToolboxEnvironmentSpec:
-        return self.ensure_environment(self.environment_spec_for_bundle(staged))
+    @staticmethod
+    def _unique_names(items: Sequence[Any]) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in list(items or []):
+            name = str(item or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
+    @staticmethod
+    def _normalize_package_name(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        for sep in ("==", ">=", "<=", "~=", "!=", ">", "<"):
+            if sep in raw:
+                raw = raw.split(sep, 1)[0]
+                break
+        raw = raw.strip()
+        return raw.lower()
+
+    @classmethod
+    def _install_plan_hash(cls, install_plan: Dict[str, Any]) -> str:
+        payload = {
+            "planned_packages": cls._unique_names(install_plan.get("planned_packages") or []),
+            "requirements_relpath": str(install_plan.get("requirements_relpath") or "").strip() or "requirements-planned.txt",
+        }
+        return cls._fingerprint_payload(payload)[:16]
+
+    @classmethod
+    def _resolved_packages_from_report(cls, report: Dict[str, Any]) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in list(dict(report or {}).get("install") or []):
+            row = dict(item or {})
+            metadata = dict(row.get("metadata") or {})
+            name = str(metadata.get("name") or "").strip()
+            version = str(metadata.get("version") or "").strip()
+            if not name:
+                continue
+            pinned = f"{name}=={version}" if version else name
+            key = pinned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(pinned)
+        return out
+
+    def read_environment_metadata(self, spec: ToolboxEnvironmentSpec) -> Dict[str, Any]:
+        metadata_path = Path(spec.venv_path).expanduser().resolve() / "environment.json"
+        if not metadata_path.exists():
+            return dict(spec.to_dict())
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            return dict(payload or {}) if isinstance(payload, dict) else dict(spec.to_dict())
+        except Exception:
+            return dict(spec.to_dict())
+
+    def realize_environment(
+        self,
+        spec: ToolboxEnvironmentSpec,
+        *,
+        environment_description: Optional[Dict[str, Any]] = None,
+        required_packages: Optional[Sequence[str]] = None,
+        missing_packages: Optional[Sequence[str]] = None,
+        toolbox_id: Optional[str] = None,
+        sandbox_profile_id: Optional[str] = None,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        ensured = self.ensure_environment(spec)
+        effective_desc_input = dict(environment_description or {})
+        effective_desc = {
+            "name": str(effective_desc_input.get("name") or ensured.environment_name or "base").strip() or "base",
+            "base_env_name": effective_desc_input.get("base_env_name"),
+            "effective_extra_packages": self._unique_names(
+                effective_desc_input.get("effective_extra_packages")
+                or effective_desc_input.get("extra_packages")
+                or []
+            ),
+            "effective_allow_online_install": bool(
+                effective_desc_input.get(
+                    "effective_allow_online_install",
+                    effective_desc_input.get("allow_online_install", False),
+                )
+            ),
+            "lineage": [str(item or "").strip() for item in list(effective_desc_input.get("lineage") or []) if str(item or "").strip()],
+        }
+        required = self._unique_names(required_packages or ensured.required_imports)
+        missing = self._unique_names(missing_packages or [])
+        planned = self._unique_names(list(effective_desc["effective_extra_packages"]) + list(required))
+        provenance_payload = {
+            "toolbox_id": str(toolbox_id or "").strip() or None,
+            "sandbox_profile_id": str(sandbox_profile_id or "").strip() or None,
+            "venv_key": ensured.venv_key,
+            "environment_name": ensured.environment_name,
+            "environment_description_hash": ensured.environment_description_hash,
+            "required_packages": required,
+            "effective_extra_packages": list(effective_desc["effective_extra_packages"]),
+            "planned_packages": planned,
+            "missing_packages": missing,
+            "allow_online_install": bool(effective_desc["effective_allow_online_install"]),
+            "tool_keys": self._unique_names(tool_keys or []),
+            "dependency_lock_hash": ensured.dependency_lock_hash,
+            "venv_lock_hash": ensured.venv_lock_hash,
+            "toolbox_runtime_hash": ensured.toolbox_runtime_hash,
+            "intrinsics_profile_id": ensured.intrinsics_profile_id,
+        }
+        provenance_hash = self._fingerprint_payload(provenance_payload)[:16]
+        realization = {
+            "mode": "metadata_only",
+            "status": "planned",
+            "provenance_hash": provenance_hash,
+            "realized_at": time.time(),
+            "required_packages": required,
+            "effective_extra_packages": list(effective_desc["effective_extra_packages"]),
+            "planned_packages": planned,
+            "missing_packages": missing,
+            "allow_online_install": bool(effective_desc["effective_allow_online_install"]),
+            "environment_lineage": list(effective_desc["lineage"]),
+        }
+        metadata = self.read_environment_metadata(ensured)
+        metadata.update(ensured.to_dict())
+        metadata["realization"] = realization
+        metadata_path = Path(ensured.venv_path).expanduser().resolve() / "environment.json"
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def prepare_install_plan(
+        self,
+        spec: ToolboxEnvironmentSpec,
+        *,
+        environment_description: Optional[Dict[str, Any]] = None,
+        required_packages: Optional[Sequence[str]] = None,
+        missing_packages: Optional[Sequence[str]] = None,
+        toolbox_id: Optional[str] = None,
+        sandbox_profile_id: Optional[str] = None,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        metadata = self.realize_environment(
+            spec,
+            environment_description=environment_description,
+            required_packages=required_packages,
+            missing_packages=missing_packages,
+            toolbox_id=toolbox_id,
+            sandbox_profile_id=sandbox_profile_id,
+            tool_keys=tool_keys,
+        )
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        realization = dict(metadata.get("realization") or {})
+        planned_packages = self._unique_names(realization.get("planned_packages") or [])
+        requirements_relpath = "requirements-planned.txt"
+        requirements_path = env_root / requirements_relpath
+        requirements_body = "".join(f"{pkg}\n" for pkg in planned_packages)
+        requirements_path.write_text(requirements_body, encoding="utf-8")
+        install_command = [
+            str(ensured.python_executable or self.python_executable_path(env_root)),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(requirements_path),
+        ]
+        install_plan = {
+            "mode": "plan_only",
+            "requirements_path": str(requirements_path),
+            "requirements_relpath": requirements_relpath,
+            "planned_packages": planned_packages,
+            "missing_packages": self._unique_names(realization.get("missing_packages") or []),
+            "can_execute_online": bool(realization.get("allow_online_install", False)),
+            "install_command": install_command,
+            "generated_at": time.time(),
+        }
+        metadata["install_plan"] = install_plan
+        metadata_path = env_root / "environment.json"
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def lock_install_plan(self, spec: ToolboxEnvironmentSpec) -> Dict[str, Any]:
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        metadata = self.read_environment_metadata(ensured)
+        install_plan = dict(metadata.get("install_plan") or {})
+        if not install_plan:
+            raise ValueError("install_plan_missing")
+        planned_packages = self._unique_names(install_plan.get("planned_packages") or [])
+        requirements_relpath = "requirements-locked.txt"
+        requirements_path = env_root / requirements_relpath
+        requirements_body = "".join(f"{pkg}\n" for pkg in planned_packages)
+        requirements_path.write_text(requirements_body, encoding="utf-8")
+        lock_payload = {
+            "venv_key": ensured.venv_key,
+            "environment_name": ensured.environment_name,
+            "environment_description_hash": ensured.environment_description_hash,
+            "planned_packages": planned_packages,
+            "requirements_relpath": requirements_relpath,
+            "toolbox_runtime_hash": ensured.toolbox_runtime_hash,
+            "intrinsics_profile_id": ensured.intrinsics_profile_id,
+            "dependency_lock_hash": ensured.dependency_lock_hash,
+            "venv_lock_hash": ensured.venv_lock_hash,
+        }
+        install_lock_hash = self._fingerprint_payload(lock_payload)[:16]
+        locked_plan = {
+            "status": "locked",
+            "locked_at": time.time(),
+            "install_lock_hash": install_lock_hash,
+            "planned_packages": planned_packages,
+            "requirements_path": str(requirements_path),
+            "requirements_relpath": requirements_relpath,
+        }
+        metadata["install_lock"] = locked_plan
+        (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def resolve_install_lock(
+        self,
+        spec: ToolboxEnvironmentSpec,
+        *,
+        allow_resolution: bool = False,
+    ) -> Dict[str, Any]:
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        metadata = self.read_environment_metadata(ensured)
+        install_plan = dict(metadata.get("install_plan") or {})
+        if not install_plan:
+            raise ValueError("install_plan_missing")
+        planned_packages = self._unique_names(install_plan.get("planned_packages") or [])
+        if not planned_packages:
+            resolution = {
+                "status": "noop",
+                "resolved_at": time.time(),
+                "reason": "no_planned_packages",
+            }
+            metadata["install_resolution"] = resolution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        if not allow_resolution:
+            resolution = {
+                "status": "blocked",
+                "resolved_at": time.time(),
+                "reason": "resolution_not_enabled",
+            }
+            metadata["install_resolution"] = resolution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        if not bool(install_plan.get("can_execute_online", False)):
+            resolution = {
+                "status": "blocked",
+                "resolved_at": time.time(),
+                "reason": "online_resolution_not_allowed",
+            }
+            metadata["install_resolution"] = resolution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+
+        requirements_path = Path(str(install_plan.get("requirements_path") or "")).expanduser().resolve()
+        if not requirements_path.exists():
+            raise ValueError("install_plan_requirements_missing")
+        report_relpath = "install-resolution-report.json"
+        report_path = env_root / report_relpath
+        command = [
+            str(ensured.python_executable or self.python_executable_path(env_root)),
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--ignore-installed",
+            "--report",
+            str(report_path),
+            "-r",
+            str(requirements_path),
+        ]
+        result = subprocess.run(  # noqa: S603
+            command,
+            cwd=str(env_root),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        resolution = {
+            "status": "ok" if int(result.returncode or 0) == 0 else "failed",
+            "resolved_at": time.time(),
+            "returncode": int(result.returncode or 0),
+            "stdout": str(result.stdout or ""),
+            "stderr": str(result.stderr or ""),
+            "command": command,
+            "report_path": str(report_path),
+            "report_relpath": report_relpath,
+            "source_install_plan_hash": self._install_plan_hash(install_plan),
+        }
+        metadata["install_resolution"] = resolution
+        if resolution["status"] == "ok" and report_path.exists():
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            resolved_packages = self._resolved_packages_from_report(dict(report or {}))
+            resolved_relpath = "requirements-resolved.txt"
+            resolved_path = env_root / resolved_relpath
+            resolved_path.write_text("".join(f"{pkg}\n" for pkg in resolved_packages), encoding="utf-8")
+            resolved_lock_payload = {
+                "venv_key": ensured.venv_key,
+                "environment_name": ensured.environment_name,
+                "environment_description_hash": ensured.environment_description_hash,
+                "resolved_packages": resolved_packages,
+                "source_install_plan_hash": resolution["source_install_plan_hash"],
+                "toolbox_runtime_hash": ensured.toolbox_runtime_hash,
+                "intrinsics_profile_id": ensured.intrinsics_profile_id,
+                "dependency_lock_hash": ensured.dependency_lock_hash,
+                "venv_lock_hash": ensured.venv_lock_hash,
+            }
+            resolved_lock_hash = self._fingerprint_payload(resolved_lock_payload)[:16]
+            metadata["resolved_install_lock"] = {
+                "status": "locked",
+                "locked_at": time.time(),
+                "resolved_lock_hash": resolved_lock_hash,
+                "resolved_packages": resolved_packages,
+                "requirements_path": str(resolved_path),
+                "requirements_relpath": resolved_relpath,
+                "report_path": str(report_path),
+                "report_relpath": report_relpath,
+                "source_install_plan_hash": resolution["source_install_plan_hash"],
+            }
+        (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def verify_install_lock(self, spec: ToolboxEnvironmentSpec) -> Dict[str, Any]:
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        metadata = self.read_environment_metadata(ensured)
+        install_plan = dict(metadata.get("install_plan") or {})
+        install_lock = dict(metadata.get("install_lock") or {})
+        if not install_plan:
+            raise ValueError("install_plan_missing")
+        if not install_lock:
+            verification = {
+                "status": "missing",
+                "verified_at": time.time(),
+                "reason": "install_lock_missing",
+            }
+            metadata["install_lock_verification"] = verification
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+
+        planned_packages = self._unique_names(install_plan.get("planned_packages") or [])
+        expected_requirements_relpath = "requirements-locked.txt"
+        expected_payload = {
+            "venv_key": ensured.venv_key,
+            "environment_name": ensured.environment_name,
+            "environment_description_hash": ensured.environment_description_hash,
+            "planned_packages": planned_packages,
+            "requirements_relpath": expected_requirements_relpath,
+            "toolbox_runtime_hash": ensured.toolbox_runtime_hash,
+            "intrinsics_profile_id": ensured.intrinsics_profile_id,
+            "dependency_lock_hash": ensured.dependency_lock_hash,
+            "venv_lock_hash": ensured.venv_lock_hash,
+        }
+        expected_lock_hash = self._fingerprint_payload(expected_payload)[:16]
+        lock_hash = str(install_lock.get("install_lock_hash") or "").strip()
+        requirements_path = Path(
+            str(install_lock.get("requirements_path") or (env_root / expected_requirements_relpath))
+        ).expanduser().resolve()
+        requirements_ok = requirements_path.exists()
+        status = "ok"
+        reason = None
+        if not requirements_ok:
+            status = "stale"
+            reason = "locked_requirements_missing"
+        elif lock_hash != expected_lock_hash:
+            status = "stale"
+            reason = "install_lock_hash_mismatch"
+        verification = {
+            "status": status,
+            "verified_at": time.time(),
+            "install_lock_hash": lock_hash or None,
+            "expected_install_lock_hash": expected_lock_hash,
+            "requirements_path": str(requirements_path),
+            "reason": reason,
+        }
+        metadata["install_lock_verification"] = verification
+        (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def execute_install_plan(
+        self,
+        spec: ToolboxEnvironmentSpec,
+        *,
+        allow_execution: bool = False,
+    ) -> Dict[str, Any]:
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        metadata = self.read_environment_metadata(ensured)
+        install_plan = dict(metadata.get("install_plan") or {})
+        if not install_plan:
+            raise ValueError("install_plan_missing")
+        planned_packages = self._unique_names(install_plan.get("planned_packages") or [])
+        if not planned_packages:
+            execution = {
+                "status": "noop",
+                "executed": False,
+                "executed_at": time.time(),
+                "reason": "no_planned_packages",
+            }
+            metadata["install_execution"] = execution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        if not allow_execution:
+            execution = {
+                "status": "blocked",
+                "executed": False,
+                "executed_at": time.time(),
+                "reason": "execution_not_enabled",
+            }
+            metadata["install_execution"] = execution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        if not bool(install_plan.get("can_execute_online", False)):
+            execution = {
+                "status": "blocked",
+                "executed": False,
+                "executed_at": time.time(),
+                "reason": "online_install_not_allowed",
+            }
+            metadata["install_execution"] = execution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+
+        verification_meta = self.verify_install_lock(ensured)
+        verification = dict(verification_meta.get("install_lock_verification") or {})
+        if str(verification.get("status") or "") not in {"ok", "missing"}:
+            execution = {
+                "status": "blocked",
+                "executed": False,
+                "executed_at": time.time(),
+                "reason": str(verification.get("reason") or "install_lock_invalid"),
+                "install_lock_hash": str(verification.get("install_lock_hash") or "").strip() or None,
+                "expected_install_lock_hash": str(verification.get("expected_install_lock_hash") or "").strip() or None,
+            }
+            metadata = self.read_environment_metadata(ensured)
+            metadata["install_execution"] = execution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+
+        metadata = verification_meta
+        install_lock = dict(metadata.get("install_lock") or {})
+        resolved_install_lock = dict(metadata.get("resolved_install_lock") or {})
+        requirements_path = str(
+            install_lock.get("requirements_path")
+            or install_plan.get("requirements_path")
+            or ""
+        ).strip()
+        command = [str(item or "").strip() for item in list(install_plan.get("install_command") or []) if str(item or "").strip()]
+        if not command:
+            raise ValueError("install_command_missing")
+        resolved_lock_hash = None
+        if resolved_install_lock:
+            expected_plan_hash = self._install_plan_hash(install_plan)
+            source_plan_hash = str(resolved_install_lock.get("source_install_plan_hash") or "").strip()
+            resolved_requirements_path = Path(
+                str(resolved_install_lock.get("requirements_path") or "")
+            ).expanduser().resolve()
+            if source_plan_hash != expected_plan_hash:
+                execution = {
+                    "status": "blocked",
+                    "executed": False,
+                    "executed_at": time.time(),
+                    "reason": "resolved_lock_plan_hash_mismatch",
+                    "resolved_lock_hash": str(resolved_install_lock.get("resolved_lock_hash") or "").strip() or None,
+                    "source_install_plan_hash": source_plan_hash or None,
+                    "expected_install_plan_hash": expected_plan_hash,
+                }
+                metadata["install_execution"] = execution
+                (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+                return metadata
+            if resolved_requirements_path.exists():
+                requirements_path = str(resolved_requirements_path)
+                resolved_lock_hash = str(resolved_install_lock.get("resolved_lock_hash") or "").strip() or None
+        if requirements_path:
+            command = command[:-1] + [requirements_path]
+        result = subprocess.run(  # noqa: S603
+            command,
+            cwd=str(env_root),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        execution = {
+            "status": "ok" if int(result.returncode or 0) == 0 else "failed",
+            "executed": True,
+            "executed_at": time.time(),
+            "returncode": int(result.returncode or 0),
+            "stdout": str(result.stdout or ""),
+            "stderr": str(result.stderr or ""),
+            "command": command,
+            "install_lock_hash": str(install_lock.get("install_lock_hash") or "").strip() or None,
+            "resolved_lock_hash": resolved_lock_hash,
+        }
+        metadata["install_execution"] = execution
+        if execution["status"] == "ok":
+            freeze_cmd = [
+                str(ensured.python_executable or self.python_executable_path(env_root)),
+                "-m",
+                "pip",
+                "freeze",
+            ]
+            try:
+                freeze_result = subprocess.run(  # noqa: S603
+                    freeze_cmd,
+                    cwd=str(env_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                freeze_output = str(freeze_result.stdout or "")
+                lines = [
+                    line.strip()
+                    for line in freeze_output.splitlines()
+                    if str(line or "").strip()
+                ]
+                receipt_payload = {
+                    "status": "ok" if int(freeze_result.returncode or 0) == 0 else "failed",
+                    "captured_at": time.time(),
+                    "returncode": int(freeze_result.returncode or 0),
+                    "command": freeze_cmd,
+                    "packages": lines,
+                    "packages_hash": self._fingerprint_payload({"packages": lines})[:16],
+                    "stderr": str(freeze_result.stderr or ""),
+                }
+            except Exception as exc:
+                receipt_payload = {
+                    "status": "failed",
+                    "captured_at": time.time(),
+                    "command": freeze_cmd,
+                    "packages": [],
+                    "packages_hash": None,
+                    "stderr": str(exc),
+                }
+            metadata["install_receipt"] = receipt_payload
+        (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def verify_install_receipt(self, spec: ToolboxEnvironmentSpec) -> Dict[str, Any]:
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        metadata = self.read_environment_metadata(ensured)
+        install_lock = dict(metadata.get("install_lock") or {})
+        resolved_install_lock = dict(metadata.get("resolved_install_lock") or {})
+        install_receipt = dict(metadata.get("install_receipt") or {})
+        if not install_lock and not resolved_install_lock:
+            verification = {
+                "status": "missing",
+                "verified_at": time.time(),
+                "reason": "install_lock_missing",
+            }
+            metadata["install_receipt_verification"] = verification
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        if not install_receipt:
+            verification = {
+                "status": "missing",
+                "verified_at": time.time(),
+                "reason": "install_receipt_missing",
+            }
+            metadata["install_receipt_verification"] = verification
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+
+        locked_source = list(resolved_install_lock.get("resolved_packages") or []) or list(install_lock.get("planned_packages") or [])
+        locked_names = {
+            self._normalize_package_name(item)
+            for item in locked_source
+            if self._normalize_package_name(item)
+        }
+        observed_names = {
+            self._normalize_package_name(item)
+            for item in list(install_receipt.get("packages") or [])
+            if self._normalize_package_name(item)
+        }
+        missing = sorted(name for name in locked_names if name not in observed_names)
+        status = "ok" if not missing else "mismatch"
+        verification = {
+            "status": status,
+            "verified_at": time.time(),
+            "locked_package_names": sorted(locked_names),
+            "observed_package_names": sorted(observed_names),
+            "missing_package_names": missing,
+            "lock_source": "resolved_install_lock" if resolved_install_lock else "install_lock",
+        }
+        metadata["install_receipt_verification"] = verification
+        (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
+    def ensure_for_bundle(
+        self,
+        staged: "StagedToolboxBundle",
+        *,
+        environment_description: Optional[Dict[str, Any]] = None,
+    ) -> ToolboxEnvironmentSpec:
+        return self.ensure_environment(self.environment_spec_for_bundle(staged, environment_description=environment_description))
 
 
 @dataclass
@@ -558,6 +1270,8 @@ class StagedToolboxBundle:
             "venv_key": spec.venv_key,
             "venv_path": spec.venv_path,
             "python_executable": spec.python_executable,
+            "environment_name": spec.environment_name,
+            "environment_description_hash": spec.environment_description_hash,
             "venv_lock_hash": spec.venv_lock_hash,
             "venv_mutable": False,
             "toolbox_runtime_hash": spec.toolbox_runtime_hash,
@@ -855,7 +1569,22 @@ class ToolboxSandboxOrchestrator:
             staged = item.staged_bundle
             revision = str(staged.manifest.get("bundle_revision") or "")
             engine_id = self._engine_id(toolbox_id, item.sandbox_profile, revision)
-            environment_spec = self.environment_manager.ensure_for_bundle(staged)
+            environment_name = str(item.sandbox_profile.environment_name or "base").strip() or "base"
+            environment_description = None
+            if hasattr(self.service, "toolbox_environment_description_effective_get"):
+                try:
+                    environment_description = self.service.toolbox_environment_description_effective_get(environment_name)
+                except Exception:
+                    environment_description = None
+            elif hasattr(self.service, "toolbox_environment_description_get"):
+                try:
+                    environment_description = self.service.toolbox_environment_description_get(environment_name)
+                except Exception:
+                    environment_description = None
+            environment_spec = self.environment_manager.ensure_for_bundle(
+                staged,
+                environment_description=environment_description,
+            )
             item.registration = self.service.spawn(
                 engine_id=engine_id,
                 command=staged.worker_command(
@@ -967,6 +1696,144 @@ class ToolboxExecutionHarness:
         ]
         return list(await asyncio.gather(*tasks))
 
+    async def execute_request_tools(
+        self,
+        parser_profile: ParserProfile,
+        final_response_items: List[InferenceResponse],
+        action_handler: Callable[..., Any],
+        serial_execution: bool = False,
+        *,
+        tools_view: Optional[ToolsView] = None,
+        context: Optional[Any] = None,
+        tool_retries_max: Optional[int] = None,
+        tool_retries_left: Optional[int] = None,
+        timeout_seconds: float = 30.0,
+        **kwargs: Any,
+    ) -> None:
+        mode = str(self.config.mode or "native").strip().lower()
+        if mode == "native" and self.native_toolbox is not None:
+            await self.native_toolbox.execute_request_tools(
+                parser_profile=parser_profile,
+                final_response_items=final_response_items,
+                action_handler=action_handler,
+                serial_execution=serial_execution,
+                tools_view=tools_view,
+                context=context,
+                tool_retries_max=tool_retries_max,
+                tool_retries_left=tool_retries_left,
+                **kwargs,
+            )
+            return
+
+        all_blocks_to_parse: List[ToolCallBlock] = []
+        for response_item in list(final_response_items or []):
+            if response_item.tool_blocks and len(response_item.tool_blocks) > 0:
+                for block in response_item.tool_blocks:
+                    if block.prompt_index is None:
+                        block.prompt_index = response_item.prompt_index
+                all_blocks_to_parse.extend(response_item.tool_blocks)
+
+        if not all_blocks_to_parse:
+            return
+
+        parser = UnifiedToolIO(profile=parser_profile)
+        parser.parse_collected_blocks(all_blocks_to_parse)
+
+        parsed_kwargs: Dict[str, Any] = {
+            **kwargs,
+            "context": context,
+            "final_response_items": final_response_items,
+            "current_response_item": None,
+            "parser": parser,
+            "tool_call": None,
+            "tool_call_block": None,
+            "tools_view": tools_view,
+            "tool_retries_max": tool_retries_max,
+            "tool_retries_left": tool_retries_left,
+            "serial_execution": serial_execution,
+        }
+        await action_handler(execute_stage="calls_parsed", **parsed_kwargs)
+
+        async def _execute_and_handle(
+            tool_call: ToolCall,
+            *,
+            response_item: InferenceResponse,
+            block: ToolCallBlock,
+        ) -> None:
+            action_kwargs = {
+                **kwargs,
+                "context": context,
+                "final_response_items": final_response_items,
+                "current_response_item": response_item,
+                "parser": parser,
+                "tool_call_block": block,
+                "tools_view": tools_view,
+                "tool_retries_max": tool_retries_max,
+                "tool_retries_left": tool_retries_left,
+                "serial_execution": serial_execution,
+            }
+            try:
+                await action_handler(execute_stage="call_starting", tool_call=tool_call, **action_kwargs)
+                executed = await self._execute_one(
+                    tool_call,
+                    timeout_seconds=float(timeout_seconds or 30.0),
+                    native_execute_kwargs=dict(
+                        kwargs,
+                        context=context,
+                        tools_view=tools_view,
+                        tool_retries_max=tool_retries_max,
+                        tool_retries_left=tool_retries_left,
+                    ),
+                )
+                tool_call.result = executed.result
+                tool_call.error = executed.error
+                tool_call.action = list(executed.action or [])
+                tool_call.id = executed.id or tool_call.id
+                tool_call.parse_errors = list(executed.parse_errors or tool_call.parse_errors or [])
+                tool_call.raw = executed.raw or tool_call.raw
+                tool_call.model_format = executed.model_format or tool_call.model_format
+            except Exception as exc:
+                if not tool_call.error:
+                    tool_call.error = f"Execution failed: {type(exc).__name__} - {exc}"
+            finally:
+                await action_handler(execute_stage="call_finished", tool_call=tool_call, **action_kwargs)
+
+        if serial_execution:
+            for response_item in list(final_response_items or []):
+                for block in list(response_item.tool_blocks or []):
+                    if not block.calls and not block.is_incomplete:
+                        block.error_block = "Tool calls list is empty."
+                        if ToolCall.KeepRaw not in (block.action_block or []):
+                            block.action_block = list(block.action_block or [])
+                            block.action_block.append(ToolCall.KeepRaw)
+                        continue
+                    if ToolCall.Ignore in block.action_block:
+                        continue
+                    for tool_call in list(block.calls or []):
+                        if ToolCall.Ignore in tool_call.action:
+                            continue
+                        await _execute_and_handle(tool_call, response_item=response_item, block=block)
+        else:
+            tasks: List[asyncio.Task[Any]] = []
+            for response_item in list(final_response_items or []):
+                for block in list(response_item.tool_blocks or []):
+                    if not block.calls and not block.is_incomplete:
+                        block.error_block = "Tool calls list is empty."
+                        if ToolCall.KeepRaw not in (block.action_block or []):
+                            block.action_block = list(block.action_block or [])
+                            block.action_block.append(ToolCall.KeepRaw)
+                        continue
+                    if ToolCall.Ignore in block.action_block:
+                        continue
+                    for tool_call in list(block.calls or []):
+                        if ToolCall.Ignore in tool_call.action:
+                            continue
+                        tasks.append(asyncio.create_task(_execute_and_handle(tool_call, response_item=response_item, block=block)))
+            if tasks:
+                await asyncio.gather(*tasks)
+
+        await action_handler(execute_stage="all_finished", **parsed_kwargs)
+
     async def _execute_one(
         self,
         call: ToolCall,
@@ -984,6 +1851,29 @@ class ToolboxExecutionHarness:
             return call
         engine_id = await self._select_engine_id()
         toolbox_id = str(self.config.sandbox_toolbox_id or "").strip()
+        gate_payload: Dict[str, Any] = {}
+        if hasattr(self.control_channel, "toolbox_gate"):
+            if toolbox_id:
+                gate_payload = dict(
+                    await asyncio.to_thread(
+                        self.control_channel.toolbox_gate,
+                        toolbox_id=toolbox_id,
+                        tool_name=str(call.name or "").strip(),
+                    )
+                )
+            else:
+                gate_payload = dict(
+                    await asyncio.to_thread(
+                        self.control_channel.toolbox_gate,
+                        engine_id=engine_id,
+                        tool_name=str(call.name or "").strip(),
+                    )
+                )
+        outcome = str(gate_payload.get("outcome") or "").strip().lower()
+        if outcome and outcome != "allowed":
+            reason = str(gate_payload.get("reason") or outcome).strip() or outcome
+            call.error = f"Execution gated: {outcome} - {reason}:{str(call.name or '').strip()}"
+            return call
         if toolbox_id:
             rpc_out = await asyncio.to_thread(
                 self.control_channel.toolbox_execute,
@@ -1018,7 +1908,7 @@ class ToolboxExecutionHarness:
             return engine_id
 
 
-class SandboxedToolboxFacade:
+class HostedToolBoxRef:
     def __init__(
         self,
         *,
@@ -1034,6 +1924,10 @@ class SandboxedToolboxFacade:
         self.python_executable = str(python_executable or "").strip() or None
         self.worker_profile_class = str(worker_profile_class or "generic").strip() or "generic"
 
+    @property
+    def ref_name(self) -> str:
+        return self.toolbox_id
+
     def register_auto_callable(
         self,
         *,
@@ -1041,6 +1935,7 @@ class SandboxedToolboxFacade:
         content: str,
         module_name: str,
         callable_name: str,
+        environment_name: str = "base",
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
@@ -1057,6 +1952,7 @@ class SandboxedToolboxFacade:
             "module_name": str(module_name or "").strip(),
             "callable_name": str(callable_name or "").strip(),
             "sandbox_profile": SandboxProfileSpec(
+                environment_name=str(environment_name or "base").strip() or "base",
                 required_imports=[str(item or "").strip() for item in list(required_imports or []) if str(item or "").strip()],
                 sandbox_policy=dict(sandbox_policy or {}),
             ).to_dict(),
@@ -1074,10 +1970,14 @@ class SandboxedToolboxFacade:
             or {}
         )
 
+    def add_auto_callable(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.register_auto_callable(**kwargs)
+
     def register_python_callable(
         self,
         implementation: Any,
         *,
+        environment_name: str = "base",
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
@@ -1102,6 +2002,7 @@ class SandboxedToolboxFacade:
             content=source_file.read_text(encoding="utf-8"),
             module_name=module_name,
             callable_name=callable_name,
+            environment_name=environment_name,
             required_imports=required_imports,
             sandbox_policy=sandbox_policy,
             activate=activate,
@@ -1109,11 +2010,15 @@ class SandboxedToolboxFacade:
             guide_description=guide_description,
         )
 
+    def add_python_callable(self, implementation: Any, **kwargs: Any) -> Dict[str, Any]:
+        return self.register_python_callable(implementation, **kwargs)
+
     def register_manual_tool(
         self,
         tool_definition: Dict[str, Any],
         implementation: Any,
         *,
+        environment_name: str = "base",
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -1145,6 +2050,7 @@ class SandboxedToolboxFacade:
                         "callable_name": callable_name,
                         "tool_definition": dict(tool_definition or {}),
                         "sandbox_profile": SandboxProfileSpec(
+                            environment_name=str(environment_name or "base").strip() or "base",
                             required_imports=[str(item or "").strip() for item in list(required_imports or []) if str(item or "").strip()],
                             sandbox_policy=dict(sandbox_policy or {}),
                         ).to_dict(),
@@ -1155,6 +2061,9 @@ class SandboxedToolboxFacade:
             )
             or {}
         )
+
+    def add_manual_tool(self, tool_definition: Dict[str, Any], implementation: Any, **kwargs: Any) -> Dict[str, Any]:
+        return self.register_manual_tool(tool_definition, implementation, **kwargs)
 
     def unregister_manual_tool(self, *, module_name: str, callable_name: str) -> Dict[str, Any]:
         key = f"manual:{str(module_name or '').strip()}:{str(callable_name or '').strip()}"
@@ -1168,6 +2077,9 @@ class SandboxedToolboxFacade:
             or {}
         )
 
+    def remove_manual_tool(self, *, module_name: str, callable_name: str) -> Dict[str, Any]:
+        return self.unregister_manual_tool(module_name=module_name, callable_name=callable_name)
+
     def unregister_auto_callable(self, *, module_name: str, callable_name: str) -> Dict[str, Any]:
         key = f"{str(module_name or '').strip()}:{str(callable_name or '').strip()}"
         return dict(
@@ -1180,11 +2092,15 @@ class SandboxedToolboxFacade:
             or {}
         )
 
+    def remove_auto_callable(self, *, module_name: str, callable_name: str) -> Dict[str, Any]:
+        return self.unregister_auto_callable(module_name=module_name, callable_name=callable_name)
+
     def register_intrinsic_tools(
         self,
         intrinsic_tool_names: Sequence[str],
         *,
         include_guides: bool = False,
+        environment_name: str = "base",
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return dict(
@@ -1192,9 +2108,216 @@ class SandboxedToolboxFacade:
                 toolbox_id=self.toolbox_id,
                 intrinsic_tool_names=[str(item or "").strip() for item in list(intrinsic_tool_names or []) if str(item or "").strip()],
                 include_guides=bool(include_guides),
-                sandbox_profile=SandboxProfileSpec(sandbox_policy=dict(sandbox_policy or {})).to_dict() if sandbox_policy else None,
+                sandbox_profile=SandboxProfileSpec(
+                    environment_name=str(environment_name or "base").strip() or "base",
+                    sandbox_policy=dict(sandbox_policy or {}),
+                ).to_dict(),
                 python_executable=self.python_executable,
                 worker_profile_class=self.worker_profile_class,
+            )
+            or {}
+        )
+
+    def add_intrinsic_tools(self, intrinsic_tool_names: Sequence[str], **kwargs: Any) -> Dict[str, Any]:
+        return self.register_intrinsic_tools(intrinsic_tool_names, **kwargs)
+
+    def environment_descriptions(self) -> Dict[str, Any]:
+        return dict(self.host.toolbox_environment_description_list() or {})
+
+    def list_environment_descriptions(self) -> Dict[str, Any]:
+        return self.environment_descriptions()
+
+    def upsert_environment_description(
+        self,
+        *,
+        name: str,
+        base_env_name: Optional[str] = None,
+        extra_packages: Optional[Sequence[str]] = None,
+        allow_online_install: bool = False,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_description_upsert(
+                name=str(name or "").strip(),
+                base_env_name=str(base_env_name or "").strip() or None,
+                extra_packages=[str(item or "").strip() for item in list(extra_packages or []) if str(item or "").strip()],
+                allow_online_install=bool(allow_online_install),
+            )
+            or {}
+        )
+
+    def clone_environment_description(
+        self,
+        *,
+        source_name: str,
+        target_name: str,
+        extra_packages: Optional[Sequence[str]] = None,
+        allow_online_install: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_description_clone(
+                source_name=str(source_name or "").strip(),
+                target_name=str(target_name or "").strip(),
+                extra_packages=[str(item or "").strip() for item in list(extra_packages or []) if str(item or "").strip()] if extra_packages is not None else None,
+                allow_online_install=allow_online_install,
+            )
+            or {}
+        )
+
+    def resolve_environment_requirements(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_resolve_requirements(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def apply_environment_description(
+        self,
+        *,
+        environment_name: str,
+        toolbox_ids: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_apply(
+                environment_name=str(environment_name or "base").strip() or "base",
+                toolbox_ids=[str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def realize_environment(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_realize(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def sync_environment_description(
+        self,
+        *,
+        source_environment_name: str,
+        target_environment_name: Optional[str] = None,
+        tool_keys: Optional[Sequence[str]] = None,
+        apply: bool = False,
+        realize: bool = False,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_sync_description(
+                toolbox_id=self.toolbox_id,
+                source_environment_name=str(source_environment_name or "base").strip() or "base",
+                target_environment_name=str(target_environment_name or "").strip() or None,
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+                apply=bool(apply),
+                realize=bool(realize),
+            )
+            or {}
+        )
+
+    def prepare_environment_install(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_prepare_install(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def lock_environment_install(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_lock_install(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def resolve_environment_install_lock(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+        allow_resolution: bool = False,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_resolve_install_lock(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+                allow_resolution=bool(allow_resolution),
+            )
+            or {}
+        )
+
+    def verify_environment_install_lock(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_verify_install_lock(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def verify_environment_install_receipt(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_verify_install_receipt(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+            )
+            or {}
+        )
+
+    def execute_environment_install(
+        self,
+        *,
+        environment_name: str,
+        tool_keys: Optional[Sequence[str]] = None,
+        allow_execution: bool = False,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_environment_execute_install(
+                toolbox_id=self.toolbox_id,
+                environment_name=str(environment_name or "base").strip() or "base",
+                tool_keys=[str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()] or None,
+                allow_execution=bool(allow_execution),
             )
             or {}
         )
@@ -1216,6 +2339,14 @@ class SandboxedToolboxFacade:
             or {}
         )
 
+    def remove_intrinsic_tools(
+        self,
+        intrinsic_tool_names: Sequence[str],
+        *,
+        include_guides: bool = False,
+    ) -> Dict[str, Any]:
+        return self.unregister_intrinsic_tools(intrinsic_tool_names, include_guides=include_guides)
+
     def describe(self, *, timeout_seconds: float = 10.0) -> Dict[str, Any]:
         return dict(
             self.host.toolbox_describe(
@@ -1224,6 +2355,18 @@ class SandboxedToolboxFacade:
             )
             or {}
         )
+
+    def gate(self, *, tool_name: str) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_gate(
+                toolbox_id=self.toolbox_id,
+                tool_name=str(tool_name or "").strip(),
+            )
+            or {}
+        )
+
+    def list_tools(self, *, timeout_seconds: float = 10.0) -> Dict[str, Any]:
+        return self.describe(timeout_seconds=timeout_seconds)
 
     def execute(
         self,
@@ -1243,6 +2386,9 @@ class SandboxedToolboxFacade:
             )
             or {}
         )
+
+
+SandboxedToolboxFacade = HostedToolBoxRef
 
 
 def load_toolbox_from_manifest(manifest_path: Path) -> tuple[Toolbox, Dict[str, Any]]:

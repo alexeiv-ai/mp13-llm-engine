@@ -167,6 +167,44 @@ Normative rule:
 1. `Toolbox.execute(...)` is an execution-time consistency check
 2. host-side sandbox authorization is the real permission gate
 
+### 4.4 Logical Availability vs Execution Gating
+
+The plan now distinguishes between:
+
+1. logical availability of a tool in the toolbox view
+2. execution-time authorization/gating for a specific call
+
+This matters because sandbox hosting introduces a real new state:
+
+1. a tool may be logically available to the model
+2. but execution may still be denied, deferred, or require extra checks in the current context
+
+Current repository state is already good enough for a first version of this through hosting:
+
+1. host-side routing decides whether a hosted tool call is allowed before dispatch
+2. sandbox policy can deny execution even when the tool is logically visible
+3. brokered fs/http rules already behave like execution-time gates
+
+But this is not yet the full long-term abstraction.
+
+Long-term direction:
+
+1. keep sandbox/hosting as the main enforcement backend
+2. add a first-class toolbox-level call-gating concept
+3. let toolbox express states such as:
+   - `allowed`
+   - `denied`
+   - `needs_confirmation`
+   - `unavailable_backend`
+   - `blocked_in_scope`
+4. use hosting/sandbox to populate those states for hosted tools
+
+That gives the system a cleaner separation:
+
+1. toolbox remains the logical interface the model/user reasons about
+2. sandbox hosting remains the main place where policy is actually enforced
+3. denied hosted calls are no longer treated only as generic execution failures
+
 ## 5. Adding And Removing Tools
 
 ### 5.1 Host-Managed Add Flow
@@ -541,11 +579,117 @@ Current implementation note:
 12. host-side register/unregister now performs a first readiness-gated cutover by waiting for new executors to answer `toolbox.describe` before retiring replaced registrations
 13. successful cutovers now persist basic rollout metadata (`ready_at`, `warmup_ms`) per profile and return it from register/unregister operations
 14. successful cutovers now also append to a bounded per-profile `rollout_history`
-15. a first higher-level user-facing facade now exists through `SandboxedToolboxFacade`, hiding common auto-callable request construction on top of the service/channel methods
-16. that facade can now also stage a real module-backed Python callable through `register_python_callable(...)`
-17. that facade can now also register and unregister builtin intrinsic tools through sandbox hosting
-18. that facade can now also register and unregister explicit manual tool definitions backed by Python implementations
-19. remaining work is about richer rollout policies, stronger garbage-collection semantics, broader facade coverage, and locked immutable dependency installation/provenance, not the basic routing model itself
+15. a first higher-level user-facing toolbox-ref API now exists through `HostedToolBoxRef` (with `SandboxedToolboxFacade` retained as an alias in code), hiding common auto-callable request construction on top of the service/channel methods
+16. that hosted ref can now also stage a real module-backed Python callable through `register_python_callable(...)`
+17. that hosted ref can now also register and unregister builtin intrinsic tools through sandbox hosting
+18. that hosted ref can now also register and unregister explicit manual tool definitions backed by Python implementations
+19. sandbox profiles now carry `environment_name`, and host persists named environment descriptions plus list/upsert/clone/resolve/apply APIs
+20. environment-apply now rebuilds linked toolbox profiles using persisted runtime defaults so env-description changes can roll into realized sandbox registrations
+21. environment resolution now honors base-env inheritance when computing effective package sets and realized environment identity
+22. applying a base environment now also rebuilds toolboxes linked to derived environments whose lineage depends on that base
+23. host now has an explicit environment-realization metadata step that records planned package/provenance information into realized env roots and toolbox profile state
+24. that realization step is intentionally metadata-only today; actual package install/update remains pending
+25. host now also has an explicit environment-sync step that can update or clone a named environment description from linked tool requirements and optionally chain apply/realize afterward
+26. host now also has an explicit install-plan emission step that writes a requirements file plus command metadata into the realized env root and persisted toolbox profile state
+27. host now also has a policy-gated install-execution hook that can run a prepared pip command and record blocked/ok/failed status into env metadata and toolbox profile state
+28. host now also has an explicit install-lock step that writes `requirements-locked.txt`, persists an `install_lock_hash`, and makes execution prefer the locked artifact when present
+29. host now also has explicit lock verification, and execution blocks when the persisted lock no longer matches the current plan
+30. successful install execution now also records a post-run package receipt (`pip freeze`) in env metadata and toolbox profile state
+31. host now also has explicit receipt verification that compares the observed package receipt against the locked package set and records `ok` / `missing` / `mismatch`
+32. host now also has an explicit resolved-lock step that can persist exact resolved packages from `pip --dry-run --report ...` as `resolved_install_lock`, and execution/receipt verification now prefer that stronger artifact when present
+33. app-facing wrappers now also have a lightweight helper and execution-router path through `src/app/hosted_toolbox_api.py`, a lightweight cursor/session-based runtime helper through `src/app/hosted_tool_runtime.py`, and `mp13chat.py` now has a selectable hosted tool-execution path that preserves local `ToolBoxRef` state while routing actual tool calls through `ToolboxExecutionHarness`
+34. remaining work is about richer rollout policies, stronger garbage-collection semantics, broader app/runtime adoption on top of that selectable execution path, and a fuller resolver-backed immutable dependency installation/provenance model rather than the current lightweight lock artifact plus resolved-lock/report plumbing
+
+### Phase 5B: Chat Usability Scenarios
+
+Use these as orthogonal end-to-end usability checks for the current hosted-toolbox story.
+
+1. Native chat baseline:
+   - run a normal chat turn with only local in-process tools enabled
+   - verify the existing `ToolBoxRef` / scope / prompt behavior is unchanged when hosted execution is not configured
+2. Hosted execution toggle:
+   - configure hosted execution for an existing logical toolbox
+   - verify the same chat turn now routes tool execution through the hosted executor while local `ToolBoxRef` visibility and prompt shaping remain unchanged
+3. Hosted auto-callable flow:
+   - register a Python callable through `HostedToolBoxRef.register_python_callable(...)`
+   - execute it from a real chat turn with hosted execution enabled
+   - verify tool results land back in the chat try-out / auto-round flow
+4. Hosted intrinsic flow:
+   - enable one builtin intrinsic tool through hosted registration
+   - execute it from chat and verify the hosted path behaves the same as the native tool-round UX
+5. Multi-profile toolbox routing from chat:
+   - register at least two tools under one logical toolbox id with different sandbox profiles
+   - trigger both tools from chat
+   - verify routing is transparent to the user and results still come back through one toolbox-ref-scoped conversation flow
+6. Environment-linked hosted tool:
+   - link a hosted tool to a named environment description with extra packages
+   - apply/realize that environment
+   - verify the chat path can still execute the tool after environment rebuild
+7. Failure-path UX:
+   - trigger a hosted tool error
+   - verify the error is surfaced through the normal tool-round result path and retry/try-out behavior remains coherent
+8. Hosted-off fallback:
+   - clear hosted execution
+   - verify the same logical toolbox can still be exercised natively when appropriate without leaving stale hosted-only assumptions in the chat runtime
+
+Current implementation note:
+
+1. `mp13chat` now has a concrete hosted demo mode that can be launched with:
+   - `--hosted-demo`
+   - `--hosted-demo-toolbox-id`
+   - `--hosted-demo-project-root`
+   - `--hosted-demo-hosting-root`
+2. that demo mode currently stages two hosted tools under different sandbox profiles:
+   - `SimpleCalc`
+   - `ProjectFilePeek`
+   - `ExampleHttpPeek`
+3. `ProjectFilePeek` demonstrates a brokered read-only filesystem root tied to the selected project root
+4. `ExampleHttpPeek` demonstrates a brokered HTTP profile with a URL-prefix allowlist
+5. hosted chat execution now narrows the outgoing advertised tool payload to the hosted-executable set when that set is known at configuration time
+6. hosted demo mode passes its known tool set explicitly so the model is shown only:
+   - `SimpleCalc`
+   - `ProjectFilePeek`
+   - `ExampleHttpPeek`
+7. hosted execution router now also exposes that hosted-visible set for chat diagnostics, so users can inspect what the hosted backend is currently advertising to the model
+8. `/t` should report effective availability and execution path (`hosted`, `native`, `gated`, `hidden`) instead of only raw local toolbox membership
+9. `/t sc` should report the effective advertised/hidden/disabled state after hosted filtering, matching what the LLM actually sees
+
+Exit criteria:
+
+1. a user can keep the familiar `ToolBoxRef`-style chat workflow while selectively switching actual tool execution to hosted sandboxes
+2. hosted execution remains invisible at the prompt/scope level except for policy/isolation behavior
+3. chat auto-rounds, tool-result turns, and retry behavior stay coherent across native and hosted execution modes
+4. toolbox inspection commands describe effective hosted-aware state instead of only raw local state
+
+### Phase 5C: Toolbox Call Gating
+
+Current first slice is implemented:
+
+1. `Toolbox.gate_call(...)` now exists for native/toolbox-facing gate decisions.
+2. `EngineHostService.toolbox_gate(...)` and `EngineHostControlChannel.toolbox_gate(...)` now expose hosted sandbox gate checks without executing the tool.
+3. `ToolboxExecutionHarness` now consults hosted gate state before sandbox dispatch and surfaces gated calls distinctly from tool crashes.
+
+Remaining work:
+
+1. Expand the lightweight toolbox-level call-gating concept beyond the current first slice so it is separate from plain active/visible tool membership everywhere the prompt/runtime stack reasons about tools.
+2. Keep supporting initial gate outcomes such as:
+   - `allowed`
+   - `denied`
+   - `needs_confirmation`
+   - `unavailable_backend`
+3. Preserve sandbox/hosting as the first concrete enforcement backend for those gate outcomes.
+4. Keep prompt/tool advertisement policy configurable so a tool may be:
+   - advertised and callable
+   - advertised but gated
+   - hidden entirely
+5. Continue moving prompt/tool advertisement to the same gate-aware model used by runtime dispatch, starting with hosted chat payload filtering.
+
+Exit criteria:
+
+1. the system can distinguish a gated/denied tool call from a crashed tool
+2. hosted sandbox policy is surfaced through a toolbox-facing gate abstraction rather than only runtime failure strings
+3. prompt/tool advertisement can use the same gate abstraction instead of relying on runtime mismatch
+4. future confirmation-based flows can fit the same model without redesigning the hosted execution path
 
 ### Phase 6: Windows First Enforcement Slice
 

@@ -984,9 +984,10 @@ Normal callers should be able to think in toolbox terms:
 
 Current implementation note:
 
-1. [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py) now provides `SandboxedToolboxFacade`
-2. the facade hides low-level `ToolboxAutoAssignmentRequest` shaping for common auto-callable registration/removal flows
-3. callers can now use:
+1. [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py) now provides public type `HostedToolBoxRef`
+2. `SandboxedToolboxFacade` remains in code as a compatibility alias to that type
+3. the hosted ref hides low-level `ToolboxAutoAssignmentRequest` shaping for common auto-callable registration/removal flows
+4. callers can now use:
     - `register_auto_callable(...)`
     - `register_python_callable(...)`
     - `register_intrinsic_tools(...)`
@@ -996,16 +997,16 @@ Current implementation note:
     - `unregister_auto_callable(...)`
     - `describe(...)`
     - `execute(...)`
-4. `register_python_callable(...)` can now stage a real module-backed Python callable by reading its source module automatically
-5. builtin intrinsic tools can now be added and removed through the same facade against sandbox hosting
-6. explicit manual tool definitions can now be registered against a module-backed Python implementation through the same facade
-7. richer facade coverage beyond these core flows remains future work
+5. `register_python_callable(...)` can now stage a real module-backed Python callable by reading its source module automatically
+6. builtin intrinsic tools can now be added and removed through the same hosted ref against sandbox hosting
+7. explicit manual tool definitions can now be registered against a module-backed Python implementation through the same hosted ref
+8. richer hosted-ref coverage beyond these core flows remains future work
 
 Public API naming direction:
 
-1. `SandboxedToolboxFacade` should be treated as an implementation-stage name
-2. the intended public API should preserve the existing `Toolbox` / `ToolBoxRef` programming model
-3. the preferred public hosting-side name is `HostedToolBoxRef`
+1. the intended public API should preserve the existing `Toolbox` / `ToolBoxRef` programming model
+2. the preferred public hosting-side name is `HostedToolBoxRef`
+3. `SandboxedToolboxFacade` should be treated as an implementation alias, not the preferred user-facing name
 4. that better reflects how users already operate on toolbox refs, especially for dynamic active-tool management
 
 ### 10.2 What Hosting Should Hide
@@ -1047,6 +1048,79 @@ Refined interpretation:
 3. sandbox lifecycle, env selection, and routing stay behind that hosted ref
 4. compatibility preservation is not required for the current helper name if the public API is renamed
 
+### 10.4 Logical Availability vs Execution Gating
+
+There are two semi-orthogonal layers in the toolbox model:
+
+1. logical tool availability
+2. execution-time call gating
+
+Logical availability means:
+
+1. the tool is part of the toolbox view presented to the LLM
+2. the tool is visible in the current `ToolBoxRef` scope
+3. the model may reasonably choose it
+
+Execution-time gating means:
+
+1. the call is actually allowed in the current context
+2. the backend/runtime is currently available
+3. extra checks may still be required before execution
+4. a visible tool call may still be denied, deferred, or require confirmation
+
+Before sandbox hosting, toolbox mostly behaved as though those two layers were collapsed:
+
+1. either the tool was present and executable
+2. or it was absent/disabled
+
+With hosted sandbox execution, that simplification is no longer sufficient.
+
+Current state:
+
+1. hosting/sandbox already provides a first real execution-gating backend:
+   - host-side allowlist/routing before `toolbox.execute`
+   - sandbox-profile-based policy enforcement
+   - brokered fs/http permission checks
+   - execution-time denial such as `tool_not_allowed:<name>`
+2. this is enough for a first working feature where a tool can be visible yet still denied at execution time
+3. the first lightweight call-gating slice is now implemented:
+   - `Toolbox.gate_call(...)` for native/toolbox-facing gate decisions
+   - `toolbox-gate` on the hosting control surface for hosted sandbox checks without execution
+   - hosted execution harness preflight that reports gated denials distinctly from generic tool crashes
+4. hosted chat wiring now has a first prompt-layer alignment slice:
+   - when hosted execution is configured and the hosted-executable tool set is known, outgoing tool definitions are narrowed to that set before reaching the model
+5. hosted chat diagnostics can now also expose that hosted-visible tool set directly through router summary state
+6. chat inspection commands now have an effective-view slice too:
+   - `/t` can report effective availability and execution path rather than only raw local registry membership
+   - `/t sc` can report the hosted-filtered effective advertised tool set that the model actually sees
+7. prompt/tool advertisement is still not fully driven by the same gate abstraction everywhere, so broader visible-vs-callable mismatch can still remain outside the current hosted-chat slice
+
+Long-term direction:
+
+1. sandbox/hosting should remain the dominant enforcement backend for hosted tools
+2. toolbox should still grow a first-class call-gating concept as the user-facing logical abstraction
+3. toolbox does not need to own sandbox policy details, but it should be able to represent states such as:
+   - visible and callable
+   - visible but gated
+   - visible but requires confirmation
+   - unavailable backend
+   - blocked in current scope
+4. hosting/sandbox can then supply those gating results for hosted tools
+5. native tools can later participate in the same abstraction if needed
+
+Why this matters:
+
+1. prompt/tool advertisement should not be forced to match backend executability exactly in every scenario
+2. a denied hosted call should be distinguishable from a crashed tool
+3. future user-confirmation and context-sensitive approvals fit this model naturally
+4. this avoids overloading sandbox denial as the only way to express tool policy
+
+Recommended interpretation:
+
+1. use sandbox/hosting as the concrete enforcement layer now
+2. add toolbox-level call-gate semantics later as the stable logical interface
+3. do not treat hosted sandbox policy as the final user-facing abstraction by itself
+
 ## 11. Integrating With The Hosting API
 
 ### 11.0 Simple Facade Integration
@@ -1055,10 +1129,10 @@ If you want a simpler toolbox-facing API on top of the service or control channe
 
 ```python
 from hosting import EngineHostService
-from hosting.toolbox_harness import SandboxedToolboxFacade
+from hosting.toolbox_harness import HostedToolBoxRef
 
 service = EngineHostService()
-toolbox = SandboxedToolboxFacade(
+toolbox = HostedToolBoxRef(
     toolbox_id="user-tools",
     host=service,
 )
@@ -1123,11 +1197,26 @@ toolbox.register_manual_tool(
 
 The same facade can wrap `EngineHostControlChannel` because it only depends on the high-level toolbox registration/describe/execute methods.
 
+Lightweight app-facing helper path:
+
+1. [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py) now provides:
+   - `create_hosted_toolbox_ref(...)`
+   - `register_hosted_tool_callable(...)`
+   - `create_hosted_toolbox_executor(...)`
+   - `HostedToolExecutionRouter`
+2. [hosted_tool_runtime.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_runtime.py) now provides `execute_tool_round_on_cursor(...)`, which exercises a real `ChatCursor` / `ChatContext` tool-result flow without requiring the full `mp13chat` import chain
+3. [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) re-exports the helper-level API and now also supports:
+   - `configure_hosted_toolbox_execution(...)`
+   - `clear_hosted_toolbox_execution()`
+4. the chat runtime now preserves the local `ToolBoxRef`/scope model but can route actual tool execution through `ToolboxExecutionHarness.execute_request_tools(...)`
+5. the hosted tool-response branch in `mp13chat.py` now delegates to the lightweight runtime helper, so the app/runtime logic is testable without pulling in the full engine import stack
+6. this is still a selective execution-path integration, not a full replacement of all in-process toolbox assumptions across the app runtime
+
 Public API direction:
 
-1. the repo currently uses `SandboxedToolboxFacade` in examples because that is what exists today
-2. the intended public API direction is a hosted toolbox-ref type, likely `HostedToolBoxRef`
-3. when renamed, the goal should be to preserve the toolbox-ref programming model rather than expose lifecycle machinery directly
+1. the repo should prefer `HostedToolBoxRef` in public examples
+2. `SandboxedToolboxFacade` remains an alias for internal continuity and migration convenience
+3. the goal is to preserve the toolbox-ref programming model rather than expose lifecycle machinery directly
 
 ### 11.0A Registration Validation Strength
 
@@ -1286,11 +1375,29 @@ Before deeper operational implementation, the architecture should assume:
 3. a toolbox function may be linked explicitly to one environment description
 4. multiple functions may share the same environment description
 
+Current first-slice implementation:
+
+1. sandbox profiles now carry `environment_name`
+2. host persists environment descriptions alongside toolbox sandbox state
+3. the current host APIs can now:
+   - list environment descriptions
+   - upsert an environment description
+   - clone an environment description
+   - resolve missing packages for functions linked to a named environment
+   - explicitly apply an environment description to linked toolbox refs and rebuild their sandbox profiles
+4. toolbox environment realization now includes the environment-description hash in `venv_key` derivation
+5. persisted logical toolbox state now records runtime defaults needed for later environment-apply rebuilds
+6. environment realization now uses the effective environment description, not only the direct one:
+   - inherited package sets are folded through the base-env chain
+   - effective online-install policy is carried through the same chain
+   - changing a base environment can therefore change the realized `venv_key` of a derived environment
+
 This keeps the model understandable:
 
 1. user chooses or creates an environment description
 2. user links a function to it
-3. hosting resolves or reuses the realized environment behind that description
+3. user explicitly applies that environment description when they want linked sandboxes rebuilt
+4. hosting resolves or reuses the realized environment behind that description
 
 ### 12.2B Package Resolution And Update API
 
@@ -1303,6 +1410,177 @@ Recommended host-owned APIs:
 2. resolve an arbitrary set of functions to the extra packages they would require beyond a given environment
 3. update an existing named environment description
 4. clone an existing environment description into a new one, then apply package changes there
+
+Current first-slice implementation:
+
+1. host can resolve linked functions in a toolbox against a named environment description
+2. the result reports:
+   - environment lineage
+   - required packages
+   - configured direct extra packages
+   - effective extra packages after base-env inheritance
+   - missing packages
+3. host can now clone environment descriptions and explicitly apply an updated description to linked toolboxes
+4. host can now sync an environment description from linked tool requirements:
+   - update the existing description with missing packages
+   - or clone into a new description with those missing packages added
+   - optionally apply and realize in the same host-managed call
+5. apply currently rebuilds linked sandbox profiles and rotates their realized environment metadata, but it still does not perform locked package installation
+6. clone/update/install operations beyond description metadata are still pending
+
+The current apply behavior is lineage-aware:
+
+1. applying a base environment description rebuilds toolboxes linked to that base directly
+2. it also rebuilds toolboxes linked to derived environments whose lineage includes that base
+3. this is required so derived environment hashes and realized sandbox registrations stay consistent with inherited package changes
+
+### 12.2D Environment Realization Metadata
+
+Current implementation now adds an explicit host-managed realization step:
+
+1. host can realize a toolbox/environment pair through an explicit API
+2. realization writes provenance metadata into the realized env root
+3. that metadata currently records:
+   - required packages
+   - effective inherited packages from the environment description
+   - planned package set
+   - missing packages not covered by the description
+   - effective online-install policy
+   - lineage and provenance hash
+4. the current realization mode is intentionally `metadata_only`
+
+This means:
+
+1. hosting now has an explicit, observable step for environment planning/provenance
+2. but it still does not claim that packages were actually installed into the env
+3. locked install/update remains the next environment-management step, not something already implied by realization
+
+The current sync workflow therefore is:
+
+1. resolve linked tool requirements against an environment description
+2. update or clone the environment description to include the missing packages
+3. optionally apply/rebuild affected toolbox profiles
+4. optionally realize provenance metadata for the resulting environment
+5. still defer actual package installation to a later host-managed implementation step
+
+### 12.2E Install Plan Emission
+
+Current implementation now adds one more explicit host-managed step:
+
+1. host can prepare an install plan for a realized toolbox environment
+2. that step emits:
+   - `requirements-planned.txt` in the env root
+   - install-plan metadata in `environment.json`
+   - the same install-plan metadata in persisted toolbox profile state
+3. the install plan records:
+   - planned packages
+   - missing packages
+   - whether online execution would be allowed by policy
+   - a concrete `python -m pip install -r ...` command template
+4. this is still a plan artifact, not an executed install
+
+### 12.2F Install Execution Hook
+
+Current implementation now also adds a policy-gated host execution hook:
+
+1. host can attempt to execute a previously prepared install plan
+2. execution is gated by:
+   - explicit `allow_execution=true` on the host API call
+   - `allow_online_install` inherited through the effective environment description
+3. execution result is written back into:
+   - `environment.json`
+   - persisted toolbox profile state
+4. current result states include:
+   - `blocked`
+   - `noop`
+   - `ok`
+   - `failed`
+5. successful execution now also captures a post-run package receipt via `pip freeze`
+6. that receipt is written into:
+   - `environment.json`
+   - persisted toolbox profile state
+
+Important limitation:
+
+1. the repository now has an explicit execution hook and result tracking
+2. but it still does not have a locked dependency resolution model
+3. the receipt is observational provenance, not a resolver-backed guarantee
+4. so this should be read as controlled host execution plumbing, not as the final reproducible install story
+
+### 12.2G Install Locking
+
+Current implementation now adds one stronger provenance step ahead of execution:
+
+1. host can lock a prepared install plan into a dedicated requirements artifact
+2. that step writes:
+   - `requirements-locked.txt`
+   - `install_lock` metadata in `environment.json`
+   - the same `install_lock` metadata in persisted toolbox profile state
+3. execution now prefers the locked requirements artifact when present
+4. execution records the `install_lock_hash` in the install-execution result
+
+This is still not a full resolver/lockfile model, but it is stronger than executing directly from mutable plan metadata.
+
+### 12.2H Lock Verification
+
+Current implementation now verifies the lock before execution:
+
+1. host can verify whether the current install lock still matches the current install plan
+2. verification records:
+   - current lock hash
+   - expected lock hash
+   - requirements path
+   - status such as `ok`, `missing`, or `stale`
+3. install execution now blocks when verification detects a stale lock
+
+So the current model is:
+
+1. mutable plan
+2. explicit lock artifact
+3. explicit verification
+4. policy-gated execution
+
+That is still weaker than a true dependency resolver lockfile, but it removes the blind “execute whatever lock happens to exist” behavior.
+
+So the current environment-management ladder is now:
+
+1. sync description metadata
+2. apply/rebuild linked sandboxes
+3. realize provenance metadata
+4. emit install plan artifacts
+5. optionally lock the install plan into a dedicated requirements artifact
+6. optionally resolve the plan into a stronger exact-package lock artifact using `pip --dry-run --report`
+7. optionally verify the observed install receipt against the strongest available lock artifact
+8. optionally execute the locked plan under host policy
+9. still stop short of a full resolver-backed reproducible dependency model
+
+### 12.2I Receipt Verification
+
+Current implementation now adds one more observational provenance step after execution:
+
+1. host can verify whether the observed `pip freeze` receipt still covers the locked package set
+2. verification records:
+   - normalized locked package names
+   - normalized observed package names
+   - any locked package names missing from the observed receipt
+   - status such as `ok`, `missing`, or `mismatch`
+3. this is still weaker than a resolver-backed lockfile because it validates post-run observation, not the original dependency solve
+
+### 12.2J Resolved Locking
+
+Current implementation now adds a stronger exact-lock step on top of the lightweight requirements lock:
+
+1. host can resolve the current install plan through `pip install --dry-run --ignore-installed --report ...`
+2. that step writes:
+   - `install-resolution-report.json`
+   - `requirements-resolved.txt`
+   - `install_resolution` metadata in `environment.json`
+   - `resolved_install_lock` metadata in `environment.json`
+   - the same resolution/lock metadata in persisted toolbox profile state
+3. install execution now prefers `requirements-resolved.txt` over the lightweight locked requirements artifact when present
+4. receipt verification also prefers the resolved exact package set over the lightweight planned package set when present
+
+This is a stronger exact-package lock path, but it is still not the same as a fully externalized resolver-backed lockfile ecosystem with explicit upgrade and re-resolution policy.
 
 The important policy rule is:
 

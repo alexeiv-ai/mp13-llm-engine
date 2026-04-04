@@ -78,6 +78,9 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-describe": [
         "@'{\"engine_id\":\"toolbox1\"}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-describe",
     ],
+    "toolbox-gate": [
+        "@'{\"toolbox_id\":\"toolbox-demo\",\"tool_name\":\"hello_tool\"}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-gate",
+    ],
     "toolbox-execute": [
         "@'{\"engine_id\":\"toolbox1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
     ],
@@ -412,6 +415,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "sandbox-fs-stat",
         "sandbox-http-fetch",
         "toolbox-describe",
+        "toolbox-gate",
         "toolbox-execute",
         "get-control-config",
         "set-control-config",
@@ -856,6 +860,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "toolbox-gate":
+            _print_ok(
+                svc.toolbox_gate(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    tool_name=str(payload.get("tool_name") or ""),
+                )
+            )
+            return 0
         if cmd == "toolbox-execute":
             _print_ok(
                 svc.toolbox_execute(
@@ -926,6 +939,123 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()],
                     python_executable=str(payload.get("python_executable") or "").strip() or None,
                     worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-list":
+            _print_ok(svc.toolbox_environment_description_list())
+            return 0
+        if cmd == "toolbox-environment-upsert":
+            _print_ok(
+                svc.toolbox_environment_description_upsert(
+                    name=str(payload.get("name") or ""),
+                    base_env_name=str(payload.get("base_env_name") or "").strip() or None,
+                    extra_packages=[str(item or "").strip() for item in list(payload.get("extra_packages") or []) if str(item or "").strip()],
+                    allow_online_install=bool(payload.get("allow_online_install", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-clone":
+            _print_ok(
+                svc.toolbox_environment_description_clone(
+                    source_name=str(payload.get("source_name") or ""),
+                    target_name=str(payload.get("target_name") or ""),
+                    extra_packages=[str(item or "").strip() for item in list(payload.get("extra_packages") or []) if str(item or "").strip()] if payload.get("extra_packages") is not None else None,
+                    allow_online_install=payload.get("allow_online_install"),
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-resolve":
+            _print_ok(
+                svc.toolbox_environment_resolve_requirements(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-apply":
+            _print_ok(
+                svc.toolbox_environment_apply(
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-realize":
+            _print_ok(
+                svc.toolbox_environment_realize(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-sync":
+            _print_ok(
+                svc.toolbox_environment_sync_description(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    source_environment_name=str(payload.get("source_environment_name") or "base"),
+                    target_environment_name=str(payload.get("target_environment_name") or "").strip() or None,
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                    apply=bool(payload.get("apply", False)),
+                    realize=bool(payload.get("realize", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-prepare-install":
+            _print_ok(
+                svc.toolbox_environment_prepare_install(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-lock-install":
+            _print_ok(
+                svc.toolbox_environment_lock_install(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-resolve-install-lock":
+            _print_ok(
+                svc.toolbox_environment_resolve_install_lock(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                    allow_resolution=bool(payload.get("allow_resolution", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-verify-install-lock":
+            _print_ok(
+                svc.toolbox_environment_verify_install_lock(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-verify-install-receipt":
+            _print_ok(
+                svc.toolbox_environment_verify_install_receipt(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-environment-execute-install":
+            _print_ok(
+                svc.toolbox_environment_execute_install(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    environment_name=str(payload.get("environment_name") or "base"),
+                    tool_keys=[str(item or "").strip() for item in list(payload.get("tool_keys") or []) if str(item or "").strip()] or None,
+                    allow_execution=bool(payload.get("allow_execution", False)),
                 )
             )
             return 0

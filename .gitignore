@@ -48,3 +48,4 @@ adapters/
 
 # Temp review directory
 .temp-review/
+.tmp*

@@ -149,14 +149,15 @@ The status has changed in one important way:
     - replaced registrations are retired only after the new executors become ready
     - failed warmup rolls back the new registrations instead of cutting over
 28. Added a simpler toolbox-facing facade in [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py):
-    - `SandboxedToolboxFacade`
+    - public type: `HostedToolBoxRef`
+    - compatibility alias: `SandboxedToolboxFacade`
     - wraps `toolbox_register_auto(...)`, `toolbox_unregister_auto(...)`, `toolbox_describe(...)`, and `toolbox_execute(...)`
     - hides low-level auto-request shaping for common sandboxed callable registration flows
 29. Added first-slice rollout observability in [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py):
     - register/unregister now return `rollout` metadata for newly readied executors
     - persisted logical toolbox profile state now records basic rollout metadata such as `ready_at` and `warmup_ms`
 30. Extended the higher-level toolbox facade in [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py):
-    - `SandboxedToolboxFacade.register_python_callable(...)`
+    - `HostedToolBoxRef.register_python_callable(...)`
     - callers can now register a real module-backed Python callable without manually supplying staged file/module metadata
 31. Added bounded per-profile rollout history in [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py):
     - successful `register_auto` / `unregister_auto` cutovers now append history entries with action, engine ids, bundle revision, and warmup timing
@@ -164,14 +165,143 @@ The status has changed in one important way:
     - `EngineHostService.toolbox_register_intrinsics(...)`
     - `EngineHostService.toolbox_unregister_intrinsics(...)`
     - control channel / daemon / CLI forwarding for the same operations
-    - `SandboxedToolboxFacade.register_intrinsic_tools(...)`
-    - `SandboxedToolboxFacade.unregister_intrinsic_tools(...)`
+    - `HostedToolBoxRef.register_intrinsic_tools(...)`
+    - `HostedToolBoxRef.unregister_intrinsic_tools(...)`
 33. Extended high-level sandbox toolbox lifecycle to explicit manual tool definitions:
     - `EngineHostService.toolbox_register_manual(...)`
     - `EngineHostService.toolbox_unregister_manual(...)`
     - control channel / daemon / CLI forwarding for the same operations
     - `SandboxedToolboxFacade.register_manual_tool(...)`
     - `SandboxedToolboxFacade.unregister_manual_tool(...)`
+34. Added first-slice named environment descriptions:
+    - sandbox profiles now carry `environment_name`
+    - host persists environment descriptions in toolbox sandbox state
+    - host APIs now support:
+      - list descriptions
+      - upsert description
+      - clone description
+      - resolve missing packages for linked toolbox functions
+    - environment realization now incorporates environment-description identity into `venv_key`
+35. Added explicit environment-apply rollout for linked toolbox sandboxes:
+    - `EngineHostService.toolbox_environment_apply(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.apply_environment_description(...)`
+    - persisted toolbox state now records runtime defaults so later environment-apply operations can rebuild linked profiles with the same runtime shape
+    - applying an updated environment description now rebuilds affected toolbox profiles and refreshes their realized environment metadata
+36. Fixed named-environment inheritance in realized sandbox environments:
+    - effective package sets are now resolved through the base-env chain
+    - package-gap resolution now reports lineage, direct configured packages, and effective inherited packages
+    - realized environment identity now changes when a base environment changes a derived environment’s effective package set
+    - applying a base environment now rebuilds toolboxes linked through derived environments too
+37. Added explicit environment-realization metadata:
+    - `EngineHostService.toolbox_environment_realize(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.realize_environment(...)`
+    - realization now writes provenance/planning metadata into each realized env root and mirrors it into persisted toolbox profile state
+    - the current realization mode is intentionally `metadata_only`; it does not yet claim package installation
+38. Added explicit environment-description sync from linked tool requirements:
+    - `EngineHostService.toolbox_environment_sync_description(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.sync_environment_description(...)`
+    - sync can now update the current named env description or clone into a new one with missing packages added
+    - sync can optionally chain apply/realize after the description update, while still remaining metadata-only with respect to actual installs
+39. Added explicit environment install-plan emission:
+    - `EngineHostService.toolbox_environment_prepare_install(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.prepare_environment_install(...)`
+    - plan emission now writes `requirements-planned.txt` plus install-plan metadata into the env root and persisted toolbox profile state
+    - the emitted install plan includes a concrete pip command template, but does not execute it yet
+40. Added explicit environment install execution:
+    - `EngineHostService.toolbox_environment_execute_install(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.execute_environment_install(...)`
+    - execution is policy-gated by both explicit caller opt-in and effective environment `allow_online_install`
+    - execution result metadata is now recorded in the env root and persisted toolbox profile state as `blocked` / `noop` / `ok` / `failed`
+41. Added explicit install locking:
+    - `EngineHostService.toolbox_environment_lock_install(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.lock_environment_install(...)`
+    - locking now writes `requirements-locked.txt` plus `install_lock` metadata into the env root and persisted toolbox profile state
+    - install execution now prefers the locked requirements artifact and records `install_lock_hash` in the execution result
+42. Added explicit install-lock verification:
+    - `EngineHostService.toolbox_environment_verify_install_lock(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.verify_environment_install_lock(...)`
+    - verification now records `ok` / `missing` / `stale` status plus expected-vs-current lock hash metadata
+    - install execution now blocks when the lock is stale
+43. Added post-install receipt capture:
+    - successful install execution now runs a follow-up `pip freeze`
+    - the observed package list and hash are written into `environment.json` and persisted toolbox profile state as `install_receipt`
+    - this is observational provenance only, not a resolver-backed lock guarantee
+44. Added explicit install-receipt verification:
+    - `EngineHostService.toolbox_environment_verify_install_receipt(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.verify_environment_install_receipt(...)`
+    - verification now compares the observed receipt against the locked package set and records `ok` / `missing` / `mismatch`
+    - this strengthens post-install provenance, but still does not replace a resolver-backed lock model
+45. Added explicit resolved-install locking:
+    - `EngineHostService.toolbox_environment_resolve_install_lock(...)`
+    - control channel / daemon / CLI forwarding for the same operation
+    - `HostedToolBoxRef.resolve_environment_install_lock(...)`
+    - host can now run `pip install --dry-run --report ...` to persist a stronger exact-package lock artifact as `resolved_install_lock`
+    - install execution and receipt verification now prefer that resolved lock when present
+46. Added first-slice app-facing hosted toolbox helpers:
+    - lightweight helper module [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py)
+    - `create_hosted_toolbox_ref(...)`
+    - `register_hosted_tool_callable(...)`
+    - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) now re-exports those helpers for wrapper convenience
+47. Added selectable hosted toolbox execution wiring for the chat runtime:
+    - `ToolboxExecutionHarness.execute_request_tools(...)` now supports the same parsed-block execution contract used by the in-process toolbox path
+    - [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py) now also provides:
+      - `create_hosted_toolbox_executor(...)`
+      - `HostedToolExecutionRouter`
+    - [hosted_tool_runtime.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_runtime.py) now provides `execute_tool_round_on_cursor(...)` for a lightweight real app-runtime slice over `ChatCursor` / `ChatContext`
+    - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) now has:
+      - `configure_hosted_toolbox_execution(...)`
+      - `clear_hosted_toolbox_execution()`
+48. Added first-slice toolbox call gating:
+    - [mp13_toolbox.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_toolbox.py) now provides `Toolbox.gate_call(...)` for native/toolbox-facing gate decisions
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_gate(...)`
+    - control channel / daemon / CLI forwarding now expose `toolbox-gate`
+    - [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py) now preflights hosted calls through gate checks before `toolbox_execute(...)`
+    - hosted gate denials now surface as explicit `Execution gated: ...` results instead of generic execution failures
+      - internal `_active_tool_executor()` routing
+    - the two chat execution callsites now execute through the active executor, so chat can preserve local `ToolBoxRef` state while routing actual tool calls through hosted sandbox execution
+    - the hosted tool-response branch in [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) now delegates to the lightweight runtime helper instead of inlining all hosted-execution handling
+    - focused app-facing tests now cover both the lightweight execution router and a real cursor/session-based hosted tool round without importing the full chat runtime
+
+48. Broader verification was confirmed outside this environment:
+    - `python -m pytest tests/test_hosting_toolbox_sandbox.py -q` -> `46 passed`
+    - `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q` -> `69 passed`
+    - `python -c "import app.mp13chat as m; print('ok', hasattr(m, '_handle_live_prompt'), hasattr(m, 'configure_hosted_toolbox_execution'))"` -> `ok True True`
+    - this means the current `mp13chat` import path is viable in the user environment, even though it remained blocked in my local execution environment because of a Python 3.12 `transformers` / `torch.compile` import issue
+49. Added explicit `mp13chat` hosted-demo startup plumbing:
+    - new helper module [hosted_chat_demo.py](/o:/repos/mp13-llm-engine/src/app/hosted_chat_demo.py)
+    - `mp13chat` now supports:
+      - `--hosted-demo`
+      - `--hosted-demo-toolbox-id`
+      - `--hosted-demo-project-root`
+      - `--hosted-demo-hosting-root`
+    - demo mode now registers two hosted tools under different sandbox profiles:
+      - `SimpleCalc`
+      - `ProjectFilePeek`
+      - `ExampleHttpPeek`
+    - `SimpleCalc` uses a basic isolated hosted profile
+    - `ProjectFilePeek` uses a different hosted profile with brokered read-only filesystem access to the selected project root
+    - `ExampleHttpPeek` uses a third hosted profile with brokered HTTP and a URL-prefix allowlist (`https://example.com/`)
+    - startup now prints suggested prompts for exercising the hosted demo mode
+    - shutdown now tears down the hosted demo toolbox registrations/workers on chat exit
+50. Added first prompt-layer hosted tool advertisement filtering in chat:
+    - [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py) now caches the hosted-advertisable tool set from `toolbox_describe(...)` or explicit configuration
+    - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) now narrows outgoing `tools` payloads to that hosted-executable set when hosted execution is active
+    - hosted demo mode now passes its known tool set explicitly so the model sees only the demo-hosted tools instead of unrelated local tools such as `scriptable_calculator`
+51. Added first hosted visibility diagnostics for chat:
+    - `HostedToolExecutionRouter` now exposes a hosted toolbox summary including the hosted-visible tool set
+    - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) now includes that hosted-visible tool set in tool-scope summaries and hosted-demo startup output
+52. Added effective hosted-aware toolbox inspection helpers:
+    - new helper module [hosted_tool_visibility.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_visibility.py)
+    - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) `/t` enumeration now reports effective availability and execution path (`hosted`, `native`, `gated`, `hidden`)
+    - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) `/t sc` now reports effective advertised/hidden/disabled state after hosted filtering, plus hosted-gated tools
 
 ### Current Interpretation Of That Work
 
@@ -202,6 +332,8 @@ What is implemented today should now be interpreted as sandbox infrastructure:
 23. first-slice bounded rollout history for successful profile cutovers
 24. first-slice intrinsic-tool registration/removal through the high-level sandbox facade and control surfaces
 25. first-slice manual tool-definition registration/removal through the high-level sandbox facade and control surfaces
+26. first-slice named environment-description persistence and package-gap resolution
+27. first-slice explicit environment-apply rebuilds for linked toolbox sandboxes using persisted runtime defaults
 
 What it is not yet:
 
@@ -383,6 +515,77 @@ Commands run:
    - result: `35 passed`
 39. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
    - result: `58 passed`
+40. `python -m pytest tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `36 passed`
+41. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `59 passed`
+42. `python -m pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `50 passed`
+43. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `59 passed`
+44. `python -m pytest tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `38 passed`
+45. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `61 passed`
+46. `python -m pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `53 passed`
+47. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `62 passed`
+48. `python -m pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `55 passed`
+49. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `64 passed`
+50. `python -m pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `56 passed`
+51. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `65 passed`
+52. `python -m pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `58 passed`
+53. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `67 passed`
+54. `python -m pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `59 passed`
+55. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `68 passed`
+56. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_sandboxed_toolbox_facade_shapes_requests_for_host_api -q --basetemp=.tmp_pytest_receipt_nodes`
+   - result: `2 passed`
+57. `python -m pytest tests/test_hosting_toolbox_sandbox.py::test_environment_execute_install_records_simulated_success -q`
+   - result: `1 passed`
+58. `python -m pytest tests/test_hosting_toolbox_sandbox.py::test_environment_verify_receipt_detects_missing_locked_package -q`
+   - result: `1 passed`
+59. `python -m pytest tests/test_hosting_toolbox_sandbox.py -q`
+   - result: `46 passed`
+60. `python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_worker_sandbox.py -q`
+   - result: `69 passed`
+61. `python -m pytest tests/test_hosting_worker_sandbox.py::test_brokered_filesystem_denies_traversal_and_allows_root_scoped_io -q`
+   - result: `1 passed`
+62. `python -m pytest tests/test_hosting_worker_sandbox.py::test_service_brokered_filesystem_uses_registration_policy -q`
+   - result: `1 passed`
+63. `python -m pytest tests/test_hosting_worker_sandbox.py::test_spawn_persists_sandbox_policy_and_runtime -q`
+   - result: `1 passed`
+64. `python -m pytest tests/test_hosting_worker_sandbox.py::test_plain_launcher_uses_close_fds_when_parent_handles_disabled -q`
+   - result: `1 passed`
+65. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_sandboxed_toolbox_facade_shapes_requests_for_host_api -q`
+   - result: `2 passed`
+66. `python -m pytest tests/test_hosting_toolbox_sandbox.py -k "gate_call_reports_denied_and_allowed or toolbox_gate_reports_denied_and_allowed_outcomes or hosted_gate_denial_before_execute or hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests or executes_request_tools_via_hosted_toolbox" -q`
+   - result: `5 passed`
+67. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads -q`
+   - result: `1 passed`
+68. `python -m pytest tests/test_mp13chat_hosted_toolbox_api.py tests/test_hosted_chat_demo.py -q`
+   - result: `7 passed`
+69. `python -m pytest tests/test_hosted_tool_visibility.py tests/test_mp13chat_hosted_toolbox_api.py tests/test_hosted_chat_demo.py -q`
+   - result: `9 passed`
+70. End-to-end hosted chat demo validation in the user environment:
+   - baseline hosted prompts worked with no fallback attempt to `scriptable_calculator`
+   - negative HTTP test produced: `PermissionError - brokered_http_url_not_allowed:https://example.org/`
+   - negative filesystem traversal test produced: `BrokeredFsError - path_traversal_denied`
+   - `/t` now showed effective hosted-aware availability:
+     - `SimpleCalc`, `ProjectFilePeek`, `ExampleHttpPeek` -> `Yes / hosted`
+     - local intrinsic tools -> `No / gated`
+   - `/t sc` now showed the effective model-facing toolbox state:
+     - `Advertised tools: ExampleHttpPeek, ProjectFilePeek, SimpleCalc`
+     - `Hosted-visible tools: ExampleHttpPeek, ProjectFilePeek, SimpleCalc`
+     - `Hosted-gated tools: scriptable_calculator, scriptable_calculator_guide, symbolic_algebra, symbolic_algebra_guide`
 
 Covered by tests:
 
@@ -401,6 +604,14 @@ Covered by tests:
 13. native toolbox async parallel execution in the new harness
 14. harness round-robin scheduling across a sandbox executor pool
 15. end-to-end `toolbox.describe` / `toolbox.execute` over the dedicated toolbox executor IPC worker
+16. native toolbox gate decisions for allowed vs undefined tools
+17. hosted toolbox gate routing for allowed vs denied tools
+18. control-channel forwarding for `toolbox-gate`
+19. hosted execution harness denial before sandbox dispatch when the gate rejects a call
+20. hosted chat/router advertisement filtering metadata through router configuration and describe-based discovery
+21. hosted router summary state for chat-facing diagnostics
+22. effective hosted-aware tool visibility summarization for prompt/inspection use
+23. end-to-end hosted chat demo usability in the user environment, including clean negative-path broker denials and effective hosted-aware toolbox inspection
 16. direct `host.call` RPC on the toolbox executor worker
 17. toolbox execution using brokered filesystem callback context (`context.fs.read_text(...)`)
 18. toolbox-worker startup spec generation and worker manifest resolution via `MP13_TOOLBOX_WORKER_SPEC_PATH`
@@ -422,6 +633,14 @@ Covered by tests:
 34. bounded rollout history persisted across successful profile replacements
 35. intrinsic-tool registration and removal through high-level facade, service, and control surfaces
 36. manual tool-definition registration and removal through high-level facade, service, and control surfaces
+37. named environment-description persistence, linkage, and package-gap resolution
+38. explicit environment-description apply operations that rebuild linked toolbox profiles and refresh environment metadata
+39. named-environment inheritance across base-env chains, including lineage-aware package resolution and base-env apply propagation into derived environments
+40. explicit environment-realization metadata planning and provenance recording for realized toolbox env roots
+41. explicit environment-description sync from linked tool requirements, including update-in-place or clone-and-then-apply/realize flows
+42. explicit environment install-plan emission, including generated requirements artifacts and pip command metadata without executing installs
+43. explicit policy-gated environment install execution with persisted blocked/ok/failed result tracking
+44. explicit install locking and stale-lock verification before execution
 
 Important clarification:
 
@@ -443,7 +662,7 @@ Important clarification:
 5. automatic daemon-managed pool lifecycle for sandbox executor replicas
 6. Linux backend
 7. any trustworthy claim of direct-network route enforcement on Windows
-8. broader higher-level facade coverage and app integration beyond the current auto-callable/module-backed callable/intrinsic/manual-definition facade
+8. broader app/runtime adoption beyond the current selectable hosted execution path, lightweight execution router, and lightweight tool-round runtime helper
 
 ### New Architectural Clarification
 
@@ -493,6 +712,8 @@ The current repository state should be understood as:
 21. persisted toolbox profile state now keeps a bounded history of successful rollouts rather than only the latest rollout snapshot
 22. builtin intrinsic tools can now be managed through the same high-level sandboxed toolbox API and routed through the same hosted sandbox lifecycle
 23. explicit manual tool definitions can now be managed through the same high-level sandboxed toolbox API and routed through the same hosted sandbox lifecycle
+24. toolbox functions can now be linked to named environment descriptions, and hosting can report package gaps between linked functions and the selected environment
+25. updated environment descriptions can now be explicitly applied to linked toolbox sandboxes, rebuilding the affected profiles and refreshing their realized environment metadata
 
 That means the next phase is architectural rather than incremental:
 

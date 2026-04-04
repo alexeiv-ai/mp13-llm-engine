@@ -50,6 +50,18 @@ from dataclasses import dataclass
 # handlers, use `register_tool_external(tool_definition, handler)` instead.
 # The helpers can be called multiple times before invoking `main()` to preload
 # a suite of application tools.
+# 
+# For hosted sandbox execution, wrappers can construct a hosted toolbox ref:
+#
+#     from src.app.mp13chat import create_hosted_toolbox_ref
+#     from hosting import EngineHostService
+#
+#     svc = EngineHostService()
+#     hosted_ref = create_hosted_toolbox_ref(
+#         host=svc,
+#         toolbox_id="user-tools",
+#     )
+#     hosted_ref.register_python_callable(get_weather, required_imports=["requests"])
 #
 # Custom command workflows currently require wrapping or delegating to
 # `handle_command()` directly; there is no dedicated plug-in interface for new
@@ -95,6 +107,15 @@ from mp13_engine.mp13_config_paths import (
 from .engine_session import EngineSession, Turn, Command, ChatSession, InferenceParams, Colors
 from .context_cursor import ChatCursor, ChatContext, ChatContextScope, StreamDisplayContext, StreamDisplayPlan, ChatForks
 from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsView, ToolBoxRef
+from hosting.toolbox_harness import ToolboxExecutionHarness
+from .hosted_tool_runtime import execute_tool_round_on_cursor
+from .hosted_chat_demo import HostedChatDemoRuntime, setup_hosted_chat_demo, shutdown_hosted_chat_demo
+from .hosted_tool_visibility import annotate_tool_listing, summarize_effective_tool_view
+from .hosted_toolbox_api import (
+    HostedToolExecutionRouter,
+    create_hosted_toolbox_ref,
+    register_hosted_tool_callable,
+)
 
 # --- Constants and globals ---
 APP_NAME = "mp13chat"
@@ -111,6 +132,8 @@ conversation_template: Optional[ChatSession] = None
 chat_scope: Optional[ChatContextScope] = None
 session_control: Optional["SessionControl"] = None 
 toolbox: Optional[Toolbox] = None
+_tool_execution_router = HostedToolExecutionRouter()
+hosted_chat_demo_runtime: Optional[HostedChatDemoRuntime] = None
 DEBUG_MODE_ENABLED: bool = False # New global flag for debug mode
 LAST_ENUMERATED_ADAPTERS: List[Dict[str, Any]] = [] # For selection by number from engine {'name': str, 'details': dict}
 LAST_ENUMERATED_TOOLS: List[str] = []
@@ -471,6 +494,75 @@ def _active_toolbox() -> Optional[Toolbox]:
     if ref:
         return ref.toolbox
     return toolbox
+
+
+def configure_hosted_toolbox_execution(
+    *,
+    control_channel: Any,
+    toolbox_id: str = "",
+    engine_ids: Optional[Sequence[str]] = None,
+    sandbox_selection: str = "round_robin",
+    advertised_tool_names: Optional[Sequence[str]] = None,
+) -> ToolboxExecutionHarness:
+    """
+    Configure hosted sandbox execution for tool calls while preserving the local
+    toolbox model for definitions, scoping, and prompt shaping.
+    When available, advertised tool names are narrowed to the hosted-executable set.
+    """
+    hosted = _tool_execution_router.configure_hosted_execution(
+        control_channel=control_channel,
+        toolbox_id=toolbox_id,
+        engine_ids=engine_ids,
+        sandbox_selection=sandbox_selection,
+        advertised_tool_names=advertised_tool_names,
+    )
+    hosted.native_toolbox = _active_toolbox()
+    return hosted
+
+
+def clear_hosted_toolbox_execution() -> None:
+    _tool_execution_router.clear_hosted_execution()
+
+
+def _active_tool_executor() -> Optional[ToolboxExecutionHarness]:
+    return _tool_execution_router.active_executor(_active_toolbox())
+
+
+def _filter_inference_payload_for_hosted_execution(payload: Dict[str, Any]) -> Dict[str, Any]:
+    filtered = dict(payload or {})
+    allowed_tool_names = _tool_execution_router.hosted_advertised_tool_names()
+    if not allowed_tool_names:
+        return filtered
+    tools_payload = dict(filtered.get("tools") or {})
+    if not tools_payload:
+        return filtered
+    allowed = set(allowed_tool_names)
+    kept: List[Dict[str, Any]] = []
+    for entry in list(tools_payload.get("for_dump") or []):
+        if not isinstance(entry, dict):
+            continue
+        fn = dict(entry.get("function") or {}) if isinstance(entry.get("function"), dict) else {}
+        name = str(fn.get("name") or entry.get("name") or "").strip()
+        if name and name in allowed:
+            kept.append(entry)
+    if kept:
+        filtered["tools"] = {"for_dump": kept}
+    else:
+        filtered.pop("tools", None)
+    return filtered
+
+
+def _active_hosted_toolbox_summary() -> Optional[Dict[str, Any]]:
+    return _tool_execution_router.hosted_toolbox_summary()
+
+
+def _active_hosted_tool_names() -> List[str]:
+    hosted = _active_hosted_toolbox_summary()
+    return [
+        str(item or "").strip()
+        for item in list((hosted or {}).get("tool_names") or [])
+        if str(item or "").strip()
+    ]
 
 
 def get_global_toolbox() -> Toolbox:
@@ -1776,13 +1868,24 @@ def _print_tools_scope_summary(cursor: ChatCursor, tools_view: ToolsView, entrie
     else:
         print(f"{Colors.SYSTEM}No active tool scopes. Using context toolbox defaults.{Colors.RESET}")
 
-    advertised = ", ".join(sorted(tools_view.advertised_tools)) or "<none>"
-    hidden_allowed = ", ".join(sorted(tools_view.hidden_allowed_tools)) or "<none>"
-    disabled = ", ".join(sorted(tools_view.disabled_tools)) or "<none>"
+    effective = summarize_effective_tool_view(
+        tools_view,
+        hosted_tool_names=_active_hosted_tool_names(),
+    )
+    advertised = ", ".join(list(effective["effective_advertised_tools"])) or "<none>"
+    hidden_allowed = ", ".join(list(effective["effective_hidden_allowed_tools"])) or "<none>"
+    disabled = ", ".join(list(effective["disabled_tools"])) or "<none>"
     print(f"{Colors.SYSTEM}Tools mode:{Colors.RESET} {tools_view.mode}")
     print(f"{Colors.SYSTEM}Advertised tools:{Colors.RESET} {advertised}")
     print(f"{Colors.SYSTEM}Hidden but allowed:{Colors.RESET} {hidden_allowed}")
     print(f"{Colors.SYSTEM}Disabled tools:{Colors.RESET} {disabled}")
+    hosted = _active_hosted_toolbox_summary()
+    if hosted:
+        hosted_names = ", ".join(list(effective["hosted_visible_tools"])) or "<none>"
+        print(f"{Colors.SYSTEM}Hosted execution:{Colors.RESET} active")
+        print(f"{Colors.SYSTEM}Hosted-visible tools:{Colors.RESET} {hosted_names}")
+        hosted_gated = ", ".join(list(effective["hosted_gated_tools"])) or "<none>"
+        print(f"{Colors.SYSTEM}Hosted-gated tools:{Colors.RESET} {hosted_gated}")
 
 
 def _format_tools_scope_header(cursor: ChatCursor) -> str:
@@ -1797,12 +1900,21 @@ def _format_tools_scope_header(cursor: ChatCursor) -> str:
     except Exception:
         return f"{base}{Colors.SYSTEM}<error computing view>{Colors.RESET}"
 
-    advertised = ", ".join(sorted(tools_view.advertised_tools)) or "<none>"
-    hidden = ", ".join(sorted(tools_view.hidden_allowed_tools)) or "<none>"
-    disabled = ", ".join(sorted(tools_view.disabled_tools)) or "<none>"
+    effective = summarize_effective_tool_view(
+        tools_view,
+        hosted_tool_names=_active_hosted_tool_names(),
+    )
+    advertised = ", ".join(list(effective["effective_advertised_tools"])) or "<none>"
+    hidden = ", ".join(list(effective["effective_hidden_allowed_tools"])) or "<none>"
+    disabled = ", ".join(list(effective["disabled_tools"])) or "<none>"
+    hosted = _active_hosted_toolbox_summary()
+    hosted_bits = ""
+    if hosted:
+        hosted_names = ", ".join(list(effective["hosted_visible_tools"])) or "<none>"
+        hosted_bits = f"; hosted={hosted_names}"
     return (
         f"{base}{Colors.SYSTEM}"
-        f"mode={tools_view.mode}; adv={advertised}; hidden={hidden}; disabled={disabled}"
+        f"mode={tools_view.mode}; adv={advertised}; hidden={hidden}; disabled={disabled}{hosted_bits}"
         f"{Colors.RESET}"
     )
 
@@ -4942,24 +5054,35 @@ async def _handle_tools_command(args_str: str, cursor: ChatCursor, pt_session: "
         if not tools:
             print(f"{Colors.TOOL_WARNING}No tools defined. Use '/t new' to add one.{Colors.RESET}")
         else:
+            tools_view = cursor.get_tools_view() or cursor.refresh_tools_view()
+            effective_rows = annotate_tool_listing(
+                tools,
+                tools_view=tools_view,
+                hosted_tool_names=_active_hosted_tool_names(),
+            )
             # Adjust name width based on the longest tool name
             max_name_len = max(len(t[0]) for t in tools) if tools else 30
             name_col_width = max(30, max_name_len + 9) # Add padding for guide/modified marker
-            print(f"{'Index':<7} {'Name':<{name_col_width}} {'Hidden':<8} {'Active':<8} {'Type':<12} {'Description'}")
-            print(f"{'-'*5:<7} {'-'*(name_col_width-2):<{name_col_width}} {'-'*6:<8} {'-'*6:<8} {'-'*10:<12} {'-'*58}")
-            for idx, (name, description, tool_type, is_active, is_hidden, is_guide, is_modified) in enumerate(tools):
+            print(f"{'Index':<7} {'Name':<{name_col_width}} {'Avail':<8} {'Via':<8} {'Type':<12} {'Description'}")
+            print(f"{'-'*5:<7} {'-'*(name_col_width-2):<{name_col_width}} {'-'*5:<8} {'-'*3:<8} {'-'*10:<12} {'-'*58}")
+            for idx, row in enumerate(effective_rows):
+                name = str(row["name"])
+                description = str(row["description"])
+                tool_type = str(row["tool_type"])
+                is_guide = bool(row["is_guide"])
+                is_modified = bool(row["is_modified"])
                 desc_trunc = (description[:57] + '...') if len(description) > 57 else description
                 modified_marker = "*" if is_modified and not is_guide else " "
-                
+
                 if tool_type == "unresolved":
                     type_display = f"{Colors.ERROR}{'Unresolved':<12}{Colors.RESET}"
                 else:
                     type_display = f'{tool_type.capitalize():<12}'
 
                 name_display = f"  └─ {name}" if is_guide else f"{modified_marker} {name}"
-                hidden_marker = "Yes" if is_hidden else "No"
-                active_marker = "Yes" if is_active else "No"
-                print(f"  {idx+1:<5} {name_display:<{name_col_width}} {hidden_marker:<8} {active_marker:<8} {type_display:<12} '{desc_trunc}'")
+                avail_marker = str(row["availability"])
+                via_marker = str(row["via"])
+                print(f"  {idx+1:<5} {name_display:<{name_col_width}} {avail_marker:<8} {via_marker:<8} {type_display:<12} '{desc_trunc}'")
                 LAST_ENUMERATED_TOOLS.append(name)
     elif sub_cmd == "new":
         # Call the interactive editor with no tool name
@@ -5773,8 +5896,8 @@ async def _apply_batch_results_to_children(
     any_tool_blocks_present = any(entry.get("tool_blocks") for entry in batch_entries)
 
     if any_tool_blocks_present and response_items:
-        active_toolbox = _active_toolbox()
-        if active_toolbox:
+        active_tool_executor = _active_tool_executor()
+        if active_tool_executor:
             context_cursor = batch_context_cursor
             if not context_cursor:
                 for entry in batch_entries:
@@ -5793,7 +5916,7 @@ async def _apply_batch_results_to_children(
                 parser_profile = _engine_parser_profile()
             tool_retries_max, tool_retries_left = _tool_retry_counters(context_cursor)
             try:
-                await active_toolbox.execute_request_tools(
+                await active_tool_executor.execute_request_tools(
                     parser_profile=parser_profile,
                     final_response_items=response_items,
                     action_handler=_tool_execution_action_handler,
@@ -6670,6 +6793,7 @@ async def _handle_general_batch_generation(
                     manual_continue=False,
                     include_tools=True,
                 )
+                inference_payload = _filter_inference_payload_for_hosted_execution(inference_payload)
                 if override_adapters:
                     adapters_for_chunk: List[str] = []
                     for fork in batch_group:
@@ -9501,6 +9625,7 @@ async def _handle_format_prompt_command(args_str: str, use_repr: bool, cursor: C
         request_id_prefix="format",
         manual_continue=is_continue,
     )
+    payload = _filter_inference_payload_for_hosted_execution(payload)
 
     # Extract only the necessary parts for the format-inference-prompt API.
     format_payload = {}
@@ -10292,143 +10417,37 @@ async def _execute_inference_round(
         elif not was_truncated and any_tool_blocks:
             active_chat_session = active_cursor.chat_session
             profile_to_use = active_chat_session.parser_profile if active_chat_session else _engine_parser_profile()
-            active_toolbox = _active_toolbox()
+            active_tool_executor = _active_tool_executor()
 
-            final_text_response = responses_in_progress.get(0, "")
-            active_cursor.add_assistant(
-                content=final_text_response or "",
-                tool_blocks=all_tool_blocks,
-                archived=False,
-                do_continue=is_manual_continue
-            )
             _record_response_adapters(active_cursor, primary_response_item)
-
-            if active_toolbox:
-                tool_retries_max, tool_retries_left = _tool_retry_counters(active_cursor)
-                await active_toolbox.execute_request_tools(
-                    parser_profile=profile_to_use,
-                    final_response_items=final_response_item_objects,
-                    action_handler=_tool_execution_action_handler,
-                    serial_execution=True,
-                    tools_view=tools_view_for_request,
-                    pt_session=pt_session,
-                    context=active_cursor.current_turn,
-                    tool_retries_max=tool_retries_max,
-                    tool_retries_left=tool_retries_left,
-                )
-            else:
+            tool_retries_max, tool_retries_left = _tool_retry_counters(active_cursor)
+            tool_round_result = await execute_tool_round_on_cursor(
+                cursor=active_cursor,
+                final_response_items=final_response_item_objects,
+                responses_in_progress=responses_in_progress,
+                parser_profile=profile_to_use,
+                tool_executor=active_tool_executor,
+                action_handler=_tool_execution_action_handler,
+                tools_view=tools_view_for_request,
+                pt_session=pt_session,
+                is_manual_continue=is_manual_continue,
+                tool_retries_max=tool_retries_max,
+                tool_retries_left=tool_retries_left,
+                auto_tool_retry_limit=_auto_tool_retry_limit(),
+                auto_anchor_prefix=_auto_anchor_name("auto_tool", active_cursor),
+            )
+            if active_tool_executor is None:
                 print(f"{Colors.TOOL_WARNING}Tool execution skipped: toolbox unavailable.{Colors.RESET}")
-
-            if _tool_blocks_have_abort(all_tool_blocks):
+            if tool_round_result.aborted:
                 print(f"{Colors.TOOL_WARNING}Tool round aborted by action; skipping execution/results.{Colors.RESET}")
                 return False
-
-            tool_anchor = None
-            if _tool_blocks_have_results(all_tool_blocks):
-                active_cursor_for_tools = _require_current_cursor()
-                scope = _scope_for_cursor(active_cursor_for_tools)
-                if scope:
-                    tool_anchor = scope.find_active_anchor("auto_tool", active_cursor_for_tools)
-                else:
-                    tool_anchor = active_cursor_for_tools.context.find_active_anchor(
-                        "auto_tool",
-                        active_cursor_for_tools,
-                    )
-                if not tool_anchor:
-                    if scope:
-                        tool_anchor = scope.start_try_out_anchor(
-                            _auto_anchor_name("auto_tool", active_cursor_for_tools),
-                            active_cursor_for_tools.head,
-                            kind="auto_tool",
-                            retry_limit=_auto_tool_retry_limit(),
-                            origin_cursor=active_cursor_for_tools,
-                        )
-                    else:
-                        tool_anchor = active_cursor_for_tools.context.start_try_out_anchor(
-                            _auto_anchor_name("auto_tool", active_cursor_for_tools),
-                            active_cursor_for_tools.head,
-                            "auto_tool",
-                            retry_limit=_auto_tool_retry_limit(),
-                            origin_cursor=active_cursor_for_tools,
-                        )
-
-            if not tool_anchor:
-                return False
-            tool_has_error = _tool_call_has_error(all_tool_blocks)
-            decrement_retry = tool_has_error
-
-            if decrement_retry and tool_anchor.retries_remaining <= 0:
-                warning = f"{Colors.TOOL_WARNING}Tool retries exhausted; returning to main without launching a new try_out.{Colors.RESET}"
-                print(warning)
-                try:
-                    if scope:
-                        closed_cursor = _ensure_registered_cursor(
-                            scope.close_try_out_anchor(tool_anchor.anchor_name, dist_mode="keep")
-                        )
-                    else:
-                        closed_cursor = _ensure_registered_cursor(
-                            active_cursor_for_tools.context.close_try_out_anchor(
-                                tool_anchor.anchor_name,
-                                dist_mode="keep",
-                            )
-                        )
-                    if closed_cursor:
-                        _set_active_cursor(closed_cursor)
-                except Exception:
-                    pass
-                _drain_and_close_auto_tryouts(cursor=active_cursor_for_tools, close_anchors=False)
-                try:
-                    scope = _scope_for_cursor(active_cursor_for_tools)
-                    _set_active_cursor(scope.active_cursor() if scope else active_cursor_for_tools.context.active_cursor_for_scope(None))
-                except Exception:
-                    pass
-                return False
-
-            if not decrement_retry or tool_anchor.retries_remaining > 0:
-                if decrement_retry:
-                    tool_anchor.retries_remaining -= 1
-                anchor_turn_for_retry = active_cursor_for_tools.current_turn or tool_anchor.anchor_turn or active_cursor_for_tools.head
-                main_cursor_for_try, tryout_cursor = active_cursor_for_tools.add_try_out(
-                    anchor=tool_anchor,
-                    anchor_turn=anchor_turn_for_retry,
-                    keep_in_main=True,
-                    convert_existing=True,
-                )
-                try:
-                    tryout_cursor.set_main_thread(True)
-                    main_cursor_for_try.set_main_thread(True)
-                except Exception:
-                    if tryout_cursor.head:
-                        tryout_cursor.head.main_thread = True
-                    if main_cursor_for_try.head:
-                        main_cursor_for_try.head.main_thread = True
-                active_cursor_for_tools = tryout_cursor
-                tool_results_cursor = active_cursor_for_tools.add_tool_results(all_tool_blocks)
-                tool_results_cursor.set_auto(True)
-                try:
-                    tool_results_cursor.set_main_thread(True)
-                except Exception:
-                    if tool_results_cursor.head:
-                        tool_results_cursor.head.main_thread = True
-                _set_active_cursor(_ensure_registered_cursor(tool_results_cursor) or tool_results_cursor)
-                try:
-                    scope = _scope_for_cursor(tool_results_cursor)
-                    if scope:
-                        scope.set_active_cursor(tool_results_cursor)
-                    else:
-                        tool_results_cursor.context.set_active_cursor(tool_results_cursor)
-                except Exception:
-                    pass
-                print(f"{Colors.DIM}(Anchored tool try-out branch: {tool_results_cursor.display_id()}){Colors.RESET}")
-                cursor_for_iteration = _require_current_cursor()
-                if cursor_for_iteration.context:
-                    scope = _scope_for_cursor(cursor_for_iteration)
-                    if scope:
-                        scope.request_auto_iteration()
-                    else:
-                        cursor_for_iteration.context.request_auto_iteration()
-                    auto_iteration_scheduled = True
+            if tool_round_result.scheduled_auto_iteration:
+                scheduled_cursor = _require_current_cursor()
+                print(f"{Colors.DIM}(Anchored tool try-out branch: {scheduled_cursor.display_id()}){Colors.RESET}")
+                auto_iteration_scheduled = True
                 return True
+            if not _tool_call_has_error(all_tool_blocks):
+                return False
 
             warning = f"{Colors.TOOL_WARNING}Tool retries exhausted after repeated errors; skipping latest tool result and returning to main.{Colors.RESET}"
             print(warning)
@@ -11958,6 +11977,7 @@ async def _run_batch_rounds_for_replay(
                     manual_continue=False,
                     include_tools=True,
                 )
+                inference_payload = _filter_inference_payload_for_hosted_execution(inference_payload)
                 adapters_for_chunk: List[str] = []
                 for fork in batch_group:
                     entry_cursor = _fork_entry_cursor(fork)
@@ -12062,6 +12082,7 @@ async def _run_replay_auto_rounds(
                 manual_continue=bool(getattr(active_cursor.current_turn, "do_continue", False)),
                 include_tools=include_tools,
             )
+            inference_payload = _filter_inference_payload_for_hosted_execution(inference_payload)
             if adapter_override:
                 inference_payload["override_adapters"] = adapter_override
         except Exception as exc:
@@ -12837,7 +12858,7 @@ def _attempt_reset_terminal_background() -> None:
 atexit.register(_attempt_reset_terminal_background)
 
 async def main_logic():
-    global current_config, session_control, toolbox, EFFECTIVE_CONFIG_FILE_PATH, DUMP_INIT_ENABLED
+    global current_config, session_control, toolbox, EFFECTIVE_CONFIG_FILE_PATH, DUMP_INIT_ENABLED, hosted_chat_demo_runtime
 
     parser = argparse.ArgumentParser(description=f"{APP_NAME} - MP13 Playground Chat")
     parser.add_argument(
@@ -12901,6 +12922,29 @@ async def main_logic():
     parser.add_argument(
         "--quit", dest="startup_quit", action="store_true",
         help="Quit after replay (and optional save)."
+    )
+    parser.add_argument(
+        "--hosted-demo",
+        action="store_true",
+        help="Enable a hosted toolbox demo with two sandboxed tools and route chat tool execution through hosting.",
+    )
+    parser.add_argument(
+        "--hosted-demo-toolbox-id",
+        type=str,
+        default="chat-hosted-demo",
+        help="Logical toolbox id to use for the hosted demo. Default: chat-hosted-demo",
+    )
+    parser.add_argument(
+        "--hosted-demo-project-root",
+        type=str,
+        default=None,
+        help="Project root exposed read-only to the hosted ProjectFilePeek demo tool. Default: current working directory.",
+    )
+    parser.add_argument(
+        "--hosted-demo-hosting-root",
+        type=str,
+        default=None,
+        help="Hosting root/state directory for the hosted demo. Default: .tmp_mp13chat_hosted_demo under the current working directory.",
     )
     parser.add_argument(
         "config_path_name",
@@ -13061,6 +13105,32 @@ async def main_logic():
     init_resp = await initialize_mp13_engine(config_for_engine_init)
     if not init_resp: print("Exiting: engine init fail."); return
 
+    if args.hosted_demo:
+        demo_project_root = Path(args.hosted_demo_project_root).expanduser().resolve() if args.hosted_demo_project_root else Path.cwd().resolve()
+        demo_hosting_root = (
+            Path(args.hosted_demo_hosting_root).expanduser().resolve()
+            if args.hosted_demo_hosting_root else (Path.cwd() / ".tmp_mp13chat_hosted_demo").resolve()
+        )
+        hosted_chat_demo_runtime = setup_hosted_chat_demo(
+            toolbox=_ensure_global_toolbox(),
+            hosting_root=demo_hosting_root,
+            project_root=demo_project_root,
+            toolbox_id=str(args.hosted_demo_toolbox_id or "").strip() or "chat-hosted-demo",
+            python_executable=sys.executable,
+        )
+        configure_hosted_toolbox_execution(
+            control_channel=hosted_chat_demo_runtime.service,
+            toolbox_id=hosted_chat_demo_runtime.plan.toolbox_id,
+            advertised_tool_names=hosted_chat_demo_runtime.plan.local_tool_names,
+        )
+        print(f"{Colors.SYSTEM}Hosted demo enabled.{Colors.RESET}")
+        print(f"{Colors.SYSTEM}  toolbox_id: {hosted_chat_demo_runtime.plan.toolbox_id}{Colors.RESET}")
+        print(f"{Colors.SYSTEM}  project_root: {hosted_chat_demo_runtime.plan.project_root}{Colors.RESET}")
+        print(f"{Colors.SYSTEM}  hosted tools: {', '.join(hosted_chat_demo_runtime.plan.local_tool_names)}{Colors.RESET}")
+        print(f"{Colors.SYSTEM}  suggested prompts:{Colors.RESET}")
+        for prompt in hosted_chat_demo_runtime.plan.suggested_prompts:
+            print(f"{Colors.DIM}    - {prompt}{Colors.RESET}")
+
     Path(current_config["adapters_root_dir"]).mkdir(parents=True, exist_ok=True)
     Path(current_config["sessions_save_dir"]).mkdir(parents=True, exist_ok=True)
 
@@ -13086,6 +13156,10 @@ async def main_logic():
         print(f"\nAn unexpected error occurred in the chat loop: {e}")
         _store_exception_traceback_if_clear(e)
         print(traceback.format_exc())
+    finally:
+        clear_hosted_toolbox_execution()
+        shutdown_hosted_chat_demo(hosted_chat_demo_runtime)
+        hosted_chat_demo_runtime = None
 
 
 async def main():

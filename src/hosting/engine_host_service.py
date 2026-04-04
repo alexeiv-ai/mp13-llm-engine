@@ -397,13 +397,1018 @@ class EngineHostService:
         return (self.hosting_root / "state" / "toolbox_sandboxes.json").resolve()
 
     def _read_toolboxes(self) -> Dict[str, Any]:
-        return self._read_json(self._toolboxes_state_file(), {"version": 1, "toolboxes": {}})
+        return self._read_json(
+            self._toolboxes_state_file(),
+            {
+                "version": 1,
+                "toolboxes": {},
+                "environment_descriptions": {
+                    "base": {
+                        "name": "base",
+                        "base_env_name": None,
+                        "extra_packages": [],
+                        "allow_online_install": False,
+                    }
+                },
+            },
+        )
 
     def _write_toolboxes(self, payload: Dict[str, Any]) -> None:
         row = dict(payload or {})
         row["version"] = 1
+        row.setdefault(
+            "environment_descriptions",
+            {
+                "base": {
+                    "name": "base",
+                    "base_env_name": None,
+                    "extra_packages": [],
+                    "allow_online_install": False,
+                }
+            },
+        )
         row["updated_at"] = time.time()
         self._write_json(self._toolboxes_state_file(), row)
+
+    def toolbox_environment_description_list(self) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager
+
+        state = self._read_toolboxes()
+        envs = dict(state.get("environment_descriptions") or {})
+        out: Dict[str, Any] = {}
+        for name, row in envs.items():
+            normalized = ToolboxEnvironmentManager.normalize_environment_description(dict(row or {}), name=str(name or ""))
+            out[str(normalized["name"])] = normalized
+        if "base" not in out:
+            out["base"] = ToolboxEnvironmentManager.normalize_environment_description({}, name="base")
+        return {"status": "ok", "environment_descriptions": out}
+
+    def toolbox_environment_description_get(self, name: str) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager
+
+        env_name = str(name or "").strip() or "base"
+        state = self._read_toolboxes()
+        envs = dict(state.get("environment_descriptions") or {})
+        payload = dict(envs.get(env_name) or ({}) if env_name == "base" else envs.get(env_name) or {})
+        if not payload and env_name != "base":
+            raise ValueError(f"environment description '{env_name}' not found")
+        return ToolboxEnvironmentManager.normalize_environment_description(payload, name=env_name)
+
+    def toolbox_environment_description_effective_get(self, name: str) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager
+
+        env_name = str(name or "").strip() or "base"
+        state = self._read_toolboxes()
+        envs = dict(state.get("environment_descriptions") or {})
+        if env_name != "base" and env_name not in envs:
+            raise ValueError(f"environment description '{env_name}' not found")
+        return ToolboxEnvironmentManager.resolve_environment_description(envs, name=env_name)
+
+    def toolbox_environment_description_upsert(
+        self,
+        *,
+        name: str,
+        base_env_name: Optional[str] = None,
+        extra_packages: Optional[List[str]] = None,
+        allow_online_install: bool = False,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager
+
+        env_name = str(name or "").strip()
+        if not env_name:
+            raise ValueError("name is required")
+        if env_name == "base" and base_env_name:
+            raise ValueError("base environment cannot inherit from another environment")
+        state = self._read_toolboxes()
+        envs = dict(state.get("environment_descriptions") or {})
+        if base_env_name and str(base_env_name).strip() not in envs and str(base_env_name).strip() != "base":
+            raise ValueError(f"base environment '{base_env_name}' not found")
+        normalized = ToolboxEnvironmentManager.normalize_environment_description(
+            {
+                "base_env_name": str(base_env_name or "").strip() or None,
+                "extra_packages": list(extra_packages or []),
+                "allow_online_install": bool(allow_online_install),
+            },
+            name=env_name,
+        )
+        envs[env_name] = normalized
+        state["environment_descriptions"] = envs
+        self._write_toolboxes(state)
+        return {"status": "ok", "environment_description": normalized}
+
+    def toolbox_environment_description_clone(
+        self,
+        *,
+        source_name: str,
+        target_name: str,
+        extra_packages: Optional[List[str]] = None,
+        allow_online_install: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager
+
+        src = str(source_name or "").strip()
+        dst = str(target_name or "").strip()
+        if not src:
+            raise ValueError("source_name is required")
+        if not dst:
+            raise ValueError("target_name is required")
+        if src == dst:
+            raise ValueError("target_name must differ from source_name")
+        source = self.toolbox_environment_description_get(src)
+        state = self._read_toolboxes()
+        envs = dict(state.get("environment_descriptions") or {})
+        if dst in envs:
+            raise ValueError(f"environment description '{dst}' already exists")
+        normalized = ToolboxEnvironmentManager.normalize_environment_description(
+            {
+                "base_env_name": src,
+                "extra_packages": list(extra_packages if extra_packages is not None else list(source.get("extra_packages") or [])),
+                "allow_online_install": bool(source.get("allow_online_install", False))
+                if allow_online_install is None
+                else bool(allow_online_install),
+            },
+            name=dst,
+        )
+        envs[dst] = normalized
+        state["environment_descriptions"] = envs
+        self._write_toolboxes(state)
+        return {"status": "ok", "environment_description": normalized}
+
+    def toolbox_environment_resolve_requirements(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env = self.toolbox_environment_description_get(environment_name)
+        effective_env = self.toolbox_environment_description_effective_get(environment_name)
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        selected = {str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()}
+        required_packages: List[str] = []
+        seen: set[str] = set()
+        for req in list(toolbox_row.get("requests") or []):
+            row = dict(req or {})
+            key = f"{str(row.get('module_name') or '').strip()}:{str(row.get('callable_name') or '').strip()}"
+            profile = dict(row.get("sandbox_profile") or {})
+            if str(profile.get("environment_name") or "base").strip() != str(environment_name or "base").strip():
+                continue
+            if selected and key not in selected:
+                continue
+            for pkg in list(profile.get("required_imports") or []):
+                name = str(pkg or "").strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    required_packages.append(name)
+        for req in list(toolbox_row.get("manual_requests") or []):
+            row = dict(req or {})
+            key = f"manual:{str(row.get('module_name') or '').strip()}:{str(row.get('callable_name') or '').strip()}"
+            profile = dict(row.get("sandbox_profile") or {})
+            if str(profile.get("environment_name") or "base").strip() != str(environment_name or "base").strip():
+                continue
+            if selected and key not in selected:
+                continue
+            for pkg in list(profile.get("required_imports") or []):
+                name = str(pkg or "").strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    required_packages.append(name)
+        extra_packages = [
+            str(item or "").strip()
+            for item in list(effective_env.get("effective_extra_packages") or [])
+            if str(item or "").strip()
+        ]
+        missing_packages = [pkg for pkg in required_packages if pkg not in set(extra_packages)]
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": str(environment_name or "base").strip() or "base",
+            "environment_lineage": list(effective_env.get("lineage") or []),
+            "required_packages": required_packages,
+            "configured_extra_packages": [str(item or "").strip() for item in list(env.get("extra_packages") or []) if str(item or "").strip()],
+            "effective_extra_packages": extra_packages,
+            "missing_packages": missing_packages,
+        }
+
+    @staticmethod
+    def _toolbox_profile_required_packages(
+        profile_row: Optional[Dict[str, Any]],
+        *,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        selected = {str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()}
+        required_packages: List[str] = []
+        seen: set[str] = set()
+        matched_tool_keys: List[str] = []
+        for req in list(dict(profile_row or {}).get("requests") or []):
+            row = dict(req or {})
+            key = f"{str(row.get('module_name') or '').strip()}:{str(row.get('callable_name') or '').strip()}"
+            if selected and key not in selected:
+                continue
+            if key:
+                matched_tool_keys.append(key)
+            profile = dict(row.get("sandbox_profile") or {})
+            for pkg in list(profile.get("required_imports") or []):
+                name = str(pkg or "").strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    required_packages.append(name)
+        for req in list(dict(profile_row or {}).get("manual_requests") or []):
+            row = dict(req or {})
+            key = f"manual:{str(row.get('module_name') or '').strip()}:{str(row.get('callable_name') or '').strip()}"
+            if selected and key not in selected:
+                continue
+            if key:
+                matched_tool_keys.append(key)
+            profile = dict(row.get("sandbox_profile") or {})
+            for pkg in list(profile.get("required_imports") or []):
+                name = str(pkg or "").strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    required_packages.append(name)
+        return {
+            "required_packages": required_packages,
+            "tool_keys": matched_tool_keys,
+        }
+
+    @staticmethod
+    def _toolbox_runtime_defaults(
+        toolbox_row: Optional[Dict[str, Any]],
+        *,
+        python_executable: Optional[str] = None,
+        worker_profile_class: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        existing = dict(dict(toolbox_row or {}).get("runtime") or {})
+        python_value = str(
+            python_executable
+            if python_executable is not None
+            else existing.get("python_executable") or ""
+        ).strip() or None
+        worker_value = str(
+            worker_profile_class
+            if worker_profile_class is not None
+            else existing.get("worker_profile_class") or "generic"
+        ).strip() or "generic"
+        return {
+            "python_executable": python_value,
+            "worker_profile_class": worker_value,
+        }
+
+    def _toolbox_uses_environment_name(self, toolbox_row: Optional[Dict[str, Any]], environment_name: str) -> bool:
+        env_name = str(environment_name or "base").strip() or "base"
+        row = dict(toolbox_row or {})
+        for req in list(row.get("requests") or []):
+            profile = dict(dict(req or {}).get("sandbox_profile") or {})
+            if str(profile.get("environment_name") or "base").strip() == env_name:
+                return True
+        for req in list(row.get("manual_requests") or []):
+            profile = dict(dict(req or {}).get("sandbox_profile") or {})
+            if str(profile.get("environment_name") or "base").strip() == env_name:
+                return True
+        intrinsics = dict(row.get("intrinsics") or {})
+        profile = dict(intrinsics.get("sandbox_profile") or {})
+        names = [
+            str(item or "").strip()
+            for item in list(intrinsics.get("names") or [])
+            if str(item or "").strip()
+        ]
+        if names and str(profile.get("environment_name") or "base").strip() == env_name:
+            return True
+        return False
+
+    def _toolbox_uses_environment_dependency(self, toolbox_row: Optional[Dict[str, Any]], environment_name: str) -> bool:
+        env_name = str(environment_name or "base").strip() or "base"
+        row = dict(toolbox_row or {})
+        names_to_check: List[str] = []
+        for req in list(row.get("requests") or []):
+            profile = dict(dict(req or {}).get("sandbox_profile") or {})
+            name = str(profile.get("environment_name") or "base").strip() or "base"
+            if name:
+                names_to_check.append(name)
+        for req in list(row.get("manual_requests") or []):
+            profile = dict(dict(req or {}).get("sandbox_profile") or {})
+            name = str(profile.get("environment_name") or "base").strip() or "base"
+            if name:
+                names_to_check.append(name)
+        intrinsics = dict(row.get("intrinsics") or {})
+        profile = dict(intrinsics.get("sandbox_profile") or {})
+        intrinsic_names = [str(item or "").strip() for item in list(intrinsics.get("names") or []) if str(item or "").strip()]
+        if intrinsic_names:
+            names_to_check.append(str(profile.get("environment_name") or "base").strip() or "base")
+        for candidate in names_to_check:
+            try:
+                effective = self.toolbox_environment_description_effective_get(candidate)
+            except Exception:
+                continue
+            if env_name in {str(item or "").strip() for item in list(effective.get("lineage") or []) if str(item or "").strip()}:
+                return True
+        return False
+
+    def _rebuild_toolbox_from_persisted_state(
+        self,
+        *,
+        toolbox_id: str,
+        toolbox_row: Dict[str, Any],
+        state: Dict[str, Any],
+        action: str,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import (
+            SandboxProfileSpec,
+            ToolboxAutoAssignmentRequest,
+            ToolboxBundleStager,
+            ToolboxManualAssignmentRequest,
+            ToolboxSandboxOrchestrator,
+        )
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        row = dict(toolbox_row or {})
+        auto_requests = [
+            ToolboxAutoAssignmentRequest.from_runtime_dict(dict(item or {}))
+            for item in list(row.get("requests") or [])
+        ]
+        manual_requests = [
+            ToolboxManualAssignmentRequest.from_runtime_dict(dict(item or {}))
+            for item in list(row.get("manual_requests") or [])
+        ]
+        intrinsics_row = dict(row.get("intrinsics") or {})
+        intrinsic_names = self._normalize_intrinsic_tool_names(
+            [str(item or "").strip() for item in list(intrinsics_row.get("names") or []) if str(item or "").strip()],
+            include_guides=bool(intrinsics_row.get("with_intrinsic_guides", False)),
+        )
+        intrinsic_profile = (
+            SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {}))
+            if intrinsic_names
+            else None
+        )
+        with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
+        existing_profiles = dict(row.get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(row)
+        old_regs_by_profile: Dict[str, str] = {}
+        for reg in self._toolbox_executor_registrations(tid):
+            old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
+
+        spawned_engine_ids: List[str] = []
+        replaced_engine_ids: List[str] = []
+        new_profiles: Dict[str, Dict[str, Any]] = {}
+        ready_rollout: Dict[str, Dict[str, Any]] = {}
+
+        if auto_requests or manual_requests or intrinsic_names:
+            orchestrator = ToolboxSandboxOrchestrator(
+                service=self,
+                stager=ToolboxBundleStager(self.hosting_root),
+                python_executable=runtime.get("python_executable"),
+            )
+            assignments = orchestrator.spawn_assignments(
+                toolbox_id=tid,
+                requests=auto_requests,
+                manual_requests=manual_requests,
+                intrinsic_tool_names=intrinsic_names,
+                intrinsic_profile=intrinsic_profile,
+                with_intrinsic_guides=with_intrinsic_guides,
+                worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
+            )
+            try:
+                ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
+            except Exception:
+                for item in assignments:
+                    reg = dict(item.registration or {})
+                    engine_id = str(reg.get("engine_id") or "").strip()
+                    if engine_id:
+                        self._retire_toolbox_registration(engine_id)
+                self._cleanup_unused_toolbox_environments(state)
+                raise
+            for item in assignments:
+                profile_id = item.sandbox_profile.normalized_profile_id()
+                reg = dict(item.registration or {})
+                engine_id = str(reg.get("engine_id") or "").strip()
+                if engine_id:
+                    spawned_engine_ids.append(engine_id)
+                old_engine_id = str(old_regs_by_profile.get(profile_id) or "").strip()
+                bundle_revision = str(dict(reg.get("bundle") or {}).get("bundle_revision") or "")
+                if old_engine_id and old_engine_id != engine_id:
+                    replaced_engine_ids.append(old_engine_id)
+                profile_auto_requests = [
+                    req.to_runtime_dict()
+                    for req in auto_requests
+                    if req.sandbox_profile.normalized_profile_id() == profile_id
+                ]
+                profile_manual_requests = [
+                    req.to_runtime_dict()
+                    for req in manual_requests
+                    if req.sandbox_profile.normalized_profile_id() == profile_id
+                ]
+                profile_row = {
+                    "sandbox_profile": item.sandbox_profile.to_dict(),
+                    "requests": profile_auto_requests,
+                    "manual_requests": profile_manual_requests,
+                    "engine_id": engine_id,
+                    "bundle_revision": bundle_revision,
+                    "environment": dict(reg.get("environment") or {}),
+                    "rollout": dict(ready_rollout.get(engine_id) or {}),
+                    "rollout_history": self._append_toolbox_rollout_history(
+                        dict(existing_profiles.get(profile_id) or {}),
+                        rollout=dict(ready_rollout.get(engine_id) or {}),
+                        action=action,
+                        engine_id=engine_id,
+                        bundle_revision=bundle_revision,
+                        replaced_engine_id=old_engine_id,
+                    ),
+                }
+                new_profiles[profile_id] = profile_row
+            for profile_id, old_engine_id in old_regs_by_profile.items():
+                if profile_id not in new_profiles and old_engine_id:
+                    replaced_engine_ids.append(old_engine_id)
+            for old_engine_id in replaced_engine_ids:
+                self._retire_toolbox_registration(old_engine_id)
+        else:
+            for old_engine_id in old_regs_by_profile.values():
+                if old_engine_id:
+                    replaced_engine_ids.append(old_engine_id)
+            for old_engine_id in replaced_engine_ids:
+                self._retire_toolbox_registration(old_engine_id)
+
+        updated_row: Dict[str, Any] = {
+            "toolbox_id": tid,
+            "requests": [req.to_runtime_dict() for req in auto_requests],
+            "manual_requests": [req.to_runtime_dict() for req in manual_requests],
+            "profiles": new_profiles,
+            "runtime": runtime,
+        }
+        if intrinsic_names:
+            updated_row["intrinsics"] = {
+                "names": intrinsic_names,
+                "sandbox_profile": (intrinsic_profile or SandboxProfileSpec(profile_id="default")).to_dict(),
+                "with_intrinsic_guides": with_intrinsic_guides,
+            }
+        return {
+            "toolbox_row": updated_row,
+            "profiles": new_profiles,
+            "spawned_engine_ids": spawned_engine_ids,
+            "ready_engine_ids": list(ready_rollout.keys()),
+            "rollout": ready_rollout,
+            "replaced_engine_ids": replaced_engine_ids,
+            "toolbox_removed": not auto_requests and not manual_requests and not intrinsic_names,
+        }
+
+    def toolbox_environment_apply(
+        self,
+        *,
+        environment_name: str,
+        toolbox_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        env_name = str(environment_name or "base").strip() or "base"
+        _ = self.toolbox_environment_description_get(env_name)
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        selected = {
+            str(item or "").strip()
+            for item in list(toolbox_ids or [])
+            if str(item or "").strip()
+        }
+        affected_ids: List[str] = []
+        for tid, row in toolboxes.items():
+            toolbox_id = str(tid or "").strip()
+            if selected and toolbox_id not in selected:
+                continue
+            if self._toolbox_uses_environment_dependency(dict(row or {}), env_name):
+                affected_ids.append(toolbox_id)
+        affected_ids.sort()
+        rebuilt: Dict[str, Any] = {}
+        for tid in affected_ids:
+            result = self._rebuild_toolbox_from_persisted_state(
+                toolbox_id=tid,
+                toolbox_row=dict(toolboxes.get(tid) or {}),
+                state=state,
+                action="apply_environment",
+            )
+            if bool(result.get("toolbox_removed")):
+                toolboxes.pop(tid, None)
+            else:
+                toolboxes[tid] = dict(result.get("toolbox_row") or {})
+            rebuilt[tid] = {
+                "profiles": dict(result.get("profiles") or {}),
+                "spawned_engine_ids": list(result.get("spawned_engine_ids") or []),
+                "ready_engine_ids": list(result.get("ready_engine_ids") or []),
+                "rollout": dict(result.get("rollout") or {}),
+                "replaced_engine_ids": list(result.get("replaced_engine_ids") or []),
+            }
+            state["toolboxes"] = toolboxes
+            self._write_toolboxes(state)
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        removed_environment_keys = self._cleanup_unused_toolbox_environments(state)
+        return {
+            "status": "ok",
+            "environment_name": env_name,
+            "affected_toolbox_ids": affected_ids,
+            "toolboxes": rebuilt,
+            "removed_environment_keys": removed_environment_keys,
+        }
+
+    def toolbox_environment_realize(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        effective_env = self.toolbox_environment_description_effective_get(env_name)
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        realized_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            required_packages = list(packages.get("required_packages") or [])
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            effective_extra = [
+                str(item or "").strip()
+                for item in list(effective_env.get("effective_extra_packages") or [])
+                if str(item or "").strip()
+            ]
+            missing_packages = [pkg for pkg in required_packages if pkg not in set(effective_extra)]
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.realize_environment(
+                spec,
+                environment_description=effective_env,
+                required_packages=required_packages,
+                missing_packages=missing_packages,
+                toolbox_id=tid,
+                sandbox_profile_id=str(profile_id or "").strip(),
+                tool_keys=matched_tool_keys,
+            )
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["realization"] = dict(metadata.get("realization") or {})
+            profiles[str(profile_id)] = profile_row
+            realized_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": realized_profiles,
+        }
+
+    def toolbox_environment_sync_description(
+        self,
+        *,
+        toolbox_id: str,
+        source_environment_name: str,
+        target_environment_name: Optional[str] = None,
+        tool_keys: Optional[List[str]] = None,
+        apply: bool = False,
+        realize: bool = False,
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        source_name = str(source_environment_name or "base").strip() or "base"
+        target_name = str(target_environment_name or "").strip() or source_name
+        resolved = self.toolbox_environment_resolve_requirements(
+            toolbox_id=tid,
+            environment_name=source_name,
+            tool_keys=tool_keys,
+        )
+        missing_packages = [
+            str(item or "").strip()
+            for item in list(resolved.get("missing_packages") or [])
+            if str(item or "").strip()
+        ]
+        source_desc = self.toolbox_environment_description_get(source_name)
+        direct_packages = [
+            str(item or "").strip()
+            for item in list(source_desc.get("extra_packages") or [])
+            if str(item or "").strip()
+        ]
+        merged_packages: List[str] = []
+        seen: set[str] = set()
+        for item in direct_packages + missing_packages:
+            if item and item not in seen:
+                seen.add(item)
+                merged_packages.append(item)
+
+        if target_name == source_name:
+            env_result = self.toolbox_environment_description_upsert(
+                name=source_name,
+                base_env_name=str(source_desc.get("base_env_name") or "").strip() or None,
+                extra_packages=merged_packages,
+                allow_online_install=bool(source_desc.get("allow_online_install", False)),
+            )
+        else:
+            env_result = self.toolbox_environment_description_clone(
+                source_name=source_name,
+                target_name=target_name,
+                extra_packages=merged_packages,
+                allow_online_install=bool(source_desc.get("allow_online_install", False)),
+            )
+
+        apply_result: Optional[Dict[str, Any]] = None
+        realize_result: Optional[Dict[str, Any]] = None
+        if apply:
+            apply_result = self.toolbox_environment_apply(
+                environment_name=target_name,
+                toolbox_ids=[tid],
+            )
+        if realize:
+            realize_result = self.toolbox_environment_realize(
+                toolbox_id=tid,
+                environment_name=target_name,
+                tool_keys=tool_keys,
+            )
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "source_environment_name": source_name,
+            "target_environment_name": target_name,
+            "resolved": resolved,
+            "environment_description": dict(env_result.get("environment_description") or {}),
+            "updated_direct_extra_packages": merged_packages,
+            "apply_result": apply_result,
+            "realize_result": realize_result,
+        }
+
+    def toolbox_environment_prepare_install(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        effective_env = self.toolbox_environment_description_effective_get(env_name)
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        planned_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            required_packages = list(packages.get("required_packages") or [])
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            effective_extra = [
+                str(item or "").strip()
+                for item in list(effective_env.get("effective_extra_packages") or [])
+                if str(item or "").strip()
+            ]
+            missing_packages = [pkg for pkg in required_packages if pkg not in set(effective_extra)]
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.prepare_install_plan(
+                spec,
+                environment_description=effective_env,
+                required_packages=required_packages,
+                missing_packages=missing_packages,
+                toolbox_id=tid,
+                sandbox_profile_id=str(profile_id or "").strip(),
+                tool_keys=matched_tool_keys,
+            )
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["realization"] = dict(metadata.get("realization") or {})
+            profile_row["environment"]["install_plan"] = dict(metadata.get("install_plan") or {})
+            profiles[str(profile_id)] = profile_row
+            planned_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": planned_profiles,
+        }
+
+    def toolbox_environment_lock_install(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        locked_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.lock_install_plan(spec)
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["install_plan"] = dict(metadata.get("install_plan") or {})
+            profile_row["environment"]["install_lock"] = dict(metadata.get("install_lock") or {})
+            profiles[str(profile_id)] = profile_row
+            locked_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": locked_profiles,
+        }
+
+    def toolbox_environment_resolve_install_lock(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+        allow_resolution: bool = False,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        resolved_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.resolve_install_lock(
+                spec,
+                allow_resolution=bool(allow_resolution),
+            )
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["install_plan"] = dict(metadata.get("install_plan") or {})
+            profile_row["environment"]["install_resolution"] = dict(metadata.get("install_resolution") or {})
+            profile_row["environment"]["resolved_install_lock"] = dict(metadata.get("resolved_install_lock") or {})
+            profiles[str(profile_id)] = profile_row
+            resolved_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": resolved_profiles,
+        }
+
+    def toolbox_environment_verify_install_lock(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        verified_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.verify_install_lock(spec)
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["install_plan"] = dict(metadata.get("install_plan") or {})
+            profile_row["environment"]["install_lock"] = dict(metadata.get("install_lock") or {})
+            profile_row["environment"]["resolved_install_lock"] = dict(metadata.get("resolved_install_lock") or {})
+            profile_row["environment"]["install_lock_verification"] = dict(metadata.get("install_lock_verification") or {})
+            profiles[str(profile_id)] = profile_row
+            verified_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": verified_profiles,
+        }
+
+    def toolbox_environment_verify_install_receipt(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        verified_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.verify_install_receipt(spec)
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["install_lock"] = dict(metadata.get("install_lock") or {})
+            profile_row["environment"]["resolved_install_lock"] = dict(metadata.get("resolved_install_lock") or {})
+            profile_row["environment"]["install_receipt"] = dict(metadata.get("install_receipt") or {})
+            profile_row["environment"]["install_receipt_verification"] = dict(metadata.get("install_receipt_verification") or {})
+            profiles[str(profile_id)] = profile_row
+            verified_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": verified_profiles,
+        }
+
+    def toolbox_environment_execute_install(
+        self,
+        *,
+        toolbox_id: str,
+        environment_name: str,
+        tool_keys: Optional[List[str]] = None,
+        allow_execution: bool = False,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        env_name = str(environment_name or "base").strip() or "base"
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        toolbox_row = dict(toolboxes.get(tid) or {})
+        if not toolbox_row:
+            raise ValueError(f"toolbox '{tid}' not found")
+        manager = ToolboxEnvironmentManager(self.hosting_root)
+        selected = [str(item or "").strip() for item in list(tool_keys or []) if str(item or "").strip()]
+        executed_profiles: Dict[str, Dict[str, Any]] = {}
+        profiles = dict(toolbox_row.get("profiles") or {})
+        for profile_id, raw_profile in profiles.items():
+            profile_row = dict(raw_profile or {})
+            sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+            if str(sandbox_profile.get("environment_name") or "base").strip() != env_name:
+                continue
+            packages = self._toolbox_profile_required_packages(profile_row, tool_keys=selected or None)
+            matched_tool_keys = list(packages.get("tool_keys") or [])
+            if selected and not matched_tool_keys:
+                continue
+            environment = dict(profile_row.get("environment") or {})
+            spec = ToolboxEnvironmentSpec.from_dict(environment)
+            metadata = manager.execute_install_plan(
+                spec,
+                allow_execution=bool(allow_execution),
+            )
+            profile_row["environment"] = dict(environment)
+            profile_row["environment"]["install_plan"] = dict(metadata.get("install_plan") or {})
+            profile_row["environment"]["install_lock"] = dict(metadata.get("install_lock") or {})
+            profile_row["environment"]["install_resolution"] = dict(metadata.get("install_resolution") or {})
+            profile_row["environment"]["resolved_install_lock"] = dict(metadata.get("resolved_install_lock") or {})
+            profile_row["environment"]["install_lock_verification"] = dict(metadata.get("install_lock_verification") or {})
+            profile_row["environment"]["install_execution"] = dict(metadata.get("install_execution") or {})
+            profile_row["environment"]["install_receipt"] = dict(metadata.get("install_receipt") or {})
+            profiles[str(profile_id)] = profile_row
+            executed_profiles[str(profile_id)] = {
+                "environment": dict(profile_row.get("environment") or {}),
+                "tool_keys": matched_tool_keys,
+            }
+        toolbox_row["profiles"] = profiles
+        toolboxes[tid] = toolbox_row
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        return {
+            "status": "ok",
+            "toolbox_id": tid,
+            "environment_name": env_name,
+            "profiles": executed_profiles,
+        }
 
     def _cleanup_unused_toolbox_environments(self, state: Optional[Dict[str, Any]] = None) -> List[str]:
         payload = dict(state or self._read_toolboxes() or {})
@@ -1296,6 +2301,7 @@ class EngineHostService:
             "sandbox-fs-stat",
             "sandbox-http-fetch",
             "toolbox-describe",
+            "toolbox-gate",
             "toolbox-execute",
             "get-control-config",
             "set-control-config",
@@ -1359,6 +2365,7 @@ class EngineHostService:
                 "sandbox-fs-stat",
                 "sandbox-http-fetch",
                 "toolbox-describe",
+                "toolbox-gate",
                 "toolbox-execute",
                 "toolbox-register-auto",
                 "toolbox-unregister-auto",
@@ -1366,6 +2373,19 @@ class EngineHostService:
                 "toolbox-unregister-intrinsics",
                 "toolbox-register-manual",
                 "toolbox-unregister-manual",
+                "toolbox-environment-list",
+                "toolbox-environment-upsert",
+                "toolbox-environment-clone",
+                "toolbox-environment-resolve",
+                "toolbox-environment-apply",
+                "toolbox-environment-realize",
+                "toolbox-environment-sync",
+                "toolbox-environment-prepare-install",
+                "toolbox-environment-lock-install",
+                "toolbox-environment-resolve-install-lock",
+                "toolbox-environment-verify-install-lock",
+                "toolbox-environment-verify-install-receipt",
+                "toolbox-environment-execute-install",
                 "host-metrics",
                 "list-configs",
                 "create-config",
@@ -1401,6 +2421,7 @@ class EngineHostService:
                 "sandbox-fs-stat",
                 "sandbox-http-fetch",
                 "toolbox-describe",
+                "toolbox-gate",
                 "toolbox-execute",
                 "toolbox-register-auto",
                 "toolbox-unregister-auto",
@@ -1408,6 +2429,19 @@ class EngineHostService:
                 "toolbox-unregister-intrinsics",
                 "toolbox-register-manual",
                 "toolbox-unregister-manual",
+                "toolbox-environment-list",
+                "toolbox-environment-upsert",
+                "toolbox-environment-clone",
+                "toolbox-environment-resolve",
+                "toolbox-environment-apply",
+                "toolbox-environment-realize",
+                "toolbox-environment-sync",
+                "toolbox-environment-prepare-install",
+                "toolbox-environment-lock-install",
+                "toolbox-environment-resolve-install-lock",
+                "toolbox-environment-verify-install-lock",
+                "toolbox-environment-verify-install-receipt",
+                "toolbox-environment-execute-install",
                 "host-metrics",
                 "models-from-config",
                 "connect-from-config",
@@ -1469,12 +2503,26 @@ class EngineHostService:
                 "sandbox-fs-stat",
                 "sandbox-http-fetch",
                 "toolbox-describe",
+                "toolbox-gate",
                 "toolbox-register-auto",
                 "toolbox-unregister-auto",
                 "toolbox-register-intrinsics",
                 "toolbox-unregister-intrinsics",
                 "toolbox-register-manual",
                 "toolbox-unregister-manual",
+                "toolbox-environment-list",
+                "toolbox-environment-upsert",
+                "toolbox-environment-clone",
+                "toolbox-environment-resolve",
+                "toolbox-environment-apply",
+                "toolbox-environment-realize",
+                "toolbox-environment-sync",
+                "toolbox-environment-prepare-install",
+                "toolbox-environment-lock-install",
+                "toolbox-environment-resolve-install-lock",
+                "toolbox-environment-verify-install-lock",
+                "toolbox-environment-verify-install-receipt",
+                "toolbox-environment-execute-install",
                 "host-metrics",
                 "get-control-config",
                 "get-lifecycle-policy-effective",
@@ -3956,6 +5004,73 @@ class EngineHostService:
         result.setdefault("tool_access", dict(reg.get("tool_access") or {}))
         return result
 
+    def toolbox_gate(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        tid = str(toolbox_id or "").strip()
+        name = str(tool_name or "").strip()
+        if not name:
+            raise ValueError("tool_name is required")
+        if not eid and not tid:
+            raise ValueError("engine_id or toolbox_id is required")
+        if tid and not eid:
+            regs = self._toolbox_executor_registrations(tid)
+            if not regs:
+                return {
+                    "status": "ok",
+                    "toolbox_id": tid,
+                    "tool_name": name,
+                    "outcome": "unavailable_backend",
+                    "reason": "toolbox_executor_missing",
+                    "executable": False,
+                    "requires_confirmation": False,
+                    "backend": "sandbox",
+                }
+            try:
+                reg = self._route_toolbox_registration(toolbox_id=tid, tool_name=name, command_label="toolbox-gate")
+            except PermissionError:
+                return {
+                    "status": "ok",
+                    "toolbox_id": tid,
+                    "tool_name": name,
+                    "outcome": "denied",
+                    "reason": "tool_not_allowed",
+                    "executable": False,
+                    "requires_confirmation": False,
+                    "backend": "sandbox",
+                }
+            eid = str(reg.get("engine_id") or "").strip()
+        else:
+            reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-gate")
+            allowed_tool_names = self._registration_allowed_tool_names(reg)
+            if allowed_tool_names is not None and name not in allowed_tool_names:
+                return {
+                    "status": "ok",
+                    "engine_id": eid,
+                    "tool_name": name,
+                    "outcome": "denied",
+                    "reason": "tool_not_allowed",
+                    "executable": False,
+                    "requires_confirmation": False,
+                    "backend": "sandbox",
+                }
+        return {
+            "status": "ok",
+            "engine_id": eid,
+            "toolbox_id": tid or self._registration_toolbox_id(reg),
+            "tool_name": name,
+            "outcome": "allowed",
+            "reason": "allowed",
+            "executable": True,
+            "requires_confirmation": False,
+            "backend": "sandbox",
+        }
+
     def toolbox_execute(
         self,
         *,
@@ -4077,6 +5192,11 @@ class EngineHostService:
         intrinsic_profile = SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {})) if intrinsic_names else None
         with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
         existing_profiles = dict(dict(toolboxes.get(tid) or {}).get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(
+            toolbox_row_existing,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
 
         old_regs_by_profile: Dict[str, str] = {}
         for reg in self._toolbox_executor_registrations(tid):
@@ -4085,7 +5205,7 @@ class EngineHostService:
         orchestrator = ToolboxSandboxOrchestrator(
             service=self,
             stager=ToolboxBundleStager(self.hosting_root),
-            python_executable=python_executable,
+            python_executable=runtime.get("python_executable"),
         )
         assignments = orchestrator.spawn_assignments(
             toolbox_id=tid,
@@ -4094,7 +5214,7 @@ class EngineHostService:
             intrinsic_tool_names=intrinsic_names,
             intrinsic_profile=intrinsic_profile,
             with_intrinsic_guides=with_intrinsic_guides,
-            worker_profile_class=worker_profile_class,
+            worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
         )
         try:
             ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
@@ -4154,6 +5274,7 @@ class EngineHostService:
             "requests": [req.to_runtime_dict() for req in merged_requests],
             "manual_requests": [req.to_runtime_dict() for req in manual_requests],
             "profiles": new_profiles,
+            "runtime": runtime,
         }
         if intrinsic_names:
             toolbox_row["intrinsics"] = {
@@ -4216,6 +5337,11 @@ class EngineHostService:
         intrinsic_profile = SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {})) if intrinsic_names else None
         with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
         existing_profiles = dict(dict(toolboxes.get(tid) or {}).get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(
+            toolbox_row_existing,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
         old_regs_by_profile: Dict[str, str] = {}
         for reg in self._toolbox_executor_registrations(tid):
             old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
@@ -4228,7 +5354,7 @@ class EngineHostService:
             orchestrator = ToolboxSandboxOrchestrator(
                 service=self,
                 stager=ToolboxBundleStager(self.hosting_root),
-                python_executable=python_executable,
+                python_executable=runtime.get("python_executable"),
             )
             assignments = orchestrator.spawn_assignments(
                 toolbox_id=tid,
@@ -4237,7 +5363,7 @@ class EngineHostService:
                 intrinsic_tool_names=intrinsic_names,
                 intrinsic_profile=intrinsic_profile,
                 with_intrinsic_guides=with_intrinsic_guides,
-                worker_profile_class=worker_profile_class,
+                worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
             )
             try:
                 ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
@@ -4290,6 +5416,7 @@ class EngineHostService:
                 "requests": [req.to_runtime_dict() for req in merged_requests],
                 "manual_requests": [req.to_runtime_dict() for req in manual_requests],
                 "profiles": new_profiles,
+                "runtime": runtime,
                 **(
                     {
                         "intrinsics": {
@@ -4352,6 +5479,11 @@ class EngineHostService:
         merged_requests, state, toolboxes = self._merge_toolbox_auto_requests(toolbox_id=tid)
         toolbox_row_existing = dict(toolboxes.get(tid) or {})
         existing_profiles = dict(toolbox_row_existing.get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(
+            toolbox_row_existing,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
         existing_intrinsics = dict(toolbox_row_existing.get("intrinsics") or {})
         existing_names = self._normalize_intrinsic_tool_names(
             [str(item or "").strip() for item in list(existing_intrinsics.get("names") or []) if str(item or "").strip()],
@@ -4370,7 +5502,7 @@ class EngineHostService:
         orchestrator = ToolboxSandboxOrchestrator(
             service=self,
             stager=ToolboxBundleStager(self.hosting_root),
-            python_executable=python_executable,
+            python_executable=runtime.get("python_executable"),
         )
         assignments = orchestrator.spawn_assignments(
             toolbox_id=tid,
@@ -4378,7 +5510,7 @@ class EngineHostService:
             intrinsic_tool_names=merged_names,
             intrinsic_profile=intrinsic_profile,
             with_intrinsic_guides=with_intrinsic_guides,
-            worker_profile_class=worker_profile_class,
+            worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
         )
         try:
             ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
@@ -4436,6 +5568,7 @@ class EngineHostService:
             "toolbox_id": tid,
             "requests": [req.to_runtime_dict() for req in merged_requests],
             "profiles": new_profiles,
+            "runtime": runtime,
             "intrinsics": {
                 "names": merged_names,
                 "sandbox_profile": intrinsic_profile.to_dict(),
@@ -4480,6 +5613,11 @@ class EngineHostService:
         merged_requests, state, toolboxes = self._merge_toolbox_auto_requests(toolbox_id=tid)
         toolbox_row_existing = dict(toolboxes.get(tid) or {})
         existing_profiles = dict(toolbox_row_existing.get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(
+            toolbox_row_existing,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
         existing_intrinsics = dict(toolbox_row_existing.get("intrinsics") or {})
         current_names = self._normalize_intrinsic_tool_names(
             [str(item or "").strip() for item in list(existing_intrinsics.get("names") or []) if str(item or "").strip()],
@@ -4500,7 +5638,7 @@ class EngineHostService:
             orchestrator = ToolboxSandboxOrchestrator(
                 service=self,
                 stager=ToolboxBundleStager(self.hosting_root),
-                python_executable=python_executable,
+                python_executable=runtime.get("python_executable"),
             )
             assignments = orchestrator.spawn_assignments(
                 toolbox_id=tid,
@@ -4508,7 +5646,7 @@ class EngineHostService:
                 intrinsic_tool_names=remaining_names,
                 intrinsic_profile=intrinsic_profile if remaining_names else None,
                 with_intrinsic_guides=with_intrinsic_guides,
-                worker_profile_class=worker_profile_class,
+                worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
             )
             try:
                 ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
@@ -4560,6 +5698,7 @@ class EngineHostService:
                 "toolbox_id": tid,
                 "requests": [req.to_runtime_dict() for req in merged_requests],
                 "profiles": new_profiles,
+                "runtime": runtime,
                 **(
                     {
                         "intrinsics": {
@@ -4633,6 +5772,11 @@ class EngineHostService:
         intrinsic_profile = SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {})) if intrinsic_names else None
         with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
         existing_profiles = dict(dict(toolboxes.get(tid) or {}).get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(
+            toolbox_row_existing,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
         old_regs_by_profile: Dict[str, str] = {}
         for reg in self._toolbox_executor_registrations(tid):
             old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
@@ -4640,7 +5784,7 @@ class EngineHostService:
         orchestrator = ToolboxSandboxOrchestrator(
             service=self,
             stager=ToolboxBundleStager(self.hosting_root),
-            python_executable=python_executable,
+            python_executable=runtime.get("python_executable"),
         )
         assignments = orchestrator.spawn_assignments(
             toolbox_id=tid,
@@ -4649,7 +5793,7 @@ class EngineHostService:
             intrinsic_tool_names=intrinsic_names,
             intrinsic_profile=intrinsic_profile,
             with_intrinsic_guides=with_intrinsic_guides,
-            worker_profile_class=worker_profile_class,
+            worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
         )
         try:
             ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
@@ -4714,6 +5858,7 @@ class EngineHostService:
             "requests": [req.to_runtime_dict() for req in auto_requests],
             "manual_requests": [req.to_runtime_dict() for req in manual_requests],
             "profiles": new_profiles,
+            "runtime": runtime,
             **(
                 {
                     "intrinsics": {
@@ -4780,6 +5925,11 @@ class EngineHostService:
         intrinsic_profile = SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {})) if intrinsic_names else None
         with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
         existing_profiles = dict(dict(toolboxes.get(tid) or {}).get("profiles") or {})
+        runtime = self._toolbox_runtime_defaults(
+            toolbox_row_existing,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
         old_regs_by_profile: Dict[str, str] = {}
         for reg in self._toolbox_executor_registrations(tid):
             old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
@@ -4791,7 +5941,7 @@ class EngineHostService:
             orchestrator = ToolboxSandboxOrchestrator(
                 service=self,
                 stager=ToolboxBundleStager(self.hosting_root),
-                python_executable=python_executable,
+                python_executable=runtime.get("python_executable"),
             )
             assignments = orchestrator.spawn_assignments(
                 toolbox_id=tid,
@@ -4800,7 +5950,7 @@ class EngineHostService:
                 intrinsic_tool_names=intrinsic_names,
                 intrinsic_profile=intrinsic_profile,
                 with_intrinsic_guides=with_intrinsic_guides,
-                worker_profile_class=worker_profile_class,
+                worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
             )
             try:
                 ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
@@ -4859,6 +6009,7 @@ class EngineHostService:
                 "requests": [req.to_runtime_dict() for req in auto_requests],
                 "manual_requests": [req.to_runtime_dict() for req in manual_requests],
                 "profiles": new_profiles,
+                "runtime": runtime,
                 **(
                     {
                         "intrinsics": {
