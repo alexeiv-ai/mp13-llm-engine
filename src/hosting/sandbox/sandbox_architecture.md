@@ -1,1878 +1,624 @@
 # Toolbox Sandbox Architecture
 
-Date: 2026-04-01
-Scope: current repository design for manifest-driven toolbox sandboxes, native toolbox fallback, hosting API integration, and toolbox-worker startup/callback contracts
+Date: 2026-04-04
+Scope: current implemented architecture for sandboxed toolbox execution, hosted lifecycle, chat/runtime integration, operator workflow, and known limits.
 
-## 1. Overview
+## 1. Purpose
 
-The sandbox design for toolbox execution is intentionally split into two layers:
+This document is the architecture guide for the toolbox sandbox feature as it exists now.
 
-1. host-side management and authorization
-2. executor-side loading and execution
+It is meant to be sufficient for a new thread or a new contributor to understand:
 
-The host remains the trust boundary.
+1. what problem this feature solves
+2. what the current architecture is
+3. what the main runtime objects and responsibilities are
+4. how chat/runtime integration works
+5. how operator/admin recovery works
+6. what is intentionally still incomplete
 
-The executor is a hosted worker process that loads a staged toolbox revision and executes user-provided tool code over the existing IPC transport.
+This document describes current reality first.
 
-Important terminology:
+It also records current pitfalls and short improvement bullets, but it is not the step-by-step plan document. Use [sandbox_plan.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_plan.md) for that.
 
-1. "worker" here means the generic hosting worker-process concept
-2. it does not mean the trusted `mp13engine` model-serving worker
-3. the toolbox executor should be built on the existing generic hosting spawn/control/IPC machinery
+## 2. Problem And Scope
 
-Current implementation entry points:
+The toolbox subsystem allows dynamic tool registration and execution.
 
-1. host-side bundle/harness helpers:
-   - [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py)
-2. sandbox executor worker:
-   - [toolbox_executor_ipc.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_executor_ipc.py)
-3. host-side authorization and RPC:
-   - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py)
-   - [engine_host_channel.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_channel.py)
-   - [engine_host_cli.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_cli.py)
-   - [engine_host_daemon.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_daemon.py)
+That is useful for trusted in-process use, but it is not enough for untrusted or semi-trusted tool code because:
 
-## 2. Main Components
+1. tools may be user-defined Python callables
+2. tools may need narrower filesystem or HTTP access than the host process has
+3. tools may need to be routed by different permission profiles
+4. tool lifecycle should be host-managed rather than ambient in-process mutation
 
-### 2.1 Toolbox Revision
+So the sandbox feature exists to make toolbox execution host-managed and policy-aware.
 
-A sandboxed toolbox does not discover callables from ambient Python scope.
+Important scope correction:
 
-Instead, the host stages an explicit toolbox revision made of:
+1. trusted model-serving workers are not the sandbox target
+2. toolbox executors are the sandbox target
+3. the host remains the trust boundary and lifecycle authority
 
-1. toolbox module files
-2. tool definitions
-3. callable entrypoints
-4. optional resources
-5. derived manifest metadata
+## 3. Core Design Principles
 
-Core types:
+The implemented design follows these rules.
 
-1. `ToolboxBundleFile`
-2. `ToolboxBundleTool`
-3. `ToolboxBundleSpec`
-4. `StagedToolboxBundle`
-5. `ToolboxBundleStager`
+1. The host is authoritative.
+   - host decides what tool code is staged
+   - host decides which sandbox profile a tool belongs to
+   - host decides whether a call is allowed before dispatch
 
-The staged manifest contains:
+2. Toolbox executors are disposable.
+   - live executor registrations are runtime state
+   - persisted logical toolbox state is the source of truth
+   - repair/reconcile should rebuild rather than patch in place
 
-1. `executor_kind=toolbox_executor_v1`
-2. `bundle_id`
-3. `bundle_revision`
-4. `manifest_hash`
-5. optional `dependency_lock_hash`
-6. tool inventory
-7. file content hashes
+3. One logical toolbox can span many sandbox profiles.
+   - users think in terms of a logical toolbox
+   - host routes each tool name to the right sandbox executor
 
-For toolbox scope, "bundle" should be read narrowly:
+4. Tool availability and tool executability are separate concerns.
+   - a tool may be logically present
+   - a given call may still be gated or denied
 
-1. one staged revision of a toolbox runtime payload
-2. not a generic worker packaging abstraction
-3. the unit of add/remove/reload for sandboxed tools
+5. Brokered I/O is the trustworthy path.
+   - brokered filesystem and brokered HTTP are supported
+   - direct-network Windows controls are not treated as a trustworthy promise
 
-That revision must cover both kinds of toolbox content:
+6. Operator UX should be compact by default.
+   - review, repair, and reconcile should not force operators to inspect raw low-level ids
+   - deep details are opt-in
 
-1. staged user-defined callables loaded from manifest-declared modules
-2. auto-discovered user-defined callables loaded from staged modules by callable name
-3. built-in intrinsic tools loaded from `INTRINSICS_REGISTRY` in [mp13_tools_builtin.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_tools_builtin.py)
+## 4. High-Level Runtime Model
 
-So a toolbox revision is not just "files on disk".
+The runtime has two primary layers.
 
-It is the complete materialized toolbox state required by the executor:
+### 4.1 Host Layer
 
-1. user-tool manifest entries
-2. auto-tool discovery entries
-3. intrinsic-tool enablement state
-4. guide-tool inclusion state
-5. active/hidden tool lists
-6. dependency and environment provenance
+The host layer owns:
 
-### 2.2 Toolbox Executor Worker
+1. persisted logical toolbox state
+2. toolbox registration and removal
+3. sandbox-profile assignment and routing
+4. environment identity and named environment descriptions
+5. worker spawn and replacement rollout
+6. tool gating before dispatch
+7. brokered filesystem and HTTP enforcement
+8. references, consistency, repair, reconcile, and GC
 
-The worker process in [toolbox_executor_ipc.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_executor_ipc.py):
+### 4.2 Sandbox Executor Layer
 
-1. reads `MP13_TOOLBOX_WORKER_SPEC_PATH` when available
-2. falls back to `MP13_TOOLBOX_MANIFEST_PATH` for compatibility
-2. loads staged Python files from the bundle root
-3. constructs a `Toolbox`
-4. registers only tools declared in the manifest
-5. serves RPC over existing IPC
+The sandbox executor layer owns:
 
-The intended long-term startup model should move from ad hoc env variables toward one structured startup spec.
+1. loading one staged toolbox revision
+2. materializing a `Toolbox` from that revision
+3. exposing RPC over the existing hosting IPC transport
+4. executing allowed tool calls
+5. making brokered callback requests to the host when tool code uses brokered fs/http
 
-Recommended shape:
+The executor is intentionally narrow. It does not own long-term lifecycle policy.
 
-```python
-@dataclass
-class ToolboxWorkerStartupSpec:
-    worker_id: str
-    sandbox_id: str
-    toolbox_revision: str
+## 5. Main Runtime Pieces
 
-    manifest_path: str
-    scratch_root: str
-    venv_path: str | None = None
+Primary implementation entry points:
 
-    ipc_family: str = "AF_PIPE"
-    ipc_address: str = ""
-    auth_token_env: str = "MP13_ENGINE_HOST_TOKEN"
+1. [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py)
+   - staging helpers
+   - sandbox profile types
+   - environment types
+   - hosted toolbox proxy
+   - execution harness
+2. [toolbox_executor_ipc.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_executor_ipc.py)
+   - sandbox worker process
+   - toolbox RPC handling
+3. [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py)
+   - authoritative host-side lifecycle and policy
+4. [engine_host_channel.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_channel.py)
+   - Python client wrapper over the host command surface
+5. [engine_host_cli.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_cli.py)
+   - operator-facing CLI
+6. [engine_host_daemon.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_daemon.py)
+   - daemon command transport
+7. [toolbox_admin.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_admin.py)
+   - long-lived server/operator convenience wrapper
+8. [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py)
+   - app-facing hosted toolbox helpers
+9. [hosted_tool_runtime.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_runtime.py)
+   - lightweight hosted tool-round runtime helper
+10. [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py)
+    - hosted demo and hosted execution wiring
 
-    execution_contract: str = "hosting.toolbox.worker.v1"
-    callback_contract: str = "hosting.toolbox.callbacks.v1"
-    policy: dict[str, Any] = field(default_factory=dict)
-```
+## 6. Main Concepts And Data Model
 
-Recommended transport of the startup spec:
+The architecture revolves around a few key concepts.
 
-1. host writes a JSON startup spec file under hosting-managed state
-2. host sets one env var such as `MP13_TOOLBOX_WORKER_SPEC_PATH`
-3. worker loads the spec from that path on startup
+### 6.1 Logical Toolbox
 
-Reason:
+A logical toolbox is the user-facing identity.
 
-1. keeps worker startup versionable
-2. avoids expanding a long list of worker-specific env vars
-3. preserves reuse of existing hosting auth and IPC setup
+Key property:
 
-Current implementation status:
+1. one logical toolbox may span many sandbox executors
 
-1. `ToolboxWorkerStartupSpec` now exists in [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py)
-2. staged bundles can emit startup-spec files through `worker_env_with_startup_spec(...)`
-3. the worker now resolves manifest path from `MP13_TOOLBOX_WORKER_SPEC_PATH`
-4. the startup spec now carries hosting-state metadata used for host callback resolution
-5. toolbox sandbox orchestration now uses the startup-spec path when spawning profile-specific executors
-6. legacy `MP13_TOOLBOX_MANIFEST_PATH` and related env fallback are still accepted for compatibility
+Current key:
 
-Current worker RPC methods:
+1. `toolbox_id`
+
+Invocation identity is toolbox-scoped, not globally unique tool names.
+
+That means:
+
+1. tool names only need to be unique within a logical toolbox
+2. routing is by `toolbox_id + tool_name`
+
+### 6.2 Staged Toolbox Revision
+
+A sandbox executor never loads tools from ambient Python scope.
+
+Instead, it loads a staged toolbox revision.
+
+A staged revision may contain:
+
+1. staged Python source files
+2. manual tool definitions
+3. module/callable auto-discovery entries
+4. intrinsic-tool activation state
+5. active/hidden tool state
+6. manifest hashes and provenance metadata
+
+The revision is the unit of replacement rollout.
+
+### 6.3 Sandbox Profile
+
+A sandbox profile captures the execution boundary for a set of tools.
+
+Current inputs include:
+
+1. sandbox policy
+2. brokered fs/http configuration
+3. required imports
+4. named environment description
+
+The implementation uses `SandboxProfileSpec`.
+
+One logical toolbox may have many profiles.
+
+Each profile typically maps to one current active sandbox executor registration.
+
+### 6.4 Environment Description
+
+Environment descriptions are host-managed named descriptions, not ambient runtime state.
+
+They exist to keep environment management understandable and explicitly controlled.
+
+Current model:
+
+1. one host-managed base environment concept
+2. additional named environment descriptions may extend that base
+3. tools can be linked to a named environment description
+4. environment descriptions can inherit from base descriptions
+
+### 6.5 Realized Environment
+
+A realized environment is the actual venv root used to start a sandbox executor.
+
+Current location:
+
+1. `<hosting_root>/toolbox_venvs/<venv_key>`
+
+Current identity inputs:
+
+1. toolbox runtime hash
+2. intrinsic dependency profile
+3. required imports
+4. environment-description identity
+5. optional dependency-lock identity
+
+### 6.6 Live Executor Registration
+
+A live toolbox executor registration ties together:
+
+1. engine id
+2. logical toolbox id
+3. sandbox profile id
+4. staged bundle root and revision
+5. environment metadata
+6. allowed tool names
+
+This is runtime state, not the authoritative model.
+
+## 7. Staging And Loading Model
+
+### 7.1 Why Staging Exists
+
+Staging exists so that sandbox executors load exactly what the host declared.
+
+That avoids:
+
+1. ambient scope discovery
+2. accidental dependency on unrelated in-process modules
+3. unclear provenance of what code was executed
+
+### 7.2 Supported Registration Styles
+
+Current registration styles:
+
+1. manual tool-definition registration
+2. live Python callable registration
+3. auto-callable registration from staged module/callable name
+4. intrinsic-tool enablement
+
+These are all normalized into staged toolbox revision state.
+
+### 7.3 Validation Strength
+
+Not all registration paths can validate equally before sandbox warmup.
+
+Current intended distinction:
+
+1. live callable or manual-definition-backed registration
+   - stronger pre-staging validation
+2. name-based auto-discovery
+   - structural pre-staging validation
+   - authoritative resolution happens during sandbox warmup
+
+### 7.4 Worker Startup
+
+The worker is started from a structured startup spec.
+
+That spec carries:
+
+1. manifest path
+2. hosting-state pointers
+3. scratch root
+4. optional venv path
+5. worker identity
+6. IPC metadata
+
+Legacy env-var fallbacks still exist, but the architecture should be understood as startup-spec driven.
+
+## 8. RPC And Callback Model
+
+### 8.1 Current Executor RPC Surface
+
+Current executor RPC surface includes:
 
 1. `rpc.describe`
 2. `toolbox.describe`
 3. `toolbox.execute`
 4. `host.call`
 
-Recommended next worker RPC methods:
+### 8.2 Brokered Callback Model
 
-1. `toolbox.cancel`
+Tool code can make host-mediated requests through execution context helpers.
 
-Current worker-side defense in depth:
+Current convenience helpers:
 
-1. unknown tool names are rejected
-2. only manifest entrypoints are loaded
-3. no ambient `search_scope` relinking is used
+1. `context.host.call(...)`
+2. `context.fs.*`
+3. `context.http.fetch(...)`
 
-### 2.3 Toolbox Execution Harness
+This is the supported path for:
 
-`ToolboxExecutionHarness` is the wiring layer between a caller and either:
+1. filesystem reads/writes within brokered roots
+2. HTTP fetches within brokered allowlists
 
-1. a native in-process `Toolbox`
-2. one sandbox executor
-3. a pool of sandbox executors
+### 8.3 Important Constraint
 
-Supported execution modes:
+No separate sandbox-facing HTTP server is introduced for callbacks.
 
-1. `native`
-2. `sandbox`
+All callback traffic stays on existing hosting IPC.
 
-Supported parallelism today:
+## 9. Logical Toolbox Routing
 
-1. async parallel dispatch within one executor
-2. round-robin dispatch across multiple sandbox executors
-3. both at once if multiple calls are dispatched while the harness has a pool configured
+### 9.1 Why Routing Exists
 
-What the harness should hide from normal callers:
+Different tools may need:
 
-1. staging/revision churn
-2. executor restart/switchover
-3. pool membership changes
-4. future `.venv` selection details
+1. different permissions
+2. different brokered roots
+3. different network policy
+4. different dependency sets
 
-What the harness should not own:
+That means one logical toolbox cannot always map to one sandbox process.
 
-1. sandbox process lifecycle policy
-2. bundle garbage collection
-3. low-level executor health orchestration
+### 9.2 Current Routing Rule
 
-That means the harness is a user-facing logical layer, but not the full lifecycle manager.
+Host routes by:
 
-### 2.4 Hosting API Layer
+1. `toolbox_id`
+2. requested tool name
 
-The host registration model now includes toolbox-specific metadata:
+Host then resolves:
 
-1. `executor_kind`
-2. `bundle`
-3. `environment`
-4. `tool_access`
-5. `capabilities`
+1. which sandbox profile owns that tool
+2. which active executor registration currently serves that profile
 
-The host service exposes:
+### 9.3 What The User Sees
 
-1. `toolbox_describe(...)`
-2. `toolbox_execute(...)`
-3. `toolbox_register_auto(...)`
-4. `toolbox_unregister_auto(...)`
+The user still sees one hosted toolbox proxy.
 
-The control channel mirrors those methods, and the daemon/CLI expose:
+The routing is hidden behind:
 
-1. `toolbox-describe`
-2. `toolbox-execute`
-3. `toolbox-register-auto`
-4. `toolbox-unregister-auto`
+1. `HostedToolBoxRef`
+2. hosted execution harness
+3. chat/runtime wiring
 
-## 3. Capability Summary
+## 10. Call Gating Model
 
-### 3.1 Supported Now
+### 10.1 Reason For Gating
 
-1. manifest-driven loading of sandboxed toolbox callables
-2. host-side allowlist gating before tool dispatch
-3. dedicated toolbox executor IPC worker
-4. native toolbox mode without sandbox
-5. harness-managed pool of sandbox executors
-6. async parallel dispatch of tool calls
-7. host registration metadata for bundle provenance
+The architecture now distinguishes:
 
-### 3.1A Important Clarification
+1. logical tool membership
+2. execution-time authorization for a specific call
 
-The current dedicated executor path is an initial toolbox-worker slice built on the generic hosting worker mechanism.
+This is necessary because a tool can be visible while still being denied or gated in the current hosted context.
 
-That means:
+### 10.2 Current Implemented Slice
 
-1. hosting already provides the relevant generic spawn/control/IPC substrate
-2. toolbox execution is the specialized worker role layered on top of it
-3. the trusted engine worker remains a separate runtime role
+Current first slice includes:
 
-### 3.2 Supported In Adjacent Sandbox Infrastructure
+1. native/toolbox-facing `Toolbox.gate_call(...)`
+2. hosted `toolbox_gate(...)`
+3. hosted execution preflight before dispatch
+4. gated errors surfaced distinctly from tool crashes
 
-These capabilities already exist in the generic sandbox layer and are reusable by toolbox sandboxes:
+### 10.3 Current Limits
 
-1. Windows spawn hardening
-2. Low Integrity worker launch path
-3. brokered filesystem policy on the host
-4. brokered HTTP allowlist enforcement on the host
+The broader prompt/runtime stack is not yet fully gate-driven everywhere.
 
-See:
+The most polished gate-aware slice is the hosted chat path.
 
-1. [policy.py](/o:/repos/mp13-llm-engine/src/hosting/sandbox/policy.py)
-2. [launcher.py](/o:/repos/mp13-llm-engine/src/hosting/sandbox/launcher.py)
-3. [broker_fs.py](/o:/repos/mp13-llm-engine/src/hosting/sandbox/broker_fs.py)
-4. [broker_http.py](/o:/repos/mp13-llm-engine/src/hosting/sandbox/broker_http.py)
+That is enough for current usability, but not the final universal model.
 
-## 4. Execution Model
+## 11. Environment Architecture
 
-### 4.1 Native Mode
+### 11.1 Current Design Choice
 
-Native mode is for trusted in-process execution.
+The environment model intentionally stays simpler than a fully generalized package-management platform.
 
-The harness calls `Toolbox.execute(...)` directly.
+The intended mental model is:
 
-Use native mode when:
+1. base toolbox environment
+2. named environment descriptions
+3. tools linked to those descriptions
+4. host-managed apply/realize/install lifecycle
 
-1. the toolbox is trusted
-2. sandbox isolation is not required
-3. you still want the same harness interface as sandbox mode
+### 11.2 Current Host APIs
 
-### 4.2 Sandbox Mode
+Current environment-related host APIs cover:
 
-Sandbox mode is for manifest-driven execution in a separate worker process.
+1. description list/get/upsert/clone
+2. requirement resolution against linked tools
+3. apply description to linked toolbox profiles
+4. realize environment metadata
+5. prepare install plan
+6. lock install plan
+7. resolve stronger exact lock
+8. execute install
+9. verify lock
+10. verify observed receipt
 
-The flow is:
+### 11.3 What Is Strong Today
 
-1. stage bundle
-2. spawn toolbox executor worker
-3. register bundle/environment/tool-access metadata with hosting
-4. use host RPC for `toolbox.describe` and `toolbox.execute`
-5. optionally place multiple executors behind one harness
+What is already good enough:
 
-The user-facing intent is still simple:
+1. deterministic environment identity
+2. host-built venv roots
+3. named environment descriptions
+4. explicit apply/rebuild flows
+5. explicit install planning and provenance recording
 
-1. add tool
-2. remove tool
-3. execute tool
-4. list tools
+### 11.4 What Is Still Weak
 
-But under sandbox mode, those simple operations map to host-managed revision and worker lifecycle changes.
+What is still not the final story:
 
-Example: sandboxing builtin intrinsic tools
+1. resolver-backed immutable lock policy
+2. full reproducibility guarantees
+3. mature upgrade/re-resolution policy
 
-The toolbox already supports builtin/intrinsic functions through [mp13_toolbox.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_toolbox.py), so sandbox mode should treat them as revision state, not as a separate side path.
+So the current environment model is usable, but should not be oversold as a production-grade package-management system.
 
-Example desired logical operation:
+## 12. Rollout And Replacement Model
 
-```python
-toolbox.add_tool_callable(
-    ["scriptable_calculator", "scriptable_calculator_guide"],
-    is_intrinsic=True,
-    include_guides=True,
-    activate=True,
-)
-```
+### 12.1 Current Rollout Policy
 
-Sandbox interpretation:
+Current rollout is intentionally minimal.
 
-1. host records the requested intrinsic names in the toolbox revision
-2. host resolves the required environment profile for those intrinsics
-3. replacement toolbox executor starts from that revision
-4. executor constructs `Toolbox(with_intrinsics=True, with_intrinsic_guides=True)`
-5. executor restores revision state and exposes only the requested intrinsic entries
-6. host routes `toolbox.execute("scriptable_calculator", ...)` to that executor after authorization checks
+Implemented checks:
 
-This keeps the user-facing toolbox API simple while still making intrinsic enablement auditable and restart-driven under sandbox management.
-
-### 4.3 Parallel Execution
-
-Parallel execution can come from either of these paths:
-
-1. async dispatch to one executor
-2. a pool of multiple executors
-3. both
-
-Current pool behavior in the harness is round-robin selection across `sandbox_engine_ids`.
-
-## 5. Wiring A Toolbox Instance To Sandboxes
-
-### 5.1 Native Wiring
-
-If you already have a `Toolbox` instance and do not want sandboxing:
-
-```python
-from hosting.toolbox_harness import ToolboxExecutionHarness, ToolboxHarnessConfig
-
-harness = ToolboxExecutionHarness(
-    config=ToolboxHarnessConfig(mode="native"),
-    native_toolbox=toolbox,
-)
-
-results = await harness.execute_calls(tool_calls, parallel=True)
-```
-
-This preserves the option of native toolbox operation mode without sandbox.
-
-### 5.2 Sandbox Wiring
-
-To wire toolbox execution to sandbox workers, you need:
-
-1. staged bundle content
-2. spawned toolbox executor registration(s)
-3. a control channel
-4. a harness configured for `mode="sandbox"`
-
-Example:
-
-```python
-import sys
-
-from hosting import EngineHostControlChannel, EngineHostService
-from hosting.toolbox_harness import (
-    ToolboxBundleFile,
-    ToolboxBundleSpec,
-    ToolboxBundleStager,
-    ToolboxBundleTool,
-    ToolboxExecutionHarness,
-    ToolboxHarnessConfig,
-)
-
-service = EngineHostService()
-stager = ToolboxBundleStager(service.hosting_root)
-
-bundle = stager.stage_bundle(
-    ToolboxBundleSpec(
-        bundle_id="user-tools",
-        files=[
-            ToolboxBundleFile(
-                relative_path="user_tools.py",
-                content=(
-                    "def hello(name='world'):\n"
-                    "    return {'greeting': f'hi {name}'}\n"
-                ),
-            ),
-        ],
-        tools=[
-            ToolboxBundleTool(
-                definition={
-                    "type": "function",
-                    "function": {
-                        "name": "hello_tool",
-                        "description": "Return a greeting.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"name": {"type": "string"}},
-                            "required": [],
-                        },
-                    },
-                },
-                entrypoint="user_tools:hello",
-            ),
-        ],
-    )
-)
-
-registration = service.spawn(
-    engine_id="toolbox-user-tools-1",
-    command=bundle.worker_command(python_executable=sys.executable),
-    env=bundle.worker_env(),
-    worker_profile_class="generic",
-    executor_kind="toolbox_executor_v1",
-    bundle=bundle.registration_bundle(),
-    environment=bundle.registration_environment(),
-    tool_access=bundle.registration_tool_access(),
-    capabilities={
-        "brokered_filesystem": False,
-        "brokered_http": False,
-        "dynamic_reload": False,
-    },
-)
-
-channel = EngineHostControlChannel()
-harness = ToolboxExecutionHarness(
-    config=ToolboxHarnessConfig(
-        mode="sandbox",
-        sandbox_engine_ids=[registration["engine_id"]],
-    ),
-    control_channel=channel,
-)
-```
-
-The current repo now supports both startup styles, but the preferred direction is the startup spec.
-
-The recommended future equivalent should look more like:
-
-```python
-startup = ToolboxWorkerStartupSpec(
-    worker_id="toolbox-user-tools-1",
-    sandbox_id="sandbox-user-tools",
-    toolbox_revision=bundle.manifest["bundle_revision"],
-    manifest_path=str(bundle.manifest_path),
-    scratch_root=str((service.hosting_root / "toolbox_scratch" / "toolbox-user-tools-1").resolve()),
-    venv_path=None,
-    ipc_family="AF_PIPE",
-    ipc_address="<allocated by hosting>",
-)
-```
-
-Hosting should serialize that spec and inject only a pointer to it into the worker startup environment.
-
-Current helper example:
-
-```python
-env = bundle.worker_env_with_startup_spec(
-    worker_id="toolbox-user-tools-1",
-    sandbox_id="sandbox-user-tools",
-    scratch_root=service.hosting_root / "toolbox_scratch" / "toolbox-user-tools-1",
-    engines_state_file=service.engines_state_file,
-    control_state_file=service.control_state_file,
-)
-```
-
-## 6. Injecting And Removing Functions As Toolbox Operations
-
-### 6.1 Important Design Rule
-
-For sandboxed execution, injection and removal are host-managed bundle operations.
-
-They are not ambient `Toolbox.add_tool_callable(...)` mutations inside the worker process.
-
-They are also intentionally symmetric:
-
-1. add function => create new toolbox revision => roll traffic to new executor revision
-2. remove function => create new toolbox revision => roll traffic to new executor revision
-
-### 6.2 Inject / Add A Function
-
-To inject a new function into a sandboxed toolbox:
-
-1. add the Python source file or module content to a new `ToolboxBundleSpec`
-2. add a new `ToolboxBundleTool` entry with:
-   - tool definition
-   - `module:function` entrypoint
-3. stage the new bundle revision
-4. spawn a new executor or refresh an existing pool member against the new revision
-5. update host registration metadata
-6. switch traffic to the new executor(s)
-
-Example delta:
-
-```python
-bundle = stager.stage_bundle(
-    ToolboxBundleSpec(
-        bundle_id="user-tools",
-        files=[
-            ToolboxBundleFile(
-                relative_path="user_tools.py",
-                content=(
-                    "def hello(name='world'):\n"
-                    "    return {'greeting': f'hi {name}'}\n"
-                    "\n"
-                    "def goodbye(name='world'):\n"
-                    "    return {'farewell': f'bye {name}'}\n"
-                ),
-            ),
-        ],
-        tools=[
-            ToolboxBundleTool(definition=hello_def, entrypoint="user_tools:hello"),
-            ToolboxBundleTool(definition=goodbye_def, entrypoint="user_tools:goodbye"),
-        ],
-    )
-)
-```
-
-That produces a new `bundle_revision` and `manifest_hash`.
-
-Recommended logical API expectation:
-
-```python
-sandbox_toolbox.add_tool(...)
-```
-
-What should happen under the hood:
-
-1. mutate logical toolbox definition
-2. generate new staged toolbox revision
-3. prepare runtime metadata and environment selection
-4. start replacement toolbox worker
-5. switch dispatch to the new revision
-
-The user should not manually perform those lifecycle steps in normal use.
-
-Automatic callable discovery from staged modules is also supported now.
-
-Example:
-
-```python
-ToolboxBundleSpec(
-    bundle_id="user-tools",
-    files=[
-        ToolboxBundleFile(
-            relative_path="user_tools.py",
-            content=(
-                "def hello_auto(name: str = 'world'):\n"
-                "    \"\"\"Return a greeting.\n\n"
-                "    Args:\n"
-                "        name (str): Name to greet.\n"
-                "    \"\"\"\n"
-                "    return {'greeting': f'hi {name}'}\n"
-            ),
-        ),
-    ],
-    auto_tools=[
-        ToolboxBundleAutoTool(
-            module_name="user_tools",
-            callable_name="hello_auto",
-        ),
-    ],
-)
-```
-
-Worker behavior:
-
-1. worker imports the staged module
-2. worker resolves the named callable from that module scope
-3. worker calls `Toolbox.add_tool_callable(callable_name, search_scope=module.__dict__, ...)`
-4. `Toolbox` derives the tool definition from signature and docstring
-5. resulting tool is exposed through normal `toolbox.describe` / `toolbox.execute`
-
-Builtin and guide activation should be described with the same workflow shape.
-
-Example:
-
-```python
-sandbox_toolbox.add_tool("symbolic_algebra", is_intrinsic=True, include_guides=True)
-```
-
-What should happen under the hood:
-
-1. mutate logical toolbox definition to include the intrinsic and optional guide
-2. generate new staged toolbox revision metadata even if no new Python file is added
-3. re-resolve environment selection because builtin dependencies may have changed
-4. start replacement toolbox worker
-5. switch dispatch to the new revision
-
-### 6.3 Remove A Function
-
-To remove a function from a sandboxed toolbox:
-
-1. build a new bundle spec without that tool
-2. stage the new revision
-3. register or refresh executor(s) with the reduced tool inventory
-4. stop routing calls to the old executor(s)
-5. remove stale registrations
-6. garbage-collect stale bundle content when safe
-
-Current implementation status:
-
-1. staging the new revision is implemented
-2. host-side tool allowlist enforcement is implemented
-3. automatic stale bundle GC is not implemented yet
-
-Recommended logical API expectation:
-
-```python
-sandbox_toolbox.remove_tool("goodbye_tool")
-```
-
-What should happen under the hood:
-
-1. remove tool from logical toolbox definition
-2. build a new staged revision
-3. start replacement worker set
-4. switch dispatch
-5. retire old revision later
-
-### 6.4 Trusted Native Toolbox Mutation
-
-For native mode only, it is still valid to use:
-
-1. `Toolbox.add_tool_callable(...)`
-2. `Toolbox.add_tool_external(...)`
-3. `Toolbox.delete_tool(...)`
+1. spawn replacement executor
+2. wait for readiness
+3. verify reported tool inventory matches expected allowlist
+4. cut over
+5. rollback on failed warmup
+6. structured rollout error reporting
 
-That is the trusted local path, not the sandbox authority path.
+### 12.2 Why It Is Acceptable For Now
 
-## 7. Generic Host Callback RPC
+This is enough to support:
 
-### 7.1 Core Design
+1. real replacement rollouts
+2. predictable failure behavior
+3. compact operator recovery flows
 
-The missing executor-side brokering problem should be solved as a generic host callback RPC design.
+It is not intended to be a full deployment/orchestration platform.
 
-Recommended worker RPC method:
+### 12.3 What Is Not Implemented
 
-1. `host.call`
+Not implemented:
 
-Recommended request shape:
+1. replicas
+2. staged percentage cutover
+3. soak windows
+4. post-cutover health orchestration beyond the current simple model
 
-```json
-{
-  "kind": "rpc_call",
-  "method": "host.call",
-  "params": {
-    "method": "fs.read_text",
-    "arguments": {
-      "root_id": "tool_data",
-      "relative_path": "config.json"
-    }
-  }
-}
-```
+## 13. Operator And Recovery Model
 
-Recommended response shape:
+### 13.1 Source Of Truth
 
-```json
-{
-  "status": "ok",
-  "result": {
-    "text": "{...}"
-  }
-}
-```
+Persisted logical toolbox state is the source of truth.
 
-This keeps the transport generic while still allowing host policy to dispatch explicit broker methods.
+Live registrations, bundle roots, and realized env roots are operational state derived from that truth.
 
-### 7.2 Toolbox-Side Convenience Layer
+### 13.2 Current Operator Surfaces
 
-Toolbox execution code should not need to manually construct low-level callback payloads.
+Current operator surfaces:
 
-Instead, the execution context may expose:
-
-```python
-context.host.call("fs.read_text", {...})
-context.host.call("http.fetch", {...})
-```
-
-And optional convenience wrappers:
-
-```python
-context.fs.read_text(root_id="tool_data", relative_path="config.json")
-context.http.fetch(url="https://example.com/api/test", method="GET")
-```
-
-That is the right place to "hide" generic callback transport from tool code.
-
-Current implementation status:
-
-1. `host.call` now exists on the dedicated toolbox executor worker
-2. execution context wrappers now expose `context.host`, `context.fs`, and `context.http`
-3. brokered filesystem callback use is covered by end-to-end tests
-4. startup-spec path now carries the hosting-state metadata needed for callback routing
-5. compatibility env wiring still exists but is no longer the preferred path
-
-### 7.3 Why This Does Not Eliminate Lifecycle Separation
-
-Even with those convenience handlers, the following still belong outside `Toolbox` and `ToolsAccess`:
-
-1. revision creation
-2. staging paths
-3. worker spawn/restart
-4. registration metadata
-5. garbage collection
-6. health and switchover
-
-So generic callback wrappers help simplify tool code, but they do not replace host/runtime lifecycle management.
-
-## 8. Permission Wiring
-
-### 8.1 Host-Side Permission Gate
-
-The host is the primary permission gate.
-
-Before dispatching `toolbox.execute`, the host checks:
-
-1. executor registration exists
-2. transport is IPC
-3. tool name is present in registration `tool_access.allowed_tool_names` when an allowlist is present
-
-Current host methods:
-
-1. `EngineHostService.toolbox_execute(...)`
-2. `EngineHostControlChannel.toolbox_execute(...)`
-
-Persisted-policy direction:
-
-1. the effective permission policy should be attached to the persisted sandbox instance itself
-2. that sandbox instance should also carry its environment-description linkage
-3. toolbox refs should depend on one or more sandbox instances
-4. rehydrating a toolbox ref should therefore rehydrate the dependent sandbox instances and their persisted permission policy
-
-Example allowlist metadata:
-
-```python
-tool_access = {
-    "allowed_tool_names": ["hello_tool", "goodbye_tool"],
-    "advertised_tool_names": ["hello_tool"],
-}
-```
-
-### 8.2 Sandbox-Side Defense In Depth
-
-The worker also enforces:
-
-1. only manifest tools are loaded
-2. only manifest tool names can execute
-
-If the host mistakenly dispatches a non-staged tool, the worker still rejects it.
-
-### 8.3 Filesystem And Network Permissions
-
-Today, toolbox executor registration can carry sandbox policy using the existing worker sandbox schema.
-
-That allows host policy to express:
-
-1. filesystem roots
-2. brokered filesystem enablement
-3. brokered HTTP enablement
-4. network mode
-5. Windows Low IL launch settings
-
-Example:
-
-```python
-sandbox_policy = {
-    "sandbox": {
-        "enabled": True,
-        "platform_policy": {
-            "windows": {
-                "restricted_token": True,
-                "integrity_level": "low",
-                "job_object": True,
-            }
-        },
-        "filesystem": {
-            "rules": [
-                {
-                    "root_id": "scratch",
-                    "path": "C:\\sandbox\\scratch",
-                    "access": ["read", "write"],
-                }
-            ]
-        },
-        "network": {
-            "mode": "brokered_only",
-            "allow_hosts": ["example.com"],
-            "allow_url_prefixes": ["https://example.com/api/"],
-        },
-        "brokered_io": {
-            "filesystem": True,
-            "http": True,
-            "subprocess": False,
-        },
-    }
-}
-```
-
-Important current limitation:
-
-1. toolbox executor bundle loading, tool execution, and initial host callbacks are implemented
-2. host broker enforcement exists and is now callable from toolbox execution context
-3. callback contract is still incomplete for cancellation, streaming callback patterns, and structured startup-spec integration
-
-So permission metadata can already be registered, and initial executor-side callback usage now works, but the contract is not yet complete.
-
-## 9. Management Model
-
-### 9.1 Registration Metadata
-
-Recommended host registration fields for toolbox executors:
-
-1. `executor_kind="toolbox_executor_v1"`
-2. `bundle`
-   - `bundle_id`
-   - `bundle_revision`
-   - `manifest_hash`
-   - `bundle_root`
-   - `manifest_path`
-3. `environment`
-   - `venv_key`
-   - `venv_lock_hash`
-   - `venv_mutable`
-4. `tool_access`
-   - `allowed_tool_names`
-   - `advertised_tool_names`
-5. `capabilities`
-   - `brokered_filesystem`
-   - `brokered_http`
-   - `dynamic_reload`
-
-### 9.2 Pool Management
-
-A pool is currently managed by the harness configuration, not by a dedicated daemon-side pool manager.
-
-That means:
-
-1. you can register multiple executor workers manually
-2. you can pass their engine ids to `ToolboxHarnessConfig.sandbox_engine_ids`
-3. the harness will distribute requests round-robin
-
-Example:
-
-```python
-harness = ToolboxExecutionHarness(
-    config=ToolboxHarnessConfig(
-        mode="sandbox",
-        sandbox_engine_ids=[
-            "toolbox-user-tools-1",
-            "toolbox-user-tools-2",
-            "toolbox-user-tools-3",
-        ],
-    ),
-    control_channel=channel,
-)
-```
-
-### 9.3 Revision Rollout
-
-A practical rollout sequence is:
-
-1. stage a new bundle revision
-2. spawn a new executor pool for that revision
-3. wait for the new executor registrations to answer `toolbox.describe`
-4. switch the harness to the new pool ids
-5. drain old traffic
-6. remove old registrations
-7. garbage-collect stale bundle content later
-
-Current implementation status:
-
-1. host-side toolbox register/unregister now waits for newly spawned profile-specific executors to become ready before retiring replaced registrations
-2. if readiness fails, the new registrations are rolled back and old registrations remain in place
-3. successful profile rollouts now persist basic rollout metadata such as:
-   - `engine_id`
-   - `ready_at`
-   - `warmup_ms`
-   - `tool_count`
-   - `tool_names`
-4. readiness now also validates that the executor-reported tool inventory matches the staged/registered allowlist before cutover
-5. persisted profile state now also keeps a bounded `rollout_history` trail for successful cutovers
-6. register/unregister results now also return that rollout metadata for newly readied executors
-7. rollout policy is intentionally still single-step
-8. the minimum additional rollout requirement is now structured failure reporting for readiness/inventory failures rather than replica warmup, staged percentages, or longer-lived health history
-
-### 9.4 One Logical Toolbox Across Multiple Sandbox Specs
-
-This design point is not fully implemented yet and must remain explicit.
-
-Current implementation shape:
-
-1. one toolbox executor registration corresponds to one staged toolbox revision
-2. one harness instance can round-robin across multiple equivalent executors
-3. host-side routing by logical `toolbox_id` now works when tools are grouped into separate profile-specific revisions
-4. automatic sandbox-profile assignment at registration time is now implemented for auto-callable requests
-
-Required future shape:
-
-1. one logical toolbox may contain functions assigned to different sandbox specs
-2. host must group tools by sandbox policy and dependency profile
-3. each group should stage to its own sandbox revision and executor pool
-4. a routing layer should dispatch each tool call to the correct sandbox pool
-5. higher-level registration should assign callables to sandbox profiles automatically
-
-Ideal user-facing direction:
-
-1. user supplies a callable plus a permissions/dependency spec
-2. hosting decides whether an existing sandbox profile matches
-3. hosting either assigns the callable to an existing sandbox or stages a new one
-4. logical toolbox APIs stay simple while host routing hides per-sandbox placement
-
-Tool identity rule:
-
-1. tool names are scoped to a live toolbox ref
-2. they do not need to be globally unique across all sandboxes
-3. the effective invocation identity should therefore be `toolbox_ref + tool_name`
-4. a separate implementation registry may still exist behind the scenes, but runtime dispatch should stay toolbox-ref-scoped because tools are always invoked through a live toolbox ref
-
-Current first-slice implementation:
-
-1. [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py) now provides:
-   - `SandboxProfileSpec`
-   - `ToolboxAutoAssignmentRequest`
-   - `ToolboxSandboxOrchestrator`
-2. `SandboxProfileSpec` can derive a stable `profile_id` from:
-   - required imports
-   - sandbox policy
-3. `ToolboxSandboxOrchestrator` can:
-   - group auto-callable requests by derived profile
-   - stage one toolbox revision per profile
-   - spawn one toolbox executor per staged profile revision
-4. host routing by logical `toolbox_id` can then dispatch calls to the correct profile-specific executor
-
-What is still missing:
-
-1. mutation/update flows that merge new tools into an already-running profile revision automatically
-2. persistent host-side management of profile membership beyond the current orchestration helper
-3. higher-level public APIs that let callers register callables without directly constructing orchestration requests
-
-The next slice is now partially implemented:
-
-1. [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_register_auto(...)`
-2. host persists logical toolbox membership in:
-   - [toolbox_sandboxes.json](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_architecture.md)
-   - actual runtime location: `<hosting_root>/state/toolbox_sandboxes.json`
-3. a registration update now works like this:
-   - load persisted requests for `toolbox_id`
-   - merge new auto-callable requests into that logical toolbox state
-   - regroup requests by derived sandbox profile
-   - stage one new revision per affected profile
-   - spawn replacement executor registrations
-   - remove replaced profile registrations from the live registry
-   - persist the new profile membership and engine ids
-
-What is still not done after this slice:
-
-1. minimal structured rollout failure reporting on top of the current readiness+inventory gate
-2. reference-counted garbage collection beyond the current first-slice reconciliation sweep
-3. a higher-level user-facing facade that can hide orchestration request construction entirely
-
-Removal lifecycle is now also implemented at the host-service layer:
-
-1. `EngineHostService.toolbox_unregister_auto(...)`
-2. remove one or more persisted callable keys from a logical toolbox
-3. regroup remaining requests by sandbox profile
-4. rebuild only the affected profile-specific revisions
-5. retire replaced registrations
-6. delete retired bundle roots under `<hosting_root>/toolbox_bundles`
-7. remove logical toolbox state entirely when the last tool is removed
-
-An additional operational reconciliation sweep is now available:
-
-1. `EngineHostService.toolbox_gc()`
-2. `EngineHostControlChannel.toolbox_gc()`
-3. `toolbox-gc`
-4. the sweep reconciles persisted logical toolbox state against live toolbox executor registrations
-5. stale toolbox executor registrations are retired
-6. unreferenced staged bundle roots under `<hosting_root>/toolbox_bundles` are removed
-7. unreferenced toolbox environments under `<hosting_root>/toolbox_venvs` are removed
-
-An explicit reference-report surface is now also available:
-
-1. `EngineHostService.toolbox_references()`
-2. `EngineHostControlChannel.toolbox_references()`
-3. `toolbox-references`
-4. the report shows:
-   - persisted logical toolbox profiles
-   - live toolbox executor registrations
-   - which registrations are referenced vs stale
-   - referenced vs stale bundle roots
-   - referenced vs stale toolbox environments
-5. referenced bundle revision directories keep their parent profile bundle directories live:
-   - a report or GC sweep should not classify a parent profile bundle directory as stale when one of its revision subdirectories is still referenced
-
-An explicit consistency-report surface is now also available:
-
-1. `EngineHostService.toolbox_consistency()`
-2. `EngineHostControlChannel.toolbox_consistency()`
-3. `toolbox-consistency`
-4. the report checks referenced logical toolbox state for:
-   - missing live registrations
-   - referenced registration `toolbox_id` drift
-   - referenced registration `sandbox_profile_id` drift
-   - referenced registration tool-inventory drift vs expected per-profile toolbox contents
-   - missing referenced environment roots or missing `environment.json` metadata
-5. this is complementary to `toolbox-references()`:
-   - `toolbox-references()` answers what is referenced vs stale
-   - `toolbox-consistency()` answers whether the referenced state is internally coherent
-
-An explicit review-snapshot surface is now also available:
-
-1. `EngineHostService.toolbox_review_snapshot(...)`
-2. `EngineHostControlChannel.toolbox_review_snapshot(...)`
+1. `toolbox-references`
+2. `toolbox-consistency`
 3. `toolbox-review-snapshot`
-4. it combines:
-   - a scoped `toolbox-references()` view
-   - a scoped `toolbox-consistency()` view
-   - a compact summary
-   - a simple `recommended_action` of `observe` or `reconcile`
-5. it should stay compact by default:
-   - per-toolbox profile rows, issue names, and recommendation fields are the main review payload
-   - deeper raw artifact inspection remains with `toolbox-references()` and `toolbox-consistency()`
-6. this is the preferred pre-action review surface before deciding whether to call `toolbox-repair(...)`, `toolbox-reconcile(...)`, or `toolbox-gc()`
-
-An explicit repair/rebuild surface is now also available:
-
-1. `EngineHostService.toolbox_repair(...)`
-2. `EngineHostControlChannel.toolbox_repair(...)`
-3. `toolbox-repair`
-4. current repair behavior is:
-   - read persisted logical toolbox state
-   - restage and respawn replacement toolbox executors from that persisted source of truth
-   - wait for the replacement executors to satisfy the current readiness + inventory checks
-   - update persisted profile state to the new registrations
-   - retire replaced registrations
-5. this keeps repair aligned with the same immutable revision and rollout model used for normal toolbox updates rather than attempting in-place mutation of a broken executor registration
-
-An explicit reconcile surface is now also available:
-
-1. `EngineHostService.toolbox_reconcile(...)`
-2. `EngineHostControlChannel.toolbox_reconcile(...)`
-3. `toolbox-reconcile`
-4. current reconcile behavior is:
-   - capture a `toolbox-consistency()` snapshot before action
-   - run selective `toolbox-repair(...)`
-   - run `toolbox-gc()`
-   - capture a `toolbox-consistency()` snapshot after action
-5. default operator output should stay compact:
-   - requested/target/repaired toolbox ids
-   - removed engine/bundle/env counts
-   - before/after issue counts
-   - overall outcome such as `noop` or `repaired`
-6. deeper `before` / `repair` / `gc` / `after` internals should be opt-in via a details flag rather than the default operator path
-7. this is the current highest-level operational workflow for hosted toolboxes because it combines:
-   - diagnosis of referenced-state problems
-   - rebuild from persisted logical toolbox state
-   - cleanup of stale registrations, bundles, and environments
-
-A lightweight long-lived-process admin wrapper is now also available:
-
-1. `HostedToolboxAdmin`
-2. current helper methods include:
-   - `review_snapshot(...)`
-   - `startup_reconcile(...)`
-   - `periodic_consistency_check(...)`
-   - `auto_repair_if_needed(...)`
-3. this helper does not introduce a new lifecycle model
-4. it simply wraps the existing:
-   - `toolbox-consistency`
-   - `toolbox-repair`
-   - `toolbox-reconcile`
-   - `toolbox-gc`
-5. this is the intended current integration point for a long-lived server process that wants:
-   - a review snapshot before action
-   - a startup reconcile pass
-   - periodic health inspection
-   - optional automatic repair when inconsistencies appear
-
-That lifecycle is now also exposed through:
-
-1. `EngineHostControlChannel.toolbox_register_auto(...)`
-2. `EngineHostControlChannel.toolbox_unregister_auto(...)`
-3. `toolbox-register-auto`
-4. `toolbox-unregister-auto`
-
-## 10. User-Facing Simplicity Vs Hidden Lifecycle
-
-### 10.1 What Users Should See
-
-Normal callers should be able to think in toolbox terms:
-
-1. `add_tool(...)`
-2. `remove_tool(...)`
-3. `execute(...)`
-4. `list_tools(...)`
-
-Current implementation note:
-
-1. [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py) now provides public type `HostedToolBoxRef`
-2. `SandboxedToolboxFacade` remains in code as a compatibility alias to that type
-3. the hosted ref hides low-level `ToolboxAutoAssignmentRequest` shaping for common auto-callable registration/removal flows
-4. callers can now use:
-    - `register_auto_callable(...)`
-    - `register_python_callable(...)`
-    - `register_intrinsic_tools(...)`
-    - `unregister_intrinsic_tools(...)`
-    - `register_manual_tool(...)`
-    - `unregister_manual_tool(...)`
-    - `unregister_auto_callable(...)`
-    - `describe(...)`
-    - `execute(...)`
-5. `register_python_callable(...)` can now stage a real module-backed Python callable by reading its source module automatically
-6. builtin intrinsic tools can now be added and removed through the same hosted ref against sandbox hosting
-7. explicit manual tool definitions can now be registered against a module-backed Python implementation through the same hosted ref
-8. richer hosted-ref coverage beyond these core flows remains future work
+4. `toolbox-repair`
+5. `toolbox-reconcile`
+6. `toolbox-gc`
 
-Public API naming direction:
+### 13.3 Current Intended Meanings
 
-1. the intended public API should preserve the existing `Toolbox` / `ToolBoxRef` programming model
-2. the preferred public hosting-side name is `HostedToolBoxRef`
-3. `SandboxedToolboxFacade` should be treated as an implementation alias, not the preferred user-facing name
-4. that better reflects how users already operate on toolbox refs, especially for dynamic active-tool management
+1. `toolbox-references`
+   - what is referenced vs stale
+2. `toolbox-consistency`
+   - whether referenced state is coherent
+3. `toolbox-review-snapshot`
+   - compact pre-action summary
+4. `toolbox-repair`
+   - rebuild inconsistent toolboxes from persisted state
+5. `toolbox-reconcile`
+   - consistency + selective repair + GC
+6. `toolbox-gc`
+   - cleanup of stale artifacts
 
-### 10.2 What Hosting Should Hide
+### 13.4 Current UX Rule
 
-Hosting should hide:
+Default output should be compact.
 
-1. revision generation
-2. worker restart and switchover
-3. bundle path bookkeeping
-4. environment bookkeeping
-5. pool churn
+Operators should mostly see:
 
-### 10.3 Why `ToolBoxRef` / `ToolsAccess` Alone Are Not Enough
+1. requested toolbox ids
+2. target toolbox ids
+3. repaired toolbox ids
+4. removed artifact counts
+5. before/after issue counts
+6. overall outcome
 
-`ToolBoxRef` and `ToolsAccess` are the right logical layer for:
+Deep internals are opt-in via `details=true`.
 
-1. tool visibility
-2. scoped permission views
-3. execution-time access shaping
+### 13.5 Current Admin Helper
 
-They are not sufficient for:
+`HostedToolboxAdmin` is the small long-lived-process wrapper over the same contract.
 
-1. cross-process startup
-2. sandbox registration provenance
-3. host authorization boundary
-4. worker lifecycle and restart
-5. bundle/reference garbage collection
+It currently supports:
 
-So the correct design is:
+1. review snapshot
+2. startup reconcile
+3. periodic consistency check
+4. optional auto-repair-if-needed
 
-1. keep toolbox logical APIs simple
-2. let a sandbox-aware facade or manager hide lifecycle complexity
-3. do not overload `ToolBoxRef` / `ToolsAccess` with process-orchestration responsibilities
+## 14. Chat And App Integration
 
-Refined interpretation:
+### 14.1 Public Hosted Proxy
 
-1. `ToolBoxRef` remains the primary user mental model
-2. hosting should expose a public hosted-ref type that behaves like normal toolbox-ref programming
-3. sandbox lifecycle, env selection, and routing stay behind that hosted ref
-4. compatibility preservation is not required for the current helper name if the public API is renamed
+`HostedToolBoxRef` is the public hosted toolbox proxy type.
 
-### 10.4 Logical Availability vs Execution Gating
+It preserves the toolbox-ref programming model while hiding most lifecycle detail.
 
-There are two semi-orthogonal layers in the toolbox model:
+### 14.2 App Helpers
 
-1. logical tool availability
-2. execution-time call gating
+Current app-facing helpers:
 
-Logical availability means:
+1. `create_hosted_toolbox_ref(...)`
+2. `register_hosted_tool_callable(...)`
+3. `create_hosted_toolbox_executor(...)`
+4. `HostedToolExecutionRouter`
+5. `execute_tool_round_on_cursor(...)`
 
-1. the tool is part of the toolbox view presented to the LLM
-2. the tool is visible in the current `ToolBoxRef` scope
-3. the model may reasonably choose it
+### 14.3 Chat Integration
 
-Execution-time gating means:
+`mp13chat` can now:
 
-1. the call is actually allowed in the current context
-2. the backend/runtime is currently available
-3. extra checks may still be required before execution
-4. a visible tool call may still be denied, deferred, or require confirmation
+1. configure hosted execution
+2. keep local toolbox-ref state
+3. route actual tool execution through hosted sandbox executors
+4. expose hosted-aware tool inspection
 
-Before sandbox hosting, toolbox mostly behaved as though those two layers were collapsed:
+### 14.4 Hosted Demo
 
-1. either the tool was present and executable
-2. or it was absent/disabled
+The hosted demo is the main polished scenario at the moment.
 
-With hosted sandbox execution, that simplification is no longer sufficient.
+It validates:
 
-Current state:
+1. multi-profile routing in chat
+2. hosted-visible tool advertisement
+3. brokered filesystem tool behavior
+4. brokered HTTP tool behavior
+5. clean deny paths
+6. compact operator review/repair/reconcile while chat is live
 
-1. hosting/sandbox already provides a first real execution-gating backend:
-   - host-side allowlist/routing before `toolbox.execute`
-   - sandbox-profile-based policy enforcement
-   - brokered fs/http permission checks
-   - execution-time denial such as `tool_not_allowed:<name>`
-2. this is enough for a first working feature where a tool can be visible yet still denied at execution time
-3. the first lightweight call-gating slice is now implemented:
-   - `Toolbox.gate_call(...)` for native/toolbox-facing gate decisions
-   - `toolbox-gate` on the hosting control surface for hosted sandbox checks without execution
-   - hosted execution harness preflight that reports gated denials distinctly from generic tool crashes
-4. hosted chat wiring now has a first prompt-layer alignment slice:
-   - when hosted execution is configured and the hosted-executable tool set is known, outgoing tool definitions are narrowed to that set before reaching the model
-5. hosted chat diagnostics can now also expose that hosted-visible tool set directly through router summary state
-6. chat inspection commands now have an effective-view slice too:
-   - `/t` can report effective availability and execution path rather than only raw local registry membership
-   - `/t sc` can report the hosted-filtered effective advertised tool set that the model actually sees
-7. prompt/tool advertisement is still not fully driven by the same gate abstraction everywhere, so broader visible-vs-callable mismatch can still remain outside the current hosted-chat slice
-
-Long-term direction:
-
-1. sandbox/hosting should remain the dominant enforcement backend for hosted tools
-2. toolbox should still grow a first-class call-gating concept as the user-facing logical abstraction
-3. toolbox does not need to own sandbox policy details, but it should be able to represent states such as:
-   - visible and callable
-   - visible but gated
-   - visible but requires confirmation
-   - unavailable backend
-   - blocked in current scope
-4. hosting/sandbox can then supply those gating results for hosted tools
-5. native tools can later participate in the same abstraction if needed
-
-Why this matters:
-
-1. prompt/tool advertisement should not be forced to match backend executability exactly in every scenario
-2. a denied hosted call should be distinguishable from a crashed tool
-3. future user-confirmation and context-sensitive approvals fit this model naturally
-4. this avoids overloading sandbox denial as the only way to express tool policy
-
-Recommended interpretation:
-
-1. use sandbox/hosting as the concrete enforcement layer now
-2. add toolbox-level call-gate semantics later as the stable logical interface
-3. do not treat hosted sandbox policy as the final user-facing abstraction by itself
-
-## 11. Integrating With The Hosting API
-
-### 11.0 Simple Facade Integration
-
-If you want a simpler toolbox-facing API on top of the service or control channel:
-
-```python
-from hosting import EngineHostService
-from hosting.toolbox_harness import HostedToolBoxRef
-
-service = EngineHostService()
-toolbox = HostedToolBoxRef(
-    toolbox_id="user-tools",
-    host=service,
-)
-
-toolbox.register_auto_callable(
-    relative_path="user_tools.py",
-    content=(
-        "def hello_auto(name: str = 'world'):\n"
-        "    return {'greeting': f'hi {name}'}\n"
-    ),
-    module_name="user_tools",
-    callable_name="hello_auto",
-    required_imports=["requests"],
-    sandbox_policy={"sandbox": {"enabled": True}},
-)
-
-desc = toolbox.describe()
-result = toolbox.execute(tool_name="hello_auto", arguments={"name": "Sam"})
-```
-
-If you already have a module-backed Python function object, the facade can register it directly:
-
-```python
-toolbox.register_python_callable(
-    hello_auto,
-    required_imports=["requests"],
-    sandbox_policy={"sandbox": {"enabled": True}},
-)
-```
-
-Intrinsic tools can now use the same facade:
-
-```python
-toolbox.register_intrinsic_tools(
-    ["symbolic_algebra"],
-    include_guides=True,
-    sandbox_policy={"sandbox": {"enabled": True}},
-)
-```
-
-Explicit tool definitions can also be staged through the same facade:
-
-```python
-toolbox.register_manual_tool(
-    tool_definition={
-        "type": "function",
-        "function": {
-            "name": "hello_manual",
-            "description": "Return a greeting.",
-            "parameters": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "required": [],
-            },
-        },
-    },
-    implementation=hello_auto,
-    required_imports=["requests"],
-    sandbox_policy={"sandbox": {"enabled": True}},
-)
-```
-
-The same facade can wrap `EngineHostControlChannel` because it only depends on the high-level toolbox registration/describe/execute methods.
-
-### 11.0B Remote Thin Client To Hosted Sandbox Server
-
-The current implementation already supports this shape:
-
-1. a remote client imports the hosting modules from this project
-2. the remote client creates `EngineHostControlChannel(...)` pointing at the hosting server
-3. the remote client creates `HostedToolBoxRef(...)` on top of that control channel
-4. the remote client registers tools and executes them through that thin proxy
-5. toolbox staging, environment realization, worker spawn, sandbox routing, and policy enforcement happen on the hosting server
-
-Example:
-
-```python
-from hosting import EngineHostControlChannel, HostedToolBoxRef
-
-channel = EngineHostControlChannel(
-    {
-        "engine_host_ssh_target": "user@hosting-box",
-        "control_ssh_key": "C:/keys/id_ed25519",
-        "engine_host_daemon_auto_bootstrap": False,
-    }
-)
-
-toolbox = HostedToolBoxRef(
-    toolbox_id="remote-user-tools",
-    host=channel,
-)
-
-toolbox.register_auto_callable(
-    relative_path="remote_user_tools.py",
-    content=(
-        "def hello_remote(name: str = 'world'):\n"
-        "    return {'greeting': f'hi {name}'}\n"
-    ),
-    module_name="remote_user_tools",
-    callable_name="hello_remote",
-    sandbox_policy={"sandbox": {"enabled": True}},
-)
-
-desc = toolbox.describe()
-result = toolbox.execute(tool_name="hello_remote", arguments={"name": "Sam"})
-```
-
-That means the current remote thin-client contract is:
-
-1. the client ships tool definitions / staged file content over the hosting control channel
-2. the server persists logical toolbox state
-3. the server stages bundle revisions and environment metadata
-4. the server spawns and manages sandbox workers
-5. the client only sees a toolbox-facing proxy
+## 15. Remote / Thin-Client Model
+
+The current architecture supports a remote thin client.
+
+Supported model:
+
+1. client uses `EngineHostControlChannel`
+2. client constructs `HostedToolBoxRef`
+3. client registers tools or executes tools through the hosted proxy
+4. hosting server performs staging, lifecycle, policy, and execution
 
 Current caveat:
 
-1. `register_auto_callable(...)` works naturally for a thin client because it already sends explicit file content
-2. `register_python_callable(...)` and `register_manual_tool(...)` currently inspect and read the implementation source file on the client side, then send that source content to the hosting server
-3. so the remote thin-client scenario already works when the client has the implementation source locally
-4. it does not yet provide a separate “register by remote module path already present on the hosting server” mode
+1. some registration modes still read source on the client before uploading staged content
+2. there is not yet a separate “register by module path already present only on the hosting server” mode
 
-So the supported remote model today is:
+Still, the thin-client model is already real and usable.
 
-1. client-side source capture or explicit staged content
-2. server-side sandbox lifecycle and execution
+## 16. Current Pitfalls And Limits
 
-That is already enough for a hosted-server / thin-client workflow.
+These are the main caveats that still matter architecturally.
 
-`HostedToolBoxRef` can now also be serialized and deserialized explicitly for that workflow.
+1. Windows Low IL is mainly a write boundary, not strong read isolation.
+2. Direct-network route control on Windows is not a trustworthy promise.
+3. Brokered HTTP is the supported network path.
+4. `.venv` lifecycle is usable, but not yet a mature immutable dependency-management system.
+5. GC/reference tracking is coherent, but not yet deeply production-style.
+6. Rollout policy is intentionally minimal.
+7. `toolbox.cancel` is missing.
+8. Linux backend is missing.
+9. Some hosted chat/runtime behavior is polished only in the current hosted slice, not universally across every app path.
 
-Current supported serialized shape:
+## 17. What The Current Polished Scenarios Prove
 
-1. `toolbox_id`
-2. `python_executable`
-3. `worker_profile_class`
-4. host descriptor:
-   - `kind = "control_channel"` with `control_settings`
-   - `kind = "service"` with state-file paths
+The current polished scenarios prove two important contracts.
 
-That means a thin client can persist and later reconstruct a hosted toolbox proxy as long as it either:
+### 17.1 User-Facing Contract
 
-1. serializes a control-channel-backed or service-backed ref, or
-2. supplies an explicit `host=...` when calling `HostedToolBoxRef.from_dict(...)`
+1. hosted tools can feel like normal chat tools
+2. hosted advertisement can stay aligned with hosted executability
+3. deny paths can appear as tool-result failures rather than app/runtime crashes
 
-Lightweight app-facing helper path:
+### 17.2 Operator-Facing Contract
 
-1. [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py) now provides:
-   - `create_hosted_toolbox_ref(...)`
-   - `register_hosted_tool_callable(...)`
-   - `create_hosted_toolbox_executor(...)`
-   - `HostedToolExecutionRouter`
-2. [hosted_tool_runtime.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_runtime.py) now provides `execute_tool_round_on_cursor(...)`, which exercises a real `ChatCursor` / `ChatContext` tool-result flow without requiring the full `mp13chat` import chain
-3. [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) re-exports the helper-level API and now also supports:
-   - `configure_hosted_toolbox_execution(...)`
-   - `clear_hosted_toolbox_execution()`
-4. the chat runtime now preserves the local `ToolBoxRef`/scope model but can route actual tool execution through `ToolboxExecutionHarness.execute_request_tools(...)`
-5. the hosted tool-response branch in `mp13chat.py` now delegates to the lightweight runtime helper, so the app/runtime logic is testable without pulling in the full engine import stack
-6. this is still a selective execution-path integration, not a full replacement of all in-process toolbox assumptions across the app runtime
+1. hosted toolbox state can be reviewed while live
+2. healthy systems produce compact no-op repair/reconcile output
+3. operators do not need low-level ids on the default path
 
-What these polished hosted scenarios are for:
+## 18. Short Improvement Bullets
 
-1. validate that one logical hosted toolbox can route tools across multiple sandbox profiles without changing the normal chat/toolbox-ref mental model
-2. validate that chat-visible tool advertisement matches the hosted-executable set closely enough that the model is not encouraged to call tools the hosted backend will deny
-3. validate that hosted deny paths behave like normal tool-result failures rather than crashing the app/runtime
-4. validate that toolbox inspection commands describe effective hosted-aware state, not only raw local registration state
-5. validate that operator/admin workflows can review, repair, and reconcile hosted toolbox state with compact outputs during long-lived server operation
+Near-term:
 
-So the polished hosted scenarios are meant to prove two contracts:
+1. add live IPC liveness probing into consistency/review/reconcile
+2. keep compact operator UX consistent across all admin outputs
+3. decide whether `toolbox.cancel` is actually needed soon
 
-1. user-facing contract:
-   - hosted tools feel like normal chat tools
-   - hosted visibility and execution stay aligned enough for practical use
-2. operator-facing contract:
-   - hosted toolbox state can be inspected and repaired without forcing operators to reason about every internal engine/profile/bundle/env identifier in the default path
+Medium-term:
 
-Public API direction:
+1. stronger immutable env/provenance model
+2. deeper reference-tracked GC semantics
+3. broader long-lived server automation/runbook guidance
+4. Linux backend
 
-1. the repo should prefer `HostedToolBoxRef` in public examples
-2. `SandboxedToolboxFacade` remains an alias for internal continuity and migration convenience
-3. the goal is to preserve the toolbox-ref programming model rather than expose lifecycle machinery directly
+## 19. Related Sandbox Docs
 
-### 11.0A Registration Validation Strength
-
-Not all registration modes can provide the same validation guarantees before sandbox warmup.
-
-Recommended distinction:
-
-1. explicit manual definition + live Python implementation object
-   - strong pre-staging validation
-   - host can verify callable object, source file, and optional schema/signature consistency
-2. live Python callable registration through `register_python_callable(...)`
-   - strong pre-staging validation
-   - host can verify callable object and source module before staging
-3. name-based auto-discovery from staged module/callable names only
-   - structural pre-staging validation only
-   - full resolution happens during sandbox warmup
-
-Operational implication:
-
-1. do not import arbitrary candidate modules in the host merely to prove name-based resolution
-2. let sandbox warmup be the authoritative resolution step for that mode
-3. keep readiness-gated rollback as the safety mechanism when sandbox resolution fails
-
-### 11.1 Direct Service Integration
-
-If you are local to the host process, use `EngineHostService`:
-
-```python
-service = EngineHostService()
-
-desc = service.toolbox_describe(engine_id="toolbox-user-tools-1")
-result = service.toolbox_execute(
-    engine_id="toolbox-user-tools-1",
-    tool_call={
-        "name": "hello_tool",
-        "arguments": {"name": "Sam"},
-    },
-)
-```
-
-### 11.2 Daemon / Control Channel Integration
-
-If you are talking to the host through the daemon, use `EngineHostControlChannel`:
-
-```python
-channel = EngineHostControlChannel(control_settings=control_settings)
-
-desc = channel.toolbox_describe(engine_id="toolbox-user-tools-1")
-result = channel.toolbox_execute(
-    engine_id="toolbox-user-tools-1",
-    tool_call={
-        "name": "hello_tool",
-        "arguments": {"name": "Sam"},
-    },
-)
-```
-
-### 11.3 CLI Integration
-
-Examples:
-
-```powershell
-@'{"engine_id":"toolbox-user-tools-1"}'@ |
-python -m hosting.engine_host_cli --payload-stdin toolbox-describe
-```
-
-```powershell
-@'{"engine_id":"toolbox-user-tools-1","tool_call":{"name":"hello_tool","arguments":{"name":"Sam"}}}'@ |
-python -m hosting.engine_host_cli --payload-stdin toolbox-execute
-```
-
-## 12. Current Limitations
-
-### 12.1 Bundle Lifecycle
-
-Not yet complete:
-
-1. automatic executor reload on bundle change
-2. reference-tracked bundle garbage collection
-3. automatic removal of stale bundle revisions
-
-### 12.2 `.venv` Management
-
-The environment metadata shape exists, but the final operational model should now be read with these design decisions:
-
-1. there is one host-managed base toolbox environment
-2. that base environment assumes none of the optional supported permissions are granted
-3. that base environment carries the standard package set needed for the toolbox runtime itself
-4. additional named environment descriptions may extend that base environment
-5. toolbox functions may be linked explicitly to one of those named environment descriptions
-
-This is intentionally simpler than a heavy fully-general package-lock distribution model.
-
-Current status:
-
-1. `venv_key` is now derived deterministically from:
-   - toolbox runtime hash
-   - intrinsic dependency tier
-   - required imports
-   - optional dependency lock hash
-2. host now materializes environment metadata roots under `<hosting_root>/toolbox_venvs/<venv_key>`
-3. host now creates a real Python virtual environment root there using stdlib `venv`
-4. profile-specific toolbox workers are now spawned through that environment's Python executable
-5. compatible toolbox revisions can now reuse the same environment root by `venv_key`
-6. unreferenced toolbox environment roots can now be garbage-collected when logical toolbox state no longer references them
-7. executor registrations now carry:
-   - `venv_key`
-   - `venv_path`
-   - `python_executable`
-   - `venv_lock_hash`
-   - `intrinsics_profile_id`
-   - `required_imports`
-8. locked dependency installation and fully reproducible environment build policy are still pending
-9. no live dependency installation should be assumed inside the sandbox executor path
-
-Recommended design direction from current decisions:
-
-1. keep one small distributable base toolbox environment in the repository/runtime story
-2. let users define a few named environment descriptions rather than forcing fully automatic environment synthesis for every tool
-3. let toolbox functions be linked manually to one of those named environments
-4. keep environment growth as a host lifecycle operation, not a normal tool-execution operation
-5. prefer cloning or extending an existing named environment over inventing a new one for every change
-
-That means the important identity split should be:
-
-1. toolbox revision identity
-2. environment description identity
-3. actual realized environment instance/path
-
-Those should remain related, but not collapsed into one hash.
-
-Current builtin dependency signal from [mp13_tools_builtin.py](/o:/repos/mp13-llm-engine/src/mp13_engine/mp13_tools_builtin.py):
-
-1. `scriptable_calculator` uses `numpy` and can optionally use `numexpr`
-2. `symbolic_algebra` uses `sympy`
-3. builtin guides are lighter logically, but their activation still belongs to the same revision model
-
-Recommended interpretation:
-
-1. intrinsic activation can affect `.venv` provenance even when no user file changes
-2. builtin guide activation should be tracked in revision state
-3. the current implementation already derives `venv_key` from runtime base plus intrinsic profile plus required imports and optional dependency lock
-4. the current implementation now builds and reuses host-managed Python environment roots, but still relies on the base interpreter package set
-5. the remaining step is adding named-environment description management, package resolution/update APIs, and stronger immutable environment provenance
-
-### 12.2A Named Environment Descriptions
-
-Before deeper operational implementation, the architecture should assume:
-
-1. host can persist several named toolbox environment descriptions
-2. each description may declare:
-   - base environment name
-   - extra packages
-   - install policy metadata
-   - whether online resolution/install is allowed
-3. a toolbox function may be linked explicitly to one environment description
-4. multiple functions may share the same environment description
-
-Current first-slice implementation:
-
-1. sandbox profiles now carry `environment_name`
-2. host persists environment descriptions alongside toolbox sandbox state
-3. the current host APIs can now:
-   - list environment descriptions
-   - upsert an environment description
-   - clone an environment description
-   - resolve missing packages for functions linked to a named environment
-   - explicitly apply an environment description to linked toolbox refs and rebuild their sandbox profiles
-4. toolbox environment realization now includes the environment-description hash in `venv_key` derivation
-5. persisted logical toolbox state now records runtime defaults needed for later environment-apply rebuilds
-6. environment realization now uses the effective environment description, not only the direct one:
-   - inherited package sets are folded through the base-env chain
-   - effective online-install policy is carried through the same chain
-   - changing a base environment can therefore change the realized `venv_key` of a derived environment
-
-This keeps the model understandable:
-
-1. user chooses or creates an environment description
-2. user links a function to it
-3. user explicitly applies that environment description when they want linked sandboxes rebuilt
-4. hosting resolves or reuses the realized environment behind that description
-
-### 12.2B Package Resolution And Update API
-
-The package-resolution path should be explicit host API, not an implicit tool-execution side effect.
-
-Recommended host-owned APIs:
-
-1. resolve currently linked functions against a named environment description
-   - return missing packages or compatibility gaps
-2. resolve an arbitrary set of functions to the extra packages they would require beyond a given environment
-3. update an existing named environment description
-4. clone an existing environment description into a new one, then apply package changes there
-
-Current first-slice implementation:
-
-1. host can resolve linked functions in a toolbox against a named environment description
-2. the result reports:
-   - environment lineage
-   - required packages
-   - configured direct extra packages
-   - effective extra packages after base-env inheritance
-   - missing packages
-3. host can now clone environment descriptions and explicitly apply an updated description to linked toolboxes
-4. host can now sync an environment description from linked tool requirements:
-   - update the existing description with missing packages
-   - or clone into a new description with those missing packages added
-   - optionally apply and realize in the same host-managed call
-5. apply currently rebuilds linked sandbox profiles and rotates their realized environment metadata, but it still does not perform locked package installation
-6. clone/update/install operations beyond description metadata are still pending
-
-The current apply behavior is lineage-aware:
-
-1. applying a base environment description rebuilds toolboxes linked to that base directly
-2. it also rebuilds toolboxes linked to derived environments whose lineage includes that base
-3. this is required so derived environment hashes and realized sandbox registrations stay consistent with inherited package changes
-
-### 12.2D Environment Realization Metadata
-
-Current implementation now adds an explicit host-managed realization step:
-
-1. host can realize a toolbox/environment pair through an explicit API
-2. realization writes provenance metadata into the realized env root
-3. that metadata currently records:
-   - required packages
-   - effective inherited packages from the environment description
-   - planned package set
-   - missing packages not covered by the description
-   - effective online-install policy
-   - lineage and provenance hash
-4. the current realization mode is intentionally `metadata_only`
-
-This means:
-
-1. hosting now has an explicit, observable step for environment planning/provenance
-2. but it still does not claim that packages were actually installed into the env
-3. locked install/update remains the next environment-management step, not something already implied by realization
-
-The current sync workflow therefore is:
-
-1. resolve linked tool requirements against an environment description
-2. update or clone the environment description to include the missing packages
-3. optionally apply/rebuild affected toolbox profiles
-4. optionally realize provenance metadata for the resulting environment
-5. still defer actual package installation to a later host-managed implementation step
-
-### 12.2E Install Plan Emission
-
-Current implementation now adds one more explicit host-managed step:
-
-1. host can prepare an install plan for a realized toolbox environment
-2. that step emits:
-   - `requirements-planned.txt` in the env root
-   - install-plan metadata in `environment.json`
-   - the same install-plan metadata in persisted toolbox profile state
-3. the install plan records:
-   - planned packages
-   - missing packages
-   - whether online execution would be allowed by policy
-   - a concrete `python -m pip install -r ...` command template
-4. this is still a plan artifact, not an executed install
-
-### 12.2F Install Execution Hook
-
-Current implementation now also adds a policy-gated host execution hook:
-
-1. host can attempt to execute a previously prepared install plan
-2. execution is gated by:
-   - explicit `allow_execution=true` on the host API call
-   - `allow_online_install` inherited through the effective environment description
-3. execution result is written back into:
-   - `environment.json`
-   - persisted toolbox profile state
-4. current result states include:
-   - `blocked`
-   - `noop`
-   - `ok`
-   - `failed`
-5. successful execution now also captures a post-run package receipt via `pip freeze`
-6. that receipt is written into:
-   - `environment.json`
-   - persisted toolbox profile state
-
-Important limitation:
-
-1. the repository now has an explicit execution hook and result tracking
-2. but it still does not have a locked dependency resolution model
-3. the receipt is observational provenance, not a resolver-backed guarantee
-4. so this should be read as controlled host execution plumbing, not as the final reproducible install story
-
-### 12.2G Install Locking
-
-Current implementation now adds one stronger provenance step ahead of execution:
-
-1. host can lock a prepared install plan into a dedicated requirements artifact
-2. that step writes:
-   - `requirements-locked.txt`
-   - `install_lock` metadata in `environment.json`
-   - the same `install_lock` metadata in persisted toolbox profile state
-3. execution now prefers the locked requirements artifact when present
-4. execution records the `install_lock_hash` in the install-execution result
-
-This is still not a full resolver/lockfile model, but it is stronger than executing directly from mutable plan metadata.
-
-### 12.2H Lock Verification
-
-Current implementation now verifies the lock before execution:
-
-1. host can verify whether the current install lock still matches the current install plan
-2. verification records:
-   - current lock hash
-   - expected lock hash
-   - requirements path
-   - status such as `ok`, `missing`, or `stale`
-3. install execution now blocks when verification detects a stale lock
-
-So the current model is:
-
-1. mutable plan
-2. explicit lock artifact
-3. explicit verification
-4. policy-gated execution
-
-That is still weaker than a true dependency resolver lockfile, but it removes the blind “execute whatever lock happens to exist” behavior.
-
-So the current environment-management ladder is now:
-
-1. sync description metadata
-2. apply/rebuild linked sandboxes
-3. realize provenance metadata
-4. emit install plan artifacts
-5. optionally lock the install plan into a dedicated requirements artifact
-6. optionally resolve the plan into a stronger exact-package lock artifact using `pip --dry-run --report`
-7. optionally verify the observed install receipt against the strongest available lock artifact
-8. optionally execute the locked plan under host policy
-9. still stop short of a full resolver-backed reproducible dependency model
-
-### 12.2I Receipt Verification
-
-Current implementation now adds one more observational provenance step after execution:
-
-1. host can verify whether the observed `pip freeze` receipt still covers the locked package set
-2. verification records:
-   - normalized locked package names
-   - normalized observed package names
-   - any locked package names missing from the observed receipt
-   - status such as `ok`, `missing`, or `mismatch`
-3. this is still weaker than a resolver-backed lockfile because it validates post-run observation, not the original dependency solve
-
-### 12.2J Resolved Locking
-
-Current implementation now adds a stronger exact-lock step on top of the lightweight requirements lock:
-
-1. host can resolve the current install plan through `pip install --dry-run --ignore-installed --report ...`
-2. that step writes:
-   - `install-resolution-report.json`
-   - `requirements-resolved.txt`
-   - `install_resolution` metadata in `environment.json`
-   - `resolved_install_lock` metadata in `environment.json`
-   - the same resolution/lock metadata in persisted toolbox profile state
-3. install execution now prefers `requirements-resolved.txt` over the lightweight locked requirements artifact when present
-4. receipt verification also prefers the resolved exact package set over the lightweight planned package set when present
-
-This is a stronger exact-package lock path, but it is still not the same as a fully externalized resolver-backed lockfile ecosystem with explicit upgrade and re-resolution policy.
-
-The important policy rule is:
-
-1. package resolution and installation belong to hosting management code
-2. they are not normal tool-function decisions
-3. a tool function should not silently mutate its environment during normal execution
-
-If automatic environment update is ever allowed, it should still be:
-
-1. host-mediated
-2. policy-gated
-3. observable in rollout/status history
-4. separate from normal sandboxed tool execution
-
-### 12.2C Online Install Policy
-
-Online package resolution/install should be a hosting configuration choice, not a tool-level permission.
-
-That means:
-
-1. a host deployment may forbid online install entirely
-2. another deployment may allow host-managed online install for environment maintenance
-3. this choice belongs to hosting config and environment-management APIs
-4. it should not be exposed as ordinary sandboxed tool network access
-
-So even if online install is enabled:
-
-1. the host performs it
-2. the environment is updated or cloned as a managed lifecycle operation
-3. sandboxed tool execution still runs against a prepared environment, not an actively mutating one
-
-### 12.3 Brokered Callback Contract
-
-The plan calls for generic executor callbacks such as `host.call`, with convenience wrappers for:
-
-1. `fs.list`
-2. `fs.read_text`
-3. `fs.write_text`
-4. `fs.mkdir`
-5. `fs.stat`
-6. `http.fetch`
-
-Host enforcement for those brokered paths already exists in the generic sandbox layer.
-
-Current status:
-
-1. the dedicated toolbox executor worker now exposes `host.call`
-2. tool code can use `context.host.call(...)` directly
-3. tool code can use `context.fs.*` and `context.http.fetch(...)` convenience wrappers
-4. richer callback semantics such as streaming callback responses are not implemented yet
-
-### 12.4 Cancellation
-
-`toolbox.cancel` is not implemented yet.
-
-### 12.5 Windows Boundary Limits
-
-These still apply:
-
-1. Low IL is primarily a write boundary, not strong same-account read isolation
-2. direct-network restrictions on Windows are still partial or unsupported beyond brokered paths
-3. direct hostname / URL allowlisting for arbitrary worker traffic is not a trustworthy current claim
-
-### 12.6 Multi-Sandbox Toolbox Routing
-
-Not yet implemented:
-
-1. richer replica and health-managed routing policies within each sandbox profile pool
-2. automatic profile assignment for non-auto registration flows such as future explicit/manual tool-definition APIs
-
-## 13. Recommended Usage Pattern Today
-
-For current repo state, the recommended pattern is:
-
-1. use native mode for trusted local callables
-2. use `toolbox_register_auto(...)` when registering isolated auto-discovered callables from staged modules
-3. register toolbox executors with explicit `tool_access`
-4. treat the host as the real policy gate
-5. use a harness-managed pool when you need parallel sandbox throughput
-6. avoid claiming immutable `.venv` isolation or strong direct-network control until those parts are completed
-
-## 14. Related Docs
-
-1. [hosting_access_plan.md](/o:/repos/mp13-llm-engine/src/hosting/hosting_access_plan.md)
-2. [hosting_status.md](/o:/repos/mp13-llm-engine/src/hosting/hosting_status.md)
-3. [sandbox_test_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_test_status.md)
+1. [sandbox_test_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_test_status.md)
+2. [sandbox_plan.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_plan.md)
+3. [sandbox_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_status.md)
