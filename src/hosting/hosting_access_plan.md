@@ -577,28 +577,47 @@ Current implementation note:
 10. unreferenced toolbox environment roots can now be garbage-collected from hosting state
 11. staged toolbox executor registrations now carry `venv_key`, `venv_path`, `python_executable`, `venv_lock_hash`, `intrinsics_profile_id`, and `required_imports`
 12. host-side register/unregister now performs a first readiness-gated cutover by waiting for new executors to answer `toolbox.describe` before retiring replaced registrations
-13. successful cutovers now persist basic rollout metadata (`ready_at`, `warmup_ms`) per profile and return it from register/unregister operations
-14. successful cutovers now also append to a bounded per-profile `rollout_history`
-15. a first higher-level user-facing toolbox-ref API now exists through `HostedToolBoxRef` (with `SandboxedToolboxFacade` retained as an alias in code), hiding common auto-callable request construction on top of the service/channel methods
-16. that hosted ref can now also stage a real module-backed Python callable through `register_python_callable(...)`
-17. that hosted ref can now also register and unregister builtin intrinsic tools through sandbox hosting
-18. that hosted ref can now also register and unregister explicit manual tool definitions backed by Python implementations
-19. sandbox profiles now carry `environment_name`, and host persists named environment descriptions plus list/upsert/clone/resolve/apply APIs
-20. environment-apply now rebuilds linked toolbox profiles using persisted runtime defaults so env-description changes can roll into realized sandbox registrations
-21. environment resolution now honors base-env inheritance when computing effective package sets and realized environment identity
-22. applying a base environment now also rebuilds toolboxes linked to derived environments whose lineage depends on that base
-23. host now has an explicit environment-realization metadata step that records planned package/provenance information into realized env roots and toolbox profile state
-24. that realization step is intentionally metadata-only today; actual package install/update remains pending
-25. host now also has an explicit environment-sync step that can update or clone a named environment description from linked tool requirements and optionally chain apply/realize afterward
-26. host now also has an explicit install-plan emission step that writes a requirements file plus command metadata into the realized env root and persisted toolbox profile state
-27. host now also has a policy-gated install-execution hook that can run a prepared pip command and record blocked/ok/failed status into env metadata and toolbox profile state
-28. host now also has an explicit install-lock step that writes `requirements-locked.txt`, persists an `install_lock_hash`, and makes execution prefer the locked artifact when present
-29. host now also has explicit lock verification, and execution blocks when the persisted lock no longer matches the current plan
-30. successful install execution now also records a post-run package receipt (`pip freeze`) in env metadata and toolbox profile state
-31. host now also has explicit receipt verification that compares the observed package receipt against the locked package set and records `ok` / `missing` / `mismatch`
-32. host now also has an explicit resolved-lock step that can persist exact resolved packages from `pip --dry-run --report ...` as `resolved_install_lock`, and execution/receipt verification now prefer that stronger artifact when present
-33. app-facing wrappers now also have a lightweight helper and execution-router path through `src/app/hosted_toolbox_api.py`, a lightweight cursor/session-based runtime helper through `src/app/hosted_tool_runtime.py`, and `mp13chat.py` now has a selectable hosted tool-execution path that preserves local `ToolBoxRef` state while routing actual tool calls through `ToolboxExecutionHarness`
-34. remaining work is about richer rollout policies, stronger garbage-collection semantics, broader app/runtime adoption on top of that selectable execution path, and a fuller resolver-backed immutable dependency installation/provenance model rather than the current lightweight lock artifact plus resolved-lock/report plumbing
+13. readiness now also validates that the executor-reported tool inventory matches the staged/registered allowlist before cutover
+14. successful cutovers now persist basic rollout metadata (`ready_at`, `warmup_ms`, `tool_count`, `tool_names`) per profile and return it from register/unregister operations
+15. successful cutovers now also append to a bounded per-profile `rollout_history`
+16. host now also has an explicit `toolbox-gc` reconciliation sweep for stale toolbox executor registrations, unused staged bundle roots, and unreferenced toolbox environments
+17. host now also has an explicit `toolbox-references` report for referenced vs stale toolbox engines, bundle roots, and environment roots
+18. host now also has an explicit `toolbox-consistency` report for broken referenced state, such as missing live registrations, referenced live registration identity drift, tool-inventory drift, and missing environment metadata
+19. host now also has an explicit `toolbox-repair` rebuild path that restages and rolls replacement toolbox executors from persisted logical toolbox state for inconsistent toolboxes
+20. host now also has an explicit `toolbox-reconcile` orchestration path that runs consistency, selective repair, and stale-artifact cleanup as one operator workflow with before/after reporting
+21. a lightweight server-oriented admin helper now exists through `HostedToolboxAdmin`, wrapping startup reconcile, periodic consistency checks, and optional auto-repair-on-inconsistency on top of the existing control/service contract
+22. that admin helper now also provides a `review_snapshot(...)` method so operator review can start from one compact references+consistency summary before taking repair or reconcile actions
+23. host now also exposes that same review contract directly as `toolbox-review-snapshot` so CLI, control-channel, and long-lived admin paths share one compact pre-action view
+24. operator review should stay compact by default:
+   - `toolbox-review-snapshot` should summarize one toolbox into profile rows, issue names, and recommended action
+   - raw artifact/detail inspection remains the job of `toolbox-references` and `toolbox-consistency`
+25. bundle reference and GC logic should treat referenced revision subdirectories as keeping their parent profile bundle directories live, so hosted multi-revision layouts do not report false stale bundle roots or delete live bundle parents
+26. `toolbox-reconcile` should also stay compact by default:
+   - default output should focus on requested/target/repaired toolbox ids, removed artifact counts, before/after issue counts, and overall outcome
+   - full `before` / `repair` / `gc` / `after` internals should be opt-in via `details=true`
+27. `toolbox-repair` should follow the same default-vs-details pattern:
+   - default output should focus on requested/target/repaired/skipped toolbox ids, removed environment keys, summary counts, and overall outcome
+   - full repaired/skipped internals should be opt-in via `details=true`
+18. a first higher-level user-facing toolbox-ref API now exists through `HostedToolBoxRef` (with `SandboxedToolboxFacade` retained as an alias in code), hiding common auto-callable request construction on top of the service/channel methods
+17. that hosted ref can now also stage a real module-backed Python callable through `register_python_callable(...)`
+18. that hosted ref can now also register and unregister builtin intrinsic tools through sandbox hosting
+19. that hosted ref can now also register and unregister explicit manual tool definitions backed by Python implementations
+20. sandbox profiles now carry `environment_name`, and host persists named environment descriptions plus list/upsert/clone/resolve/apply APIs
+21. environment-apply now rebuilds linked toolbox profiles using persisted runtime defaults so env-description changes can roll into realized sandbox registrations
+22. environment resolution now honors base-env inheritance when computing effective package sets and realized environment identity
+23. applying a base environment now also rebuilds toolboxes linked to derived environments whose lineage depends on that base
+24. host now has an explicit environment-realization metadata step that records planned package/provenance information into realized env roots and toolbox profile state
+25. that realization step is intentionally metadata-only today; actual package install/update remains pending
+26. host now also has an explicit environment-sync step that can update or clone a named environment description from linked tool requirements and optionally chain apply/realize afterward
+27. host now also has an explicit install-plan emission step that writes a requirements file plus command metadata into the realized env root and persisted toolbox profile state
+28. host now also has a policy-gated install-execution hook that can run a prepared pip command and record blocked/ok/failed status into env metadata and toolbox profile state
+29. host now also has an explicit install-lock step that writes `requirements-locked.txt`, persists an `install_lock_hash`, and makes execution prefer the locked artifact when present
+30. host now also has explicit lock verification, and execution blocks when the persisted lock no longer matches the current plan
+31. successful install execution now also records a post-run package receipt (`pip freeze`) in env metadata and toolbox profile state
+32. host now also has explicit receipt verification that compares the observed package receipt against the locked package set and records `ok` / `missing` / `mismatch`
+33. host now also has an explicit resolved-lock step that can persist exact resolved packages from `pip --dry-run --report ...` as `resolved_install_lock`, and execution/receipt verification now prefer that stronger artifact when present
+34. app-facing wrappers now also have a lightweight helper and execution-router path through `src/app/hosted_toolbox_api.py`, a lightweight cursor/session-based runtime helper through `src/app/hosted_tool_runtime.py`, and `mp13chat.py` now has a selectable hosted tool-execution path that preserves local `ToolBoxRef` state while routing actual tool calls through `ToolboxExecutionHarness`
+37. remaining work is about minimal structured rollout-failure reporting on top of the current readiness+inventory gate rather than deeper orchestration features, stronger reference-tracked garbage-collection semantics beyond the current reference report + consistency sweep + repair/rebuild + reconcile sweep, broader app/runtime adoption on top of that selectable execution path, and a fuller resolver-backed immutable dependency installation/provenance model rather than the current lightweight lock artifact plus resolved-lock/report plumbing
 
 ### Phase 5B: Chat Usability Scenarios
 
@@ -660,6 +679,62 @@ Exit criteria:
 2. hosted execution remains invisible at the prompt/scope level except for policy/isolation behavior
 3. chat auto-rounds, tool-result turns, and retry behavior stay coherent across native and hosted execution modes
 4. toolbox inspection commands describe effective hosted-aware state instead of only raw local state
+
+Smoke-test commands for the current polished hosted-chat and operator story:
+
+1. launch hosted demo chat:
+   ```powershell
+   $env:PYTHONPATH='src'
+   python -m app.mp13chat --hosted-demo --hosted-demo-toolbox-id toolbox-admin-demo --hosted-demo-project-root . --hosted-demo-hosting-root .tmp_toolbox_admin_demo
+   ```
+2. in chat, verify hosted tools and visibility:
+   - `compute 12 + 3 * 5`
+   - `Use ProjectFilePeek to read src/app/mp13chat.py and show the first 300 characters.`
+   - `Use ExampleHttpPeek to fetch https://example.com/ and show the first 200 characters.`
+   - `/t`
+   - `/t sc`
+3. in chat, verify deny paths:
+   - `Use ExampleHttpPeek to fetch https://example.org/ and show the first 100 characters.`
+   - `Use ProjectFilePeek to read ../pyproject.toml`
+4. in a second terminal while chat is still running, review operator state:
+   ```powershell
+   $env:PYTHONPATH='src'
+   '{"toolbox_ids":["toolbox-admin-demo"]}' | python -m hosting.engine_host_cli --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json --payload-stdin toolbox-review-snapshot
+   ```
+5. verify healthy repair path stays compact and no-ops:
+   ```powershell
+   $env:PYTHONPATH='src'
+   '{"toolbox_ids":["toolbox-admin-demo"]}' | python -m hosting.engine_host_cli --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json --payload-stdin toolbox-repair
+   ```
+6. verify healthy reconcile path stays compact and no-ops:
+   ```powershell
+   $env:PYTHONPATH='src'
+   '{"toolbox_ids":["toolbox-admin-demo"]}' | python -m hosting.engine_host_cli --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json --payload-stdin toolbox-reconcile
+   ```
+7. if deeper inspection is needed, opt in explicitly:
+   ```powershell
+   $env:PYTHONPATH='src'
+   '{"toolbox_ids":["toolbox-admin-demo"],"details":true}' | python -m hosting.engine_host_cli --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json --payload-stdin toolbox-repair
+   ```
+   ```powershell
+   $env:PYTHONPATH='src'
+   '{"toolbox_ids":["toolbox-admin-demo"],"details":true}' | python -m hosting.engine_host_cli --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json --payload-stdin toolbox-reconcile
+   ```
+
+Expected healthy outcomes:
+
+1. chat should advertise and successfully use only:
+   - `SimpleCalc`
+   - `ProjectFilePeek`
+   - `ExampleHttpPeek`
+2. deny-path errors should remain tool-result failures:
+   - `PermissionError - brokered_http_url_not_allowed:https://example.org/`
+   - `BrokeredFsError - path_traversal_denied`
+3. `/t` should show hosted tools as available via `hosted`
+4. `/t sc` should show only the hosted-visible tools under `Advertised tools`
+5. `toolbox-review-snapshot` should recommend `observe`
+6. `toolbox-repair` should return `outcome: "noop"` with empty `target_toolbox_ids`
+7. `toolbox-reconcile` should return `outcome: "noop"` with empty `target_toolbox_ids`
 
 ### Phase 5C: Toolbox Call Gating
 

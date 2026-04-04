@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+from .engine_host_connection import CommandError
+
 # Keywords that indicate an expired or invalid session token in daemon error strings.
 _SESSION_AUTH_ERROR_KEYWORDS = (
     "auth_failed",
@@ -437,7 +439,12 @@ class EngineHostControlChannel:
             raise RuntimeError(f"engine host returned invalid json: {raw}") from exc
         if not isinstance(out, dict) or not out.get("ok"):
             msg = str((out or {}).get("error") or f"engine host command '{command}' failed")
-            raise RuntimeError(msg)
+            raise CommandError(
+                msg,
+                code=str((out or {}).get("error_code") or "").strip(),
+                details=dict((out or {}).get("error_details") or {}),
+                result=(out or {}).get("result"),
+            )
         return out.get("result")
 
     def _invoke(
@@ -1208,6 +1215,65 @@ class EngineHostControlChannel:
                 "toolbox_id": str(toolbox_id or "").strip(),
                 "tool_call": dict(tool_call or {}),
                 "timeout_seconds": float(timeout_seconds or 30.0),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_gc(self) -> Dict[str, Any]:
+        res = self._invoke("toolbox-gc", {})
+        return dict(res or {})
+
+    def toolbox_references(self) -> Dict[str, Any]:
+        res = self._invoke("toolbox-references", {})
+        return dict(res or {})
+
+    def toolbox_consistency(self) -> Dict[str, Any]:
+        res = self._invoke("toolbox-consistency", {})
+        return dict(res or {})
+
+    def toolbox_review_snapshot(
+        self,
+        *,
+        toolbox_ids: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-review-snapshot",
+            {
+                "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()],
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_repair(
+        self,
+        *,
+        toolbox_ids: Optional[list[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-repair",
+            {
+                "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()],
+                "only_inconsistent": bool(only_inconsistent),
+                "details": bool(details),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_reconcile(
+        self,
+        *,
+        toolbox_ids: Optional[list[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-reconcile",
+            {
+                "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()],
+                "only_inconsistent": bool(only_inconsistent),
+                "details": bool(details),
             },
         )
         return dict(res or {})

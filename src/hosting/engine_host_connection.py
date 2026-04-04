@@ -34,6 +34,21 @@ class ConnectionError(Exception):  # noqa: A001
     """Raised when a connection to the daemon cannot be established or is lost."""
 
 
+class CommandError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "",
+        details: Optional[Dict[str, Any]] = None,
+        result: Any = None,
+    ) -> None:
+        super().__init__(str(message or code or "daemon_command_failed"))
+        self.code = str(code or "").strip()
+        self.details = dict(details or {})
+        self.result = result
+
+
 class BaseConnection:
     def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         raise NotImplementedError
@@ -162,7 +177,12 @@ class LocalSocketConnection(BaseConnection):
                     if not isinstance(resp, dict):
                         raise ConnectionError("Daemon returned invalid response")
                     if not resp.get("ok"):
-                        raise RuntimeError(str(resp.get("error") or f"daemon command '{cmd}' failed"))
+                        raise CommandError(
+                            str(resp.get("error") or f"daemon command '{cmd}' failed"),
+                            code=str(resp.get("error_code") or "").strip(),
+                            details=dict(resp.get("error_details") or {}),
+                            result=resp.get("result"),
+                        )
                     return resp.get("result")
                 except (OSError, BrokenPipeError, ConnectionResetError, ConnectionError, EOFError, AuthenticationError) as exc:
                     last_exc = exc

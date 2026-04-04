@@ -1928,6 +1928,68 @@ class HostedToolBoxRef:
     def ref_name(self) -> str:
         return self.toolbox_id
 
+    def _host_descriptor(self) -> Dict[str, Any]:
+        host = self.host
+        host_type = type(host).__name__
+        descriptor: Dict[str, Any] = {
+            "host_type": host_type,
+        }
+        if hasattr(host, "control_settings"):
+            descriptor["kind"] = "control_channel"
+            descriptor["control_settings"] = dict(getattr(host, "control_settings", {}) or {})
+            return descriptor
+        engines_state_file = getattr(host, "engines_state_file", None)
+        control_state_file = getattr(host, "control_state_file", None)
+        if engines_state_file is not None or control_state_file is not None:
+            descriptor["kind"] = "service"
+            descriptor["engines_state_file"] = str(engines_state_file) if engines_state_file is not None else None
+            descriptor["control_state_file"] = str(control_state_file) if control_state_file is not None else None
+            return descriptor
+        descriptor["kind"] = "opaque"
+        return descriptor
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "toolbox_id": self.toolbox_id,
+            "python_executable": self.python_executable,
+            "worker_profile_class": self.worker_profile_class,
+            "host": self._host_descriptor(),
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Dict[str, Any],
+        *,
+        host: Any = None,
+    ) -> "HostedToolBoxRef":
+        row = dict(payload or {})
+        resolved_host = host
+        if resolved_host is None:
+            host_row = dict(row.get("host") or {})
+            kind = str(host_row.get("kind") or "").strip().lower()
+            if kind == "control_channel":
+                from .engine_host_channel import EngineHostControlChannel
+
+                resolved_host = EngineHostControlChannel(dict(host_row.get("control_settings") or {}))
+            elif kind == "service":
+                from .engine_host_service import EngineHostService
+
+                engines_state_raw = str(host_row.get("engines_state_file") or "").strip()
+                control_state_raw = str(host_row.get("control_state_file") or "").strip()
+                resolved_host = EngineHostService(
+                    engines_state_file=Path(engines_state_raw) if engines_state_raw else None,
+                    control_state_file=Path(control_state_raw) if control_state_raw else None,
+                )
+            else:
+                raise ValueError("host_required_for_hosted_toolbox_ref_deserialization")
+        return cls(
+            toolbox_id=str(row.get("toolbox_id") or "").strip(),
+            host=resolved_host,
+            python_executable=str(row.get("python_executable") or "").strip() or None,
+            worker_profile_class=str(row.get("worker_profile_class") or "generic").strip() or "generic",
+        )
+
     def register_auto_callable(
         self,
         *,

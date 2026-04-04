@@ -93,6 +93,26 @@ EMERGENCY_FORCE_OVERRIDE_REASONS = {
 }
 
 
+class ToolboxRolloutError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "toolbox_rollout_failed",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(str(message or code))
+        self.code = str(code or "toolbox_rollout_failed")
+        self.details = dict(details or {})
+
+    def to_error_payload(self) -> Dict[str, Any]:
+        return {
+            "error": "toolbox_rollout_failed",
+            "error_code": self.code,
+            "error_details": dict(self.details or {}),
+        }
+
+
 class EngineHostService:
     """File-backed engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
@@ -1434,6 +1454,818 @@ class EngineHostService:
             removed.append(child.name)
         return removed
 
+    def _toolbox_reference_report(self, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = dict(state or self._read_toolboxes() or {})
+        toolboxes = dict(payload.get("toolboxes") or {})
+        referenced_engine_ids = self._referenced_toolbox_engine_ids(payload)
+        referenced_env_keys: set[str] = set()
+        profiles_by_toolbox: Dict[str, Any] = {}
+        for toolbox_id, raw_toolbox in toolboxes.items():
+            toolbox_row = dict(raw_toolbox or {})
+            profiles = dict(toolbox_row.get("profiles") or {})
+            out_profiles: Dict[str, Any] = {}
+            for profile_id, raw_profile in profiles.items():
+                profile_row = dict(raw_profile or {})
+                environment = dict(profile_row.get("environment") or {})
+                venv_key = str(environment.get("venv_key") or "").strip()
+                if venv_key:
+                    referenced_env_keys.add(venv_key)
+                out_profiles[str(profile_id)] = {
+                    "engine_id": str(profile_row.get("engine_id") or "").strip() or None,
+                    "bundle_revision": str(profile_row.get("bundle_revision") or "").strip() or None,
+                    "environment": environment,
+                    "sandbox_profile": dict(profile_row.get("sandbox_profile") or {}),
+                    "request_count": len(list(profile_row.get("requests") or [])),
+                    "rollout": dict(profile_row.get("rollout") or {}),
+                }
+            profiles_by_toolbox[str(toolbox_id)] = {
+                "profiles": out_profiles,
+                "runtime": dict(toolbox_row.get("runtime") or {}),
+            }
+
+        live_toolbox_regs: Dict[str, Dict[str, Any]] = {}
+        stale_engine_ids: List[str] = []
+        referenced_bundle_roots: set[str] = set()
+        for reg in self._read_engines():
+            row = dict(reg or {})
+            if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+                continue
+            engine_id = str(row.get("engine_id") or "").strip()
+            bundle = dict(row.get("bundle") or {})
+            bundle_root = str(bundle.get("bundle_root") or "").strip()
+            is_referenced = engine_id in referenced_engine_ids
+            if bundle_root and is_referenced:
+                try:
+                    referenced_bundle_roots.add(str(Path(bundle_root).expanduser().resolve()))
+                except Exception:
+                    pass
+            live_toolbox_regs[engine_id] = {
+                "toolbox_id": self._registration_toolbox_id(row) or None,
+                "sandbox_profile_id": self._registration_sandbox_profile_id(row),
+                "bundle_root": bundle_root or None,
+                "environment": dict(row.get("environment") or {}),
+                "allowed_tool_names": sorted(list(self._registration_allowed_tool_names(row) or set())),
+                "referenced": is_referenced,
+            }
+            if engine_id and not is_referenced:
+                stale_engine_ids.append(engine_id)
+
+        bundles_root = (self.hosting_root / "toolbox_bundles").resolve()
+        stale_bundle_roots: List[str] = []
+        if bundles_root.exists():
+            for child in bundles_root.iterdir():
+                if not child.is_dir():
+                    continue
+                if not self._bundle_directory_is_referenced(
+                    child,
+                    referenced_bundle_roots=referenced_bundle_roots,
+                ):
+                    stale_bundle_roots.append(child.name)
+
+        env_root = (self.hosting_root / "toolbox_venvs").resolve()
+        stale_environment_keys: List[str] = []
+        if env_root.exists():
+            for child in env_root.iterdir():
+                if not child.is_dir():
+                    continue
+                if child.name not in referenced_env_keys:
+                    stale_environment_keys.append(child.name)
+
+        return {
+            "status": "ok",
+            "toolboxes": profiles_by_toolbox,
+            "live_registrations": live_toolbox_regs,
+            "referenced_engine_ids": sorted(referenced_engine_ids),
+            "referenced_environment_keys": sorted(referenced_env_keys),
+            "stale_engine_ids": sorted(stale_engine_ids),
+            "stale_bundle_roots": sorted(stale_bundle_roots),
+            "stale_environment_keys": sorted(stale_environment_keys),
+            "summary": {
+                "toolbox_count": len(profiles_by_toolbox),
+                "live_registration_count": len(live_toolbox_regs),
+                "referenced_engine_count": len(referenced_engine_ids),
+                "stale_engine_count": len(stale_engine_ids),
+                "stale_bundle_count": len(stale_bundle_roots),
+                "stale_environment_count": len(stale_environment_keys),
+            },
+        }
+
+    @staticmethod
+    def _bundle_directory_is_referenced(
+        directory: Path,
+        *,
+        referenced_bundle_roots: set[str],
+    ) -> bool:
+        try:
+            base = directory.expanduser().resolve()
+        except Exception:
+            return False
+        for raw in set(referenced_bundle_roots or set()):
+            try:
+                ref = Path(raw).expanduser().resolve()
+            except Exception:
+                continue
+            if ref == base:
+                return True
+            try:
+                ref.relative_to(base)
+                return True
+            except Exception:
+                continue
+        return False
+
+    @staticmethod
+    def _toolbox_profile_expected_tool_names(
+        toolbox_row: Optional[Dict[str, Any]],
+        profile_id: str,
+    ) -> List[str]:
+        from .toolbox_harness import (
+            ToolboxAutoAssignmentRequest,
+            ToolboxManualAssignmentRequest,
+        )
+
+        toolbox_payload = dict(toolbox_row or {})
+        profile_key = str(profile_id or "").strip()
+        names: set[str] = set()
+
+        for raw_request in list(toolbox_payload.get("requests") or []):
+            try:
+                req = ToolboxAutoAssignmentRequest.from_runtime_dict(dict(raw_request or {}))
+            except Exception:
+                continue
+            if req.sandbox_profile.normalized_profile_id() != profile_key:
+                continue
+            tool_name = str(req.callable_name or "").strip()
+            if tool_name:
+                names.add(tool_name)
+
+        for raw_request in list(toolbox_payload.get("manual_requests") or []):
+            try:
+                req = ToolboxManualAssignmentRequest.from_runtime_dict(dict(raw_request or {}))
+            except Exception:
+                continue
+            if req.sandbox_profile.normalized_profile_id() != profile_key:
+                continue
+            fn = dict(dict(req.tool_definition or {}).get("function") or {})
+            tool_name = str(fn.get("name") or "").strip()
+            if tool_name:
+                names.add(tool_name)
+
+        intrinsics_row = dict(toolbox_payload.get("intrinsics") or {})
+        if intrinsics_row:
+            intrinsic_profile = dict(intrinsics_row.get("sandbox_profile") or {})
+            intrinsic_profile_id = str(intrinsic_profile.get("profile_id") or "").strip() or "default"
+            if intrinsic_profile_id == profile_key:
+                include_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
+                intrinsic_names = [
+                    str(item or "").strip()
+                    for item in list(intrinsics_row.get("names") or [])
+                    if str(item or "").strip()
+                ]
+                names.update(
+                    EngineHostService._normalize_intrinsic_tool_names(
+                        intrinsic_names,
+                        include_guides=include_guides,
+                    )
+                )
+        return sorted(names)
+
+    def toolbox_consistency(self) -> Dict[str, Any]:
+        state = self._read_toolboxes()
+        refs = self._toolbox_reference_report(state)
+        toolboxes = dict(state.get("toolboxes") or {})
+        live_regs = {
+            str(engine_id or "").strip(): dict(row or {})
+            for engine_id, row in dict(refs.get("live_registrations") or {}).items()
+            if str(engine_id or "").strip()
+        }
+        referenced_engine_ids = {
+            str(item or "").strip()
+            for item in list(refs.get("referenced_engine_ids") or [])
+            if str(item or "").strip()
+        }
+        issues: List[Dict[str, Any]] = []
+
+        for toolbox_id, raw_toolbox in toolboxes.items():
+            toolbox_row = dict(raw_toolbox or {})
+            profiles = dict(toolbox_row.get("profiles") or {})
+            for profile_id, raw_profile in profiles.items():
+                profile_row = dict(raw_profile or {})
+                engine_id = str(profile_row.get("engine_id") or "").strip()
+                sandbox_profile = dict(profile_row.get("sandbox_profile") or {})
+                expected_profile_id = str(sandbox_profile.get("profile_id") or "").strip() or str(profile_id or "").strip()
+                environment = dict(profile_row.get("environment") or {})
+                venv_key = str(environment.get("venv_key") or "").strip()
+                venv_path = str(environment.get("venv_path") or "").strip()
+                expected_tool_names = self._toolbox_profile_expected_tool_names(toolbox_row, str(profile_id or ""))
+
+                if not engine_id:
+                    issues.append(
+                        {
+                            "issue": "missing_profile_engine_id",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                        }
+                    )
+                    continue
+                if engine_id not in referenced_engine_ids:
+                    issues.append(
+                        {
+                            "issue": "unreferenced_profile_engine_id",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                        }
+                    )
+                live = dict(live_regs.get(engine_id) or {})
+                if not live:
+                    issues.append(
+                        {
+                            "issue": "missing_live_registration",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                        }
+                    )
+                    continue
+                live_toolbox_id = str(live.get("toolbox_id") or "").strip()
+                if live_toolbox_id and live_toolbox_id != str(toolbox_id):
+                    issues.append(
+                        {
+                            "issue": "registration_toolbox_id_mismatch",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                            "expected_toolbox_id": str(toolbox_id),
+                            "actual_toolbox_id": live_toolbox_id,
+                        }
+                    )
+                live_profile_id = str(live.get("sandbox_profile_id") or "").strip()
+                if live_profile_id and live_profile_id != expected_profile_id:
+                    issues.append(
+                        {
+                            "issue": "registration_profile_id_mismatch",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                            "expected_sandbox_profile_id": expected_profile_id,
+                            "actual_sandbox_profile_id": live_profile_id,
+                        }
+                    )
+                live_allowed = sorted(
+                    [
+                        str(item or "").strip()
+                        for item in list(live.get("allowed_tool_names") or [])
+                        if str(item or "").strip()
+                    ]
+                )
+                if live_allowed != expected_tool_names:
+                    issues.append(
+                        {
+                            "issue": "registration_allowed_tool_names_mismatch",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                            "expected_tool_names": expected_tool_names,
+                            "actual_tool_names": live_allowed,
+                        }
+                    )
+
+                if venv_key and not venv_path:
+                    issues.append(
+                        {
+                            "issue": "environment_path_missing",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                            "venv_key": venv_key,
+                        }
+                    )
+                elif venv_key and venv_path:
+                    try:
+                        env_path = Path(venv_path).expanduser().resolve()
+                    except Exception:
+                        env_path = None
+                    if env_path is None or not env_path.exists():
+                        issues.append(
+                            {
+                                "issue": "environment_path_missing_on_disk",
+                                "toolbox_id": str(toolbox_id),
+                                "sandbox_profile_id": str(profile_id),
+                                "engine_id": engine_id,
+                                "venv_key": venv_key,
+                                "venv_path": venv_path,
+                            }
+                        )
+                    else:
+                        metadata_path = env_path / "environment.json"
+                        if not metadata_path.exists():
+                            issues.append(
+                                {
+                                    "issue": "environment_metadata_missing",
+                                    "toolbox_id": str(toolbox_id),
+                                    "sandbox_profile_id": str(profile_id),
+                                    "engine_id": engine_id,
+                                    "venv_key": venv_key,
+                                    "venv_path": str(env_path),
+                                }
+                            )
+
+        return {
+            "status": "ok",
+            "issue_count": len(issues),
+            "issues": issues,
+            "references": refs,
+            "summary": {
+                "issue_count": len(issues),
+                "toolbox_count": len(toolboxes),
+                "referenced_engine_count": len(referenced_engine_ids),
+            },
+        }
+
+    def toolbox_review_snapshot(
+        self,
+        *,
+        toolbox_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        scoped_ids = {
+            str(item or "").strip()
+            for item in list(toolbox_ids or [])
+            if str(item or "").strip()
+        }
+        references = self.toolbox_references()
+        consistency = self.toolbox_consistency()
+        if scoped_ids:
+            filtered_toolboxes = {
+                str(k): dict(v or {})
+                for k, v in dict(references.get("toolboxes") or {}).items()
+                if str(k or "").strip() in scoped_ids
+            }
+            filtered_issues = [
+                dict(item or {})
+                for item in list(consistency.get("issues") or [])
+                if str(dict(item or {}).get("toolbox_id") or "").strip() in scoped_ids
+            ]
+            references = {
+                **references,
+                "toolboxes": filtered_toolboxes,
+                "summary": {
+                    **dict(references.get("summary") or {}),
+                    "toolbox_count": len(filtered_toolboxes),
+                },
+            }
+            consistency = {
+                **consistency,
+                "issue_count": len(filtered_issues),
+                "issues": filtered_issues,
+                "summary": {
+                    **dict(consistency.get("summary") or {}),
+                    "issue_count": len(filtered_issues),
+                    "toolbox_count": len(filtered_toolboxes),
+                },
+            }
+        issues = [dict(item or {}) for item in list(consistency.get("issues") or [])]
+        issues_by_toolbox: Dict[str, List[Dict[str, Any]]] = {}
+        for item in issues:
+            toolbox_id = str(item.get("toolbox_id") or "").strip()
+            issues_by_toolbox.setdefault(toolbox_id, []).append(item)
+
+        toolbox_rows: Dict[str, Dict[str, Any]] = {}
+        live_regs = dict(references.get("live_registrations") or {})
+        for toolbox_id, raw_toolbox in dict(references.get("toolboxes") or {}).items():
+            toolbox_row = dict(raw_toolbox or {})
+            profile_rows: List[Dict[str, Any]] = []
+            for profile_id, raw_profile in dict(toolbox_row.get("profiles") or {}).items():
+                profile_row = dict(raw_profile or {})
+                rollout = dict(profile_row.get("rollout") or {})
+                environment = dict(profile_row.get("environment") or {})
+                engine_id = str(profile_row.get("engine_id") or "").strip()
+                live_reg = dict(live_regs.get(engine_id) or {})
+                tool_names = [
+                    str(item or "").strip()
+                    for item in list(rollout.get("tool_names") or live_reg.get("allowed_tool_names") or [])
+                    if str(item or "").strip()
+                ]
+                profile_rows.append(
+                    {
+                        "sandbox_profile_id": str(dict(profile_row.get("sandbox_profile") or {}).get("profile_id") or profile_id or "").strip(),
+                        "environment_name": str(environment.get("environment_name") or "").strip() or None,
+                        "tool_names": sorted(tool_names),
+                        "engine_id": engine_id or None,
+                        "ready": bool(rollout.get("ready", False)),
+                        "warmup_ms": int(rollout.get("warmup_ms") or 0),
+                    }
+                )
+            profile_rows.sort(key=lambda item: (str(item.get("environment_name") or ""), str(item.get("sandbox_profile_id") or "")))
+            toolbox_issues = list(issues_by_toolbox.get(str(toolbox_id or "").strip()) or [])
+            toolbox_rows[str(toolbox_id)] = {
+                "profile_count": len(profile_rows),
+                "profiles": profile_rows,
+                "issue_count": len(toolbox_issues),
+                "issue_names": sorted(
+                    {
+                        str(item.get("issue") or "").strip()
+                        for item in toolbox_issues
+                        if str(item.get("issue") or "").strip()
+                    }
+                ),
+                "live_registration_count": sum(
+                    1 for item in profile_rows if str(item.get("engine_id") or "").strip()
+                ),
+            }
+
+        issue_count = len(issues)
+        return {
+            "status": "ok",
+            "toolbox_ids": sorted(scoped_ids),
+            "toolboxes": toolbox_rows,
+            "issues": issues,
+            "recommended_action": "reconcile" if issue_count > 0 else "observe",
+            "references_summary": dict(references.get("summary") or {}),
+            "consistency_summary": {
+                **dict(consistency.get("summary") or {}),
+                "issue_count": issue_count,
+            },
+            "summary": {
+                "toolbox_count": int(dict(dict(references or {}).get("summary") or {}).get("toolbox_count") or 0),
+                "issue_count": issue_count,
+                "stale_engine_count": int(dict(dict(references or {}).get("summary") or {}).get("stale_engine_count") or 0),
+                "stale_bundle_count": int(dict(dict(references or {}).get("summary") or {}).get("stale_bundle_count") or 0),
+                "stale_environment_count": int(dict(dict(references or {}).get("summary") or {}).get("stale_environment_count") or 0),
+            },
+        }
+
+    def toolbox_repair(
+        self,
+        *,
+        toolbox_ids: Optional[List[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+    ) -> Dict[str, Any]:
+        from .toolbox_harness import (
+            SandboxProfileSpec,
+            ToolboxAutoAssignmentRequest,
+            ToolboxBundleStager,
+            ToolboxManualAssignmentRequest,
+            ToolboxSandboxOrchestrator,
+        )
+
+        state = self._read_toolboxes()
+        toolboxes = dict(state.get("toolboxes") or {})
+        consistency = self.toolbox_consistency()
+        issues = list(consistency.get("issues") or [])
+        inconsistent_toolbox_ids = sorted(
+            {
+                str(item.get("toolbox_id") or "").strip()
+                for item in issues
+                if str(item.get("toolbox_id") or "").strip()
+            }
+        )
+        requested_toolbox_ids = [
+            str(item or "").strip()
+            for item in list(toolbox_ids or [])
+            if str(item or "").strip()
+        ]
+        if requested_toolbox_ids:
+            if only_inconsistent:
+                inconsistent_set = set(inconsistent_toolbox_ids)
+                target_toolbox_ids = [
+                    item for item in requested_toolbox_ids
+                    if item in inconsistent_set
+                ]
+            else:
+                target_toolbox_ids = requested_toolbox_ids
+        elif only_inconsistent:
+            target_toolbox_ids = inconsistent_toolbox_ids
+        else:
+            target_toolbox_ids = sorted(str(item or "").strip() for item in toolboxes.keys() if str(item or "").strip())
+
+        repaired: Dict[str, Any] = {}
+        skipped: Dict[str, str] = {}
+
+        for tid in target_toolbox_ids:
+            toolbox_row_existing = dict(toolboxes.get(tid) or {})
+            if not toolbox_row_existing:
+                skipped[tid] = "toolbox_not_found"
+                continue
+            runtime = dict(toolbox_row_existing.get("runtime") or {})
+            auto_requests = [
+                ToolboxAutoAssignmentRequest.from_runtime_dict(dict(item or {}))
+                for item in list(toolbox_row_existing.get("requests") or [])
+            ]
+            manual_requests = [
+                ToolboxManualAssignmentRequest.from_runtime_dict(dict(item or {}))
+                for item in list(toolbox_row_existing.get("manual_requests") or [])
+            ]
+            intrinsics_row = dict(toolbox_row_existing.get("intrinsics") or {})
+            intrinsic_names = self._normalize_intrinsic_tool_names(
+                [str(item or "").strip() for item in list(intrinsics_row.get("names") or []) if str(item or "").strip()],
+                include_guides=bool(intrinsics_row.get("with_intrinsic_guides", False)),
+            )
+            intrinsic_profile = (
+                SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {}))
+                if intrinsic_names
+                else None
+            )
+            with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
+            existing_profiles = dict(toolbox_row_existing.get("profiles") or {})
+            old_regs_by_profile: Dict[str, str] = {}
+            for reg in self._toolbox_executor_registrations(tid):
+                old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
+
+            if not auto_requests and not manual_requests and not intrinsic_names:
+                skipped[tid] = "toolbox_has_no_persisted_requests"
+                continue
+
+            orchestrator = ToolboxSandboxOrchestrator(
+                service=self,
+                stager=ToolboxBundleStager(self.hosting_root),
+                python_executable=str(runtime.get("python_executable") or "").strip() or None,
+            )
+            assignments = orchestrator.spawn_assignments(
+                toolbox_id=tid,
+                requests=auto_requests,
+                manual_requests=manual_requests,
+                intrinsic_tool_names=intrinsic_names,
+                intrinsic_profile=intrinsic_profile,
+                with_intrinsic_guides=with_intrinsic_guides,
+                worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
+            )
+            try:
+                ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
+            except Exception:
+                for item in assignments:
+                    reg = dict(item.registration or {})
+                    engine_id = str(reg.get("engine_id") or "").strip()
+                    if engine_id:
+                        self._retire_toolbox_registration(engine_id)
+                self._cleanup_unused_toolbox_environments(state)
+                raise
+
+            new_profiles: Dict[str, Dict[str, Any]] = {}
+            spawned_engine_ids: List[str] = []
+            replaced_engine_ids: List[str] = []
+            for item in assignments:
+                profile_id = item.sandbox_profile.normalized_profile_id()
+                reg = dict(item.registration or {})
+                engine_id = str(reg.get("engine_id") or "").strip()
+                if engine_id:
+                    spawned_engine_ids.append(engine_id)
+                old_engine_id = str(old_regs_by_profile.get(profile_id) or "").strip()
+                bundle_revision = str(dict(reg.get("bundle") or {}).get("bundle_revision") or "")
+                if old_engine_id and old_engine_id != engine_id:
+                    replaced_engine_ids.append(old_engine_id)
+                profile_auto_requests = [
+                    req.to_runtime_dict()
+                    for req in auto_requests
+                    if req.sandbox_profile.normalized_profile_id() == profile_id
+                ]
+                profile_manual_requests = [
+                    req.to_runtime_dict()
+                    for req in manual_requests
+                    if req.sandbox_profile.normalized_profile_id() == profile_id
+                ]
+                new_profiles[profile_id] = {
+                    "sandbox_profile": item.sandbox_profile.to_dict(),
+                    "requests": profile_auto_requests,
+                    "manual_requests": profile_manual_requests,
+                    "engine_id": engine_id,
+                    "bundle_revision": bundle_revision,
+                    "environment": dict(reg.get("environment") or {}),
+                    "rollout": dict(ready_rollout.get(engine_id) or {}),
+                    "rollout_history": self._append_toolbox_rollout_history(
+                        dict(existing_profiles.get(profile_id) or {}),
+                        rollout=dict(ready_rollout.get(engine_id) or {}),
+                        action="repair",
+                        engine_id=engine_id,
+                        bundle_revision=bundle_revision,
+                        replaced_engine_id=old_engine_id,
+                    ),
+                }
+            for profile_id, old_engine_id in old_regs_by_profile.items():
+                if profile_id not in new_profiles and old_engine_id:
+                    replaced_engine_ids.append(old_engine_id)
+            for old_engine_id in replaced_engine_ids:
+                self._retire_toolbox_registration(old_engine_id)
+
+            toolboxes[tid] = {
+                "toolbox_id": tid,
+                "requests": [req.to_runtime_dict() for req in auto_requests],
+                "manual_requests": [req.to_runtime_dict() for req in manual_requests],
+                "profiles": new_profiles,
+                "runtime": runtime,
+                **(
+                    {
+                        "intrinsics": {
+                            "names": intrinsic_names,
+                            "sandbox_profile": (intrinsic_profile or SandboxProfileSpec(profile_id="default")).to_dict(),
+                            "with_intrinsic_guides": with_intrinsic_guides,
+                        }
+                    }
+                    if intrinsic_names
+                    else {}
+                ),
+            }
+            repaired[tid] = {
+                "profiles": new_profiles,
+                "spawned_engine_ids": spawned_engine_ids,
+                "ready_engine_ids": list(ready_rollout.keys()),
+                "rollout": ready_rollout,
+                "replaced_engine_ids": replaced_engine_ids,
+            }
+
+        state["toolboxes"] = toolboxes
+        self._write_toolboxes(state)
+        removed_environment_keys = self._cleanup_unused_toolbox_environments(state)
+        result = {
+            "status": "ok",
+            "requested_toolbox_ids": requested_toolbox_ids,
+            "target_toolbox_ids": target_toolbox_ids,
+            "inconsistent_toolbox_ids": inconsistent_toolbox_ids,
+            "repaired_toolbox_ids": sorted(
+                str(item or "").strip()
+                for item in repaired.keys()
+                if str(item or "").strip()
+            ),
+            "skipped_toolbox_ids": sorted(
+                str(item or "").strip()
+                for item in skipped.keys()
+                if str(item or "").strip()
+            ),
+            "removed_environment_keys": removed_environment_keys,
+            "outcome": "repaired" if repaired else "noop",
+            "summary": {
+                "requested_toolbox_count": len(requested_toolbox_ids),
+                "target_toolbox_count": len(target_toolbox_ids),
+                "repaired_toolbox_count": len(repaired),
+                "skipped_toolbox_count": len(skipped),
+                "removed_environment_count": len(removed_environment_keys),
+            },
+        }
+        if details:
+            result["repaired"] = repaired
+            result["skipped"] = skipped
+        return result
+
+    def toolbox_reconcile(
+        self,
+        *,
+        toolbox_ids: Optional[List[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+    ) -> Dict[str, Any]:
+        requested_toolbox_ids = [
+            str(item or "").strip()
+            for item in list(toolbox_ids or [])
+            if str(item or "").strip()
+        ]
+        before = self.toolbox_consistency()
+        repair = self.toolbox_repair(
+            toolbox_ids=toolbox_ids,
+            only_inconsistent=only_inconsistent,
+        )
+        gc_out = self.toolbox_gc()
+        after = self.toolbox_consistency()
+        repair_requested_toolbox_ids = list(dict(repair or {}).get("requested_toolbox_ids") or requested_toolbox_ids)
+        repair_inconsistent_toolbox_ids = list(dict(repair or {}).get("inconsistent_toolbox_ids") or [])
+        repaired_toolbox_ids = sorted(
+            str(item or "").strip()
+            for item in dict(dict(repair or {}).get("repaired") or {}).keys()
+            if str(item or "").strip()
+        )
+        repair_target_toolbox_ids = list(dict(repair or {}).get("target_toolbox_ids") or repaired_toolbox_ids)
+        skipped_toolbox_ids = sorted(
+            str(item or "").strip()
+            for item in dict(dict(repair or {}).get("skipped") or {}).keys()
+            if str(item or "").strip()
+        )
+        result = {
+            "status": "ok",
+            "toolbox_ids": requested_toolbox_ids,
+            "requested_toolbox_ids": repair_requested_toolbox_ids,
+            "target_toolbox_ids": repair_target_toolbox_ids,
+            "inconsistent_toolbox_ids": repair_inconsistent_toolbox_ids,
+            "repaired_toolbox_ids": repaired_toolbox_ids,
+            "skipped_toolbox_ids": skipped_toolbox_ids,
+            "removed_engine_ids": list(dict(gc_out or {}).get("removed_engine_ids") or []),
+            "removed_bundle_roots": list(dict(gc_out or {}).get("removed_bundle_roots") or []),
+            "removed_environment_keys": list(dict(gc_out or {}).get("removed_environment_keys") or []),
+            "outcome": (
+                "repaired"
+                if repaired_toolbox_ids
+                else "noop"
+            ),
+            "summary": {
+                "before_issue_count": int(dict(before or {}).get("issue_count") or 0),
+                "after_issue_count": int(dict(after or {}).get("issue_count") or 0),
+                "removed_engine_count": len(list(dict(gc_out or {}).get("removed_engine_ids") or [])),
+                "removed_bundle_count": len(list(dict(gc_out or {}).get("removed_bundle_roots") or [])),
+                "removed_environment_count": len(list(dict(gc_out or {}).get("removed_environment_keys") or [])),
+                "repaired_toolbox_count": len(repaired_toolbox_ids),
+                "requested_toolbox_count": len(repair_requested_toolbox_ids),
+                "target_toolbox_count": len(repair_target_toolbox_ids),
+            },
+        }
+        if details:
+            result["before"] = before
+            result["repair"] = repair
+            result["gc"] = gc_out
+            result["after"] = after
+        return result
+
+    @staticmethod
+    def _referenced_toolbox_engine_ids(state: Optional[Dict[str, Any]] = None) -> set[str]:
+        payload = dict(state or {})
+        toolboxes = dict(payload.get("toolboxes") or {})
+        referenced: set[str] = set()
+        for toolbox_row in toolboxes.values():
+            profiles = dict(dict(toolbox_row or {}).get("profiles") or {})
+            for profile_row in profiles.values():
+                engine_id = str(dict(profile_row or {}).get("engine_id") or "").strip()
+                if engine_id:
+                    referenced.add(engine_id)
+        return referenced
+
+    def _cleanup_stale_toolbox_registrations(self, state: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]]:
+        payload = dict(state or self._read_toolboxes() or {})
+        referenced_engine_ids = self._referenced_toolbox_engine_ids(payload)
+        removed: List[str] = []
+        removed_bundle_roots: List[str] = []
+        for reg in self._read_engines():
+            row = dict(reg or {})
+            if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+                continue
+            engine_id = str(row.get("engine_id") or "").strip()
+            if not engine_id or engine_id in referenced_engine_ids:
+                continue
+            bundle = dict(row.get("bundle") or {})
+            raw_root = str(bundle.get("bundle_root") or "").strip()
+            bundle_name = ""
+            if raw_root:
+                try:
+                    bundle_name = Path(raw_root).expanduser().resolve().name
+                except Exception:
+                    bundle_name = ""
+            self._retire_toolbox_registration(engine_id)
+            removed.append(engine_id)
+            if bundle_name:
+                removed_bundle_roots.append(bundle_name)
+        return {
+            "removed_engine_ids": removed,
+            "removed_bundle_roots": removed_bundle_roots,
+        }
+
+    def _cleanup_unused_toolbox_bundles(self) -> List[str]:
+        bundles_root = (self.hosting_root / "toolbox_bundles").resolve()
+        removed: List[str] = []
+        if not bundles_root.exists():
+            return removed
+        referenced_roots: set[str] = set()
+        for reg in self._read_engines():
+            row = dict(reg or {})
+            if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+                continue
+            bundle = dict(row.get("bundle") or {})
+            raw = str(bundle.get("bundle_root") or "").strip()
+            if not raw:
+                continue
+            try:
+                referenced_roots.add(str(Path(raw).expanduser().resolve()))
+            except Exception:
+                continue
+        for child in bundles_root.iterdir():
+            if not child.is_dir():
+                continue
+            if self._bundle_directory_is_referenced(
+                child,
+                referenced_bundle_roots=referenced_roots,
+            ):
+                continue
+            shutil.rmtree(child, ignore_errors=True)
+            removed.append(child.name)
+        return removed
+
+    def toolbox_gc(self) -> Dict[str, Any]:
+        state = self._read_toolboxes()
+        stale = self._cleanup_stale_toolbox_registrations(state)
+        removed_bundle_roots = list(stale.get("removed_bundle_roots") or [])
+        removed_bundle_roots.extend(self._cleanup_unused_toolbox_bundles())
+        removed_environment_keys = self._cleanup_unused_toolbox_environments(state)
+        return {
+            "status": "ok",
+            "removed_engine_ids": list(stale.get("removed_engine_ids") or []),
+            "removed_bundle_roots": list(dict.fromkeys([item for item in removed_bundle_roots if str(item or "").strip()])),
+            "removed_environment_keys": removed_environment_keys,
+            "summary": {
+                "removed_engine_count": len(list(stale.get("removed_engine_ids") or [])),
+                "removed_bundle_count": len(list(dict.fromkeys([item for item in removed_bundle_roots if str(item or "").strip()]))),
+                "removed_environment_count": len(removed_environment_keys),
+            },
+        }
+
+    def toolbox_references(self) -> Dict[str, Any]:
+        return self._toolbox_reference_report()
+
     @staticmethod
     def _append_toolbox_rollout_history(
         existing_profile_row: Optional[Dict[str, Any]],
@@ -2303,6 +3135,12 @@ class EngineHostService:
             "toolbox-describe",
             "toolbox-gate",
             "toolbox-execute",
+            "toolbox-gc",
+            "toolbox-references",
+            "toolbox-consistency",
+            "toolbox-review-snapshot",
+            "toolbox-repair",
+            "toolbox-reconcile",
             "get-control-config",
             "set-control-config",
             "auth-status",
@@ -2367,6 +3205,12 @@ class EngineHostService:
                 "toolbox-describe",
                 "toolbox-gate",
                 "toolbox-execute",
+                "toolbox-gc",
+                "toolbox-references",
+                "toolbox-consistency",
+                "toolbox-review-snapshot",
+                "toolbox-repair",
+                "toolbox-reconcile",
                 "toolbox-register-auto",
                 "toolbox-unregister-auto",
                 "toolbox-register-intrinsics",
@@ -2423,6 +3267,12 @@ class EngineHostService:
                 "toolbox-describe",
                 "toolbox-gate",
                 "toolbox-execute",
+                "toolbox-gc",
+                "toolbox-references",
+                "toolbox-consistency",
+                "toolbox-review-snapshot",
+                "toolbox-repair",
+                "toolbox-reconcile",
                 "toolbox-register-auto",
                 "toolbox-unregister-auto",
                 "toolbox-register-intrinsics",
@@ -2504,6 +3354,12 @@ class EngineHostService:
                 "sandbox-http-fetch",
                 "toolbox-describe",
                 "toolbox-gate",
+                "toolbox-gc",
+                "toolbox-references",
+                "toolbox-consistency",
+                "toolbox-review-snapshot",
+                "toolbox-repair",
+                "toolbox-reconcile",
                 "toolbox-register-auto",
                 "toolbox-unregister-auto",
                 "toolbox-register-intrinsics",
@@ -5121,15 +5977,60 @@ class EngineHostService:
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
+        try:
+            reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-ready")
+        except Exception as exc:
+            raise ToolboxRolloutError(
+                f"toolbox_executor_missing:{eid}",
+                code="toolbox_executor_missing",
+                details={
+                    "failure_phase": "spawned",
+                    "engine_id": eid,
+                    "reason": str(exc),
+                },
+            ) from exc
         deadline = time.time() + max(0.1, float(timeout_seconds or 8.0))
         last_error: Optional[Exception] = None
         while time.time() < deadline:
             try:
-                return self.toolbox_describe(engine_id=eid, timeout_seconds=min(2.0, max(0.2, float(timeout_seconds or 8.0))))
+                desc = self.toolbox_describe(engine_id=eid, timeout_seconds=min(2.0, max(0.2, float(timeout_seconds or 8.0))))
+                allowed = self._registration_allowed_tool_names(reg)
+                reported = {
+                    str(item or "").strip()
+                    for item in list(dict(desc or {}).get("tool_names") or [])
+                    if str(item or "").strip()
+                }
+                if allowed is not None and reported != allowed:
+                    raise ToolboxRolloutError(
+                        f"toolbox_executor_inventory_mismatch:{eid}",
+                        code="toolbox_executor_inventory_mismatch",
+                        details={
+                            "failure_phase": "inventory_verified",
+                            "engine_id": eid,
+                            "expected_tool_names": sorted(allowed),
+                            "actual_tool_names": sorted(reported),
+                        },
+                    )
+                return desc
             except Exception as exc:
                 last_error = exc
                 time.sleep(max(0.05, float(poll_seconds or 0.1)))
-        raise RuntimeError(f"toolbox_executor_not_ready:{eid}:{last_error}")
+        if isinstance(last_error, ToolboxRolloutError):
+            raise ToolboxRolloutError(
+                str(last_error),
+                code=last_error.code,
+                details=dict(last_error.details or {}),
+            ) from last_error
+        raise ToolboxRolloutError(
+            f"toolbox_executor_not_ready:{eid}:{last_error}",
+            code="toolbox_executor_not_ready",
+            details={
+                "failure_phase": "ready",
+                "engine_id": eid,
+                "timeout_seconds": float(timeout_seconds or 8.0),
+                "reason": str(last_error or ""),
+            },
+        )
 
     def _ensure_toolbox_assignments_ready(
         self,
@@ -5144,13 +6045,33 @@ class EngineHostService:
             if not engine_id:
                 continue
             started_at = time.time()
-            self._wait_for_toolbox_executor_ready(engine_id, timeout_seconds=timeout_seconds)
+            try:
+                desc = self._wait_for_toolbox_executor_ready(engine_id, timeout_seconds=timeout_seconds)
+            except ToolboxRolloutError as exc:
+                bundle = dict(reg.get("bundle") or {})
+                details = dict(exc.details or {})
+                details.setdefault("toolbox_id", str(bundle.get("toolbox_id") or getattr(item, "toolbox_id", "") or ""))
+                details.setdefault(
+                    "sandbox_profile_id",
+                    str(bundle.get("sandbox_profile_id") or getattr(getattr(item, "sandbox_profile", None), "normalized_profile_id", lambda: "")() or ""),
+                )
+                details.setdefault("bundle_revision", str(bundle.get("bundle_revision") or ""))
+                details.setdefault("engine_id", engine_id)
+                raise ToolboxRolloutError(str(exc), code=exc.code, details=details) from exc
             ready_at = time.time()
+            tool_names = [
+                str(name or "").strip()
+                for name in list(dict(desc or {}).get("tool_names") or [])
+                if str(name or "").strip()
+            ]
             ready[engine_id] = {
                 "engine_id": engine_id,
                 "ready": True,
                 "ready_at": ready_at,
                 "warmup_ms": int(max(0.0, (ready_at - started_at) * 1000.0)),
+                "tool_inventory_ok": True,
+                "tool_count": len(tool_names),
+                "tool_names": tool_names,
             }
         return ready
 

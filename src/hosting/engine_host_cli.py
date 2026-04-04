@@ -76,13 +76,34 @@ EXAMPLES_BY_COMMAND = {
         "@'{\"engine_id\":\"worker1\",\"url\":\"https://example.com/api/test\",\"method\":\"GET\"}'@ | python -m hosting.engine_host_cli --payload-stdin sandbox-http-fetch",
     ],
     "toolbox-describe": [
-        "@'{\"engine_id\":\"toolbox1\"}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-describe",
+        "'{\"engine_id\":\"toolbox1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-describe",
     ],
     "toolbox-gate": [
-        "@'{\"toolbox_id\":\"toolbox-demo\",\"tool_name\":\"hello_tool\"}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-gate",
+        "'{\"toolbox_id\":\"toolbox-demo\",\"tool_name\":\"hello_tool\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-gate",
     ],
     "toolbox-execute": [
-        "@'{\"engine_id\":\"toolbox1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}'@ | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
+        "'{\"engine_id\":\"toolbox1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}' | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
+    ],
+    "toolbox-gc": [
+        "python -m hosting.engine_host_cli toolbox-gc",
+    ],
+    "toolbox-references": [
+        "python -m hosting.engine_host_cli toolbox-references",
+    ],
+    "toolbox-consistency": [
+        "python -m hosting.engine_host_cli toolbox-consistency",
+    ],
+    "toolbox-review-snapshot": [
+        "python -m hosting.engine_host_cli toolbox-review-snapshot",
+        "'{\"toolbox_ids\":[\"toolbox-demo\"]}' | python -m hosting.engine_host_cli --payload-stdin toolbox-review-snapshot",
+    ],
+    "toolbox-repair": [
+        "python -m hosting.engine_host_cli toolbox-repair",
+        "'{\"toolbox_ids\":[\"toolbox-demo\"],\"only_inconsistent\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-repair",
+    ],
+    "toolbox-reconcile": [
+        "python -m hosting.engine_host_cli toolbox-reconcile",
+        "'{\"toolbox_ids\":[\"toolbox-demo\"],\"only_inconsistent\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-reconcile",
     ],
     "auth-upsert-key": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"admin\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
@@ -201,8 +222,29 @@ def _print_ok(result: Any) -> None:
     print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
 
 
-def _print_error(message: str) -> None:
-    print(json.dumps({"ok": False, "error": str(message or "unknown_error")}, ensure_ascii=False))
+def _print_error(message: Any) -> None:
+    if hasattr(message, "to_error_payload"):
+        payload = dict(getattr(message, "to_error_payload")() or {})
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": str(payload.get("error") or "unknown_error"),
+                    "error_code": str(payload.get("error_code") or ""),
+                    "error_details": dict(payload.get("error_details") or {}),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    code = str(getattr(message, "code", "") or "").strip()
+    details = dict(getattr(message, "details", {}) or {})
+    payload = {"ok": False, "error": str(message or "unknown_error")}
+    if code:
+        payload["error_code"] = code
+    if details:
+        payload["error_details"] = details
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +459,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-describe",
         "toolbox-gate",
         "toolbox-execute",
+        "toolbox-gc",
+        "toolbox-references",
+        "toolbox-consistency",
+        "toolbox-review-snapshot",
+        "toolbox-repair",
+        "toolbox-reconcile",
         "get-control-config",
         "set-control-config",
         "auth-status",
@@ -876,6 +924,40 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     toolbox_id=str(payload.get("toolbox_id") or ""),
                     tool_call=dict(payload.get("tool_call") or {}),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
+        if cmd == "toolbox-gc":
+            _print_ok(svc.toolbox_gc())
+            return 0
+        if cmd == "toolbox-references":
+            _print_ok(svc.toolbox_references())
+            return 0
+        if cmd == "toolbox-consistency":
+            _print_ok(svc.toolbox_consistency())
+            return 0
+        if cmd == "toolbox-review-snapshot":
+            _print_ok(
+                svc.toolbox_review_snapshot(
+                    toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
+                )
+            )
+            return 0
+        if cmd == "toolbox-repair":
+            _print_ok(
+                svc.toolbox_repair(
+                    toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
+                    only_inconsistent=bool(payload.get("only_inconsistent", True)),
+                    details=bool(payload.get("details", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-reconcile":
+            _print_ok(
+                svc.toolbox_reconcile(
+                    toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
+                    only_inconsistent=bool(payload.get("only_inconsistent", True)),
+                    details=bool(payload.get("details", False)),
                 )
             )
             return 0

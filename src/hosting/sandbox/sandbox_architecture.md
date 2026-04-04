@@ -875,9 +875,13 @@ Current implementation status:
    - `engine_id`
    - `ready_at`
    - `warmup_ms`
-4. persisted profile state now also keeps a bounded `rollout_history` trail for successful cutovers
-5. register/unregister results now also return that rollout metadata for newly readied executors
-6. rollout policy is still single-step and does not yet include replica warmup, staged cutover percentages, or longer-lived health history
+   - `tool_count`
+   - `tool_names`
+4. readiness now also validates that the executor-reported tool inventory matches the staged/registered allowlist before cutover
+5. persisted profile state now also keeps a bounded `rollout_history` trail for successful cutovers
+6. register/unregister results now also return that rollout metadata for newly readied executors
+7. rollout policy is intentionally still single-step
+8. the minimum additional rollout requirement is now structured failure reporting for readiness/inventory failures rather than replica warmup, staged percentages, or longer-lived health history
 
 ### 9.4 One Logical Toolbox Across Multiple Sandbox Specs
 
@@ -950,8 +954,8 @@ The next slice is now partially implemented:
 
 What is still not done after this slice:
 
-1. richer rollout policies such as health-checked cutover, staged warmup, or replica pools per profile
-2. reference-counted garbage collection beyond the current retired-bundle cleanup path
+1. minimal structured rollout failure reporting on top of the current readiness+inventory gate
+2. reference-counted garbage collection beyond the current first-slice reconciliation sweep
 3. a higher-level user-facing facade that can hide orchestration request construction entirely
 
 Removal lifecycle is now also implemented at the host-service layer:
@@ -963,6 +967,114 @@ Removal lifecycle is now also implemented at the host-service layer:
 5. retire replaced registrations
 6. delete retired bundle roots under `<hosting_root>/toolbox_bundles`
 7. remove logical toolbox state entirely when the last tool is removed
+
+An additional operational reconciliation sweep is now available:
+
+1. `EngineHostService.toolbox_gc()`
+2. `EngineHostControlChannel.toolbox_gc()`
+3. `toolbox-gc`
+4. the sweep reconciles persisted logical toolbox state against live toolbox executor registrations
+5. stale toolbox executor registrations are retired
+6. unreferenced staged bundle roots under `<hosting_root>/toolbox_bundles` are removed
+7. unreferenced toolbox environments under `<hosting_root>/toolbox_venvs` are removed
+
+An explicit reference-report surface is now also available:
+
+1. `EngineHostService.toolbox_references()`
+2. `EngineHostControlChannel.toolbox_references()`
+3. `toolbox-references`
+4. the report shows:
+   - persisted logical toolbox profiles
+   - live toolbox executor registrations
+   - which registrations are referenced vs stale
+   - referenced vs stale bundle roots
+   - referenced vs stale toolbox environments
+5. referenced bundle revision directories keep their parent profile bundle directories live:
+   - a report or GC sweep should not classify a parent profile bundle directory as stale when one of its revision subdirectories is still referenced
+
+An explicit consistency-report surface is now also available:
+
+1. `EngineHostService.toolbox_consistency()`
+2. `EngineHostControlChannel.toolbox_consistency()`
+3. `toolbox-consistency`
+4. the report checks referenced logical toolbox state for:
+   - missing live registrations
+   - referenced registration `toolbox_id` drift
+   - referenced registration `sandbox_profile_id` drift
+   - referenced registration tool-inventory drift vs expected per-profile toolbox contents
+   - missing referenced environment roots or missing `environment.json` metadata
+5. this is complementary to `toolbox-references()`:
+   - `toolbox-references()` answers what is referenced vs stale
+   - `toolbox-consistency()` answers whether the referenced state is internally coherent
+
+An explicit review-snapshot surface is now also available:
+
+1. `EngineHostService.toolbox_review_snapshot(...)`
+2. `EngineHostControlChannel.toolbox_review_snapshot(...)`
+3. `toolbox-review-snapshot`
+4. it combines:
+   - a scoped `toolbox-references()` view
+   - a scoped `toolbox-consistency()` view
+   - a compact summary
+   - a simple `recommended_action` of `observe` or `reconcile`
+5. it should stay compact by default:
+   - per-toolbox profile rows, issue names, and recommendation fields are the main review payload
+   - deeper raw artifact inspection remains with `toolbox-references()` and `toolbox-consistency()`
+6. this is the preferred pre-action review surface before deciding whether to call `toolbox-repair(...)`, `toolbox-reconcile(...)`, or `toolbox-gc()`
+
+An explicit repair/rebuild surface is now also available:
+
+1. `EngineHostService.toolbox_repair(...)`
+2. `EngineHostControlChannel.toolbox_repair(...)`
+3. `toolbox-repair`
+4. current repair behavior is:
+   - read persisted logical toolbox state
+   - restage and respawn replacement toolbox executors from that persisted source of truth
+   - wait for the replacement executors to satisfy the current readiness + inventory checks
+   - update persisted profile state to the new registrations
+   - retire replaced registrations
+5. this keeps repair aligned with the same immutable revision and rollout model used for normal toolbox updates rather than attempting in-place mutation of a broken executor registration
+
+An explicit reconcile surface is now also available:
+
+1. `EngineHostService.toolbox_reconcile(...)`
+2. `EngineHostControlChannel.toolbox_reconcile(...)`
+3. `toolbox-reconcile`
+4. current reconcile behavior is:
+   - capture a `toolbox-consistency()` snapshot before action
+   - run selective `toolbox-repair(...)`
+   - run `toolbox-gc()`
+   - capture a `toolbox-consistency()` snapshot after action
+5. default operator output should stay compact:
+   - requested/target/repaired toolbox ids
+   - removed engine/bundle/env counts
+   - before/after issue counts
+   - overall outcome such as `noop` or `repaired`
+6. deeper `before` / `repair` / `gc` / `after` internals should be opt-in via a details flag rather than the default operator path
+7. this is the current highest-level operational workflow for hosted toolboxes because it combines:
+   - diagnosis of referenced-state problems
+   - rebuild from persisted logical toolbox state
+   - cleanup of stale registrations, bundles, and environments
+
+A lightweight long-lived-process admin wrapper is now also available:
+
+1. `HostedToolboxAdmin`
+2. current helper methods include:
+   - `review_snapshot(...)`
+   - `startup_reconcile(...)`
+   - `periodic_consistency_check(...)`
+   - `auto_repair_if_needed(...)`
+3. this helper does not introduce a new lifecycle model
+4. it simply wraps the existing:
+   - `toolbox-consistency`
+   - `toolbox-repair`
+   - `toolbox-reconcile`
+   - `toolbox-gc`
+5. this is the intended current integration point for a long-lived server process that wants:
+   - a review snapshot before action
+   - a startup reconcile pass
+   - periodic health inspection
+   - optional automatic repair when inconsistencies appear
 
 That lifecycle is now also exposed through:
 
@@ -1197,6 +1309,87 @@ toolbox.register_manual_tool(
 
 The same facade can wrap `EngineHostControlChannel` because it only depends on the high-level toolbox registration/describe/execute methods.
 
+### 11.0B Remote Thin Client To Hosted Sandbox Server
+
+The current implementation already supports this shape:
+
+1. a remote client imports the hosting modules from this project
+2. the remote client creates `EngineHostControlChannel(...)` pointing at the hosting server
+3. the remote client creates `HostedToolBoxRef(...)` on top of that control channel
+4. the remote client registers tools and executes them through that thin proxy
+5. toolbox staging, environment realization, worker spawn, sandbox routing, and policy enforcement happen on the hosting server
+
+Example:
+
+```python
+from hosting import EngineHostControlChannel, HostedToolBoxRef
+
+channel = EngineHostControlChannel(
+    {
+        "engine_host_ssh_target": "user@hosting-box",
+        "control_ssh_key": "C:/keys/id_ed25519",
+        "engine_host_daemon_auto_bootstrap": False,
+    }
+)
+
+toolbox = HostedToolBoxRef(
+    toolbox_id="remote-user-tools",
+    host=channel,
+)
+
+toolbox.register_auto_callable(
+    relative_path="remote_user_tools.py",
+    content=(
+        "def hello_remote(name: str = 'world'):\n"
+        "    return {'greeting': f'hi {name}'}\n"
+    ),
+    module_name="remote_user_tools",
+    callable_name="hello_remote",
+    sandbox_policy={"sandbox": {"enabled": True}},
+)
+
+desc = toolbox.describe()
+result = toolbox.execute(tool_name="hello_remote", arguments={"name": "Sam"})
+```
+
+That means the current remote thin-client contract is:
+
+1. the client ships tool definitions / staged file content over the hosting control channel
+2. the server persists logical toolbox state
+3. the server stages bundle revisions and environment metadata
+4. the server spawns and manages sandbox workers
+5. the client only sees a toolbox-facing proxy
+
+Current caveat:
+
+1. `register_auto_callable(...)` works naturally for a thin client because it already sends explicit file content
+2. `register_python_callable(...)` and `register_manual_tool(...)` currently inspect and read the implementation source file on the client side, then send that source content to the hosting server
+3. so the remote thin-client scenario already works when the client has the implementation source locally
+4. it does not yet provide a separate “register by remote module path already present on the hosting server” mode
+
+So the supported remote model today is:
+
+1. client-side source capture or explicit staged content
+2. server-side sandbox lifecycle and execution
+
+That is already enough for a hosted-server / thin-client workflow.
+
+`HostedToolBoxRef` can now also be serialized and deserialized explicitly for that workflow.
+
+Current supported serialized shape:
+
+1. `toolbox_id`
+2. `python_executable`
+3. `worker_profile_class`
+4. host descriptor:
+   - `kind = "control_channel"` with `control_settings`
+   - `kind = "service"` with state-file paths
+
+That means a thin client can persist and later reconstruct a hosted toolbox proxy as long as it either:
+
+1. serializes a control-channel-backed or service-backed ref, or
+2. supplies an explicit `host=...` when calling `HostedToolBoxRef.from_dict(...)`
+
 Lightweight app-facing helper path:
 
 1. [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py) now provides:
@@ -1211,6 +1404,22 @@ Lightweight app-facing helper path:
 4. the chat runtime now preserves the local `ToolBoxRef`/scope model but can route actual tool execution through `ToolboxExecutionHarness.execute_request_tools(...)`
 5. the hosted tool-response branch in `mp13chat.py` now delegates to the lightweight runtime helper, so the app/runtime logic is testable without pulling in the full engine import stack
 6. this is still a selective execution-path integration, not a full replacement of all in-process toolbox assumptions across the app runtime
+
+What these polished hosted scenarios are for:
+
+1. validate that one logical hosted toolbox can route tools across multiple sandbox profiles without changing the normal chat/toolbox-ref mental model
+2. validate that chat-visible tool advertisement matches the hosted-executable set closely enough that the model is not encouraged to call tools the hosted backend will deny
+3. validate that hosted deny paths behave like normal tool-result failures rather than crashing the app/runtime
+4. validate that toolbox inspection commands describe effective hosted-aware state, not only raw local registration state
+5. validate that operator/admin workflows can review, repair, and reconcile hosted toolbox state with compact outputs during long-lived server operation
+
+So the polished hosted scenarios are meant to prove two contracts:
+
+1. user-facing contract:
+   - hosted tools feel like normal chat tools
+   - hosted visibility and execution stay aligned enough for practical use
+2. operator-facing contract:
+   - hosted toolbox state can be inspected and repaired without forcing operators to reason about every internal engine/profile/bundle/env identifier in the default path
 
 Public API direction:
 

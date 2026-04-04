@@ -56,6 +56,7 @@ from .toolbox_harness import (
     HostedToolBoxRef,
     SandboxedToolboxFacade,
 )
+from .toolbox_admin import HostedToolboxAdmin
 
 __all__ = [
     "EngineHostService",
@@ -88,4 +89,5 @@ __all__ = [
     "ToolboxExecutionHarness",
     "HostedToolBoxRef",
     "SandboxedToolboxFacade",
+    "HostedToolboxAdmin",
 ]

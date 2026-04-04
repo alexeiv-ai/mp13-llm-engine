@@ -302,6 +302,76 @@ The status has changed in one important way:
     - new helper module [hosted_tool_visibility.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_visibility.py)
     - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) `/t` enumeration now reports effective availability and execution path (`hosted`, `native`, `gated`, `hidden`)
     - [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py) `/t sc` now reports effective advertised/hidden/disabled state after hosted filtering, plus hosted-gated tools
+53. Added explicit operational toolbox reconciliation sweep:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_gc()`
+    - control channel / daemon / CLI now expose `toolbox-gc`
+    - the sweep reconciles persisted logical toolbox state against live toolbox executor registrations
+    - stale toolbox executor registrations are retired
+    - unused staged bundle roots under `<hosting_root>/toolbox_bundles` are removed
+    - unreferenced toolbox environments under `<hosting_root>/toolbox_venvs` are removed
+54. Tightened rollout readiness semantics:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now requires executor-reported `tool_names` from `toolbox.describe(...)` to match the staged/registered allowlist before cutover
+    - rollout metadata now also records `tool_inventory_ok`, `tool_count`, and `tool_names`
+    - readiness failure now includes inventory mismatches, not just transport/process unavailability
+55. Added explicit toolbox reference reporting:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_references()`
+    - control channel / daemon / CLI now expose `toolbox-references`
+    - the report distinguishes:
+      - persisted logical toolbox profiles
+      - live toolbox executor registrations
+      - referenced vs stale engine registrations
+      - referenced vs stale bundle roots
+      - referenced vs stale toolbox environments
+56. Added explicit toolbox consistency reporting:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_consistency()`
+    - control channel / daemon / CLI now expose `toolbox-consistency`
+    - the report checks referenced logical toolbox state for live mismatch conditions, including:
+      - missing referenced live registrations
+      - toolbox-id / sandbox-profile-id drift between persisted profile state and the referenced live registration
+      - referenced live tool inventory drift vs the expected per-profile toolbox inventory
+      - missing referenced environment roots or missing `environment.json` metadata
+57. Added explicit toolbox repair/rebuild flow:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_repair(...)`
+    - control channel / daemon / CLI now expose `toolbox-repair`
+    - repair now rebuilds inconsistent toolbox executors from persisted logical toolbox state, rolls replacement executors through the existing readiness + inventory gate, updates persisted profile state, and retires replaced registrations
+58. Added explicit toolbox reconcile flow:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_reconcile(...)`
+    - control channel / daemon / CLI now expose `toolbox-reconcile`
+    - reconcile now captures consistency before action, runs selective repair, runs stale-artifact cleanup, and returns a consistency snapshot after action
+59. Tightened minimal rollout-policy completion around structured failure paths:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now raises `ToolboxRolloutError` with structured `error_code` and `error_details`
+    - readiness/inventory failures now carry explicit failure metadata such as `failure_phase`, `engine_id`, expected vs actual tool inventory, timeout, and routed toolbox/profile context
+    - daemon / CLI / Python control-channel paths now preserve that structure instead of collapsing rollout failures to plain strings
+    - operational surfaces now also return lightweight `summary` blocks for references / consistency / repair / reconcile / gc outputs
+60. Added lightweight server-oriented admin helper:
+    - new [toolbox_admin.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_admin.py)
+    - public type: `HostedToolboxAdmin`
+    - helper methods:
+      - `review_snapshot(...)`
+      - `startup_reconcile(...)`
+      - `periodic_consistency_check(...)`
+      - `auto_repair_if_needed(...)`
+    - the helper wraps the existing control/service contract rather than adding a new sandbox lifecycle model
+61. Added explicit review-snapshot operator surface:
+    - [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py) now provides `toolbox_review_snapshot(...)`
+    - control channel / daemon / CLI now expose `toolbox-review-snapshot`
+    - `HostedToolboxAdmin.review_snapshot(...)` now prefers that shared hosting-side contract when available
+    - the snapshot combines references + consistency + compact summary + `recommended_action`
+62. Added explicit serialization/deserialization for hosted sandbox toolbox proxies:
+    - [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py) `HostedToolBoxRef` now provides `to_dict()` / `from_dict(...)`
+    - current supported host descriptors cover:
+      - control-channel-backed refs via serialized `control_settings`
+      - service-backed refs via serialized state-file paths
+    - this makes the remote thin-client workflow persistable without inventing a separate toolbox-proxy wire format
+63. Tightened operator review/reference UX:
+    - `toolbox-review-snapshot` now returns a compact per-toolbox summary with profile rows, issue names, and recommendation fields instead of repeating the full raw references tree
+    - bundle-reference reporting and bundle GC now treat referenced revision subdirectories as keeping their parent profile bundle directories live, avoiding false `stale_bundle_roots` reports in hosted multi-revision layouts
+64. Tightened reconcile UX:
+    - `toolbox-reconcile` now returns a compact operator-oriented default payload with requested/target/repaired toolbox ids, removed artifact ids, summary counts, and a simple `outcome`
+    - deep `before` / `repair` / `gc` / `after` internals are still available through `details=true`
+65. Tightened repair UX:
+    - `toolbox-repair` now also returns a compact operator-oriented default payload with requested/target/repaired/skipped toolbox ids, removed environment keys, summary counts, and a simple `outcome`
+    - deep repaired/skipped internals are still available through `details=true`
 
 ### Current Interpretation Of That Work
 
@@ -575,7 +645,9 @@ Commands run:
    - result: `7 passed`
 69. `python -m pytest tests/test_hosted_tool_visibility.py tests/test_mp13chat_hosted_toolbox_api.py tests/test_hosted_chat_demo.py -q`
    - result: `9 passed`
-70. End-to-end hosted chat demo validation in the user environment:
+70. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_toolbox_gc_reconciles_stale_registrations_and_artifacts -q`
+   - result: `2 passed`
+71. end-to-end hosted chat demo validation in the user environment:
    - baseline hosted prompts worked with no fallback attempt to `scriptable_calculator`
    - negative HTTP test produced: `PermissionError - brokered_http_url_not_allowed:https://example.org/`
    - negative filesystem traversal test produced: `BrokeredFsError - path_traversal_denied`
@@ -586,6 +658,27 @@ Commands run:
      - `Advertised tools: ExampleHttpPeek, ProjectFilePeek, SimpleCalc`
      - `Hosted-visible tools: ExampleHttpPeek, ProjectFilePeek, SimpleCalc`
      - `Hosted-gated tools: scriptable_calculator, scriptable_calculator_guide, symbolic_algebra, symbolic_algebra_guide`
+72. `python -m pytest tests/test_hosting_toolbox_sandbox.py::test_ensure_toolbox_assignments_ready_returns_rollout_metadata tests/test_hosting_toolbox_sandbox.py::test_wait_for_toolbox_executor_ready_requires_inventory_match -q`
+   - result: `2 passed`
+73. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_toolbox_references_reports_referenced_and_stale_artifacts -q`
+   - result: `2 passed`
+74. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_toolbox_consistency_reports_profile_registration_and_environment_mismatches -q`
+   - result: `2 passed`
+75. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_toolbox_repair_rebuilds_inconsistent_toolbox_from_persisted_state -q`
+   - result: `2 passed`
+76. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_toolbox_reconcile_chains_consistency_repair_and_gc -q`
+   - result: `2 passed`
+77. `python -m pytest tests/test_hosting_toolbox_sandbox.py::test_wait_for_toolbox_executor_ready_requires_inventory_match tests/test_hosting_toolbox_sandbox.py::test_toolbox_reconcile_chains_consistency_repair_and_gc tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads -q`
+   - result: `3 passed`
+78. `python -m pytest tests/test_toolbox_admin.py -q`
+   - result: `4 passed`
+79. `python -m pytest tests/test_engine_host_channel.py::test_toolbox_lifecycle_channel_methods_forward_expected_payloads tests/test_hosting_toolbox_sandbox.py::test_toolbox_review_snapshot_filters_and_recommends_reconcile tests/test_toolbox_admin.py -q`
+   - result: `6 passed`
+80. `python -m pytest tests/test_hosting_toolbox_sandbox.py -k "hosted_toolbox_ref_serializes_and_deserializes" -q`
+   - result: `2 passed`
+81. `python -m pytest tests/test_toolbox_admin.py -k real_hosted_demo_toolbox -q`
+   - result: `1 passed`
+   - this covers the admin review path against a real hosted-chat-demo toolbox shape with three persisted sandbox profiles, while mocking only the low-level worker-launch/readiness boundary for determinism
 
 Covered by tests:
 
@@ -612,6 +705,9 @@ Covered by tests:
 21. hosted router summary state for chat-facing diagnostics
 22. effective hosted-aware tool visibility summarization for prompt/inspection use
 23. end-to-end hosted chat demo usability in the user environment, including clean negative-path broker denials and effective hosted-aware toolbox inspection
+24. explicit toolbox reconciliation sweep for stale executor registrations, stale bundle roots, and unreferenced environments
+25. stricter rollout readiness validation using executor-reported tool inventory, not only toolbox IPC responsiveness
+26. explicit reference reporting for referenced vs stale toolbox engines, bundle roots, and environment roots before reconciliation
 16. direct `host.call` RPC on the toolbox executor worker
 17. toolbox execution using brokered filesystem callback context (`context.fs.read_text(...)`)
 18. toolbox-worker startup spec generation and worker manifest resolution via `MP13_TOOLBOX_WORKER_SPEC_PATH`

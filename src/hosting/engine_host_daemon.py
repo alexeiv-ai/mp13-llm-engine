@@ -1282,6 +1282,15 @@ class EngineHostDaemon:
                     "error_details": {"reason": code},
                 }
             except Exception as exc:
+                if hasattr(exc, "to_error_payload"):
+                    payload = dict(getattr(exc, "to_error_payload")() or {})
+                    return {
+                        "seq": seq,
+                        "ok": False,
+                        "error": str(payload.get("error") or "internal_error"),
+                        "error_code": str(payload.get("error_code") or "internal_error"),
+                        "error_details": dict(payload.get("error_details") or {}),
+                    }
                 return {
                     "seq": seq,
                     "ok": False,
@@ -1360,6 +1369,15 @@ class EngineHostDaemon:
                 "error_details": {"reason": code},
             }
         except Exception as exc:
+            if hasattr(exc, "to_error_payload"):
+                payload = dict(getattr(exc, "to_error_payload")() or {})
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": str(payload.get("error") or "internal_error"),
+                    "error_code": str(payload.get("error_code") or "internal_error"),
+                    "error_details": dict(payload.get("error_details") or {}),
+                }
             return {
                 "seq": seq,
                 "ok": False,
@@ -1562,6 +1580,28 @@ class EngineHostDaemon:
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 tool_call=dict(payload.get("tool_call") or {}),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+            )
+        if cmd == "toolbox-gc":
+            return svc.toolbox_gc()
+        if cmd == "toolbox-references":
+            return svc.toolbox_references()
+        if cmd == "toolbox-consistency":
+            return svc.toolbox_consistency()
+        if cmd == "toolbox-review-snapshot":
+            return svc.toolbox_review_snapshot(
+                toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
+            )
+        if cmd == "toolbox-repair":
+            return svc.toolbox_repair(
+                toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
+                only_inconsistent=bool(payload.get("only_inconsistent", True)),
+                details=bool(payload.get("details", False)),
+            )
+        if cmd == "toolbox-reconcile":
+            return svc.toolbox_reconcile(
+                toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
+                only_inconsistent=bool(payload.get("only_inconsistent", True)),
+                details=bool(payload.get("details", False)),
             )
         if cmd == "toolbox-register-auto":
             return svc.toolbox_register_auto(
