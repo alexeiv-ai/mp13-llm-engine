@@ -971,6 +971,31 @@ class ToolboxEnvironmentManager:
         install_plan = dict(metadata.get("install_plan") or {})
         if not install_plan:
             raise ValueError("install_plan_missing")
+        install_lock = dict(metadata.get("install_lock") or {})
+        if not install_lock:
+            resolution = {
+                "status": "blocked",
+                "resolved_at": time.time(),
+                "reason": "install_lock_required",
+            }
+            metadata["install_resolution"] = resolution
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        verification_meta = self.verify_install_lock(ensured)
+        verification = dict(verification_meta.get("install_lock_verification") or {})
+        if str(verification.get("status") or "").strip().lower() != "ok":
+            resolution = {
+                "status": "blocked",
+                "resolved_at": time.time(),
+                "reason": str(verification.get("reason") or "install_lock_invalid"),
+                "install_lock_hash": str(verification.get("install_lock_hash") or "").strip() or None,
+                "expected_install_lock_hash": str(verification.get("expected_install_lock_hash") or "").strip() or None,
+            }
+            verification_meta["install_resolution"] = resolution
+            (env_root / "environment.json").write_text(json.dumps(verification_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            return verification_meta
+        metadata = verification_meta
+        install_plan = dict(metadata.get("install_plan") or {})
         planned_packages = self._unique_names(install_plan.get("planned_packages") or [])
         if not planned_packages:
             resolution = {
@@ -1038,7 +1063,9 @@ class ToolboxEnvironmentManager:
         }
         metadata["install_resolution"] = resolution
         if resolution["status"] == "ok" and report_path.exists():
-            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report_text = report_path.read_text(encoding="utf-8")
+            report = json.loads(report_text)
+            report_hash = _sha256_text(report_text)
             resolved_packages = self._resolved_packages_from_report(dict(report or {}))
             resolved_relpath = "requirements-resolved.txt"
             resolved_path = env_root / resolved_relpath
@@ -1065,6 +1092,7 @@ class ToolboxEnvironmentManager:
                 "requirements_relpath": resolved_relpath,
                 "report_path": str(report_path),
                 "report_relpath": report_relpath,
+                "report_sha256": report_hash,
                 "source_install_plan_hash": resolution["source_install_plan_hash"],
             }
         (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1119,6 +1147,9 @@ class ToolboxEnvironmentManager:
         resolved_lock_hash = str(resolved_install_lock.get("resolved_lock_hash") or "").strip()
         expected_resolved_lock_hash = None
         resolved_requirements_path = None
+        resolved_report_path = None
+        resolved_report_hash = str(resolved_install_lock.get("report_sha256") or "").strip()
+        expected_resolved_report_hash = None
         resolved_reason = None
         resolved_status = "missing"
         if resolved_install_lock:
@@ -1136,6 +1167,12 @@ class ToolboxEnvironmentManager:
             resolved_requirements_path = Path(
                 str(resolved_install_lock.get("requirements_path") or (env_root / expected_resolved_relpath))
             ).expanduser().resolve()
+            expected_report_relpath = (
+                str(resolved_install_lock.get("report_relpath") or "").strip() or "install-resolution-report.json"
+            )
+            resolved_report_path = Path(
+                str(resolved_install_lock.get("report_path") or (env_root / expected_report_relpath))
+            ).expanduser().resolve()
             resolved_status = "ok"
             if source_plan_hash != expected_plan_hash:
                 resolved_status = "stale"
@@ -1143,7 +1180,15 @@ class ToolboxEnvironmentManager:
             elif not resolved_requirements_path.exists():
                 resolved_status = "stale"
                 resolved_reason = "resolved_lock_requirements_missing"
-            elif resolved_lock_hash != expected_resolved_lock_hash:
+            elif not resolved_report_path.exists():
+                resolved_status = "stale"
+                resolved_reason = "resolved_lock_report_missing"
+            else:
+                expected_resolved_report_hash = _sha256_text(resolved_report_path.read_text(encoding="utf-8"))
+                if resolved_report_hash and resolved_report_hash != expected_resolved_report_hash:
+                    resolved_status = "stale"
+                    resolved_reason = "resolved_lock_report_hash_mismatch"
+            if resolved_status == "ok" and resolved_lock_hash != expected_resolved_lock_hash:
                 resolved_status = "stale"
                 resolved_reason = "resolved_lock_hash_mismatch"
             if resolved_status != "ok":
@@ -1160,6 +1205,9 @@ class ToolboxEnvironmentManager:
             "resolved_lock_hash": resolved_lock_hash or None,
             "expected_resolved_lock_hash": expected_resolved_lock_hash,
             "resolved_requirements_path": str(resolved_requirements_path) if resolved_requirements_path else None,
+            "resolved_report_path": str(resolved_report_path) if resolved_report_path else None,
+            "resolved_report_sha256": resolved_report_hash or None,
+            "expected_resolved_report_sha256": expected_resolved_report_hash,
             "resolved_reason": resolved_reason,
         }
         metadata["install_lock_verification"] = verification
@@ -1212,12 +1260,17 @@ class ToolboxEnvironmentManager:
 
         verification_meta = self.verify_install_lock(ensured)
         verification = dict(verification_meta.get("install_lock_verification") or {})
-        if str(verification.get("status") or "") not in {"ok", "missing"}:
+        if str(verification.get("status") or "") != "ok":
+            verification_reason = str(verification.get("reason") or "").strip()
             execution = {
                 "status": "blocked",
                 "executed": False,
                 "executed_at": time.time(),
-                "reason": str(verification.get("reason") or "install_lock_invalid"),
+                "reason": (
+                    "install_lock_required"
+                    if verification_reason in {"", "install_lock_missing"}
+                    else verification_reason
+                ),
                 "install_lock_hash": str(verification.get("install_lock_hash") or "").strip() or None,
                 "expected_install_lock_hash": str(verification.get("expected_install_lock_hash") or "").strip() or None,
             }
@@ -1323,6 +1376,8 @@ class ToolboxEnvironmentManager:
                     "stderr": str(exc),
                 }
             metadata["install_receipt"] = receipt_payload
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            metadata = self.verify_install_receipt(ensured)
         (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return metadata
 

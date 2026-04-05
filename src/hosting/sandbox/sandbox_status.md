@@ -34,6 +34,13 @@ Current status:
 23. lightweight hosted tool-round execution now returns coarse-cancel guidance directly in `ToolRoundResult`, including canceled tool names and resubmittable tool names after applying `non_restartable`
 24. hosted demo helpers now expose the exact `execute_tool_round_on_cursor(...)` options a thin client should pass for coarse-cancel retry policy, using the plan's persisted `non_restartable` flags
 25. remaining app-facing hosted presentation helpers no longer fall back to coarse `all_registered_tool_names`; UI-facing hosted visibility now reads the explicit advertised/hidden split only
+26. environment resolution/execution policy is tighter: resolver work and install execution now require an explicit locked install plan instead of proceeding from plan-only state
+27. resolved-lock provenance now includes the resolver report artifact itself: the stored `pip --report` JSON hash is verified alongside the resolved package list, and tampered/missing report artifacts now stale the resolved lock
+28. successful install execution now immediately certifies and persists `install_receipt_verification`, so observed install state is checked against the lock source as part of execution rather than only by a later manual verify step
+29. rollout readiness now treats successful install execution as incomplete unless `install_receipt_verification` is also `ok`, so stale observed install state can block a toolbox from being treated as ready
+30. GC/reference tracking now protects realized toolbox environments by resolved `venv_path` as well as `venv_key`, so referenced environments are not misclassified as stale when the on-disk folder name differs from the logical environment key
+31. `toolbox_references()` now exposes explicit reference reasons for retained environment keys, realized environment roots, and bundle roots, so operators can see why an artifact was kept instead of only seeing stale lists
+32. `toolbox_gc()` now returns collection-side provenance for removed registrations, bundle directories, and environment directories, so GC results explain why stale artifacts were collected instead of only listing names
 
 ## 2. Most Important Current Contracts
 
@@ -136,7 +143,11 @@ Validated in the user environment:
 4. Windows direct-network enforcement is still not a trustworthy claim
 5. env/provenance is still short of a full immutable dependency-management story
    - resolved lock hash and resolved requirements file are now verified against the current install plan and environment identity
+   - resolved lock now also verifies the persisted resolver report artifact hash
    - receipt verification now short-circuits on stale lock state instead of validating against a drifted lock source
+   - resolution/execution now require an explicit locked plan instead of tolerating plan-only installs
+   - successful install execution now also records immediate receipt verification
+   - rollout readiness now enforces verified observed install state when an environment has recorded successful install execution
    - remaining gap is policy depth, not total absence of lock verification
 6. Linux backend is still missing
 7. `toolbox.cancel` now exists only as coarse executor-level cancellation
@@ -149,6 +160,11 @@ Validated in the user environment:
    - non-chat hosted tool rounds no longer force serial execution, so multiple tool calls in one response can overlap through the sandbox harness
    - repair/rebuild now also serialize per targeted toolbox id
    - broader housekeeping paths outside the explicit per-toolbox registration and repair flows may still want more locking if concurrency pressure increases
+9. GC/reference tracking is more robust, but still intentionally simple
+   - stale environment detection now considers both logical `venv_key` references and resolved `venv_path` references under `toolbox_venvs`
+   - `toolbox_references()` now also reports retention reasons for referenced env keys, env roots, and bundle roots
+   - `toolbox_gc()` now also reports collection reasons for removed registrations, removed bundle directories, and removed environments
+   - remaining gap is richer lifecycle history if operators later need GC actions tied back to prior rollout/repair events
 
 ## 6. Starting Point For The Next Thread
 
@@ -167,3 +183,4 @@ If starting fresh from these docs, assume:
 5. otherwise move on to the next investment rather than expanding sandbox operator output unnecessarily
 6. if client-facing cancellation needs become more demanding, the next step is request-level cancellation rather than another coarse worker-restart layer
 7. if concurrency becomes a primary product concern, the next step is to widen per-toolbox serialization coverage and then let chat/runtime exploit parallel tool execution more aggressively
+8. if continuing strictly by the plan, the next near-term bucket after env/provenance is deeper GC/reference provenance rather than another client/runtime feature

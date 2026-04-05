@@ -1514,6 +1514,7 @@ class EngineHostService:
             profile_row["environment"]["install_lock_verification"] = dict(metadata.get("install_lock_verification") or {})
             profile_row["environment"]["install_execution"] = dict(metadata.get("install_execution") or {})
             profile_row["environment"]["install_receipt"] = dict(metadata.get("install_receipt") or {})
+            profile_row["environment"]["install_receipt_verification"] = dict(metadata.get("install_receipt_verification") or {})
             profiles[str(profile_id)] = profile_row
             executed_profiles[str(profile_id)] = {
                 "environment": dict(profile_row.get("environment") or {}),
@@ -1533,22 +1534,39 @@ class EngineHostService:
     def _cleanup_unused_toolbox_environments(self, state: Optional[Dict[str, Any]] = None) -> List[str]:
         payload = dict(state or self._read_toolboxes() or {})
         toolboxes = dict(payload.get("toolboxes") or {})
-        referenced: set[str] = set()
+        referenced_keys: set[str] = set()
+        referenced_paths: set[str] = set()
+        env_root = (self.hosting_root / "toolbox_venvs").resolve()
         for toolbox_row in toolboxes.values():
             profiles = dict(dict(toolbox_row or {}).get("profiles") or {})
             for profile_row in profiles.values():
                 environment = dict(dict(profile_row or {}).get("environment") or {})
                 venv_key = str(environment.get("venv_key") or "").strip()
                 if venv_key:
-                    referenced.add(venv_key)
-        env_root = (self.hosting_root / "toolbox_venvs").resolve()
+                    referenced_keys.add(venv_key)
+                raw_path = str(environment.get("venv_path") or "").strip()
+                if not raw_path:
+                    continue
+                try:
+                    resolved = Path(raw_path).expanduser().resolve()
+                except Exception:
+                    continue
+                try:
+                    if resolved == env_root or env_root in resolved.parents:
+                        referenced_paths.add(str(resolved))
+                except Exception:
+                    continue
         removed: List[str] = []
         if not env_root.exists():
             return removed
         for child in env_root.iterdir():
             if not child.is_dir():
                 continue
-            if child.name in referenced:
+            try:
+                resolved_child = str(child.expanduser().resolve())
+            except Exception:
+                resolved_child = ""
+            if child.name in referenced_keys or (resolved_child and resolved_child in referenced_paths):
                 continue
             shutil.rmtree(child, ignore_errors=True)
             removed.append(child.name)
@@ -1565,6 +1583,10 @@ class EngineHostService:
         toolboxes = dict(payload.get("toolboxes") or {})
         referenced_engine_ids = self._referenced_toolbox_engine_ids(payload)
         referenced_env_keys: set[str] = set()
+        referenced_env_roots: set[str] = set()
+        referenced_env_key_reasons: Dict[str, List[Dict[str, Any]]] = {}
+        referenced_env_root_reasons: Dict[str, List[Dict[str, Any]]] = {}
+        env_root = (self.hosting_root / "toolbox_venvs").resolve()
         profiles_by_toolbox: Dict[str, Any] = {}
         for toolbox_id, raw_toolbox in toolboxes.items():
             toolbox_row = dict(raw_toolbox or {})
@@ -1576,6 +1598,34 @@ class EngineHostService:
                 venv_key = str(environment.get("venv_key") or "").strip()
                 if venv_key:
                     referenced_env_keys.add(venv_key)
+                    referenced_env_key_reasons.setdefault(venv_key, []).append(
+                        {
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "kind": "profile_environment",
+                        }
+                    )
+                raw_env_path = str(environment.get("venv_path") or "").strip()
+                if raw_env_path:
+                    try:
+                        resolved_env_path = Path(raw_env_path).expanduser().resolve()
+                    except Exception:
+                        resolved_env_path = None
+                    if resolved_env_path is not None:
+                        try:
+                            if resolved_env_path == env_root or env_root in resolved_env_path.parents:
+                                env_root_value = str(resolved_env_path)
+                                referenced_env_roots.add(env_root_value)
+                                referenced_env_root_reasons.setdefault(env_root_value, []).append(
+                                    {
+                                        "toolbox_id": str(toolbox_id),
+                                        "sandbox_profile_id": str(profile_id),
+                                        "kind": "profile_environment",
+                                        "venv_key": venv_key or None,
+                                    }
+                                )
+                        except Exception:
+                            pass
                 out_profiles[str(profile_id)] = {
                     "engine_id": str(profile_row.get("engine_id") or "").strip() or None,
                     "bundle_revision": str(profile_row.get("bundle_revision") or "").strip() or None,
@@ -1592,6 +1642,7 @@ class EngineHostService:
         live_toolbox_regs: Dict[str, Dict[str, Any]] = {}
         stale_engine_ids: List[str] = []
         referenced_bundle_roots: set[str] = set()
+        referenced_bundle_root_reasons: Dict[str, List[Dict[str, Any]]] = {}
         for reg in self._read_engines():
             row = dict(reg or {})
             if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
@@ -1602,7 +1653,16 @@ class EngineHostService:
             is_referenced = engine_id in referenced_engine_ids
             if bundle_root and is_referenced:
                 try:
-                    referenced_bundle_roots.add(str(Path(bundle_root).expanduser().resolve()))
+                    resolved_bundle_root = str(Path(bundle_root).expanduser().resolve())
+                    referenced_bundle_roots.add(resolved_bundle_root)
+                    referenced_bundle_root_reasons.setdefault(resolved_bundle_root, []).append(
+                        {
+                            "engine_id": engine_id,
+                            "toolbox_id": self._registration_toolbox_id(row) or None,
+                            "sandbox_profile_id": self._registration_sandbox_profile_id(row) or None,
+                            "kind": "live_registration",
+                        }
+                    )
                 except Exception:
                     pass
             live_toolbox_regs[engine_id] = {
@@ -1634,14 +1694,16 @@ class EngineHostService:
                     referenced_bundle_roots=referenced_bundle_roots,
                 ):
                     stale_bundle_roots.append(child.name)
-
-        env_root = (self.hosting_root / "toolbox_venvs").resolve()
         stale_environment_keys: List[str] = []
         if env_root.exists():
             for child in env_root.iterdir():
                 if not child.is_dir():
                     continue
-                if child.name not in referenced_env_keys:
+                try:
+                    resolved_child = str(child.expanduser().resolve())
+                except Exception:
+                    resolved_child = ""
+                if child.name not in referenced_env_keys and resolved_child not in referenced_env_roots:
                     stale_environment_keys.append(child.name)
 
         return {
@@ -1650,6 +1712,19 @@ class EngineHostService:
             "live_registrations": live_toolbox_regs,
             "referenced_engine_ids": sorted(referenced_engine_ids),
             "referenced_environment_keys": sorted(referenced_env_keys),
+            "referenced_environment_roots": sorted(referenced_env_roots),
+            "referenced_environment_key_reasons": {
+                str(key): list(rows)
+                for key, rows in sorted(referenced_env_key_reasons.items())
+            },
+            "referenced_environment_root_reasons": {
+                str(key): list(rows)
+                for key, rows in sorted(referenced_env_root_reasons.items())
+            },
+            "referenced_bundle_root_reasons": {
+                str(key): list(rows)
+                for key, rows in sorted(referenced_bundle_root_reasons.items())
+            },
             "stale_engine_ids": sorted(stale_engine_ids),
             "stale_bundle_roots": sorted(stale_bundle_roots),
             "stale_environment_keys": sorted(stale_environment_keys),
@@ -2354,11 +2429,12 @@ class EngineHostService:
                     referenced.add(engine_id)
         return referenced
 
-    def _cleanup_stale_toolbox_registrations(self, state: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]]:
+    def _cleanup_stale_toolbox_registrations(self, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = dict(state or self._read_toolboxes() or {})
         referenced_engine_ids = self._referenced_toolbox_engine_ids(payload)
         removed: List[str] = []
         removed_bundle_roots: List[str] = []
+        removed_details: List[Dict[str, Any]] = []
         for reg in self._read_engines():
             row = dict(reg or {})
             if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
@@ -2378,16 +2454,28 @@ class EngineHostService:
             removed.append(engine_id)
             if bundle_name:
                 removed_bundle_roots.append(bundle_name)
+            removed_details.append(
+                {
+                    "engine_id": engine_id,
+                    "toolbox_id": self._registration_toolbox_id(row) or None,
+                    "sandbox_profile_id": self._registration_sandbox_profile_id(row) or None,
+                    "bundle_root": raw_root or None,
+                    "bundle_name": bundle_name or None,
+                    "reason": "unreferenced_live_registration",
+                }
+            )
         return {
             "removed_engine_ids": removed,
             "removed_bundle_roots": removed_bundle_roots,
+            "removed_registration_details": removed_details,
         }
 
-    def _cleanup_unused_toolbox_bundles(self) -> List[str]:
+    def _cleanup_unused_toolbox_bundles(self) -> Dict[str, Any]:
         bundles_root = (self.hosting_root / "toolbox_bundles").resolve()
         removed: List[str] = []
+        removed_details: List[Dict[str, Any]] = []
         if not bundles_root.exists():
-            return removed
+            return {"removed_bundle_roots": removed, "removed_bundle_details": removed_details}
         referenced_roots: set[str] = set()
         for reg in self._read_engines():
             row = dict(reg or {})
@@ -2411,19 +2499,41 @@ class EngineHostService:
                 continue
             shutil.rmtree(child, ignore_errors=True)
             removed.append(child.name)
-        return removed
+            removed_details.append(
+                {
+                    "bundle_name": child.name,
+                    "bundle_root": str(child),
+                    "reason": "unreferenced_bundle_directory",
+                }
+            )
+        return {
+            "removed_bundle_roots": removed,
+            "removed_bundle_details": removed_details,
+        }
 
     def toolbox_gc(self) -> Dict[str, Any]:
         state = self._read_toolboxes()
         stale = self._cleanup_stale_toolbox_registrations(state)
+        bundle_gc = self._cleanup_unused_toolbox_bundles()
         removed_bundle_roots = list(stale.get("removed_bundle_roots") or [])
-        removed_bundle_roots.extend(self._cleanup_unused_toolbox_bundles())
+        removed_bundle_roots.extend(list(bundle_gc.get("removed_bundle_roots") or []))
         removed_environment_keys = self._cleanup_unused_toolbox_environments(state)
+        removed_environment_details = [
+            {
+                "venv_key": str(item or "").strip(),
+                "reason": "unreferenced_environment_directory",
+            }
+            for item in list(removed_environment_keys or [])
+            if str(item or "").strip()
+        ]
         return {
             "status": "ok",
             "removed_engine_ids": list(stale.get("removed_engine_ids") or []),
             "removed_bundle_roots": list(dict.fromkeys([item for item in removed_bundle_roots if str(item or "").strip()])),
             "removed_environment_keys": removed_environment_keys,
+            "removed_registration_details": list(stale.get("removed_registration_details") or []),
+            "removed_bundle_details": list(bundle_gc.get("removed_bundle_details") or []),
+            "removed_environment_details": removed_environment_details,
             "summary": {
                 "removed_engine_count": len(list(stale.get("removed_engine_ids") or [])),
                 "removed_bundle_count": len(list(dict.fromkeys([item for item in removed_bundle_roots if str(item or "").strip()]))),
@@ -6447,7 +6557,10 @@ class EngineHostService:
         *,
         timeout_seconds: float = 8.0,
     ) -> Dict[str, Dict[str, Any]]:
+        from .toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+
         ready: Dict[str, Dict[str, Any]] = {}
+        environment_manager = ToolboxEnvironmentManager(self.hosting_root)
         for item in list(assignments or []):
             reg = dict(getattr(item, "registration", None) or {})
             engine_id = str(reg.get("engine_id") or "").strip()
@@ -6476,6 +6589,32 @@ class EngineHostService:
                 )
                 if str(name or "").strip()
             ]
+            environment = dict(reg.get("environment") or {})
+            receipt_verification_status = None
+            install_execution_status = None
+            if environment:
+                spec = ToolboxEnvironmentSpec.from_dict(environment)
+                metadata = environment_manager.read_environment_metadata(spec)
+                install_execution_status = str(dict(metadata.get("install_execution") or {}).get("status") or "").strip() or None
+                receipt_verification_status = str(
+                    dict(metadata.get("install_receipt_verification") or {}).get("status") or ""
+                ).strip() or None
+                if install_execution_status == "ok" and receipt_verification_status != "ok":
+                    raise ToolboxRolloutError(
+                        f"environment receipt verification not ready for {engine_id}",
+                        code="toolbox_environment_receipt_unverified",
+                        details={
+                            "engine_id": engine_id,
+                            "install_execution_status": install_execution_status,
+                            "install_receipt_verification_status": receipt_verification_status,
+                            "toolbox_id": str(dict(reg.get("bundle") or {}).get("toolbox_id") or getattr(item, "toolbox_id", "") or ""),
+                            "sandbox_profile_id": str(
+                                dict(reg.get("bundle") or {}).get("sandbox_profile_id")
+                                or getattr(getattr(item, "sandbox_profile", None), "normalized_profile_id", lambda: "")()
+                                or ""
+                            ),
+                        },
+                    )
             ready[engine_id] = {
                 "engine_id": engine_id,
                 "ready": True,
@@ -6484,6 +6623,8 @@ class EngineHostService:
                 "tool_inventory_ok": True,
                 "tool_count": len(tool_names),
                 "all_registered_tool_names": tool_names,
+                "install_execution_status": install_execution_status,
+                "install_receipt_verification_status": receipt_verification_status,
             }
         return ready
 
