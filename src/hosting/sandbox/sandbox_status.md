@@ -23,6 +23,7 @@ Current status:
 12. env install verification now treats `resolved_install_lock` as a first-class provenance artifact, and receipt verification refuses to certify installs against stale lock state
 13. real chat command coverage now includes `/t` and `/t sc` presentation for hosted visible, hosted hidden-but-allowed, and hosted-gated tools in one integrated flow
 14. `mp13chat` `/t` command handling now delegates to a shared lightweight tools-CLI handler, so the hosted chat test path and live chat tool-management path are aligned instead of duplicated
+15. `HostedToolBoxRef` now supports a `.mutate()` builder API, allowing clients to aggregate multiple tool registrations into a single synchronous backend update, significantly minimizing sandbox rollout penalty.
 
 ## 2. Most Important Current Contracts
 

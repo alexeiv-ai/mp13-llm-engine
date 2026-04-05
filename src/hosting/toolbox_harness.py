@@ -2122,6 +2122,9 @@ class HostedToolBoxRef:
             worker_profile_class=str(row.get("worker_profile_class") or "generic").strip() or "generic",
         )
 
+    def mutate(self) -> "PendingHostedToolboxRef":
+        return PendingHostedToolboxRef(self)
+
     def register_auto_callable(
         self,
         *,
@@ -2590,6 +2593,161 @@ class HostedToolBoxRef:
             or {}
         )
 
+
+
+class PendingHostedToolboxRef:
+    def __init__(self, base_ref: HostedToolBoxRef) -> None:
+        self.base_ref = base_ref
+        self._pending_auto_requests: List[Dict[str, Any]] = []
+        self._pending_manual_requests: List[Dict[str, Any]] = []
+
+    def register_auto_callable(
+        self,
+        *,
+        relative_path: str,
+        content: str,
+        module_name: str,
+        callable_name: str,
+        environment_name: str = "base",
+        required_imports: Optional[Sequence[str]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        activate: bool = True,
+        hidden: bool = False,
+        guide_content: Optional[Dict[str, List[str]]] = None,
+        guide_description: Optional[str] = None,
+    ) -> "PendingHostedToolboxRef":
+        request = {
+            "files": [
+                ToolboxBundleFile(
+                    relative_path=str(relative_path or "").strip(),
+                    content=str(content or ""),
+                ).to_runtime_dict()
+            ],
+            "module_name": str(module_name or "").strip(),
+            "callable_name": str(callable_name or "").strip(),
+            "sandbox_profile": SandboxProfileSpec(
+                environment_name=str(environment_name or "base").strip() or "base",
+                required_imports=[str(item or "").strip() for item in list(required_imports or []) if str(item or "").strip()],
+                sandbox_policy=dict(sandbox_policy or {}),
+            ).to_dict(),
+            "activate": bool(activate),
+            "hidden": bool(hidden),
+            "guide_content": dict(guide_content or {}) or None,
+            "guide_description": str(guide_description or "").strip() or None,
+        }
+        self._pending_auto_requests.append(request)
+        return self
+
+    def add_auto_callable(self, **kwargs: Any) -> "PendingHostedToolboxRef":
+        return self.register_auto_callable(**kwargs)
+
+    def register_python_callable(
+        self,
+        implementation: Any,
+        *,
+        environment_name: str = "base",
+        required_imports: Optional[Sequence[str]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        activate: bool = True,
+        hidden: bool = False,
+        guide_content: Optional[Dict[str, List[str]]] = None,
+        guide_description: Optional[str] = None,
+    ) -> "PendingHostedToolboxRef":
+        module = inspect.getmodule(implementation)
+        module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
+        if not module_name:
+            raise ValueError("callable_module_name_required")
+        callable_name = str(getattr(implementation, "__name__", "") or "").strip()
+        if not callable_name:
+            raise ValueError("callable_name_required")
+        source_path = inspect.getsourcefile(implementation) or getattr(module, "__file__", None)
+        if not source_path:
+            raise ValueError("callable_source_file_required")
+        source_file = Path(str(source_path)).expanduser().resolve()
+        if not source_file.exists():
+            raise ValueError("callable_source_file_missing")
+        return self.register_auto_callable(
+            relative_path=source_file.name,
+            content=source_file.read_text(encoding="utf-8"),
+            module_name=module_name,
+            callable_name=callable_name,
+            environment_name=environment_name,
+            required_imports=required_imports,
+            sandbox_policy=sandbox_policy,
+            activate=activate,
+            hidden=hidden,
+            guide_content=guide_content,
+            guide_description=guide_description,
+        )
+
+    def add_python_callable(self, implementation: Any, **kwargs: Any) -> "PendingHostedToolboxRef":
+        return self.register_python_callable(implementation, **kwargs)
+
+    def register_manual_tool(
+        self,
+        tool_definition: Dict[str, Any],
+        implementation: Any,
+        *,
+        environment_name: str = "base",
+        required_imports: Optional[Sequence[str]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        hidden: bool = False,
+    ) -> "PendingHostedToolboxRef":
+        module = inspect.getmodule(implementation)
+        module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
+        if not module_name:
+            raise ValueError("callable_module_name_required")
+        callable_name = str(getattr(implementation, "__name__", "") or "").strip()
+        if not callable_name:
+            raise ValueError("callable_name_required")
+        source_path = inspect.getsourcefile(implementation) or getattr(module, "__file__", None)
+        if not source_path:
+            raise ValueError("callable_source_file_required")
+        source_file = Path(str(source_path)).expanduser().resolve()
+        if not source_file.exists():
+            raise ValueError("callable_source_file_missing")
+        
+        request = {
+            "files": [
+                ToolboxBundleFile(
+                    relative_path=source_file.name,
+                    content=source_file.read_text(encoding="utf-8"),
+                ).to_runtime_dict()
+            ],
+            "module_name": module_name,
+            "callable_name": callable_name,
+            "tool_definition": dict(tool_definition or {}),
+            "sandbox_profile": SandboxProfileSpec(
+                environment_name=str(environment_name or "base").strip() or "base",
+                required_imports=[str(item or "").strip() for item in list(required_imports or []) if str(item or "").strip()],
+                sandbox_policy=dict(sandbox_policy or {}),
+            ).to_dict(),
+            "hidden": bool(hidden),
+        }
+        self._pending_manual_requests.append(request)
+        return self
+
+    def add_manual_tool(self, tool_definition: Dict[str, Any], implementation: Any, **kwargs: Any) -> "PendingHostedToolboxRef":
+        return self.register_manual_tool(tool_definition, implementation, **kwargs)
+
+    def resolve_sandbox(self) -> HostedToolBoxRef:
+        if self._pending_auto_requests:
+            self.base_ref.host.toolbox_register_auto(
+                toolbox_id=self.base_ref.toolbox_id,
+                requests=list(self._pending_auto_requests),
+                python_executable=self.base_ref.python_executable,
+                worker_profile_class=self.base_ref.worker_profile_class,
+            )
+        if self._pending_manual_requests:
+            self.base_ref.host.toolbox_register_manual(
+                toolbox_id=self.base_ref.toolbox_id,
+                requests=list(self._pending_manual_requests),
+                python_executable=self.base_ref.python_executable,
+                worker_profile_class=self.base_ref.worker_profile_class,
+            )
+        self._pending_auto_requests.clear()
+        self._pending_manual_requests.clear()
+        return self.base_ref
 
 SandboxedToolboxFacade = HostedToolBoxRef
 

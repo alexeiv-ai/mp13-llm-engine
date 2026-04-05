@@ -291,8 +291,9 @@ def setup_hosted_chat_demo(
         python_executable=python_executable,
         worker_profile_class=worker_profile_class,
     )
+    builder = toolbox_ref.mutate()
     for request in list(plan.auto_requests or []):
-        toolbox_ref.register_auto_callable(
+        builder.register_auto_callable(
             relative_path=str(request["relative_path"]),
             content=str(request["content"]),
             module_name=str(request["module_name"]),
@@ -302,6 +303,7 @@ def setup_hosted_chat_demo(
             sandbox_policy=dict(request.get("sandbox_policy") or {}),
             activate=True,
         )
+    builder.resolve_sandbox()
     return HostedChatDemoRuntime(service=service, toolbox_ref=toolbox_ref, plan=plan)
 
 

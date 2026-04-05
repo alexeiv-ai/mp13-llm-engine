@@ -574,6 +574,14 @@ Current app-facing helpers:
 4. `HostedToolExecutionRouter`
 5. `execute_tool_round_on_cursor(...)`
 
+### 14.2.1 Hosted Toolbox Ref Builder API
+
+To minimize sandbox rebuild penalties when registering multiple tools, `HostedToolBoxRef` implements a builder pattern.
+
+1. Call `ref.mutate()` to create a `PendingHostedToolboxRef`.
+2. Accumulate tools locally using `builder.register_python_callable(...)` or `builder.register_auto_callable(...)`.
+3. Call `builder.resolve_sandbox()` to trigger a single synchronous backend update, avoiding `N-1` sandbox replacements.
+
 ### 14.3 Chat Integration
 
 `mp13chat` can now:
