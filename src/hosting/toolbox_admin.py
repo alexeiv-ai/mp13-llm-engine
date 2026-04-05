@@ -79,9 +79,9 @@ class HostedToolboxAdmin:
                     {
                         "sandbox_profile_id": str(dict(profile_row.get("sandbox_profile") or {}).get("profile_id") or profile_id or "").strip(),
                         "environment_name": str(environment.get("environment_name") or "").strip() or None,
-                        "tool_names": [
+                        "all_registered_tool_names": [
                             str(item or "").strip()
-                            for item in list(rollout.get("tool_names") or [])
+                            for item in list(rollout.get("all_registered_tool_names") or [])
                             if str(item or "").strip()
                         ],
                         "engine_id": str(profile_row.get("engine_id") or "").strip() or None,

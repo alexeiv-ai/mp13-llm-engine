@@ -117,7 +117,7 @@ class HostedToolExecutionRouter:
             self._hosted_toolbox_description = {
                 "status": "ok",
                 "toolbox_id": str(toolbox_id or "").strip(),
-                "tool_names": list(explicit_names),
+                "all_registered_tool_names": list(explicit_names),
                 "source": "explicit",
             }
         else:
@@ -128,7 +128,11 @@ class HostedToolExecutionRouter:
                     self._hosted_toolbox_description = dict(payload or {})
                     described_names = [
                         str(item or "").strip()
-                        for item in list(payload.get("tool_names") or [])
+                        for item in list(
+                            payload.get("advertised_tool_names")
+                            or payload.get("all_registered_tool_names")
+                            or []
+                        )
                         if str(item or "").strip()
                     ]
             except Exception:
@@ -160,5 +164,20 @@ class HostedToolExecutionRouter:
             return None
         summary = dict(self._hosted_toolbox_description or {})
         summary.setdefault("mode", "sandbox")
-        summary["tool_names"] = list(self._hosted_advertised_tool_names or [])
+        summary.setdefault("all_registered_tool_names", [])
+        summary.setdefault("advertised_tool_names", list(self._hosted_advertised_tool_names or []))
+        summary.setdefault(
+            "hidden_allowed_tool_names",
+            [
+                str(item or "").strip()
+                for item in list(summary.get("hidden_allowed_tool_names") or [])
+                if str(item or "").strip()
+            ],
+        )
+        summary["all_registered_tool_names"] = [
+            str(item or "").strip()
+            for item in list(summary.get("all_registered_tool_names") or [])
+            if str(item or "").strip()
+        ]
+        summary.pop("tool_names", None)
         return summary

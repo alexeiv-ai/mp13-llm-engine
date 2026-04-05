@@ -24,6 +24,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from mp13_engine.mp13_toolbox import ToolsView
+
 from .sandbox import (
     BrokeredFilesystem,
     HostBrokeredHttpClient,
@@ -1350,6 +1352,7 @@ class EngineHostService:
             profile_row["environment"] = dict(environment)
             profile_row["environment"]["install_lock"] = dict(metadata.get("install_lock") or {})
             profile_row["environment"]["resolved_install_lock"] = dict(metadata.get("resolved_install_lock") or {})
+            profile_row["environment"]["install_lock_verification"] = dict(metadata.get("install_lock_verification") or {})
             profile_row["environment"]["install_receipt"] = dict(metadata.get("install_receipt") or {})
             profile_row["environment"]["install_receipt_verification"] = dict(metadata.get("install_receipt_verification") or {})
             profiles[str(profile_id)] = profile_row
@@ -1454,7 +1457,13 @@ class EngineHostService:
             removed.append(child.name)
         return removed
 
-    def _toolbox_reference_report(self, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _toolbox_reference_report(
+        self,
+        state: Optional[Dict[str, Any]] = None,
+        *,
+        include_reachability: bool = False,
+        reachability_timeout_seconds: float = 0.35,
+    ) -> Dict[str, Any]:
         payload = dict(state or self._read_toolboxes() or {})
         toolboxes = dict(payload.get("toolboxes") or {})
         referenced_engine_ids = self._referenced_toolbox_engine_ids(payload)
@@ -1507,6 +1516,13 @@ class EngineHostService:
                 "allowed_tool_names": sorted(list(self._registration_allowed_tool_names(row) or set())),
                 "referenced": is_referenced,
             }
+            if include_reachability and engine_id:
+                reachability = self._probe_registration_reachability(
+                    row,
+                    timeout_seconds=reachability_timeout_seconds,
+                )
+                live_toolbox_regs[engine_id]["reachable"] = bool(reachability.get("reachable", False))
+                live_toolbox_regs[engine_id]["reachability"] = dict(reachability or {})
             if engine_id and not is_referenced:
                 stale_engine_ids.append(engine_id)
 
@@ -1632,7 +1648,10 @@ class EngineHostService:
 
     def toolbox_consistency(self) -> Dict[str, Any]:
         state = self._read_toolboxes()
-        refs = self._toolbox_reference_report(state)
+        refs = self._toolbox_reference_report(
+            state,
+            include_reachability=True,
+        )
         toolboxes = dict(state.get("toolboxes") or {})
         live_regs = {
             str(engine_id or "").strip(): dict(row or {})
@@ -1688,6 +1707,18 @@ class EngineHostService:
                         }
                     )
                     continue
+                if live.get("reachable") is False:
+                    reachability = dict(live.get("reachability") or {})
+                    issues.append(
+                        {
+                            "issue": "live_registration_unreachable",
+                            "toolbox_id": str(toolbox_id),
+                            "sandbox_profile_id": str(profile_id),
+                            "engine_id": engine_id,
+                            "probe": str(reachability.get("probe") or "").strip() or None,
+                            "reachability_error": str(reachability.get("error") or "").strip() or None,
+                        }
+                    )
                 live_toolbox_id = str(live.get("toolbox_id") or "").strip()
                 if live_toolbox_id and live_toolbox_id != str(toolbox_id):
                     issues.append(
@@ -1795,6 +1826,16 @@ class EngineHostService:
         }
         references = self.toolbox_references()
         consistency = self.toolbox_consistency()
+        consistency_references = dict(consistency.get("references") or {})
+        if consistency_references:
+            references = {
+                **references,
+                "live_registrations": dict(consistency_references.get("live_registrations") or dict(references.get("live_registrations") or {})),
+                "summary": {
+                    **dict(references.get("summary") or {}),
+                    **dict(consistency_references.get("summary") or {}),
+                },
+            }
         if scoped_ids:
             filtered_toolboxes = {
                 str(k): dict(v or {})
@@ -1843,15 +1884,21 @@ class EngineHostService:
                 live_reg = dict(live_regs.get(engine_id) or {})
                 tool_names = [
                     str(item or "").strip()
-                    for item in list(rollout.get("tool_names") or live_reg.get("allowed_tool_names") or [])
+                    for item in list(
+                        rollout.get("all_registered_tool_names")
+                        or live_reg.get("all_registered_tool_names")
+                        or live_reg.get("allowed_tool_names")
+                        or []
+                    )
                     if str(item or "").strip()
                 ]
                 profile_rows.append(
                     {
                         "sandbox_profile_id": str(dict(profile_row.get("sandbox_profile") or {}).get("profile_id") or profile_id or "").strip(),
                         "environment_name": str(environment.get("environment_name") or "").strip() or None,
-                        "tool_names": sorted(tool_names),
+                        "all_registered_tool_names": sorted(tool_names),
                         "engine_id": engine_id or None,
+                        "reachable": live_reg.get("reachable"),
                         "ready": bool(rollout.get("ready", False)),
                         "warmup_ms": int(rollout.get("warmup_ms") or 0),
                     }
@@ -5140,6 +5187,42 @@ class EngineHostService:
         return allowed or None
 
     @staticmethod
+    def _registration_advertised_tool_names(reg: Dict[str, Any]) -> Optional[set[str]]:
+        tool_access = dict(reg.get("tool_access") or {})
+        advertised = {
+            str(item or "").strip()
+            for item in list(tool_access.get("advertised_tool_names") or [])
+            if str(item or "").strip()
+        }
+        return advertised or None
+
+    @staticmethod
+    def _registration_hidden_allowed_tool_names(reg: Dict[str, Any]) -> Optional[set[str]]:
+        tool_access = dict(reg.get("tool_access") or {})
+        hidden = {
+            str(item or "").strip()
+            for item in list(tool_access.get("hidden_allowed_tool_names") or [])
+            if str(item or "").strip()
+        }
+        return hidden or None
+
+    @staticmethod
+    def _tools_view_from_payload(payload: Optional[Dict[str, Any]]) -> Optional[ToolsView]:
+        row = dict(payload or {})
+        if not row:
+            return None
+        return ToolsView(
+            view_id=str(row.get("view_id") or "").strip() or "hosted-tools-view",
+            mode=str(row.get("mode") or "").strip() or "advertised",
+            allowed_tools=set(str(item or "").strip() for item in list(row.get("allowed_tools") or []) if str(item or "").strip()),
+            advertised_tools=set(str(item or "").strip() for item in list(row.get("advertised_tools") or []) if str(item or "").strip()),
+            hidden_allowed_tools=set(
+                str(item or "").strip() for item in list(row.get("hidden_allowed_tools") or []) if str(item or "").strip()
+            ),
+            disabled_tools=set(str(item or "").strip() for item in list(row.get("disabled_tools") or []) if str(item or "").strip()),
+        )
+
+    @staticmethod
     def _registration_tool_routes(reg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         tool_access = dict(reg.get("tool_access") or {})
         routes = dict(tool_access.get("tool_routes") or {})
@@ -5825,18 +5908,27 @@ class EngineHostService:
             if not regs:
                 raise ValueError(f"toolbox '{tid}' has no registered sandbox executors")
             tool_names: set[str] = set()
+            advertised_tool_names: set[str] = set()
+            hidden_allowed_tool_names: set[str] = set()
             sandbox_profile_ids: set[str] = set()
             engine_ids: List[str] = []
             for reg in regs:
                 engine_ids.append(str(reg.get("engine_id") or ""))
                 for name in list(self._registration_allowed_tool_names(reg) or set()):
                     tool_names.add(name)
+                for name in list(self._registration_advertised_tool_names(reg) or set()):
+                    advertised_tool_names.add(name)
+                for name in list(self._registration_hidden_allowed_tool_names(reg) or set()):
+                    hidden_allowed_tool_names.add(name)
                 sandbox_profile_ids.add(str(dict(reg.get("bundle") or {}).get("sandbox_profile_id") or "default"))
             return {
                 "status": "ok",
                 "toolbox_id": tid,
                 "engine_ids": [eid for eid in engine_ids if eid],
-                "tool_names": sorted(tool_names),
+                "all_registered_tool_names": sorted(tool_names),
+                "allowed_tool_names": sorted(tool_names),
+                "advertised_tool_names": sorted(advertised_tool_names or tool_names),
+                "hidden_allowed_tool_names": sorted(hidden_allowed_tool_names),
                 "sandbox_profile_ids": sorted([pid for pid in sandbox_profile_ids if pid]),
                 "executor_kind": "toolbox_executor_v1",
                 "mode": "sandbox",
@@ -5858,6 +5950,11 @@ class EngineHostService:
         result.setdefault("executor_kind", str(reg.get("executor_kind") or "toolbox_executor_v1"))
         result.setdefault("bundle", dict(reg.get("bundle") or {}))
         result.setdefault("tool_access", dict(reg.get("tool_access") or {}))
+        result.setdefault("all_registered_tool_names", sorted(list(self._registration_allowed_tool_names(reg) or set())))
+        result.setdefault("allowed_tool_names", sorted(list(self._registration_allowed_tool_names(reg) or set())))
+        result.setdefault("advertised_tool_names", sorted(list(self._registration_advertised_tool_names(reg) or set())))
+        result.setdefault("hidden_allowed_tool_names", sorted(list(self._registration_hidden_allowed_tool_names(reg) or set())))
+        result.pop("tool_names", None)
         return result
 
     def toolbox_gate(
@@ -5866,10 +5963,12 @@ class EngineHostService:
         engine_id: str = "",
         toolbox_id: str = "",
         tool_name: str,
+        tools_view: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         tid = str(toolbox_id or "").strip()
         name = str(tool_name or "").strip()
+        view = self._tools_view_from_payload(tools_view)
         if not name:
             raise ValueError("tool_name is required")
         if not eid and not tid:
@@ -5883,6 +5982,20 @@ class EngineHostService:
                     "tool_name": name,
                     "outcome": "unavailable_backend",
                     "reason": "toolbox_executor_missing",
+                    "executable": False,
+                    "requires_confirmation": False,
+                    "backend": "sandbox",
+                }
+            allowed_for_toolbox: set[str] = set()
+            for item in regs:
+                allowed_for_toolbox.update(self._registration_allowed_tool_names(item) or set())
+            if view is not None and name in allowed_for_toolbox and not view.is_allowed(name):
+                return {
+                    "status": "ok",
+                    "toolbox_id": tid,
+                    "tool_name": name,
+                    "outcome": "denied",
+                    "reason": "blocked_in_scope",
                     "executable": False,
                     "requires_confirmation": False,
                     "backend": "sandbox",
@@ -5915,6 +6028,18 @@ class EngineHostService:
                     "requires_confirmation": False,
                     "backend": "sandbox",
                 }
+            if view is not None and allowed_tool_names is not None and name in allowed_tool_names and not view.is_allowed(name):
+                return {
+                    "status": "ok",
+                    "engine_id": eid,
+                    "toolbox_id": tid or self._registration_toolbox_id(reg),
+                    "tool_name": name,
+                    "outcome": "denied",
+                    "reason": "blocked_in_scope",
+                    "executable": False,
+                    "requires_confirmation": False,
+                    "backend": "sandbox",
+                }
         return {
             "status": "ok",
             "engine_id": eid,
@@ -5934,16 +6059,22 @@ class EngineHostService:
         toolbox_id: str = "",
         tool_call: Dict[str, Any],
         timeout_seconds: float = 30.0,
+        tools_view: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         call = dict(tool_call or {})
         tool_name = str(call.get("name") or "").strip()
+        view = self._tools_view_from_payload(tools_view)
         if not tool_name:
             raise ValueError("tool_call.name is required")
         tid = str(toolbox_id or "").strip()
         if not eid and not tid:
             raise ValueError("engine_id or toolbox_id is required")
         if tid and not eid:
+            gate = self.toolbox_gate(toolbox_id=tid, tool_name=tool_name, tools_view=tools_view)
+            if str(gate.get("outcome") or "").strip().lower() != "allowed":
+                reason = str(gate.get("reason") or gate.get("outcome") or "denied")
+                raise PermissionError(f"{reason}:{tool_name}")
             reg = self._route_toolbox_registration(toolbox_id=tid, tool_name=tool_name, command_label="toolbox-execute")
             eid = str(reg.get("engine_id") or "").strip()
         else:
@@ -5951,6 +6082,8 @@ class EngineHostService:
             allowed_tool_names = self._registration_allowed_tool_names(reg)
             if allowed_tool_names is not None and tool_name not in allowed_tool_names:
                 raise PermissionError(f"tool_not_allowed:{tool_name}")
+            if view is not None and allowed_tool_names is not None and tool_name in allowed_tool_names and not view.is_allowed(tool_name):
+                raise PermissionError(f"blocked_in_scope:{tool_name}")
         out = self._ipc_call(
             reg=reg,
             payload={
@@ -5997,7 +6130,10 @@ class EngineHostService:
                 allowed = self._registration_allowed_tool_names(reg)
                 reported = {
                     str(item or "").strip()
-                    for item in list(dict(desc or {}).get("tool_names") or [])
+                    for item in list(
+                        dict(desc or {}).get("all_registered_tool_names")
+                        or []
+                    )
                     if str(item or "").strip()
                 }
                 if allowed is not None and reported != allowed:
@@ -6061,7 +6197,10 @@ class EngineHostService:
             ready_at = time.time()
             tool_names = [
                 str(name or "").strip()
-                for name in list(dict(desc or {}).get("tool_names") or [])
+                for name in list(
+                    dict(desc or {}).get("all_registered_tool_names")
+                    or []
+                )
                 if str(name or "").strip()
             ]
             ready[engine_id] = {
@@ -6071,7 +6210,7 @@ class EngineHostService:
                 "warmup_ms": int(max(0.0, (ready_at - started_at) * 1000.0)),
                 "tool_inventory_ok": True,
                 "tool_count": len(tool_names),
-                "tool_names": tool_names,
+                "all_registered_tool_names": tool_names,
             }
         return ready
 

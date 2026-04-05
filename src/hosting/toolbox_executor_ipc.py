@@ -266,7 +266,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
         "sync_rpc": True,
         "async_rpc": True,
         "cancellation": False,
-        "tool_names": tool_names,
+        "all_registered_tool_names": tool_names,
         "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
     }
 
@@ -296,7 +296,7 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
                 "bundle_revision": manifest.get("bundle_revision"),
                 "manifest_hash": manifest.get("manifest_hash"),
             },
-            "tool_names": tool_names,
+            "all_registered_tool_names": tool_names,
             "parallel_execution": {
                 "async_within_executor": True,
                 "sandbox_pool": False,

@@ -1573,6 +1573,7 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or ""),
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 tool_name=str(payload.get("tool_name") or ""),
+                tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
             )
         if cmd == "toolbox-execute":
             return svc.toolbox_execute(
@@ -1580,6 +1581,7 @@ class EngineHostDaemon:
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 tool_call=dict(payload.get("tool_call") or {}),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
             )
         if cmd == "toolbox-gc":
             return svc.toolbox_gc()

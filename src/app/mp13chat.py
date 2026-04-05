@@ -111,6 +111,7 @@ from hosting.toolbox_harness import ToolboxExecutionHarness
 from .hosted_tool_runtime import execute_tool_round_on_cursor
 from .hosted_chat_demo import HostedChatDemoRuntime, setup_hosted_chat_demo, shutdown_hosted_chat_demo
 from .hosted_tool_visibility import annotate_tool_listing, summarize_effective_tool_view
+from .tools_cli_light import LightweightToolsCliHandler
 from .hosted_toolbox_api import (
     HostedToolExecutionRouter,
     create_hosted_toolbox_ref,
@@ -556,11 +557,24 @@ def _active_hosted_toolbox_summary() -> Optional[Dict[str, Any]]:
     return _tool_execution_router.hosted_toolbox_summary()
 
 
-def _active_hosted_tool_names() -> List[str]:
+def _active_hosted_advertised_tool_names() -> List[str]:
     hosted = _active_hosted_toolbox_summary()
     return [
         str(item or "").strip()
-        for item in list((hosted or {}).get("tool_names") or [])
+        for item in list(
+            (hosted or {}).get("advertised_tool_names")
+            or (hosted or {}).get("all_registered_tool_names")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+
+
+def _active_hosted_hidden_allowed_tool_names() -> List[str]:
+    hosted = _active_hosted_toolbox_summary()
+    return [
+        str(item or "").strip()
+        for item in list((hosted or {}).get("hidden_allowed_tool_names") or [])
         if str(item or "").strip()
     ]
 
@@ -1870,7 +1884,8 @@ def _print_tools_scope_summary(cursor: ChatCursor, tools_view: ToolsView, entrie
 
     effective = summarize_effective_tool_view(
         tools_view,
-        hosted_tool_names=_active_hosted_tool_names(),
+        hosted_advertised_tool_names=_active_hosted_advertised_tool_names(),
+        hosted_hidden_allowed_tool_names=_active_hosted_hidden_allowed_tool_names(),
     )
     advertised = ", ".join(list(effective["effective_advertised_tools"])) or "<none>"
     hidden_allowed = ", ".join(list(effective["effective_hidden_allowed_tools"])) or "<none>"
@@ -1882,8 +1897,10 @@ def _print_tools_scope_summary(cursor: ChatCursor, tools_view: ToolsView, entrie
     hosted = _active_hosted_toolbox_summary()
     if hosted:
         hosted_names = ", ".join(list(effective["hosted_visible_tools"])) or "<none>"
+        hosted_hidden = ", ".join(list(effective["hosted_hidden_allowed_tools"])) or "<none>"
         print(f"{Colors.SYSTEM}Hosted execution:{Colors.RESET} active")
         print(f"{Colors.SYSTEM}Hosted-visible tools:{Colors.RESET} {hosted_names}")
+        print(f"{Colors.SYSTEM}Hosted hidden-allowed tools:{Colors.RESET} {hosted_hidden}")
         hosted_gated = ", ".join(list(effective["hosted_gated_tools"])) or "<none>"
         print(f"{Colors.SYSTEM}Hosted-gated tools:{Colors.RESET} {hosted_gated}")
 
@@ -1902,7 +1919,8 @@ def _format_tools_scope_header(cursor: ChatCursor) -> str:
 
     effective = summarize_effective_tool_view(
         tools_view,
-        hosted_tool_names=_active_hosted_tool_names(),
+        hosted_advertised_tool_names=_active_hosted_advertised_tool_names(),
+        hosted_hidden_allowed_tool_names=_active_hosted_hidden_allowed_tool_names(),
     )
     advertised = ", ".join(list(effective["effective_advertised_tools"])) or "<none>"
     hidden = ", ".join(list(effective["effective_hidden_allowed_tools"])) or "<none>"
@@ -5009,405 +5027,17 @@ async def _handle_adapter_command(args_str: str, cursor: ChatCursor, pt_session:
     return cursor, True
 
 async def _handle_tools_command(args_str: str, cursor: ChatCursor, pt_session: "PromptSession") -> Tuple[ChatCursor, bool]:
-    global LAST_ENUMERATED_TOOLS
-    toolbox = _active_toolbox()
-    toolbox_ref = _active_toolbox_ref()
-    if not toolbox:
-        print(f"{Colors.ERROR}Error: Toolbox not initialized.{Colors.RESET}")
-        return cursor, True
-    all_tool_names = _all_tool_names(toolbox)
-    tool_wildcards = _tool_wildcard_groups(toolbox)
-
-    stripped_args = args_str.strip()
-    if stripped_args in {"?", "help"}:
-        _print_tools_cli_help()
-        return cursor, True
-
-    parts = args_str.split(" ", 1)
-    sub_cmd_full = parts[0].lower()
-    sub_args = parts[1] if len(parts) > 1 else ""
-
-    sub_cmd_map = {
-        "e": "enum", "n": "new", "m": "modify", "r": "replace", 
-        "a": "activate", "d": "deactivate", "p": "print", "u": "unregister",
-        "sa": "save", "save": "save", "h": "hide", "hide": "hide", "hidden": "hide",
-        "show": "show", "sh": "show",
-        "load": "load", "f": "fix",
-        "scope": "scope", "sc": "scope",
-        "global": "global", "g": "global", "gl": "global", "mode": "global",
-    }
-    sub_cmd = sub_cmd_map.get(sub_cmd_full) or sub_cmd_map.get(sub_cmd_full[0] if sub_cmd_full else "")
-
-    if not sub_cmd_full.strip():
-        sub_cmd = "enum"
-    
-    # --- Handle commands that can have a tool name as the first argument --- #TBD
-    if not sub_cmd:
-        print(f"{Colors.ERROR}Unknown tools command: '{sub_cmd_full}'.{Colors.RESET}")
-        print("Valid options are: e[num], n[ew], m[odify], r[eplace], p[rint], a[ctivate], d[eactivate], u[nregister], h[idden], f[ix], sa[ve], l[oad], sc[ope], g[lobal].")
-        print("Type '/help' for more details.")
-        return cursor, True
-
-    if sub_cmd == "enum":
-        tools = toolbox.list_tools()
-        LAST_ENUMERATED_TOOLS.clear() 
-        if not tools:
-            print(f"{Colors.TOOL_WARNING}No tools defined. Use '/t new' to add one.{Colors.RESET}")
-        else:
-            tools_view = cursor.get_tools_view() or cursor.refresh_tools_view()
-            effective_rows = annotate_tool_listing(
-                tools,
-                tools_view=tools_view,
-                hosted_tool_names=_active_hosted_tool_names(),
-            )
-            # Adjust name width based on the longest tool name
-            max_name_len = max(len(t[0]) for t in tools) if tools else 30
-            name_col_width = max(30, max_name_len + 9) # Add padding for guide/modified marker
-            print(f"{'Index':<7} {'Name':<{name_col_width}} {'Avail':<8} {'Via':<8} {'Type':<12} {'Description'}")
-            print(f"{'-'*5:<7} {'-'*(name_col_width-2):<{name_col_width}} {'-'*5:<8} {'-'*3:<8} {'-'*10:<12} {'-'*58}")
-            for idx, row in enumerate(effective_rows):
-                name = str(row["name"])
-                description = str(row["description"])
-                tool_type = str(row["tool_type"])
-                is_guide = bool(row["is_guide"])
-                is_modified = bool(row["is_modified"])
-                desc_trunc = (description[:57] + '...') if len(description) > 57 else description
-                modified_marker = "*" if is_modified and not is_guide else " "
-
-                if tool_type == "unresolved":
-                    type_display = f"{Colors.ERROR}{'Unresolved':<12}{Colors.RESET}"
-                else:
-                    type_display = f'{tool_type.capitalize():<12}'
-
-                name_display = f"  └─ {name}" if is_guide else f"{modified_marker} {name}"
-                avail_marker = str(row["availability"])
-                via_marker = str(row["via"])
-                print(f"  {idx+1:<5} {name_display:<{name_col_width}} {avail_marker:<8} {via_marker:<8} {type_display:<12} '{desc_trunc}'")
-                LAST_ENUMERATED_TOOLS.append(name)
-    elif sub_cmd == "new":
-        # Call the interactive editor with no tool name
-        success, msg = await toolbox.interactive_edit_tool(pt_session, external_tool_handler, tool_name_to_edit=None, search_scope=globals())
-        print(msg)
-    elif sub_cmd == "modify":
-        if not sub_args.strip():
-            print(f"Usage: /t modify {Colors.CYAN}[g/]<name|num>{Colors.RESET}")
-            return cursor, True
-        
-        target_arg = sub_args.strip()
-        edit_guide = False
-        if target_arg.lower().startswith("g/"):
-            edit_guide = True
-            target_arg = target_arg[2:]
-
-        tool_name_to_edit = ""
-        if target_arg.isdigit():
-            try:
-                idx = int(target_arg) - 1
-                if 0 <= idx < len(LAST_ENUMERATED_TOOLS):
-                    tool_name_to_edit = LAST_ENUMERATED_TOOLS[idx]
-                else: print(f"{Colors.ERROR}Invalid tool number: {target_arg}. Use '/t list'.{Colors.RESET}"); return cursor, True
-            except ValueError: print(f"Invalid number format: {target_arg}."); return True
-        else:
-            tool_name_to_edit = target_arg
-
-        if edit_guide:
-            # Find the corresponding guide name
-            tool_def = toolbox.get_tool(tool_name_to_edit)
-            # For user-defined tools, the guide is part of the main tool's definition.
-            # The editor handles this by asking to edit the guide.
-            # For intrinsics, we need to find the separate guide tool name.
-            if tool_def and "guide_definition" in tool_def:
-                 tool_name_to_edit = tool_def["guide_definition"]["function"]["name"]
-            elif f"{tool_name_to_edit}_guide" in toolbox.intrinsic_tools:
-                 tool_name_to_edit = f"{tool_name_to_edit}_guide"
-            else:
-                print(f"{Colors.ERROR}Error: Could not find a guide function for tool '{tool_name_to_edit}'.{Colors.RESET}")
-                return cursor, True
-
-        success, msg = await toolbox.interactive_edit_tool(pt_session, external_tool_handler, tool_name_to_edit=tool_name_to_edit, search_scope=globals())
-        print(msg)
-    elif sub_cmd == "replace":
-        if not sub_args.strip():
-            print(f"Usage: /t replace {Colors.CYAN}<name|num>{Colors.RESET}")
-            return cursor, True
-        
-        tool_name_to_update = ""
-        if sub_args.isdigit():
-            try:
-                idx = int(sub_args) - 1
-                if 0 <= idx < len(LAST_ENUMERATED_TOOLS):
-                    tool_name_to_update = LAST_ENUMERATED_TOOLS[idx]
-                else: print(f"{Colors.ERROR}Invalid tool number: {sub_args}. Use '/t list'.{Colors.RESET}"); return cursor, True
-            except ValueError: print(f"{Colors.ERROR}Invalid number format: {sub_args}.{Colors.RESET}"); return cursor, True
-        else:
-            tool_name_to_update = sub_args.strip()
-
-        print(f"Enter the full JSON definition for '{tool_name_to_update}'. Type END_JSON on a new line to finish.")
-        json_lines = []
-        while True:
-            line = await pt_session.prompt_async("")
-            if line.strip() == "END_JSON": break
-            json_lines.append(line)
-        json_string = "\n".join(json_lines)
-
-        if not json_string:
-            print("Update cancelled.")
-            return cursor, True
-
-        success, msg = toolbox.update_tool_from_json_string(tool_name_to_update, json_string, external_handler=external_tool_handler, search_scope=globals())
-        print(msg)
-    elif sub_cmd == "print":
-        if not sub_args.strip():
-            print(f"Usage: /t print {Colors.CYAN}<name|num>{Colors.RESET}")
-            return cursor, True
-        
-        tool_name_to_print = ""
-        if sub_args.isdigit():
-            try:
-                idx = int(sub_args) - 1
-                if 0 <= idx < len(LAST_ENUMERATED_TOOLS):
-                    tool_name_to_print = LAST_ENUMERATED_TOOLS[idx]
-                else:
-                    print(f"{Colors.ERROR}Invalid tool number: {sub_args}. Use '/t list'.{Colors.RESET}")
-                    return cursor, True
-            except ValueError:
-                print(f"{Colors.ERROR}Invalid number format: {sub_args}.{Colors.RESET}")
-                return cursor, True
-        else:
-            tool_name_to_print = sub_args.strip()
-
-        tool_def = toolbox.get_tool(tool_name_to_print)
-        if tool_def:
-            print(f"\n--- Tool Definition: {tool_name_to_print} ---")
-            print(json.dumps(tool_def, indent=2))
-            print("---")
-        else:
-            print(f"{Colors.ERROR}Tool '{tool_name_to_print}' not found.{Colors.RESET}")
-    elif sub_cmd in ["activate", "deactivate"]:
-        if not sub_args.strip(): 
-            print(f"Usage: /t {sub_cmd} {Colors.CYAN}<name|num|*|*i|*c|*e,...>{Colors.RESET}")
-            return cursor, True
-        tool_names = await _parse_cli_targets(
-            sub_args.strip(),
-            LAST_ENUMERATED_TOOLS,
-            allow_wildcard=True,
-            wildcard_values=all_tool_names,
-            wildcard_groups=tool_wildcards,
-        )
-        if not tool_names:
-            print(f"{Colors.ERROR}No valid tools specified.{Colors.RESET}")
-            return cursor, True
-
-        success, msg = await asyncio.to_thread(toolbox.activate_tool if sub_cmd == "activate" else toolbox.deactivate_tool, tool_names)
-        print(msg)
-    elif sub_cmd == "save":
-        save_path_str = sub_args.strip()
-        if save_path_str:
-            target_path = Path(save_path_str).expanduser().resolve()
-        else:
-            tools_path = (current_config or {}).get("tools_config_path")
-            if not tools_path:
-                print(f"{Colors.ERROR}No tools config path configured.{Colors.RESET}")
-                return cursor, True
-            target_path = Path(tools_path) # type: ignore
-        try:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            toolbox_state = toolbox.to_dict()
-            with open(target_path, "w") as f:
-                json.dump(toolbox_state, f, indent=2)
-            print(f"Toolbox state saved to {target_path}")
-        except Exception as e:
-            print(f"Error saving toolbox state: {e}")
-    elif sub_cmd == "load":
-        load_arg = sub_args.strip()
-        if not load_arg:
-            print(f"Usage: /t load {Colors.CYAN}<file_path|json_string>{Colors.RESET}")
-            return cursor, True
-        
-        try:
-            if load_arg.strip().startswith('{'): # Assume it's a JSON string
-                data = json.loads(load_arg)
-                toolbox.from_dict(data, search_scope=globals(), external_handler=external_tool_handler)
-                print("Toolbox state loaded from JSON string.")
-            else: # Assume it's a file path
-                with open(Path(load_arg).expanduser().resolve(), "r") as f:
-                    toolbox.from_dict(json.load(f), search_scope=globals(), external_handler=external_tool_handler)
-                print(f"Toolbox state loaded from {load_arg}")
-        except Exception as e:
-            print(f"Error loading toolbox state: {e}")
-    elif sub_cmd in ["hide", "show"]:
-        if not sub_args.strip():
-            print(f"Usage: /t {sub_cmd} {Colors.CYAN}<name|num|*|*i|*c|*e,...>{Colors.RESET}")
-            return cursor, True
-        tool_names = await _parse_cli_targets(
-            sub_args.strip(),
-            LAST_ENUMERATED_TOOLS,
-            allow_wildcard=True,
-            wildcard_values=all_tool_names,
-            wildcard_groups=tool_wildcards,
-        )
-        if not tool_names:
-            print(f"{Colors.ERROR}No valid tools specified.{Colors.RESET}")
-            return cursor, True
-        hide_flag = (sub_cmd == "hide")
-        success, msg = await asyncio.to_thread(toolbox.set_hidden, tool_names, hide_flag)
-        print(msg)
-    elif sub_cmd == "unregister":
-        if not sub_args.strip():
-            print(f"Usage: /t unregister {Colors.CYAN}<name|num|*|*i|*c|*e,...>{Colors.RESET}")
-            return cursor, True
-
-        # This command now correctly handles single or multiple targets.
-        tool_names = await _parse_cli_targets(
-            sub_args.strip(),
-            LAST_ENUMERATED_TOOLS,
-            allow_wildcard=True,
-            wildcard_values=all_tool_names,
-            wildcard_groups=tool_wildcards,
-        )
-        if not tool_names:
-            print("No valid tools specified for unregister.")
-            return cursor, True
-        success, msg = await asyncio.to_thread(toolbox.delete_tool, tool_names)
-        print(msg) # This will now print the summary message for all deletions
-    elif sub_cmd == "fix":
-        if not sub_args.strip():
-            print(f"Usage: /t fix {Colors.CYAN}<name|num>{Colors.RESET}")
-            return cursor, True
-        tool_names = await _parse_cli_targets(sub_args.strip(), LAST_ENUMERATED_TOOLS)
-        if not tool_names:
-            print(f"{Colors.ERROR}No valid tool specified.{Colors.RESET}")
-            return cursor, True
-        
-        tool_to_fix = tool_names[0]
-        print(f"\nHow do you want to fix the unresolved tool '{Colors.CYAN}{tool_to_fix}{Colors.RESET}'?")
-        print(f"  1. Try to re-link as a {Colors.BOLD}'callable'{Colors.RESET} Python function, falling back to 'external' if not found. (Default)") 
-        print(f"  2. Try to re-link as a {Colors.BOLD}'callable'{Colors.RESET} Python function {Colors.ERROR}only{Colors.RESET}. The command will fail if the function is not found.")
-        print(f"  3. Convert to an {Colors.BOLD}'external'{Colors.RESET} tool, using the console input handler.")
-        choice = (await pt_session.prompt_async("Enter choice (1, 2, or 3) [1]: ")).strip()
-
-        if choice == '3':
-            # Fix as external
-            success, msg = toolbox.resolve_tool_link(tool_to_fix, search_scope=None, external_handler=external_tool_handler)
-        elif choice == '2':
-            # Fix as callable only (no fallback)
-            success, msg = toolbox.resolve_tool_link(tool_to_fix, search_scope=globals(), external_handler=None)
-        elif choice in ['1', '']:
-            # Default: Fix as callable with external as a fallback
-            success, msg = toolbox.resolve_tool_link(tool_to_fix, search_scope=globals(), external_handler=external_tool_handler) 
-        else:
-            success, msg = False, "Invalid choice. Fix cancelled."
-
-        print(msg) # Print the result from the toolbox method
-    elif sub_cmd == "global":
-        arg = sub_args.strip().lower()
-        if arg in {"?", "help"} or not arg:
-            print(f"Usage: /t g[lobal] {Colors.CYAN}<a|s|d>{Colors.RESET} (advertised|silent|disabled)")
-            return cursor, True
-        mode_alias = {"a": "advertised", "adv": "advertised", "advertised": "advertised",
-                      "s": "silent", "sil": "silent", "silent": "silent",
-                      "d": "disabled", "dis": "disabled", "disabled": "disabled"}
-        resolved_mode = mode_alias.get(arg, arg)
-        if resolved_mode not in {"advertised", "silent", "disabled"}:
-            print(f"Usage: /t g[lobal] {Colors.CYAN}<a|s|d>{Colors.RESET} (advertised|silent|disabled)")
-            return cursor, True
-        if not toolbox_ref:
-            print(f"{Colors.ERROR}Error: Toolbox scope context unavailable.{Colors.RESET}")
-            return cursor, True
-        def _update(scope: ToolsScope) -> ToolsScope:
-            scope.mode = resolved_mode
-            return scope
-        toolbox_ref.mutate_scope(_update)
-        print(f"{Colors.SYSTEM}Context tools mode set to '{resolved_mode}'.{Colors.RESET}")
-    elif sub_cmd == "scope":
-        scope_args = sub_args.strip()
-        if scope_args in {"?", "help"}:
-            _print_tools_cli_help()
-            return cursor, True
-        if not scope_args:
-            action = "show"
-            remainder = ""
-        else:
-            action_token, _, remainder = scope_args.partition(" ")
-            action_token = action_token.lower()
-            remainder = remainder.strip()
-            scope_action_map = {
-                "set": "set", "s": "set",
-                "add": "add", "a": "add",
-                "pop": "pop", "p": "pop",
-                "reset": "reset", "r": "reset",
-                "show": "show", "status": "show", "": "show",
-            }
-            action = scope_action_map.get(action_token)
-            if not action and "=" in action_token:
-                # No verb was provided; default to 'set' when the first token looks like an option.
-                action = "set"
-                remainder = scope_args
-            elif not action:
-                action = "show"
-                remainder = scope_args
-        command_text = f"/t scope {scope_args}" if scope_args else "/t scope"
-        if action == "show":
-            target_cursor = cursor
-            gen_id_arg = remainder.strip()
-            if gen_id_arg:
-                try:
-                    target_cursor = cursor.cursor_for_gen_id(gen_id_arg)
-                except KeyError:
-                    print(f"{Colors.ERROR}Turn with gen_id '{gen_id_arg}' not found.{Colors.RESET}")
-                    return cursor, True
-                except ValueError as err:
-                    print(f"{Colors.ERROR}{err}{Colors.RESET}")
-                    return cursor, True
-            tools_view = target_cursor.get_tools_view()
-            if not tools_view:
-                print(f"{Colors.SYSTEM}No active tools context available.{Colors.RESET}")
-            else:
-                entries = _collect_tools_scope_entries(target_cursor)
-                _print_tools_scope_summary(target_cursor, tools_view, entries)
-        elif action in {"set", "add"}:
-            if not remainder or remainder in {"?", "help"}:
-                verb = "set" if action == "set" else "add"
-                hint = " (use mode=* to reset to defaults)" if action == "set" else ""
-                print(f"Usage: /t scope {verb} m[ode]=... a[dvertised]=... s[ilent]=... d[isabled]=...{hint}")
-                return cursor, True
-            scope_obj = _parse_scope_cli_args(remainder)
-            if not scope_obj:
-                print(f"{Colors.ERROR}No valid scope options provided. Example: mode=silent advertise=search{Colors.RESET}")
-                return cursor, True
-            normalized_scope, warnings = _normalize_scope_tool_names(scope_obj, toolbox)
-            for warning in warnings:
-                print(warning)
-            if normalized_scope.is_noop():
-                print(f"{Colors.TOOL_WARNING}Scope has no valid settings; command ignored.{Colors.RESET}")
-                return cursor, True
-            cursor.apply_tools_scope(action, normalized_scope, command_text=command_text)
-        elif action == "pop":
-            stack_id, _ = _parse_pop_target_options(remainder)
-            try:
-                cursor.apply_tools_scope(
-                    "pop",
-                    None,
-                    command_text=command_text,
-                    stack_id=stack_id,
-                )
-            except ValueError as exc:
-                print(f"{Colors.ERROR}{exc}{Colors.RESET}")
-                return cursor, True
-        elif action == "reset":
-            print(f"{Colors.SYSTEM}Use '/t scope set mode=*' to reset to the default tools mode.{Colors.RESET}")
-            return cursor, True
-        else:
-            print(f"Usage: /t scope s[et]|a[dd]|p[op] [options]")
-            print(f"{Colors.SYSTEM}Tip: Use '/t scope set mode=*' to reset to defaults.{Colors.RESET}")
-            return cursor, True
-        if action in {"set", "add", "pop"}:
-            tools_view = cursor.get_tools_view()
-            if tools_view:
-                entries = _collect_tools_scope_entries(cursor)
-                _print_tools_scope_summary(cursor, tools_view, entries)
-
-    return cursor, True
+    light_handler = LightweightToolsCliHandler(
+        get_toolbox=_active_toolbox,
+        get_toolbox_ref=_active_toolbox_ref,
+        get_hosted_summary=_active_hosted_toolbox_summary,
+        print_help=_print_tools_cli_help,
+        external_tool_handler=external_tool_handler,
+        get_current_config=lambda: current_config,
+        get_search_scope=lambda: globals(),
+        last_enumerated_tools=LAST_ENUMERATED_TOOLS,
+    )
+    return await light_handler.handle_tools_command(args_str, cursor, pt_session)
 
 async def async_input(prompt: str) -> str:
     """Asynchronously read input from the console."""

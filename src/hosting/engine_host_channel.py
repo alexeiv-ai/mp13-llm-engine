@@ -1189,6 +1189,7 @@ class EngineHostControlChannel:
         engine_id: str = "",
         toolbox_id: str = "",
         tool_name: str,
+        tools_view: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "toolbox-gate",
@@ -1196,6 +1197,7 @@ class EngineHostControlChannel:
                 "engine_id": str(engine_id or "").strip(),
                 "toolbox_id": str(toolbox_id or "").strip(),
                 "tool_name": str(tool_name or "").strip(),
+                "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
             },
         )
         return dict(res or {})
@@ -1207,6 +1209,7 @@ class EngineHostControlChannel:
         toolbox_id: str = "",
         tool_call: Dict[str, Any],
         timeout_seconds: float = 30.0,
+        tools_view: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "toolbox-execute",
@@ -1215,6 +1218,7 @@ class EngineHostControlChannel:
                 "toolbox_id": str(toolbox_id or "").strip(),
                 "tool_call": dict(tool_call or {}),
                 "timeout_seconds": float(timeout_seconds or 30.0),
+                "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
             },
         )
         return dict(res or {})

@@ -28,6 +28,19 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def serialize_tools_view(tools_view: Optional[ToolsView]) -> Optional[Dict[str, Any]]:
+    if tools_view is None:
+        return None
+    return {
+        "view_id": str(tools_view.view_id or "").strip(),
+        "mode": str(tools_view.mode or "").strip(),
+        "allowed_tools": sorted(str(item or "").strip() for item in list(tools_view.allowed_tools or []) if str(item or "").strip()),
+        "advertised_tools": sorted(str(item or "").strip() for item in list(tools_view.advertised_tools or []) if str(item or "").strip()),
+        "hidden_allowed_tools": sorted(str(item or "").strip() for item in list(tools_view.hidden_allowed_tools or []) if str(item or "").strip()),
+        "disabled_tools": sorted(str(item or "").strip() for item in list(tools_view.disabled_tools or []) if str(item or "").strip()),
+    }
+
+
 @dataclass
 class ToolboxBundleFile:
     relative_path: str
@@ -64,6 +77,7 @@ class ToolboxBundleFile:
 class ToolboxBundleTool:
     definition: Dict[str, Any]
     entrypoint: str
+    hidden: bool = False
 
     def tool_name(self) -> str:
         fn = dict(self.definition.get("function") or {})
@@ -77,6 +91,7 @@ class ToolboxBundleTool:
             "name": self.tool_name(),
             "definition": dict(self.definition or {}),
             "entrypoint": str(self.entrypoint or "").strip(),
+            "hidden": bool(self.hidden),
         }
 
 
@@ -85,6 +100,7 @@ class ToolboxBundleAutoTool:
     module_name: str
     callable_name: str
     activate: bool = True
+    hidden: bool = False
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
 
@@ -109,6 +125,7 @@ class ToolboxBundleAutoTool:
             "module_name": self.normalized_module_name(),
             "callable_name": self.normalized_callable_name(),
             "activate": bool(self.activate),
+            "hidden": bool(self.hidden),
             "guide_content": dict(self.guide_content or {}) or None,
             "guide_description": str(self.guide_description or "").strip() or None,
         }
@@ -191,6 +208,7 @@ class ToolboxAutoAssignmentRequest:
     callable_name: str
     sandbox_profile: SandboxProfileSpec = field(default_factory=SandboxProfileSpec)
     activate: bool = True
+    hidden: bool = False
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
 
@@ -199,6 +217,7 @@ class ToolboxAutoAssignmentRequest:
             module_name=str(self.module_name or "").strip(),
             callable_name=str(self.callable_name or "").strip(),
             activate=bool(self.activate),
+            hidden=bool(self.hidden),
             guide_content=dict(self.guide_content or {}) or None,
             guide_description=str(self.guide_description or "").strip() or None,
         )
@@ -213,6 +232,7 @@ class ToolboxAutoAssignmentRequest:
             "callable_name": str(self.callable_name or "").strip(),
             "sandbox_profile": self.sandbox_profile.to_dict(),
             "activate": bool(self.activate),
+            "hidden": bool(self.hidden),
             "guide_content": dict(self.guide_content or {}) or None,
             "guide_description": str(self.guide_description or "").strip() or None,
         }
@@ -226,6 +246,7 @@ class ToolboxAutoAssignmentRequest:
             callable_name=str(row.get("callable_name") or "").strip(),
             sandbox_profile=SandboxProfileSpec.from_dict(dict(row.get("sandbox_profile") or {})),
             activate=bool(row.get("activate", True)),
+            hidden=bool(row.get("hidden", False)),
             guide_content=dict(row.get("guide_content") or {}) or None,
             guide_description=str(row.get("guide_description") or "").strip() or None,
         )
@@ -238,11 +259,13 @@ class ToolboxManualAssignmentRequest:
     callable_name: str
     tool_definition: Dict[str, Any]
     sandbox_profile: SandboxProfileSpec = field(default_factory=SandboxProfileSpec)
+    hidden: bool = False
 
     def to_bundle_tool(self) -> ToolboxBundleTool:
         return ToolboxBundleTool(
             definition=dict(self.tool_definition or {}),
             entrypoint=f"{str(self.module_name or '').strip()}:{str(self.callable_name or '').strip()}",
+            hidden=bool(self.hidden),
         )
 
     def stable_key(self) -> str:
@@ -255,6 +278,7 @@ class ToolboxManualAssignmentRequest:
             "callable_name": str(self.callable_name or "").strip(),
             "tool_definition": dict(self.tool_definition or {}),
             "sandbox_profile": self.sandbox_profile.to_dict(),
+            "hidden": bool(self.hidden),
         }
 
     @classmethod
@@ -266,6 +290,7 @@ class ToolboxManualAssignmentRequest:
             callable_name=str(row.get("callable_name") or "").strip(),
             tool_definition=dict(row.get("tool_definition") or {}),
             sandbox_profile=SandboxProfileSpec.from_dict(dict(row.get("sandbox_profile") or {})),
+            hidden=bool(row.get("hidden", False)),
         )
 
 
@@ -291,6 +316,7 @@ class ToolboxBundleSpec:
     intrinsic_tool_names: List[str] = field(default_factory=list)
     active_intrinsic_tool_names: List[str] = field(default_factory=list)
     hidden_intrinsic_tool_names: List[str] = field(default_factory=list)
+    hidden_tool_names: List[str] = field(default_factory=list)
     dependency_lock_hash: Optional[str] = None
 
     def normalized_bundle_id(self) -> str:
@@ -338,6 +364,11 @@ class ToolboxBundleSpec:
             self.active_intrinsic_tool_names if self.active_intrinsic_tool_names else intrinsic_tool_names
         )
         hidden_intrinsic_tool_names = self._normalize_name_list(self.hidden_intrinsic_tool_names)
+        hidden_tool_names = self._normalize_name_list(
+            list(self.hidden_tool_names)
+            + [item.tool_name() for item in list(self.tools or []) if bool(getattr(item, "hidden", False))]
+            + [item.tool_name() for item in list(self.auto_tools or []) if bool(getattr(item, "hidden", False))]
+        )
         manifest_input = {
             "bundle_id": bundle_id,
             "toolbox_id": toolbox_id,
@@ -350,6 +381,7 @@ class ToolboxBundleSpec:
             "intrinsic_tool_names": intrinsic_tool_names,
             "active_intrinsic_tool_names": active_intrinsic_tool_names,
             "hidden_intrinsic_tool_names": hidden_intrinsic_tool_names,
+            "hidden_tool_names": hidden_tool_names,
             "dependency_lock_hash": str(self.dependency_lock_hash or "").strip() or None,
         }
         manifest_hash = _sha256_text(_stable_json(manifest_input))
@@ -370,6 +402,7 @@ class ToolboxBundleSpec:
             "intrinsic_tool_names": intrinsic_tool_names,
             "active_intrinsic_tool_names": active_intrinsic_tool_names,
             "hidden_intrinsic_tool_names": hidden_intrinsic_tool_names,
+            "hidden_tool_names": hidden_tool_names,
         }
 
 
@@ -674,6 +707,29 @@ class ToolboxEnvironmentManager:
         return cls._fingerprint_payload(payload)[:16]
 
     @classmethod
+    def _resolved_install_lock_hash(
+        cls,
+        spec: ToolboxEnvironmentSpec,
+        *,
+        resolved_packages: Sequence[Any],
+        source_install_plan_hash: str,
+        requirements_relpath: str = "requirements-resolved.txt",
+    ) -> str:
+        payload = {
+            "venv_key": spec.venv_key,
+            "environment_name": spec.environment_name,
+            "environment_description_hash": spec.environment_description_hash,
+            "resolved_packages": cls._unique_names(resolved_packages or []),
+            "source_install_plan_hash": str(source_install_plan_hash or "").strip() or None,
+            "requirements_relpath": str(requirements_relpath or "").strip() or "requirements-resolved.txt",
+            "toolbox_runtime_hash": spec.toolbox_runtime_hash,
+            "intrinsics_profile_id": spec.intrinsics_profile_id,
+            "dependency_lock_hash": spec.dependency_lock_hash,
+            "venv_lock_hash": spec.venv_lock_hash,
+        }
+        return cls._fingerprint_payload(payload)[:16]
+
+    @classmethod
     def _resolved_packages_from_report(cls, report: Dict[str, Any]) -> List[str]:
         out: List[str] = []
         seen: set[str] = set()
@@ -948,6 +1004,7 @@ class ToolboxEnvironmentManager:
                 "environment_description_hash": ensured.environment_description_hash,
                 "resolved_packages": resolved_packages,
                 "source_install_plan_hash": resolution["source_install_plan_hash"],
+                "requirements_relpath": resolved_relpath,
                 "toolbox_runtime_hash": ensured.toolbox_runtime_hash,
                 "intrinsics_profile_id": ensured.intrinsics_profile_id,
                 "dependency_lock_hash": ensured.dependency_lock_hash,
@@ -1013,6 +1070,40 @@ class ToolboxEnvironmentManager:
         elif lock_hash != expected_lock_hash:
             status = "stale"
             reason = "install_lock_hash_mismatch"
+        resolved_install_lock = dict(metadata.get("resolved_install_lock") or {})
+        resolved_lock_hash = str(resolved_install_lock.get("resolved_lock_hash") or "").strip()
+        expected_resolved_lock_hash = None
+        resolved_requirements_path = None
+        resolved_reason = None
+        resolved_status = "missing"
+        if resolved_install_lock:
+            expected_plan_hash = self._install_plan_hash(install_plan)
+            source_plan_hash = str(resolved_install_lock.get("source_install_plan_hash") or "").strip()
+            expected_resolved_relpath = (
+                str(resolved_install_lock.get("requirements_relpath") or "").strip() or "requirements-resolved.txt"
+            )
+            expected_resolved_lock_hash = self._resolved_install_lock_hash(
+                ensured,
+                resolved_packages=resolved_install_lock.get("resolved_packages") or [],
+                source_install_plan_hash=expected_plan_hash,
+                requirements_relpath=expected_resolved_relpath,
+            )
+            resolved_requirements_path = Path(
+                str(resolved_install_lock.get("requirements_path") or (env_root / expected_resolved_relpath))
+            ).expanduser().resolve()
+            resolved_status = "ok"
+            if source_plan_hash != expected_plan_hash:
+                resolved_status = "stale"
+                resolved_reason = "resolved_lock_plan_hash_mismatch"
+            elif not resolved_requirements_path.exists():
+                resolved_status = "stale"
+                resolved_reason = "resolved_lock_requirements_missing"
+            elif resolved_lock_hash != expected_resolved_lock_hash:
+                resolved_status = "stale"
+                resolved_reason = "resolved_lock_hash_mismatch"
+            if resolved_status != "ok":
+                status = "stale"
+                reason = resolved_reason
         verification = {
             "status": status,
             "verified_at": time.time(),
@@ -1020,6 +1111,11 @@ class ToolboxEnvironmentManager:
             "expected_install_lock_hash": expected_lock_hash,
             "requirements_path": str(requirements_path),
             "reason": reason,
+            "resolved_lock_status": resolved_status,
+            "resolved_lock_hash": resolved_lock_hash or None,
+            "expected_resolved_lock_hash": expected_resolved_lock_hash,
+            "resolved_requirements_path": str(resolved_requirements_path) if resolved_requirements_path else None,
+            "resolved_reason": resolved_reason,
         }
         metadata["install_lock_verification"] = verification
         (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1188,10 +1284,11 @@ class ToolboxEnvironmentManager:
     def verify_install_receipt(self, spec: ToolboxEnvironmentSpec) -> Dict[str, Any]:
         ensured = self.ensure_environment(spec)
         env_root = Path(ensured.venv_path).expanduser().resolve()
-        metadata = self.read_environment_metadata(ensured)
+        metadata = self.verify_install_lock(ensured)
         install_lock = dict(metadata.get("install_lock") or {})
         resolved_install_lock = dict(metadata.get("resolved_install_lock") or {})
         install_receipt = dict(metadata.get("install_receipt") or {})
+        lock_verification = dict(metadata.get("install_lock_verification") or {})
         if not install_lock and not resolved_install_lock:
             verification = {
                 "status": "missing",
@@ -1206,6 +1303,17 @@ class ToolboxEnvironmentManager:
                 "status": "missing",
                 "verified_at": time.time(),
                 "reason": "install_receipt_missing",
+            }
+            metadata["install_receipt_verification"] = verification
+            (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return metadata
+        if str(lock_verification.get("status") or "").strip() not in {"ok", "missing"}:
+            verification = {
+                "status": "stale",
+                "verified_at": time.time(),
+                "reason": str(lock_verification.get("reason") or "install_lock_invalid"),
+                "lock_verification_status": str(lock_verification.get("status") or "").strip() or None,
+                "lock_source": "resolved_install_lock" if resolved_install_lock else "install_lock",
             }
             metadata["install_receipt_verification"] = verification
             (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1287,6 +1395,11 @@ class StagedToolboxBundle:
         for name in auto_tool_names:
             if name and name not in tool_names:
                 tool_names.append(name)
+        hidden_tool_names = {
+            str(item or "").strip()
+            for item in list(self.manifest.get("hidden_tool_names") or [])
+            if str(item or "").strip()
+        }
         active_intrinsic_names = [
             str(item or "").strip()
             for item in list(self.manifest.get("active_intrinsic_tool_names") or [])
@@ -1301,11 +1414,13 @@ class StagedToolboxBundle:
         for name in active_intrinsic_names:
             if name not in allowed_tool_names:
                 allowed_tool_names.append(name)
-        advertised_tool_names = [name for name in allowed_tool_names if name not in hidden_intrinsic_names]
+        hidden_allowed_tool_names = [name for name in allowed_tool_names if name in hidden_tool_names or name in hidden_intrinsic_names]
+        advertised_tool_names = [name for name in allowed_tool_names if name not in set(hidden_allowed_tool_names)]
         sandbox_profile_id = str(dict(self.manifest.get("sandbox_profile") or {}).get("profile_id") or "default")
         return {
             "allowed_tool_names": allowed_tool_names,
             "advertised_tool_names": advertised_tool_names,
+            "hidden_allowed_tool_names": hidden_allowed_tool_names,
             "tool_routes": {
                 name: {
                     "toolbox_id": str(self.manifest.get("toolbox_id") or self.manifest.get("bundle_id") or ""),
@@ -1485,6 +1600,17 @@ class ToolboxSandboxOrchestrator:
             file_map: Dict[str, ToolboxBundleFile] = {}
             for file_spec in list(row["files"] or []):
                 file_map[file_spec.normalized_path()] = file_spec
+            hidden_tool_names: List[str] = []
+            for tool_spec in list(row["tools"] or []):
+                if bool(getattr(tool_spec, "hidden", False)):
+                    name = tool_spec.tool_name()
+                    if name not in hidden_tool_names:
+                        hidden_tool_names.append(name)
+            for auto_spec in list(row["auto_tools"] or []):
+                if bool(getattr(auto_spec, "hidden", False)):
+                    name = auto_spec.tool_name()
+                    if name not in hidden_tool_names:
+                        hidden_tool_names.append(name)
             spec = ToolboxBundleSpec(
                 bundle_id=self._bundle_id(tid, profile),
                 toolbox_id=tid,
@@ -1492,6 +1618,7 @@ class ToolboxSandboxOrchestrator:
                 files=list(file_map.values()),
                 tools=list(row["tools"] or []),
                 auto_tools=list(row["auto_tools"] or []),
+                hidden_tool_names=hidden_tool_names,
             )
             out.append(
                 ToolboxSandboxAssignment(
@@ -1641,7 +1768,7 @@ class ToolboxExecutionHarness:
             return {
                 "mode": "native",
                 "executor_kind": "native_toolbox",
-                "tool_names": names,
+                "all_registered_tool_names": names,
                 "parallel_execution": {
                     "async_within_executor": True,
                     "sandbox_pool": False,
@@ -1851,6 +1978,7 @@ class ToolboxExecutionHarness:
             return call
         engine_id = await self._select_engine_id()
         toolbox_id = str(self.config.sandbox_toolbox_id or "").strip()
+        tools_view_payload = serialize_tools_view(native_execute_kwargs.get("tools_view"))
         gate_payload: Dict[str, Any] = {}
         if hasattr(self.control_channel, "toolbox_gate"):
             if toolbox_id:
@@ -1859,6 +1987,7 @@ class ToolboxExecutionHarness:
                         self.control_channel.toolbox_gate,
                         toolbox_id=toolbox_id,
                         tool_name=str(call.name or "").strip(),
+                        tools_view=tools_view_payload,
                     )
                 )
             else:
@@ -1867,6 +1996,7 @@ class ToolboxExecutionHarness:
                         self.control_channel.toolbox_gate,
                         engine_id=engine_id,
                         tool_name=str(call.name or "").strip(),
+                        tools_view=tools_view_payload,
                     )
                 )
         outcome = str(gate_payload.get("outcome") or "").strip().lower()
@@ -1880,6 +2010,7 @@ class ToolboxExecutionHarness:
                 toolbox_id=toolbox_id,
                 tool_call=call.to_dict(),
                 timeout_seconds=float(timeout_seconds or 30.0),
+                tools_view=tools_view_payload,
             )
         else:
             rpc_out = await asyncio.to_thread(
@@ -1887,6 +2018,7 @@ class ToolboxExecutionHarness:
                 engine_id=engine_id,
                 tool_call=call.to_dict(),
                 timeout_seconds=float(timeout_seconds or 30.0),
+                tools_view=tools_view_payload,
             )
         payload = dict(rpc_out or {})
         tool_out = dict(payload.get("tool_call") or {})
@@ -2001,6 +2133,7 @@ class HostedToolBoxRef:
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
+        hidden: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -2019,6 +2152,7 @@ class HostedToolBoxRef:
                 sandbox_policy=dict(sandbox_policy or {}),
             ).to_dict(),
             "activate": bool(activate),
+            "hidden": bool(hidden),
             "guide_content": dict(guide_content or {}) or None,
             "guide_description": str(guide_description or "").strip() or None,
         }
@@ -2043,6 +2177,7 @@ class HostedToolBoxRef:
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
+        hidden: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -2068,6 +2203,7 @@ class HostedToolBoxRef:
             required_imports=required_imports,
             sandbox_policy=sandbox_policy,
             activate=activate,
+            hidden=hidden,
             guide_content=guide_content,
             guide_description=guide_description,
         )
@@ -2083,6 +2219,7 @@ class HostedToolBoxRef:
         environment_name: str = "base",
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        hidden: bool = False,
     ) -> Dict[str, Any]:
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2116,6 +2253,7 @@ class HostedToolBoxRef:
                             required_imports=[str(item or "").strip() for item in list(required_imports or []) if str(item or "").strip()],
                             sandbox_policy=dict(sandbox_policy or {}),
                         ).to_dict(),
+                        "hidden": bool(hidden),
                     }
                 ],
                 python_executable=self.python_executable,
@@ -2418,11 +2556,12 @@ class HostedToolBoxRef:
             or {}
         )
 
-    def gate(self, *, tool_name: str) -> Dict[str, Any]:
+    def gate(self, *, tool_name: str, tools_view: Optional[ToolsView] = None) -> Dict[str, Any]:
         return dict(
             self.host.toolbox_gate(
                 toolbox_id=self.toolbox_id,
                 tool_name=str(tool_name or "").strip(),
+                tools_view=serialize_tools_view(tools_view),
             )
             or {}
         )
@@ -2436,6 +2575,7 @@ class HostedToolBoxRef:
         tool_name: str,
         arguments: Optional[Dict[str, Any]] = None,
         timeout_seconds: float = 30.0,
+        tools_view: Optional[ToolsView] = None,
     ) -> Dict[str, Any]:
         return dict(
             self.host.toolbox_execute(
@@ -2445,6 +2585,7 @@ class HostedToolBoxRef:
                     "arguments": dict(arguments or {}),
                 },
                 timeout_seconds=float(timeout_seconds or 30.0),
+                tools_view=serialize_tools_view(tools_view),
             )
             or {}
         )
@@ -2468,6 +2609,11 @@ def load_toolbox_from_manifest(manifest_path: Path) -> tuple[Toolbox, Dict[str, 
         if str(item or "").strip()
     ]
     toolbox = Toolbox()
+    hidden_user_tools = [
+        str(item or "").strip()
+        for item in list(manifest.get("hidden_tool_names") or [])
+        if str(item or "").strip()
+    ]
     if intrinsic_tool_names:
         ok, msg = toolbox.add_tool_callable(
             intrinsic_tool_names,
@@ -2529,4 +2675,8 @@ def load_toolbox_from_manifest(manifest_path: Path) -> tuple[Toolbox, Dict[str, 
         )
         if not ok:
             raise ValueError(str(msg or "tool_registration_failed"))
+    if hidden_user_tools:
+        toolbox.hidden_tool_names = [
+            name for name in hidden_user_tools if name in toolbox.tools
+        ]
     return toolbox, manifest

@@ -16,16 +16,22 @@ def _normalized_name_set(items: Optional[Iterable[Any]]) -> set[str]:
 def summarize_effective_tool_view(
     tools_view: ToolsView,
     *,
-    hosted_tool_names: Optional[Sequence[str]] = None,
+    hosted_advertised_tool_names: Optional[Sequence[str]] = None,
+    hosted_hidden_allowed_tool_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     local_advertised = _normalized_name_set(tools_view.advertised_tools)
     local_hidden = _normalized_name_set(tools_view.hidden_allowed_tools)
     local_disabled = _normalized_name_set(tools_view.disabled_tools)
-    hosted = _normalized_name_set(hosted_tool_names)
-    if hosted:
-        effective_advertised = local_advertised & hosted
-        effective_hidden = local_hidden & hosted
-        hosted_gated = (local_advertised | local_hidden) - hosted
+    hosted_advertised = _normalized_name_set(hosted_advertised_tool_names)
+    hosted_hidden = _normalized_name_set(hosted_hidden_allowed_tool_names)
+    hosted_allowed = hosted_advertised | hosted_hidden
+    if hosted_allowed:
+        effective_advertised = local_advertised & hosted_advertised
+        effective_hidden = (local_hidden & hosted_allowed) | ((local_advertised & hosted_hidden) - hosted_advertised)
+        local_known = local_advertised | local_hidden | local_disabled
+        hosted_gated = ((local_known & hosted_allowed) - effective_advertised - effective_hidden) | (
+            (local_advertised | local_hidden) - hosted_allowed
+        )
     else:
         effective_advertised = set(local_advertised)
         effective_hidden = set(local_hidden)
@@ -37,8 +43,9 @@ def summarize_effective_tool_view(
         "effective_hidden_allowed_tools": sorted(effective_hidden),
         "disabled_tools": sorted(local_disabled),
         "hosted_gated_tools": sorted(hosted_gated),
-        "hosted_visible_tools": sorted(hosted),
-        "hosted_execution": bool(hosted),
+        "hosted_visible_tools": sorted(effective_advertised),
+        "hosted_hidden_allowed_tools": sorted(effective_hidden),
+        "hosted_execution": bool(hosted_allowed),
     }
 
 
@@ -46,9 +53,12 @@ def annotate_tool_listing(
     listed_tools: Sequence[Tuple[str, str, str, bool, bool, bool, bool]],
     *,
     tools_view: Optional[ToolsView] = None,
-    hosted_tool_names: Optional[Sequence[str]] = None,
+    hosted_advertised_tool_names: Optional[Sequence[str]] = None,
+    hosted_hidden_allowed_tool_names: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
-    hosted = _normalized_name_set(hosted_tool_names)
+    hosted_advertised = _normalized_name_set(hosted_advertised_tool_names)
+    hosted_hidden = _normalized_name_set(hosted_hidden_allowed_tool_names)
+    hosted = hosted_advertised | hosted_hidden
     local_allowed = _normalized_name_set(tools_view.allowed_tools) if tools_view else set()
     local_advertised = _normalized_name_set(tools_view.advertised_tools) if tools_view else set()
     rows: List[Dict[str, Any]] = []
@@ -60,7 +70,7 @@ def annotate_tool_listing(
         if hosted:
             if tool_name in hosted and scope_allowed:
                 availability = "Yes"
-                via = "hosted"
+                via = "hosted-hidden" if tool_name in hosted_hidden else "hosted"
             elif local_visible or scope_allowed:
                 availability = "No"
                 via = "gated"

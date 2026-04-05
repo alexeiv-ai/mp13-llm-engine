@@ -14,6 +14,15 @@ Current status:
 3. chat can run a hosted demo end to end
 4. operator flows now have compact defaults
 5. env management is usable, though not fully production-hardened
+6. hosted gate/execute now accept request-scoped hosted `ToolsView` payloads so host-side dispatch can deny `blocked_in_scope` before sandbox IPC
+7. hosted `describe` now reports separated `all_registered_tool_names`, `advertised_tool_names`, and `hidden_allowed_tool_names`
+8. staged/persisted hosted user-tool requests can now carry hidden membership, and staged manifests preserve hidden user-tool state
+9. app-facing hosted visibility helpers now distinguish hosted advertised tools from hosted hidden-but-allowed tools instead of collapsing both into one advertised-only set
+10. focused hosted runtime tests now cover one round with both `blocked_in_scope` denial and hidden-but-allowed hosted execution using the same hosted `ToolsView`
+11. toolbox consistency/review now probe live executor IPC reachability and surface dead-but-registered workers as explicit consistency issues
+12. env install verification now treats `resolved_install_lock` as a first-class provenance artifact, and receipt verification refuses to certify installs against stale lock state
+13. real chat command coverage now includes `/t` and `/t sc` presentation for hosted visible, hosted hidden-but-allowed, and hosted-gated tools in one integrated flow
+14. `mp13chat` `/t` command handling now delegates to a shared lightweight tools-CLI handler, so the hosted chat test path and live chat tool-management path are aligned instead of duplicated
 
 ## 2. Most Important Current Contracts
 
@@ -97,19 +106,25 @@ Validated in the user environment:
 
 ## 5. Known Gaps That Still Matter
 
-1. hosted execution is not yet fully scope-equivalent to native `Toolbox` execution
-   - request-scoped `ToolsView` restrictions are not the authoritative gate on the hosted path yet
-2. hosted user tools do not yet fully support native hidden/silent semantics
-   - hidden intrinsics are representable
-   - hidden hosted auto/manual user tools are not a first-class hosted state yet
-3. hosted `describe` currently exposes tool membership more strongly than true advertised visibility
-   - practical chat UX is aligned in the polished hosted slice
-   - the underlying hosted contract is still coarser than native `ToolsView`
-4. live dead-worker detection is still weaker than ideal
-5. Windows direct-network enforcement is still not a trustworthy claim
-6. env/provenance is still short of a full immutable dependency-management story
-7. Linux backend is still missing
-8. `toolbox.cancel` is still missing
+1. hosted semantic parity is improved, but still not fully proven across every app/runtime path
+   - host-side dispatch now accepts request-scoped `ToolsView`
+   - app-side visibility helpers now preserve hosted hidden-but-allowed tools
+   - focused runtime coverage now exercises scoped deny plus hidden-but-allowed hosted execution in one hosted round
+   - real chat coverage now exercises `/t` and `/t sc` presentation for hosted visible, hidden-allowed, and gated states
+   - `mp13chat` tool-management handling now shares the lightweight handler used by hosted tests
+   - remaining risk is broader non-chat hosted-consumer validation outside the focused runtime/chat slices
+2. hosted user-tool hidden state is now representable in staged/persisted hosted requests
+   - remaining gap is broader operator/runtime surface adoption, not manifest-state absence
+3. live dead-worker detection is now present in consistency/review, but operator UX may still want small polish
+   - dead-but-registered executors now surface as explicit consistency issues
+   - remaining question is whether default review output needs any more compact liveness wording
+4. Windows direct-network enforcement is still not a trustworthy claim
+5. env/provenance is still short of a full immutable dependency-management story
+   - resolved lock hash and resolved requirements file are now verified against the current install plan and environment identity
+   - receipt verification now short-circuits on stale lock state instead of validating against a drifted lock source
+   - remaining gap is policy depth, not total absence of lock verification
+6. Linux backend is still missing
+7. `toolbox.cancel` is still missing
 
 ## 6. Starting Point For The Next Thread
 
@@ -118,8 +133,11 @@ If starting fresh from these docs, assume:
 1. architecture is coherent enough to continue implementation
 2. the next recommended execution item is native/hosted access-control parity
 3. the highest-priority semantic fixes are:
-   - hosted enforcement of request-scoped `ToolsView`
-   - hosted hidden/silent parity for user tools
-   - hosted `describe` separation of allowed vs advertised visibility
-4. after that, add live worker liveness probing in consistency/review/reconcile
-5. then reassess whether further operator polish is needed before tackling deeper env/provenance or Linux work
+   - verify any remaining downstream consumers use hosted `advertised_tool_names` and `hidden_allowed_tool_names` rather than coarse full membership
+   - treat gated tool-call completeness and hosting integration as explicit follow-through work, not just helper parity
+   - re-check whether any non-chat app path still bypasses hosted request-scoped `ToolsView`
+4. env/provenance is somewhat tighter now:
+   - `resolved_install_lock` drift blocks execution
+   - stale lock state also blocks receipt certification
+   - the next env step, if worth doing, is policy hardening such as requiring resolver work to start from an already-locked plan or storing a stronger external resolver provenance model
+5. otherwise move on to the next investment rather than expanding sandbox operator output unnecessarily
