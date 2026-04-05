@@ -28,6 +28,29 @@ Current status:
 1. hosted tools should feel like normal chat tools
 2. hosted-visible advertisement should align with executability closely enough for practical use
 3. deny paths should show up as tool-result failures, not runtime crashes
+4. hosted execution should preserve native `Toolbox` access semantics, not silently broaden them
+
+### 2.2A Access-Control Alignment Contract
+
+The original/native `Toolbox` contract has two axes:
+
+1. visibility
+   - governed by global mode, hidden state, and per-turn `ToolsScope`
+2. execution
+   - governed by `ToolsView.is_allowed(...)` and `Toolbox.gate_call(...)`
+
+Hosted sandbox execution is expected to support and extend that model:
+
+1. native `Toolbox` remains the semantic source of truth for:
+   - advertised tools
+   - hidden-but-allowed tools
+   - disabled tools
+   - scoped per-turn overlays
+2. hosted sandbox adds only backend-specific concerns:
+   - routed sandbox profile ownership
+   - sandbox policy denials
+   - unavailable executor/backend states
+3. hosted gating must therefore extend native gating, not duplicate it in a separate incompatible form
 
 ### 2.3 Operator Contract
 
@@ -74,16 +97,29 @@ Validated in the user environment:
 
 ## 5. Known Gaps That Still Matter
 
-1. live dead-worker detection is still weaker than ideal
-2. Windows direct-network enforcement is still not a trustworthy claim
-3. env/provenance is still short of a full immutable dependency-management story
-4. Linux backend is still missing
-5. `toolbox.cancel` is still missing
+1. hosted execution is not yet fully scope-equivalent to native `Toolbox` execution
+   - request-scoped `ToolsView` restrictions are not the authoritative gate on the hosted path yet
+2. hosted user tools do not yet fully support native hidden/silent semantics
+   - hidden intrinsics are representable
+   - hidden hosted auto/manual user tools are not a first-class hosted state yet
+3. hosted `describe` currently exposes tool membership more strongly than true advertised visibility
+   - practical chat UX is aligned in the polished hosted slice
+   - the underlying hosted contract is still coarser than native `ToolsView`
+4. live dead-worker detection is still weaker than ideal
+5. Windows direct-network enforcement is still not a trustworthy claim
+6. env/provenance is still short of a full immutable dependency-management story
+7. Linux backend is still missing
+8. `toolbox.cancel` is still missing
 
 ## 6. Starting Point For The Next Thread
 
 If starting fresh from these docs, assume:
 
 1. architecture is coherent enough to continue implementation
-2. the next recommended execution item is live worker liveness probing in consistency/review/reconcile
-3. after that, reassess whether further operator polish is needed before tackling deeper env/provenance or Linux work
+2. the next recommended execution item is native/hosted access-control parity
+3. the highest-priority semantic fixes are:
+   - hosted enforcement of request-scoped `ToolsView`
+   - hosted hidden/silent parity for user tools
+   - hosted `describe` separation of allowed vs advertised visibility
+4. after that, add live worker liveness probing in consistency/review/reconcile
+5. then reassess whether further operator polish is needed before tackling deeper env/provenance or Linux work

@@ -364,13 +364,55 @@ Current first slice includes:
 3. hosted execution preflight before dispatch
 4. gated errors surfaced distinctly from tool crashes
 
-### 10.3 Current Limits
+### 10.3 Intended Semantic Relationship To Native Toolbox Access Control
+
+The hosted sandbox model is not intended to define a second access-control system.
+
+The original/native `Toolbox` contract remains the semantic baseline:
+
+1. visibility
+   - what the LLM sees
+   - determined by native toolbox mode, hidden state, and `ToolsScope`
+2. execution
+   - what is allowed to run
+   - determined by `ToolsView.is_allowed(...)` and `Toolbox.gate_call(...)`
+
+Hosted sandbox execution is intended to extend that contract, not duplicate it:
+
+1. native toolbox remains responsible for logical visibility and scoped execution semantics
+2. hosted sandbox adds backend-specific outcomes:
+   - routed sandbox-profile ownership
+   - sandbox policy denials
+   - unavailable backend / missing executor
+3. the effective hosted contract should therefore be:
+   - first apply native toolbox access resolution
+   - then apply hosted backend routing and policy checks
+
+This means the long-term hosted model should preserve native categories such as:
+
+1. advertised and allowed
+2. hidden but allowed
+3. disabled / blocked in scope
+
+without redefining them in a sandbox-only vocabulary
+
+### 10.4 Current Limits
 
 The broader prompt/runtime stack is not yet fully gate-driven everywhere.
 
 The most polished gate-aware slice is the hosted chat path.
 
 That is enough for current usability, but not the final universal model.
+
+More specifically, the current architecture still has these parity gaps:
+
+1. hosted execution preflight is not yet fully request-scope-aware
+   - hosted dispatch currently checks staged hosted allowlists and backend availability
+   - it does not yet universally enforce the same scoped `ToolsView` decision model as native in-process execution
+2. hosted persisted state can represent hidden intrinsic tools, but not the full native hidden/silent model for hosted user tools
+3. hosted `describe` is still closer to "tool membership" than to a complete native-style visibility report
+
+These gaps should be treated as top-priority semantic alignment work, not optional polish
 
 ## 11. Environment Architecture
 
@@ -554,6 +596,12 @@ It validates:
 5. clean deny paths
 6. compact operator review/repair/reconcile while chat is live
 
+Important limitation of the current polished chat slice:
+
+1. chat currently compensates for some hosted contract gaps by filtering inference payloads to a hosted-visible set
+2. that makes the user-facing hosted demo work well
+3. but it should not be mistaken for full hosted/native semantic parity underneath
+
 ## 15. Remote / Thin-Client Model
 
 The current architecture supports a remote thin client.
@@ -585,6 +633,8 @@ These are the main caveats that still matter architecturally.
 7. `toolbox.cancel` is missing.
 8. Linux backend is missing.
 9. Some hosted chat/runtime behavior is polished only in the current hosted slice, not universally across every app path.
+10. Hosted access control is not yet fully contract-equivalent to the original native `Toolbox` design.
+11. Hosted user-tool hidden/silent state is not yet first-class in the same way as native toolbox state.
 
 ## 17. What The Current Polished Scenarios Prove
 
@@ -606,9 +656,12 @@ The current polished scenarios prove two important contracts.
 
 Near-term:
 
-1. add live IPC liveness probing into consistency/review/reconcile
-2. keep compact operator UX consistent across all admin outputs
-3. decide whether `toolbox.cancel` is actually needed soon
+1. make hosted gating fully honor native request-scoped `ToolsView` semantics before sandbox dispatch
+2. add hosted hidden/silent parity for user tools, not only intrinsics
+3. split hosted `describe` into allowed vs advertised vs hidden-allowed reporting
+4. add live IPC liveness probing into consistency/review/reconcile
+5. keep compact operator UX consistent across all admin outputs
+6. decide whether `toolbox.cancel` is actually needed soon
 
 Medium-term:
 
