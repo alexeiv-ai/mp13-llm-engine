@@ -23,6 +23,7 @@ Current status:
 12. env install verification now treats `resolved_install_lock` as a first-class provenance artifact, and receipt verification refuses to certify installs against stale lock state
 13. real chat command coverage now includes `/t` and `/t sc` presentation for hosted visible, hosted hidden-but-allowed, and hosted-gated tools in one integrated flow
 14. `mp13chat` `/t` command handling now delegates to a shared lightweight tools-CLI handler, so the hosted chat test path and live chat tool-management path are aligned instead of duplicated
+15. operator review/admin profile rows now carry `all_registered_tool_names`, `advertised_tool_names`, and `hidden_allowed_tool_names`, so non-chat hosted inspection surfaces reflect the same hosted visibility split
 15. `HostedToolBoxRef` now supports a `.mutate()` builder API, allowing clients to aggregate multiple tool registrations into a single synchronous backend update, significantly minimizing sandbox rollout penalty.
 
 ## 2. Most Important Current Contracts
@@ -113,7 +114,8 @@ Validated in the user environment:
    - focused runtime coverage now exercises scoped deny plus hidden-but-allowed hosted execution in one hosted round
    - real chat coverage now exercises `/t` and `/t sc` presentation for hosted visible, hidden-allowed, and gated states
    - `mp13chat` tool-management handling now shares the lightweight handler used by hosted tests
-   - remaining risk is broader non-chat hosted-consumer validation outside the focused runtime/chat slices
+   - operator review/admin now expose the same registered/advertised/hidden split
+   - remaining risk is broader non-chat hosted-consumer validation outside the focused runtime/chat/operator slices
 2. hosted user-tool hidden state is now representable in staged/persisted hosted requests
    - remaining gap is broader operator/runtime surface adoption, not manifest-state absence
 3. live dead-worker detection is now present in consistency/review, but operator UX may still want small polish

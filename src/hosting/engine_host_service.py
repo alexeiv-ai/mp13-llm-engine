@@ -1892,11 +1892,31 @@ class EngineHostService:
                     )
                     if str(item or "").strip()
                 ]
+                advertised_tool_names = [
+                    str(item or "").strip()
+                    for item in list(
+                        rollout.get("advertised_tool_names")
+                        or live_reg.get("advertised_tool_names")
+                        or []
+                    )
+                    if str(item or "").strip()
+                ]
+                hidden_allowed_tool_names = [
+                    str(item or "").strip()
+                    for item in list(
+                        rollout.get("hidden_allowed_tool_names")
+                        or live_reg.get("hidden_allowed_tool_names")
+                        or []
+                    )
+                    if str(item or "").strip()
+                ]
                 profile_rows.append(
                     {
                         "sandbox_profile_id": str(dict(profile_row.get("sandbox_profile") or {}).get("profile_id") or profile_id or "").strip(),
                         "environment_name": str(environment.get("environment_name") or "").strip() or None,
                         "all_registered_tool_names": sorted(tool_names),
+                        "advertised_tool_names": sorted(advertised_tool_names),
+                        "hidden_allowed_tool_names": sorted(hidden_allowed_tool_names),
                         "engine_id": engine_id or None,
                         "reachable": live_reg.get("reachable"),
                         "ready": bool(rollout.get("ready", False)),

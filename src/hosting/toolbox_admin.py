@@ -75,6 +75,16 @@ class HostedToolboxAdmin:
                 profile_row = dict(raw_profile or {})
                 rollout = dict(profile_row.get("rollout") or {})
                 environment = dict(profile_row.get("environment") or {})
+                advertised_tool_names = [
+                    str(item or "").strip()
+                    for item in list(rollout.get("advertised_tool_names") or [])
+                    if str(item or "").strip()
+                ]
+                hidden_allowed_tool_names = [
+                    str(item or "").strip()
+                    for item in list(rollout.get("hidden_allowed_tool_names") or [])
+                    if str(item or "").strip()
+                ]
                 profile_rows.append(
                     {
                         "sandbox_profile_id": str(dict(profile_row.get("sandbox_profile") or {}).get("profile_id") or profile_id or "").strip(),
@@ -84,6 +94,8 @@ class HostedToolboxAdmin:
                             for item in list(rollout.get("all_registered_tool_names") or [])
                             if str(item or "").strip()
                         ],
+                        "advertised_tool_names": advertised_tool_names,
+                        "hidden_allowed_tool_names": hidden_allowed_tool_names,
                         "engine_id": str(profile_row.get("engine_id") or "").strip() or None,
                         "ready": bool(rollout.get("ready", False)),
                         "warmup_ms": int(rollout.get("warmup_ms") or 0),
