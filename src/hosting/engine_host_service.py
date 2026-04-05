@@ -19,6 +19,7 @@ import hmac
 import base64
 import tempfile
 import shutil
+from contextlib import contextmanager
 from multiprocessing.connection import Client as MPClient
 import threading
 from pathlib import Path
@@ -119,6 +120,8 @@ class EngineHostService:
     """File-backed engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
+    _toolbox_lock_guard = threading.Lock()
+    _toolbox_locks: Dict[str, threading.RLock] = {}
 
     def __init__(
         self,
@@ -452,6 +455,31 @@ class EngineHostService:
         row["updated_at"] = time.time()
         self._write_json(self._toolboxes_state_file(), row)
 
+    @classmethod
+    def _toolbox_lock_for(cls, toolbox_id: str) -> threading.RLock:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            return threading.RLock()
+        with cls._toolbox_lock_guard:
+            lock = cls._toolbox_locks.get(tid)
+            if lock is None:
+                lock = threading.RLock()
+                cls._toolbox_locks[tid] = lock
+            return lock
+
+    @contextmanager
+    def _locked_toolbox(self, toolbox_id: str):
+        lock = self._toolbox_lock_for(toolbox_id)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+
+    def _run_locked_toolbox_call(self, toolbox_id: str, callback: Any, /, *args: Any, **kwargs: Any) -> Any:
+        with self._locked_toolbox(toolbox_id):
+            return callback(*args, **kwargs)
+
     def toolbox_environment_description_list(self) -> Dict[str, Any]:
         from .toolbox_harness import ToolboxEnvironmentManager
 
@@ -677,9 +705,43 @@ class EngineHostService:
             else existing.get("worker_profile_class") or "generic"
         ).strip() or "generic"
         return {
+            **existing,
             "python_executable": python_value,
             "worker_profile_class": worker_value,
         }
+
+    @staticmethod
+    def _append_toolbox_cancel_event(
+        toolbox_row: Optional[Dict[str, Any]],
+        *,
+        engine_ids: Sequence[str],
+        tool_name: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        respawn: bool = True,
+        non_restartable: bool = False,
+    ) -> Dict[str, Any]:
+        row = dict(toolbox_row or {})
+        runtime = dict(row.get("runtime") or {})
+        events = list(runtime.get("cancel_events") or [])
+        events.append(
+            {
+                "timestamp": time.time(),
+                "engine_ids": [
+                    str(item or "").strip()
+                    for item in list(engine_ids or [])
+                    if str(item or "").strip()
+                ],
+                "tool_name": str(tool_name or "").strip() or None,
+                "tool_call_id": str(tool_call_id or "").strip() or None,
+                "respawn": bool(respawn),
+                "non_restartable": bool(non_restartable),
+            }
+        )
+        if len(events) > 25:
+            events = events[-25:]
+        runtime["cancel_events"] = events
+        row["runtime"] = runtime
+        return row
 
     def _toolbox_uses_environment_name(self, toolbox_row: Optional[Dict[str, Any]], environment_name: str) -> bool:
         env_name = str(environment_name or "base").strip() or "base"
@@ -729,6 +791,23 @@ class EngineHostService:
                 continue
             if env_name in {str(item or "").strip() for item in list(effective.get("lineage") or []) if str(item or "").strip()}:
                 return True
+        return False
+
+    @staticmethod
+    def _toolbox_tool_non_restartable(toolbox_row: Optional[Dict[str, Any]], tool_name: str) -> bool:
+        target = str(tool_name or "").strip()
+        if not target:
+            return False
+        row = dict(toolbox_row or {})
+        for req in list(row.get("requests") or []):
+            request = dict(req or {})
+            if str(request.get("callable_name") or "").strip() == target:
+                return bool(request.get("non_restartable", False))
+        for req in list(row.get("manual_requests") or []):
+            request = dict(req or {})
+            fn = dict(dict(request.get("tool_definition") or {}).get("function") or {})
+            if str(fn.get("name") or "").strip() == target:
+                return bool(request.get("non_restartable", False))
         return False
 
     def _rebuild_toolbox_from_persisted_state(
@@ -3202,6 +3281,7 @@ class EngineHostService:
             "toolbox-describe",
             "toolbox-gate",
             "toolbox-execute",
+            "toolbox-cancel",
             "toolbox-gc",
             "toolbox-references",
             "toolbox-consistency",
@@ -3272,6 +3352,7 @@ class EngineHostService:
                 "toolbox-describe",
                 "toolbox-gate",
                 "toolbox-execute",
+                "toolbox-cancel",
                 "toolbox-gc",
                 "toolbox-references",
                 "toolbox-consistency",
@@ -3334,6 +3415,7 @@ class EngineHostService:
                 "toolbox-describe",
                 "toolbox-gate",
                 "toolbox-execute",
+                "toolbox-cancel",
                 "toolbox-gc",
                 "toolbox-references",
                 "toolbox-consistency",
@@ -3421,6 +3503,7 @@ class EngineHostService:
                 "sandbox-http-fetch",
                 "toolbox-describe",
                 "toolbox-gate",
+                "toolbox-cancel",
                 "toolbox-gc",
                 "toolbox-references",
                 "toolbox-consistency",
@@ -6120,6 +6203,154 @@ class EngineHostService:
         result.setdefault("engine_id", eid)
         return result
 
+    def toolbox_cancel(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str = "",
+        tool_call_id: str = "",
+        timeout_seconds: float = 8.0,
+        respawn: bool = True,
+    ) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip()
+        tid = str(toolbox_id or "").strip()
+        name = str(tool_name or "").strip()
+        call_id = str(tool_call_id or "").strip()
+        if not eid and not tid:
+            raise ValueError("engine_id or toolbox_id is required")
+
+        target_regs: List[Dict[str, Any]] = []
+        if tid:
+            if name:
+                try:
+                    target_regs = [self._route_toolbox_registration(toolbox_id=tid, tool_name=name, command_label="toolbox-cancel")]
+                except PermissionError:
+                    return {
+                        "status": "ok",
+                        "toolbox_id": tid,
+                        "tool_name": name,
+                        "outcome": "noop",
+                        "reason": "tool_not_allowed",
+                        "canceled_engine_ids": [],
+                        "failed_engine_ids": [],
+                        "repaired_toolbox_ids": [],
+                    }
+            else:
+                target_regs = list(self._toolbox_executor_registrations(tid))
+            if not target_regs:
+                return {
+                    "status": "ok",
+                    "toolbox_id": tid,
+                    "tool_name": name or None,
+                    "outcome": "noop",
+                    "reason": "toolbox_executor_missing",
+                    "canceled_engine_ids": [],
+                    "failed_engine_ids": [],
+                    "repaired_toolbox_ids": [],
+                }
+        else:
+            reg = dict(self._find_registration(eid) or {})
+            if not reg:
+                return {
+                    "status": "ok",
+                    "engine_id": eid,
+                    "outcome": "noop",
+                    "reason": "engine_not_found",
+                    "canceled_engine_ids": [],
+                    "failed_engine_ids": [],
+                    "repaired_toolbox_ids": [],
+                }
+            target_regs = [reg]
+
+        canceled_engine_ids: List[str] = []
+        failed_engine_ids: List[str] = []
+        shutdown_results: Dict[str, Dict[str, Any]] = {}
+        target_toolbox_ids: set[str] = set()
+        for reg in target_regs:
+            target_engine_id = str(dict(reg or {}).get("engine_id") or "").strip()
+            if not target_engine_id:
+                continue
+            reg_toolbox_id = self._registration_toolbox_id(dict(reg or {}))
+            if reg_toolbox_id:
+                target_toolbox_ids.add(reg_toolbox_id)
+            shutdown_out = dict(self.shutdown(target_engine_id, timeout_seconds=float(timeout_seconds or 8.0)) or {})
+            shutdown_results[target_engine_id] = shutdown_out
+            if bool(shutdown_out.get("alive")) or str(shutdown_out.get("status") or "").strip() == "stop_failed":
+                failed_engine_ids.append(target_engine_id)
+            else:
+                canceled_engine_ids.append(target_engine_id)
+
+        repair_out: Dict[str, Any] = {}
+        repaired_toolbox_ids: List[str] = []
+        for target_toolbox_id in sorted(target_toolbox_ids):
+            with self._locked_toolbox(target_toolbox_id):
+                state = self._read_toolboxes()
+                toolboxes = dict(state.get("toolboxes") or {})
+                toolbox_row = dict(toolboxes.get(target_toolbox_id) or {})
+                if toolbox_row:
+                    toolbox_row = self._append_toolbox_cancel_event(
+                        toolbox_row,
+                        engine_ids=canceled_engine_ids,
+                        tool_name=name or None,
+                        tool_call_id=call_id or None,
+                        respawn=respawn,
+                        non_restartable=self._toolbox_tool_non_restartable(toolbox_row, name),
+                    )
+                    toolboxes[target_toolbox_id] = toolbox_row
+                    state["toolboxes"] = toolboxes
+                    self._write_toolboxes(state)
+                if respawn:
+                    repair_piece = dict(
+                        self.toolbox_repair(
+                            toolbox_ids=[target_toolbox_id],
+                            only_inconsistent=False,
+                            details=False,
+                        )
+                        or {}
+                    )
+                    if repair_piece:
+                        repaired_toolbox_ids.extend(
+                            [
+                                str(item or "").strip()
+                                for item in list(repair_piece.get("repaired_toolbox_ids") or [])
+                                if str(item or "").strip()
+                            ]
+                        )
+                        if not repair_out:
+                            repair_out = dict(repair_piece)
+                        else:
+                            repair_out.setdefault("repaired_toolbox_ids", [])
+                            repair_out["repaired_toolbox_ids"] = sorted(
+                                {
+                                    *list(repair_out.get("repaired_toolbox_ids") or []),
+                                    *list(repair_piece.get("repaired_toolbox_ids") or []),
+                                }
+                            )
+
+        return {
+            "status": "ok",
+            "engine_id": eid or None,
+            "toolbox_id": tid or None,
+            "tool_name": name or None,
+            "tool_call_id": call_id or None,
+            "respawn": bool(respawn),
+            "outcome": (
+                "canceled_and_repaired"
+                if canceled_engine_ids and repaired_toolbox_ids
+                else "canceled"
+                if canceled_engine_ids
+                else "noop"
+                if not failed_engine_ids
+                else "partial_failure"
+            ),
+            "canceled_engine_ids": sorted(canceled_engine_ids),
+            "failed_engine_ids": sorted(failed_engine_ids),
+            "repaired_toolbox_ids": sorted(repaired_toolbox_ids),
+            "shutdown_results": shutdown_results,
+            "repair": repair_out,
+        }
+
     def _wait_for_toolbox_executor_ready(
         self,
         engine_id: str,
@@ -6235,6 +6466,26 @@ class EngineHostService:
         return ready
 
     def toolbox_register_auto(
+        self,
+        *,
+        toolbox_id: str,
+        requests: List[Dict[str, Any]],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        return self._run_locked_toolbox_call(
+            tid,
+            self._toolbox_register_auto_impl,
+            toolbox_id=tid,
+            requests=list(requests or []),
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
+
+    def _toolbox_register_auto_impl(
         self,
         *,
         toolbox_id: str,
@@ -6379,6 +6630,26 @@ class EngineHostService:
         }
 
     def toolbox_unregister_auto(
+        self,
+        *,
+        toolbox_id: str,
+        tool_keys: List[str],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        return self._run_locked_toolbox_call(
+            tid,
+            self._toolbox_unregister_auto_impl,
+            toolbox_id=tid,
+            tool_keys=list(tool_keys or []),
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
+
+    def _toolbox_unregister_auto_impl(
         self,
         *,
         toolbox_id: str,
@@ -6545,6 +6816,30 @@ class EngineHostService:
         python_executable: Optional[str] = None,
         worker_profile_class: str = "generic",
     ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        return self._run_locked_toolbox_call(
+            tid,
+            self._toolbox_register_intrinsics_impl,
+            toolbox_id=tid,
+            intrinsic_tool_names=list(intrinsic_tool_names or []),
+            include_guides=include_guides,
+            sandbox_profile=dict(sandbox_profile or {}) if isinstance(sandbox_profile, dict) else None,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
+
+    def _toolbox_register_intrinsics_impl(
+        self,
+        *,
+        toolbox_id: str,
+        intrinsic_tool_names: List[str],
+        include_guides: bool = False,
+        sandbox_profile: Optional[Dict[str, Any]] = None,
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
         from .toolbox_harness import SandboxProfileSpec, ToolboxBundleStager, ToolboxSandboxOrchestrator
 
         tid = str(toolbox_id or "").strip()
@@ -6671,6 +6966,28 @@ class EngineHostService:
         }
 
     def toolbox_unregister_intrinsics(
+        self,
+        *,
+        toolbox_id: str,
+        intrinsic_tool_names: List[str],
+        include_guides: bool = False,
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        return self._run_locked_toolbox_call(
+            tid,
+            self._toolbox_unregister_intrinsics_impl,
+            toolbox_id=tid,
+            intrinsic_tool_names=list(intrinsic_tool_names or []),
+            include_guides=include_guides,
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
+
+    def _toolbox_unregister_intrinsics_impl(
         self,
         *,
         toolbox_id: str,
@@ -6823,6 +7140,26 @@ class EngineHostService:
         python_executable: Optional[str] = None,
         worker_profile_class: str = "generic",
     ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        return self._run_locked_toolbox_call(
+            tid,
+            self._toolbox_register_manual_impl,
+            toolbox_id=tid,
+            requests=list(requests or []),
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
+
+    def _toolbox_register_manual_impl(
+        self,
+        *,
+        toolbox_id: str,
+        requests: List[Dict[str, Any]],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
         from .toolbox_harness import (
             SandboxProfileSpec,
             ToolboxBundleStager,
@@ -6967,6 +7304,26 @@ class EngineHostService:
         }
 
     def toolbox_unregister_manual(
+        self,
+        *,
+        toolbox_id: str,
+        tool_keys: List[str],
+        python_executable: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id is required")
+        return self._run_locked_toolbox_call(
+            tid,
+            self._toolbox_unregister_manual_impl,
+            toolbox_id=tid,
+            tool_keys=list(tool_keys or []),
+            python_executable=python_executable,
+            worker_profile_class=worker_profile_class,
+        )
+
+    def _toolbox_unregister_manual_impl(
         self,
         *,
         toolbox_id: str,

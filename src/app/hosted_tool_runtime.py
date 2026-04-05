@@ -60,6 +60,7 @@ async def execute_tool_round_on_cursor(
     tool_retries_left: Optional[int] = None,
     auto_tool_retry_limit: int = 5,
     auto_anchor_prefix: str = "auto_tool",
+    serial_execution: bool = False,
 ) -> ToolRoundResult:
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
@@ -93,7 +94,7 @@ async def execute_tool_round_on_cursor(
         parser_profile=parser_profile,
         final_response_items=final_response_items,
         action_handler=action_handler,
-        serial_execution=True,
+        serial_execution=bool(serial_execution),
         tools_view=tools_view,
         pt_session=pt_session,
         context=cursor.current_turn,

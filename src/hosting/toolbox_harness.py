@@ -78,6 +78,7 @@ class ToolboxBundleTool:
     definition: Dict[str, Any]
     entrypoint: str
     hidden: bool = False
+    non_restartable: bool = False
 
     def tool_name(self) -> str:
         fn = dict(self.definition.get("function") or {})
@@ -92,6 +93,7 @@ class ToolboxBundleTool:
             "definition": dict(self.definition or {}),
             "entrypoint": str(self.entrypoint or "").strip(),
             "hidden": bool(self.hidden),
+            "non_restartable": bool(self.non_restartable),
         }
 
 
@@ -101,6 +103,7 @@ class ToolboxBundleAutoTool:
     callable_name: str
     activate: bool = True
     hidden: bool = False
+    non_restartable: bool = False
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
 
@@ -126,6 +129,7 @@ class ToolboxBundleAutoTool:
             "callable_name": self.normalized_callable_name(),
             "activate": bool(self.activate),
             "hidden": bool(self.hidden),
+            "non_restartable": bool(self.non_restartable),
             "guide_content": dict(self.guide_content or {}) or None,
             "guide_description": str(self.guide_description or "").strip() or None,
         }
@@ -209,6 +213,7 @@ class ToolboxAutoAssignmentRequest:
     sandbox_profile: SandboxProfileSpec = field(default_factory=SandboxProfileSpec)
     activate: bool = True
     hidden: bool = False
+    non_restartable: bool = False
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
 
@@ -218,6 +223,7 @@ class ToolboxAutoAssignmentRequest:
             callable_name=str(self.callable_name or "").strip(),
             activate=bool(self.activate),
             hidden=bool(self.hidden),
+            non_restartable=bool(self.non_restartable),
             guide_content=dict(self.guide_content or {}) or None,
             guide_description=str(self.guide_description or "").strip() or None,
         )
@@ -233,6 +239,7 @@ class ToolboxAutoAssignmentRequest:
             "sandbox_profile": self.sandbox_profile.to_dict(),
             "activate": bool(self.activate),
             "hidden": bool(self.hidden),
+            "non_restartable": bool(self.non_restartable),
             "guide_content": dict(self.guide_content or {}) or None,
             "guide_description": str(self.guide_description or "").strip() or None,
         }
@@ -247,6 +254,7 @@ class ToolboxAutoAssignmentRequest:
             sandbox_profile=SandboxProfileSpec.from_dict(dict(row.get("sandbox_profile") or {})),
             activate=bool(row.get("activate", True)),
             hidden=bool(row.get("hidden", False)),
+            non_restartable=bool(row.get("non_restartable", False)),
             guide_content=dict(row.get("guide_content") or {}) or None,
             guide_description=str(row.get("guide_description") or "").strip() or None,
         )
@@ -260,12 +268,14 @@ class ToolboxManualAssignmentRequest:
     tool_definition: Dict[str, Any]
     sandbox_profile: SandboxProfileSpec = field(default_factory=SandboxProfileSpec)
     hidden: bool = False
+    non_restartable: bool = False
 
     def to_bundle_tool(self) -> ToolboxBundleTool:
         return ToolboxBundleTool(
             definition=dict(self.tool_definition or {}),
             entrypoint=f"{str(self.module_name or '').strip()}:{str(self.callable_name or '').strip()}",
             hidden=bool(self.hidden),
+            non_restartable=bool(self.non_restartable),
         )
 
     def stable_key(self) -> str:
@@ -279,6 +289,7 @@ class ToolboxManualAssignmentRequest:
             "tool_definition": dict(self.tool_definition or {}),
             "sandbox_profile": self.sandbox_profile.to_dict(),
             "hidden": bool(self.hidden),
+            "non_restartable": bool(self.non_restartable),
         }
 
     @classmethod
@@ -291,6 +302,7 @@ class ToolboxManualAssignmentRequest:
             tool_definition=dict(row.get("tool_definition") or {}),
             sandbox_profile=SandboxProfileSpec.from_dict(dict(row.get("sandbox_profile") or {})),
             hidden=bool(row.get("hidden", False)),
+            non_restartable=bool(row.get("non_restartable", False)),
         )
 
 
@@ -2137,6 +2149,7 @@ class HostedToolBoxRef:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
         hidden: bool = False,
+        non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -2156,6 +2169,7 @@ class HostedToolBoxRef:
             ).to_dict(),
             "activate": bool(activate),
             "hidden": bool(hidden),
+            "non_restartable": bool(non_restartable),
             "guide_content": dict(guide_content or {}) or None,
             "guide_description": str(guide_description or "").strip() or None,
         }
@@ -2181,6 +2195,7 @@ class HostedToolBoxRef:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
         hidden: bool = False,
+        non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -2207,6 +2222,7 @@ class HostedToolBoxRef:
             sandbox_policy=sandbox_policy,
             activate=activate,
             hidden=hidden,
+            non_restartable=non_restartable,
             guide_content=guide_content,
             guide_description=guide_description,
         )
@@ -2223,6 +2239,7 @@ class HostedToolBoxRef:
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         hidden: bool = False,
+        non_restartable: bool = False,
     ) -> Dict[str, Any]:
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2257,6 +2274,7 @@ class HostedToolBoxRef:
                             sandbox_policy=dict(sandbox_policy or {}),
                         ).to_dict(),
                         "hidden": bool(hidden),
+                        "non_restartable": bool(non_restartable),
                     }
                 ],
                 python_executable=self.python_executable,
@@ -2593,6 +2611,25 @@ class HostedToolBoxRef:
             or {}
         )
 
+    def cancel(
+        self,
+        *,
+        tool_name: str = "",
+        tool_call_id: str = "",
+        timeout_seconds: float = 8.0,
+        respawn: bool = True,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_cancel(
+                toolbox_id=self.toolbox_id,
+                tool_name=str(tool_name or "").strip(),
+                tool_call_id=str(tool_call_id or "").strip(),
+                timeout_seconds=float(timeout_seconds or 8.0),
+                respawn=bool(respawn),
+            )
+            or {}
+        )
+
 
 
 class PendingHostedToolboxRef:
@@ -2613,6 +2650,7 @@ class PendingHostedToolboxRef:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
         hidden: bool = False,
+        non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
     ) -> "PendingHostedToolboxRef":
@@ -2632,6 +2670,7 @@ class PendingHostedToolboxRef:
             ).to_dict(),
             "activate": bool(activate),
             "hidden": bool(hidden),
+            "non_restartable": bool(non_restartable),
             "guide_content": dict(guide_content or {}) or None,
             "guide_description": str(guide_description or "").strip() or None,
         }
@@ -2650,6 +2689,7 @@ class PendingHostedToolboxRef:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         activate: bool = True,
         hidden: bool = False,
+        non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
     ) -> "PendingHostedToolboxRef":
@@ -2676,6 +2716,7 @@ class PendingHostedToolboxRef:
             sandbox_policy=sandbox_policy,
             activate=activate,
             hidden=hidden,
+            non_restartable=non_restartable,
             guide_content=guide_content,
             guide_description=guide_description,
         )
@@ -2692,6 +2733,7 @@ class PendingHostedToolboxRef:
         required_imports: Optional[Sequence[str]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         hidden: bool = False,
+        non_restartable: bool = False,
     ) -> "PendingHostedToolboxRef":
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2723,6 +2765,7 @@ class PendingHostedToolboxRef:
                 sandbox_policy=dict(sandbox_policy or {}),
             ).to_dict(),
             "hidden": bool(hidden),
+            "non_restartable": bool(non_restartable),
         }
         self._pending_manual_requests.append(request)
         return self

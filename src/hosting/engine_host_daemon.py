@@ -1583,6 +1583,15 @@ class EngineHostDaemon:
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
             )
+        if cmd == "toolbox-cancel":
+            return svc.toolbox_cancel(
+                engine_id=str(payload.get("engine_id") or ""),
+                toolbox_id=str(payload.get("toolbox_id") or ""),
+                tool_name=str(payload.get("tool_name") or ""),
+                tool_call_id=str(payload.get("tool_call_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 8.0),
+                respawn=bool(payload.get("respawn", True)),
+            )
         if cmd == "toolbox-gc":
             return svc.toolbox_gc()
         if cmd == "toolbox-references":

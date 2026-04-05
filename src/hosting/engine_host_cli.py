@@ -84,6 +84,10 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-execute": [
         "'{\"engine_id\":\"toolbox1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}' | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
     ],
+    "toolbox-cancel": [
+        "'{\"toolbox_id\":\"toolbox-demo\",\"tool_name\":\"hello_tool\",\"tool_call_id\":\"call-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-cancel",
+        "'{\"engine_id\":\"toolbox1\",\"respawn\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-cancel",
+    ],
     "toolbox-gc": [
         "python -m hosting.engine_host_cli toolbox-gc",
     ],
@@ -459,6 +463,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-describe",
         "toolbox-gate",
         "toolbox-execute",
+        "toolbox-cancel",
         "toolbox-gc",
         "toolbox-references",
         "toolbox-consistency",
@@ -926,6 +931,18 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     tool_call=dict(payload.get("tool_call") or {}),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                     tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-cancel":
+            _print_ok(
+                svc.toolbox_cancel(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    tool_name=str(payload.get("tool_name") or ""),
+                    tool_call_id=str(payload.get("tool_call_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 8.0),
+                    respawn=bool(payload.get("respawn", True)),
                 )
             )
             return 0

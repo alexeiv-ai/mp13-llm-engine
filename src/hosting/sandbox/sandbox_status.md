@@ -24,7 +24,12 @@ Current status:
 13. real chat command coverage now includes `/t` and `/t sc` presentation for hosted visible, hosted hidden-but-allowed, and hosted-gated tools in one integrated flow
 14. `mp13chat` `/t` command handling now delegates to a shared lightweight tools-CLI handler, so the hosted chat test path and live chat tool-management path are aligned instead of duplicated
 15. operator review/admin profile rows now carry `all_registered_tool_names`, `advertised_tool_names`, and `hidden_allowed_tool_names`, so non-chat hosted inspection surfaces reflect the same hosted visibility split
-15. `HostedToolBoxRef` now supports a `.mutate()` builder API, allowing clients to aggregate multiple tool registrations into a single synchronous backend update, significantly minimizing sandbox rollout penalty.
+16. `HostedToolBoxRef` now supports a `.mutate()` builder API, allowing clients to aggregate multiple tool registrations into a single synchronous backend update, significantly minimizing sandbox rollout penalty.
+17. hosted sandbox clients now have a coarse `toolbox.cancel` path that stops targeted executor workers and repairs persisted toolbox state, giving client code a real abort-and-recover operation without requiring per-tool cooperative cancellation
+18. hosted toolbox mutation flows for auto/manual/intrinsic registration are now serialized per `toolbox_id`, reducing state races when the same hosted toolbox ref is used concurrently across client threads
+19. coarse `toolbox.cancel` can now record optional tool-call identity and persist recent cancel events in toolbox runtime metadata so later restart policy can know what caused sandbox recycling
+20. hosted auto/manual tool registrations can now persist a `non_restartable` flag, defaulting to `false`, so future sandbox-restart policy can distinguish tools that should not be auto-resumed
+21. non-chat hosted tool-runtime execution now defaults to parallel multi-call dispatch, so one hosted response can execute multiple tool calls with native-style concurrency even while `mp13chat` remains explicitly serial for now
 
 ## 2. Most Important Current Contracts
 
@@ -40,6 +45,8 @@ Current status:
 2. hosted-visible advertisement should align with executability closely enough for practical use
 3. deny paths should show up as tool-result failures, not runtime crashes
 4. hosted execution should preserve native `Toolbox` access semantics, not silently broaden them
+5. the same hosted toolbox ref may be shared across client threads for concurrent describe/gate/execute/cancel use
+6. hosted toolbox mutation is expected to serialize per logical toolbox id rather than racing persisted state
 
 ### 2.2A Access-Control Alignment Contract
 
@@ -127,7 +134,15 @@ Validated in the user environment:
    - receipt verification now short-circuits on stale lock state instead of validating against a drifted lock source
    - remaining gap is policy depth, not total absence of lock verification
 6. Linux backend is still missing
-7. `toolbox.cancel` is still missing
+7. `toolbox.cancel` now exists only as coarse executor-level cancellation
+   - it cancels by stopping sandbox executor worker(s) and repairing persisted toolbox state
+   - cancel events can now persist `tool_name`, optional `tool_call_id`, and `non_restartable` state for later restart-policy work
+   - remaining gap is finer-grained in-flight request cancellation if that becomes necessary
+8. concurrent execution is better than concurrent mutation
+   - same sandbox executor can serve overlapping tool calls
+   - same hosted toolbox ref can now tolerate concurrent read/execute-style use better
+   - non-chat hosted tool rounds no longer force serial execution, so multiple tool calls in one response can overlap through the sandbox harness
+   - broader mutation/rebuild paths outside the explicit per-toolbox registration flows may still want more locking if concurrency pressure increases
 
 ## 6. Starting Point For The Next Thread
 
@@ -144,3 +159,5 @@ If starting fresh from these docs, assume:
    - stale lock state also blocks receipt certification
    - the next env step, if worth doing, is policy hardening such as requiring resolver work to start from an already-locked plan or storing a stronger external resolver provenance model
 5. otherwise move on to the next investment rather than expanding sandbox operator output unnecessarily
+6. if client-facing cancellation needs become more demanding, the next step is request-level cancellation rather than another coarse worker-restart layer
+7. if concurrency becomes a primary product concern, the next step is to widen per-toolbox serialization coverage and then let chat/runtime exploit parallel tool execution more aggressively

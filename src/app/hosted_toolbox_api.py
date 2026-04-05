@@ -36,6 +36,7 @@ def register_hosted_tool_callable(
     python_executable: Optional[str] = None,
     worker_profile_class: str = "generic",
     activate: bool = True,
+    non_restartable: bool = False,
     guide_content: Optional[Dict[str, List[str]]] = None,
     guide_description: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -55,6 +56,7 @@ def register_hosted_tool_callable(
         required_imports=required_imports,
         sandbox_policy=sandbox_policy,
         activate=activate,
+        non_restartable=non_restartable,
         guide_content=guide_content,
         guide_description=guide_description,
     )

@@ -1223,6 +1223,29 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def toolbox_cancel(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str = "",
+        tool_call_id: str = "",
+        timeout_seconds: float = 8.0,
+        respawn: bool = True,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-cancel",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_name": str(tool_name or "").strip(),
+                "tool_call_id": str(tool_call_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 8.0),
+                "respawn": bool(respawn),
+            },
+        )
+        return dict(res or {})
+
     def toolbox_gc(self) -> Dict[str, Any]:
         res = self._invoke("toolbox-gc", {})
         return dict(res or {})
