@@ -363,6 +363,14 @@ Current first slice includes:
 2. hosted `toolbox_gate(...)`
 3. hosted execution preflight before dispatch
 4. gated errors surfaced distinctly from tool crashes
+5. hosted `describe` now reports:
+   - `all_registered_tool_names`
+   - `advertised_tool_names`
+   - `hidden_allowed_tool_names`
+6. hosted app/runtime helpers now preserve the native distinction between:
+   - advertised and allowed
+   - hidden but allowed
+   - blocked in scope
 
 ### 10.3 Intended Semantic Relationship To Native Toolbox Access Control
 
@@ -398,21 +406,22 @@ without redefining them in a sandbox-only vocabulary
 
 ### 10.4 Current Limits
 
-The broader prompt/runtime stack is not yet fully gate-driven everywhere.
+The broader prompt/runtime stack is still not fully gate-driven everywhere.
 
-The most polished gate-aware slice is the hosted chat path.
+Current state is better than the initial hosted slice:
 
-That is enough for current usability, but not the final universal model.
+1. hosted gate/execute now accept request-scoped `ToolsView` payloads
+2. hosted user-tool hidden state is now representable in persisted requests
+3. hosted visibility reporting is now split into registered vs advertised vs hidden-allowed sets
 
-More specifically, the current architecture still has these parity gaps:
+Remaining architectural limit:
 
-1. hosted execution preflight is not yet fully request-scope-aware
-   - hosted dispatch currently checks staged hosted allowlists and backend availability
-   - it does not yet universally enforce the same scoped `ToolsView` decision model as native in-process execution
-2. hosted persisted state can represent hidden intrinsic tools, but not the full native hidden/silent model for hosted user tools
-3. hosted `describe` is still closer to "tool membership" than to a complete native-style visibility report
-
-These gaps should be treated as top-priority semantic alignment work, not optional polish
+1. not every app/runtime path has been proven end to end against the full native toolbox contract
+2. the most polished slices are:
+   - hosted chat inspection and `/t` presentation
+   - focused hosted tool-round runtime
+   - operator review/admin surfaces
+3. chat itself is still intentionally serial in the current implementation even though hosted/native toolbox execution can support parallel multi-call execution underneath
 
 ## 11. Environment Architecture
 
@@ -530,6 +539,8 @@ Current operator surfaces:
 6. `toolbox-gc`
    - cleanup of stale artifacts
 
+Repair/reconcile are now serialized per targeted `toolbox_id`, so concurrent rebuild attempts against the same logical hosted toolbox do not overlap state rewrite or sandbox respawn work.
+
 ### 13.4 Current UX Rule
 
 Default output should be compact.
@@ -573,14 +584,17 @@ Current app-facing helpers:
 3. `create_hosted_toolbox_executor(...)`
 4. `HostedToolExecutionRouter`
 5. `execute_tool_round_on_cursor(...)`
+6. `is_hosted_tool_call_canceled(...)`
+7. `should_resubmit_hosted_tool_call(...)`
 
 ### 14.2.1 Hosted Toolbox Ref Builder API
 
 To minimize sandbox rebuild penalties when registering multiple tools, `HostedToolBoxRef` implements a builder pattern.
 
 1. Call `ref.mutate()` to create a `PendingHostedToolboxRef`.
-2. Accumulate tools locally using `builder.register_python_callable(...)` or `builder.register_auto_callable(...)`.
-3. Call `builder.resolve_sandbox()` to trigger a single synchronous backend update, avoiding `N-1` sandbox replacements.
+2. Accumulate changes locally using builder registration methods.
+3. Call `builder.resolve_sandbox()` explicitly to trigger one synchronous backend update.
+4. Tool registrations can now persist `non_restartable=false|true` so later coarse-cancel recovery policy can distinguish tools that should not be auto-resubmitted.
 
 ### 14.3 Chat Integration
 
@@ -590,6 +604,11 @@ To minimize sandbox rebuild penalties when registering multiple tools, `HostedTo
 2. keep local toolbox-ref state
 3. route actual tool execution through hosted sandbox executors
 4. expose hosted-aware tool inspection
+
+Important current split:
+
+1. non-chat hosted tool rounds now default to native-style parallel multi-call execution
+2. `mp13chat` remains intentionally serial for tool execution at the moment
 
 ### 14.4 Hosted Demo
 
@@ -628,6 +647,13 @@ Current caveat:
 
 Still, the thin-client model is already real and usable.
 
+Coarse cancellation contract in the thin-client model:
+
+1. `toolbox.cancel` is coarse executor-level cancellation, not per-call cooperative cancellation
+2. a successful cancel kills the targeted sandbox worker and can optionally respawn healthy replacement workers from persisted toolbox state
+3. in-flight hosted tool calls that lose their worker are normalized to `canceled` tool-call errors at the harness boundary
+4. wrappers can use `should_resubmit_hosted_tool_call(...)` plus the persisted `non_restartable` flag to choose whether to resubmit on a fresh sandbox
+
 ## 16. Current Pitfalls And Limits
 
 These are the main caveats that still matter architecturally.
@@ -638,11 +664,11 @@ These are the main caveats that still matter architecturally.
 4. `.venv` lifecycle is usable, but not yet a mature immutable dependency-management system.
 5. GC/reference tracking is coherent, but not yet deeply production-style.
 6. Rollout policy is intentionally minimal.
-7. `toolbox.cancel` is missing.
+7. `toolbox.cancel` is only coarse executor-level cancellation.
 8. Linux backend is missing.
-9. Some hosted chat/runtime behavior is polished only in the current hosted slice, not universally across every app path.
-10. Hosted access control is not yet fully contract-equivalent to the original native `Toolbox` design.
-11. Hosted user-tool hidden/silent state is not yet first-class in the same way as native toolbox state.
+9. Some hosted chat/runtime behavior is polished only in the current hosted slices, not universally across every app path.
+10. Hosted access control is much closer to the original native `Toolbox` design, but broader end-to-end coverage is still more mature in the focused hosted slices than in every possible consumer.
+11. Hosted user-tool hidden state is first-class in persisted requests, but a full native hidden/silent vocabulary is still not expanded into a richer separate hosted reporting contract than the current registered/advertised/hidden split.
 
 ## 17. What The Current Polished Scenarios Prove
 
@@ -653,23 +679,25 @@ The current polished scenarios prove two important contracts.
 1. hosted tools can feel like normal chat tools
 2. hosted advertisement can stay aligned with hosted executability
 3. deny paths can appear as tool-result failures rather than app/runtime crashes
+4. shared hosted toolbox refs can tolerate concurrent read/execute/cancel use
+5. non-chat hosted execution can execute multiple tool calls from one response in parallel
 
 ### 17.2 Operator-Facing Contract
 
 1. hosted toolbox state can be reviewed while live
 2. healthy systems produce compact no-op repair/reconcile output
 3. operators do not need low-level ids on the default path
+4. concurrent repair attempts against the same toolbox serialize instead of racing
 
 ## 18. Short Improvement Bullets
 
 Near-term:
 
-1. make hosted gating fully honor native request-scoped `ToolsView` semantics before sandbox dispatch
-2. add hosted hidden/silent parity for user tools, not only intrinsics
-3. split hosted `describe` into allowed vs advertised vs hidden-allowed reporting
-4. add live IPC liveness probing into consistency/review/reconcile
-5. keep compact operator UX consistent across all admin outputs
-6. decide whether `toolbox.cancel` is actually needed soon
+1. keep validating remaining app/runtime consumers against the current hosted visibility and gate contract
+2. decide whether client-facing helper coverage around coarse cancel should expand beyond the current retry-decision helpers
+3. keep compact operator UX consistent across all admin outputs
+4. decide whether request-level cancellation is worth the deeper executor redesign
+5. widen locking further only if housekeeping paths beyond registration/repair/reconcile become a real concurrency hotspot
 
 Medium-term:
 

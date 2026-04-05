@@ -480,6 +480,24 @@ class EngineHostService:
         with self._locked_toolbox(toolbox_id):
             return callback(*args, **kwargs)
 
+    @contextmanager
+    def _locked_toolboxes(self, toolbox_ids: List[str]):
+        normalized_ids = sorted(
+            {
+                str(item or "").strip()
+                for item in list(toolbox_ids or [])
+                if str(item or "").strip()
+            }
+        )
+        locks = [self._toolbox_lock_for(toolbox_id) for toolbox_id in normalized_ids]
+        for lock in locks:
+            lock.acquire()
+        try:
+            yield normalized_ids
+        finally:
+            for lock in reversed(locks):
+                lock.release()
+
     def toolbox_environment_description_list(self) -> Dict[str, Any]:
         from .toolbox_harness import ToolboxEnvironmentManager
 
@@ -2089,140 +2107,144 @@ class EngineHostService:
         repaired: Dict[str, Any] = {}
         skipped: Dict[str, str] = {}
 
-        for tid in target_toolbox_ids:
-            toolbox_row_existing = dict(toolboxes.get(tid) or {})
-            if not toolbox_row_existing:
-                skipped[tid] = "toolbox_not_found"
-                continue
-            runtime = dict(toolbox_row_existing.get("runtime") or {})
-            auto_requests = [
-                ToolboxAutoAssignmentRequest.from_runtime_dict(dict(item or {}))
-                for item in list(toolbox_row_existing.get("requests") or [])
-            ]
-            manual_requests = [
-                ToolboxManualAssignmentRequest.from_runtime_dict(dict(item or {}))
-                for item in list(toolbox_row_existing.get("manual_requests") or [])
-            ]
-            intrinsics_row = dict(toolbox_row_existing.get("intrinsics") or {})
-            intrinsic_names = self._normalize_intrinsic_tool_names(
-                [str(item or "").strip() for item in list(intrinsics_row.get("names") or []) if str(item or "").strip()],
-                include_guides=bool(intrinsics_row.get("with_intrinsic_guides", False)),
-            )
-            intrinsic_profile = (
-                SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {}))
-                if intrinsic_names
-                else None
-            )
-            with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
-            existing_profiles = dict(toolbox_row_existing.get("profiles") or {})
-            old_regs_by_profile: Dict[str, str] = {}
-            for reg in self._toolbox_executor_registrations(tid):
-                old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
+        with self._locked_toolboxes(target_toolbox_ids):
+            state = self._read_toolboxes()
+            toolboxes = dict(state.get("toolboxes") or {})
 
-            if not auto_requests and not manual_requests and not intrinsic_names:
-                skipped[tid] = "toolbox_has_no_persisted_requests"
-                continue
+            for tid in target_toolbox_ids:
+                toolbox_row_existing = dict(toolboxes.get(tid) or {})
+                if not toolbox_row_existing:
+                    skipped[tid] = "toolbox_not_found"
+                    continue
+                runtime = dict(toolbox_row_existing.get("runtime") or {})
+                auto_requests = [
+                    ToolboxAutoAssignmentRequest.from_runtime_dict(dict(item or {}))
+                    for item in list(toolbox_row_existing.get("requests") or [])
+                ]
+                manual_requests = [
+                    ToolboxManualAssignmentRequest.from_runtime_dict(dict(item or {}))
+                    for item in list(toolbox_row_existing.get("manual_requests") or [])
+                ]
+                intrinsics_row = dict(toolbox_row_existing.get("intrinsics") or {})
+                intrinsic_names = self._normalize_intrinsic_tool_names(
+                    [str(item or "").strip() for item in list(intrinsics_row.get("names") or []) if str(item or "").strip()],
+                    include_guides=bool(intrinsics_row.get("with_intrinsic_guides", False)),
+                )
+                intrinsic_profile = (
+                    SandboxProfileSpec.from_dict(dict(intrinsics_row.get("sandbox_profile") or {}))
+                    if intrinsic_names
+                    else None
+                )
+                with_intrinsic_guides = bool(intrinsics_row.get("with_intrinsic_guides", False))
+                existing_profiles = dict(toolbox_row_existing.get("profiles") or {})
+                old_regs_by_profile: Dict[str, str] = {}
+                for reg in self._toolbox_executor_registrations(tid):
+                    old_regs_by_profile[self._registration_sandbox_profile_id(reg)] = str(reg.get("engine_id") or "").strip()
 
-            orchestrator = ToolboxSandboxOrchestrator(
-                service=self,
-                stager=ToolboxBundleStager(self.hosting_root),
-                python_executable=str(runtime.get("python_executable") or "").strip() or None,
-            )
-            assignments = orchestrator.spawn_assignments(
-                toolbox_id=tid,
-                requests=auto_requests,
-                manual_requests=manual_requests,
-                intrinsic_tool_names=intrinsic_names,
-                intrinsic_profile=intrinsic_profile,
-                with_intrinsic_guides=with_intrinsic_guides,
-                worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
-            )
-            try:
-                ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
-            except Exception:
+                if not auto_requests and not manual_requests and not intrinsic_names:
+                    skipped[tid] = "toolbox_has_no_persisted_requests"
+                    continue
+
+                orchestrator = ToolboxSandboxOrchestrator(
+                    service=self,
+                    stager=ToolboxBundleStager(self.hosting_root),
+                    python_executable=str(runtime.get("python_executable") or "").strip() or None,
+                )
+                assignments = orchestrator.spawn_assignments(
+                    toolbox_id=tid,
+                    requests=auto_requests,
+                    manual_requests=manual_requests,
+                    intrinsic_tool_names=intrinsic_names,
+                    intrinsic_profile=intrinsic_profile,
+                    with_intrinsic_guides=with_intrinsic_guides,
+                    worker_profile_class=str(runtime.get("worker_profile_class") or "generic"),
+                )
+                try:
+                    ready_rollout = self._ensure_toolbox_assignments_ready(assignments, timeout_seconds=8.0)
+                except Exception:
+                    for item in assignments:
+                        reg = dict(item.registration or {})
+                        engine_id = str(reg.get("engine_id") or "").strip()
+                        if engine_id:
+                            self._retire_toolbox_registration(engine_id)
+                    self._cleanup_unused_toolbox_environments(state)
+                    raise
+
+                new_profiles: Dict[str, Dict[str, Any]] = {}
+                spawned_engine_ids: List[str] = []
+                replaced_engine_ids: List[str] = []
                 for item in assignments:
+                    profile_id = item.sandbox_profile.normalized_profile_id()
                     reg = dict(item.registration or {})
                     engine_id = str(reg.get("engine_id") or "").strip()
                     if engine_id:
-                        self._retire_toolbox_registration(engine_id)
-                self._cleanup_unused_toolbox_environments(state)
-                raise
+                        spawned_engine_ids.append(engine_id)
+                    old_engine_id = str(old_regs_by_profile.get(profile_id) or "").strip()
+                    bundle_revision = str(dict(reg.get("bundle") or {}).get("bundle_revision") or "")
+                    if old_engine_id and old_engine_id != engine_id:
+                        replaced_engine_ids.append(old_engine_id)
+                    profile_auto_requests = [
+                        req.to_runtime_dict()
+                        for req in auto_requests
+                        if req.sandbox_profile.normalized_profile_id() == profile_id
+                    ]
+                    profile_manual_requests = [
+                        req.to_runtime_dict()
+                        for req in manual_requests
+                        if req.sandbox_profile.normalized_profile_id() == profile_id
+                    ]
+                    new_profiles[profile_id] = {
+                        "sandbox_profile": item.sandbox_profile.to_dict(),
+                        "requests": profile_auto_requests,
+                        "manual_requests": profile_manual_requests,
+                        "engine_id": engine_id,
+                        "bundle_revision": bundle_revision,
+                        "environment": dict(reg.get("environment") or {}),
+                        "rollout": dict(ready_rollout.get(engine_id) or {}),
+                        "rollout_history": self._append_toolbox_rollout_history(
+                            dict(existing_profiles.get(profile_id) or {}),
+                            rollout=dict(ready_rollout.get(engine_id) or {}),
+                            action="repair",
+                            engine_id=engine_id,
+                            bundle_revision=bundle_revision,
+                            replaced_engine_id=old_engine_id,
+                        ),
+                    }
+                for profile_id, old_engine_id in old_regs_by_profile.items():
+                    if profile_id not in new_profiles and old_engine_id:
+                        replaced_engine_ids.append(old_engine_id)
+                for old_engine_id in replaced_engine_ids:
+                    self._retire_toolbox_registration(old_engine_id)
 
-            new_profiles: Dict[str, Dict[str, Any]] = {}
-            spawned_engine_ids: List[str] = []
-            replaced_engine_ids: List[str] = []
-            for item in assignments:
-                profile_id = item.sandbox_profile.normalized_profile_id()
-                reg = dict(item.registration or {})
-                engine_id = str(reg.get("engine_id") or "").strip()
-                if engine_id:
-                    spawned_engine_ids.append(engine_id)
-                old_engine_id = str(old_regs_by_profile.get(profile_id) or "").strip()
-                bundle_revision = str(dict(reg.get("bundle") or {}).get("bundle_revision") or "")
-                if old_engine_id and old_engine_id != engine_id:
-                    replaced_engine_ids.append(old_engine_id)
-                profile_auto_requests = [
-                    req.to_runtime_dict()
-                    for req in auto_requests
-                    if req.sandbox_profile.normalized_profile_id() == profile_id
-                ]
-                profile_manual_requests = [
-                    req.to_runtime_dict()
-                    for req in manual_requests
-                    if req.sandbox_profile.normalized_profile_id() == profile_id
-                ]
-                new_profiles[profile_id] = {
-                    "sandbox_profile": item.sandbox_profile.to_dict(),
-                    "requests": profile_auto_requests,
-                    "manual_requests": profile_manual_requests,
-                    "engine_id": engine_id,
-                    "bundle_revision": bundle_revision,
-                    "environment": dict(reg.get("environment") or {}),
-                    "rollout": dict(ready_rollout.get(engine_id) or {}),
-                    "rollout_history": self._append_toolbox_rollout_history(
-                        dict(existing_profiles.get(profile_id) or {}),
-                        rollout=dict(ready_rollout.get(engine_id) or {}),
-                        action="repair",
-                        engine_id=engine_id,
-                        bundle_revision=bundle_revision,
-                        replaced_engine_id=old_engine_id,
+                toolboxes[tid] = {
+                    "toolbox_id": tid,
+                    "requests": [req.to_runtime_dict() for req in auto_requests],
+                    "manual_requests": [req.to_runtime_dict() for req in manual_requests],
+                    "profiles": new_profiles,
+                    "runtime": runtime,
+                    **(
+                        {
+                            "intrinsics": {
+                                "names": intrinsic_names,
+                                "sandbox_profile": (intrinsic_profile or SandboxProfileSpec(profile_id="default")).to_dict(),
+                                "with_intrinsic_guides": with_intrinsic_guides,
+                            }
+                        }
+                        if intrinsic_names
+                        else {}
                     ),
                 }
-            for profile_id, old_engine_id in old_regs_by_profile.items():
-                if profile_id not in new_profiles and old_engine_id:
-                    replaced_engine_ids.append(old_engine_id)
-            for old_engine_id in replaced_engine_ids:
-                self._retire_toolbox_registration(old_engine_id)
+                repaired[tid] = {
+                    "profiles": new_profiles,
+                    "spawned_engine_ids": spawned_engine_ids,
+                    "ready_engine_ids": list(ready_rollout.keys()),
+                    "rollout": ready_rollout,
+                    "replaced_engine_ids": replaced_engine_ids,
+                }
 
-            toolboxes[tid] = {
-                "toolbox_id": tid,
-                "requests": [req.to_runtime_dict() for req in auto_requests],
-                "manual_requests": [req.to_runtime_dict() for req in manual_requests],
-                "profiles": new_profiles,
-                "runtime": runtime,
-                **(
-                    {
-                        "intrinsics": {
-                            "names": intrinsic_names,
-                            "sandbox_profile": (intrinsic_profile or SandboxProfileSpec(profile_id="default")).to_dict(),
-                            "with_intrinsic_guides": with_intrinsic_guides,
-                        }
-                    }
-                    if intrinsic_names
-                    else {}
-                ),
-            }
-            repaired[tid] = {
-                "profiles": new_profiles,
-                "spawned_engine_ids": spawned_engine_ids,
-                "ready_engine_ids": list(ready_rollout.keys()),
-                "rollout": ready_rollout,
-                "replaced_engine_ids": replaced_engine_ids,
-            }
-
-        state["toolboxes"] = toolboxes
-        self._write_toolboxes(state)
-        removed_environment_keys = self._cleanup_unused_toolbox_environments(state)
+            state["toolboxes"] = toolboxes
+            self._write_toolboxes(state)
+            removed_environment_keys = self._cleanup_unused_toolbox_environments(state)
         result = {
             "status": "ok",
             "requested_toolbox_ids": requested_toolbox_ids,

@@ -260,7 +260,7 @@ class LightweightToolsCliHandler:
         hosted = self.get_hosted_summary() or {}
         return [
             str(item or "").strip()
-            for item in list(hosted.get("advertised_tool_names") or hosted.get("all_registered_tool_names") or [])
+            for item in list(hosted.get("advertised_tool_names") or [])
             if str(item or "").strip()
         ]
 

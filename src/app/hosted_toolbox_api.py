@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from hosting import HostedToolBoxRef
-from hosting.toolbox_harness import ToolboxExecutionHarness, ToolboxHarnessConfig
+from hosting.toolbox_harness import (
+    ToolboxExecutionHarness,
+    ToolboxHarnessConfig,
+    is_canceled_tool_error as _is_canceled_tool_error,
+    should_resubmit_canceled_tool_call as _should_resubmit_canceled_tool_call,
+)
 
 
 def create_hosted_toolbox_ref(
@@ -83,6 +88,29 @@ def create_hosted_toolbox_executor(
     )
 
 
+def is_hosted_tool_call_canceled(tool_call: Any) -> bool:
+    """
+    Return True when a hosted tool-call result represents coarse sandbox recycle
+    cancellation rather than a normal tool failure.
+    """
+    return _is_canceled_tool_error(tool_call)
+
+
+def should_resubmit_hosted_tool_call(
+    tool_call: Any,
+    *,
+    non_restartable: bool = False,
+) -> bool:
+    """
+    Helper for wrappers that want a default retry decision after coarse hosted
+    sandbox recycling. Non-restartable tools stay opted out.
+    """
+    return _should_resubmit_canceled_tool_call(
+        tool_call,
+        non_restartable=non_restartable,
+    )
+
+
 class HostedToolExecutionRouter:
     """
     Small app-facing router that preserves a native toolbox execution path while
@@ -120,6 +148,8 @@ class HostedToolExecutionRouter:
                 "status": "ok",
                 "toolbox_id": str(toolbox_id or "").strip(),
                 "all_registered_tool_names": list(explicit_names),
+                "advertised_tool_names": list(explicit_names),
+                "hidden_allowed_tool_names": [],
                 "source": "explicit",
             }
         else:
@@ -131,9 +161,7 @@ class HostedToolExecutionRouter:
                     described_names = [
                         str(item or "").strip()
                         for item in list(
-                            payload.get("advertised_tool_names")
-                            or payload.get("all_registered_tool_names")
-                            or []
+                            payload.get("advertised_tool_names") or []
                         )
                         if str(item or "").strip()
                     ]

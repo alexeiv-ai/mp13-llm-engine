@@ -30,6 +30,10 @@ Current status:
 19. coarse `toolbox.cancel` can now record optional tool-call identity and persist recent cancel events in toolbox runtime metadata so later restart policy can know what caused sandbox recycling
 20. hosted auto/manual tool registrations can now persist a `non_restartable` flag, defaulting to `false`, so future sandbox-restart policy can distinguish tools that should not be auto-resumed
 21. non-chat hosted tool-runtime execution now defaults to parallel multi-call dispatch, so one hosted response can execute multiple tool calls with native-style concurrency even while `mp13chat` remains explicitly serial for now
+22. hosted repair/rebuild flows now serialize per targeted `toolbox_id`, so concurrent repair attempts against the same hosted toolbox do not overlap sandbox respawn or state rewrite work
+23. lightweight hosted tool-round execution now returns coarse-cancel guidance directly in `ToolRoundResult`, including canceled tool names and resubmittable tool names after applying `non_restartable`
+24. hosted demo helpers now expose the exact `execute_tool_round_on_cursor(...)` options a thin client should pass for coarse-cancel retry policy, using the plan's persisted `non_restartable` flags
+25. remaining app-facing hosted presentation helpers no longer fall back to coarse `all_registered_tool_names`; UI-facing hosted visibility now reads the explicit advertised/hidden split only
 
 ## 2. Most Important Current Contracts
 
@@ -118,11 +122,12 @@ Validated in the user environment:
 1. hosted semantic parity is improved, but still not fully proven across every app/runtime path
    - host-side dispatch now accepts request-scoped `ToolsView`
    - app-side visibility helpers now preserve hosted hidden-but-allowed tools
+   - app-facing hosted presentation helpers now avoid coarse full-membership fallback for visible-tool lists
    - focused runtime coverage now exercises scoped deny plus hidden-but-allowed hosted execution in one hosted round
    - real chat coverage now exercises `/t` and `/t sc` presentation for hosted visible, hidden-allowed, and gated states
    - `mp13chat` tool-management handling now shares the lightweight handler used by hosted tests
    - operator review/admin now expose the same registered/advertised/hidden split
-   - remaining risk is broader non-chat hosted-consumer validation outside the focused runtime/chat/operator slices
+   - remaining risk is mostly future consumers, not the current app/admin helpers that have now been re-audited
 2. hosted user-tool hidden state is now representable in staged/persisted hosted requests
    - remaining gap is broader operator/runtime surface adoption, not manifest-state absence
 3. live dead-worker detection is now present in consistency/review, but operator UX may still want small polish
@@ -142,7 +147,8 @@ Validated in the user environment:
    - same sandbox executor can serve overlapping tool calls
    - same hosted toolbox ref can now tolerate concurrent read/execute-style use better
    - non-chat hosted tool rounds no longer force serial execution, so multiple tool calls in one response can overlap through the sandbox harness
-   - broader mutation/rebuild paths outside the explicit per-toolbox registration flows may still want more locking if concurrency pressure increases
+   - repair/rebuild now also serialize per targeted toolbox id
+   - broader housekeeping paths outside the explicit per-toolbox registration and repair flows may still want more locking if concurrency pressure increases
 
 ## 6. Starting Point For The Next Thread
 

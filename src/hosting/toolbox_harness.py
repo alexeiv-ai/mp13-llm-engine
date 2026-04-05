@@ -41,6 +41,39 @@ def serialize_tools_view(tools_view: Optional[ToolsView]) -> Optional[Dict[str, 
     }
 
 
+def is_canceled_tool_error(tool_call: Any) -> bool:
+    if isinstance(tool_call, dict):
+        error_text = str(tool_call.get("error") or "").strip().lower()
+    else:
+        error_text = str(getattr(tool_call, "error", "") or "").strip().lower()
+    return error_text == "canceled" or error_text.startswith("execution canceled:")
+
+
+def should_resubmit_canceled_tool_call(
+    tool_call: Any,
+    *,
+    non_restartable: bool = False,
+) -> bool:
+    return is_canceled_tool_error(tool_call) and not bool(non_restartable)
+
+
+def _is_coarse_cancel_execution_error(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    cancel_markers = (
+        "toolbox_executor_missing",
+        "engine_not_found",
+        "no output",
+        "connection reset",
+        "broken pipe",
+        "end of file",
+        "eoferror",
+        "worker_exception",
+    )
+    return any(marker in message for marker in cancel_markers)
+
+
 @dataclass
 class ToolboxBundleFile:
     relative_path: str
@@ -2016,22 +2049,28 @@ class ToolboxExecutionHarness:
             reason = str(gate_payload.get("reason") or outcome).strip() or outcome
             call.error = f"Execution gated: {outcome} - {reason}:{str(call.name or '').strip()}"
             return call
-        if toolbox_id:
-            rpc_out = await asyncio.to_thread(
-                self.control_channel.toolbox_execute,
-                toolbox_id=toolbox_id,
-                tool_call=call.to_dict(),
-                timeout_seconds=float(timeout_seconds or 30.0),
-                tools_view=tools_view_payload,
-            )
-        else:
-            rpc_out = await asyncio.to_thread(
-                self.control_channel.toolbox_execute,
-                engine_id=engine_id,
-                tool_call=call.to_dict(),
-                timeout_seconds=float(timeout_seconds or 30.0),
-                tools_view=tools_view_payload,
-            )
+        try:
+            if toolbox_id:
+                rpc_out = await asyncio.to_thread(
+                    self.control_channel.toolbox_execute,
+                    toolbox_id=toolbox_id,
+                    tool_call=call.to_dict(),
+                    timeout_seconds=float(timeout_seconds or 30.0),
+                    tools_view=tools_view_payload,
+                )
+            else:
+                rpc_out = await asyncio.to_thread(
+                    self.control_channel.toolbox_execute,
+                    engine_id=engine_id,
+                    tool_call=call.to_dict(),
+                    timeout_seconds=float(timeout_seconds or 30.0),
+                    tools_view=tools_view_payload,
+                )
+        except Exception as exc:
+            if _is_coarse_cancel_execution_error(exc):
+                call.error = f"Execution canceled: sandbox_recycled:{str(call.name or '').strip()}"
+                return call
+            raise
         payload = dict(rpc_out or {})
         tool_out = dict(payload.get("tool_call") or {})
         return ToolCall.from_dict(tool_out) if tool_out else call

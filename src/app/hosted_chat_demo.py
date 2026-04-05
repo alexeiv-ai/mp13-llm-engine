@@ -100,6 +100,30 @@ class HostedChatDemoRuntime:
     plan: HostedChatDemoPlan
 
 
+def hosted_demo_non_restartable_tool_names(
+    runtime_or_plan: HostedChatDemoRuntime | HostedChatDemoPlan,
+) -> List[str]:
+    plan = runtime_or_plan.plan if isinstance(runtime_or_plan, HostedChatDemoRuntime) else runtime_or_plan
+    out: List[str] = []
+    seen: set[str] = set()
+    for request in list(plan.auto_requests or []):
+        if not bool(dict(request or {}).get("non_restartable", False)):
+            continue
+        tool_name = str(dict(request or {}).get("callable_name") or "").strip()
+        if tool_name and tool_name not in seen:
+            seen.add(tool_name)
+            out.append(tool_name)
+    return out
+
+
+def hosted_demo_tool_round_options(
+    runtime_or_plan: HostedChatDemoRuntime | HostedChatDemoPlan,
+) -> Dict[str, Any]:
+    return {
+        "non_restartable_tool_names": hosted_demo_non_restartable_tool_names(runtime_or_plan),
+    }
+
+
 def build_hosted_chat_demo_plan(
     *,
     toolbox_id: str,
@@ -162,6 +186,7 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs
                 "content": calc_source,
                 "module_name": "hosted_demo_math",
                 "callable_name": "SimpleCalc",
+                "non_restartable": False,
                 "environment_name": "base",
                 "required_imports": [],
                 "sandbox_policy": {
@@ -175,6 +200,7 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs
                 "content": file_source,
                 "module_name": "hosted_demo_fs",
                 "callable_name": "ProjectFilePeek",
+                "non_restartable": False,
                 "environment_name": "project-read",
                 "required_imports": [],
                 "sandbox_policy": {
@@ -221,6 +247,7 @@ def ExampleHttpPeek(url='https://example.com/', max_chars=300, **kwargs):
 """.strip() + "\n",
                 "module_name": "hosted_demo_http",
                 "callable_name": "ExampleHttpPeek",
+                "non_restartable": False,
                 "environment_name": "brokered-http",
                 "required_imports": [],
                 "sandbox_policy": {
@@ -302,6 +329,7 @@ def setup_hosted_chat_demo(
             required_imports=list(request.get("required_imports") or []),
             sandbox_policy=dict(request.get("sandbox_policy") or {}),
             activate=True,
+            non_restartable=bool(request.get("non_restartable", False)),
         )
     builder.resolve_sandbox()
     return HostedChatDemoRuntime(service=service, toolbox_ref=toolbox_ref, plan=plan)

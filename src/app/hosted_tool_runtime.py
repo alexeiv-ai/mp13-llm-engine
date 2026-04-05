@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from app.context_cursor import ChatCursor
+from hosting.toolbox_harness import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
 from mp13_engine.mp13_toolbox import ToolsView
 
@@ -36,6 +37,40 @@ def _tool_call_has_error(blocks: Sequence[ToolCallBlock]) -> bool:
     return False
 
 
+def summarize_canceled_tool_calls(
+    blocks: Sequence[ToolCallBlock],
+    *,
+    non_restartable_tool_names: Optional[Sequence[str]] = None,
+) -> Dict[str, List[str]]:
+    non_restartable = {
+        str(item or "").strip()
+        for item in list(non_restartable_tool_names or [])
+        if str(item or "").strip()
+    }
+    canceled: List[str] = []
+    resubmittable: List[str] = []
+    seen_canceled: set[str] = set()
+    seen_resubmittable: set[str] = set()
+    for block in list(blocks or []):
+        for tool_call in list(getattr(block, "calls", []) or []):
+            tool_name = str(getattr(tool_call, "name", "") or "").strip()
+            if not tool_name or not is_canceled_tool_error(tool_call):
+                continue
+            if tool_name not in seen_canceled:
+                seen_canceled.add(tool_name)
+                canceled.append(tool_name)
+            if should_resubmit_canceled_tool_call(
+                tool_call,
+                non_restartable=tool_name in non_restartable,
+            ) and tool_name not in seen_resubmittable:
+                seen_resubmittable.add(tool_name)
+                resubmittable.append(tool_name)
+    return {
+        "canceled_tool_names": canceled,
+        "resubmittable_tool_names": resubmittable,
+    }
+
+
 @dataclass
 class ToolRoundResult:
     had_tool_blocks: bool
@@ -43,6 +78,8 @@ class ToolRoundResult:
     scheduled_auto_iteration: bool
     aborted: bool
     tool_result_cursor_id: Optional[str] = None
+    canceled_tool_names: List[str] = field(default_factory=list)
+    resubmittable_tool_names: List[str] = field(default_factory=list)
 
 
 async def execute_tool_round_on_cursor(
@@ -61,6 +98,7 @@ async def execute_tool_round_on_cursor(
     auto_tool_retry_limit: int = 5,
     auto_anchor_prefix: str = "auto_tool",
     serial_execution: bool = False,
+    non_restartable_tool_names: Optional[Sequence[str]] = None,
 ) -> ToolRoundResult:
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
@@ -72,6 +110,8 @@ async def execute_tool_round_on_cursor(
             executed=False,
             scheduled_auto_iteration=False,
             aborted=False,
+            canceled_tool_names=[],
+            resubmittable_tool_names=[],
         )
 
     final_text_response = responses_in_progress.get(0, "")
@@ -88,6 +128,8 @@ async def execute_tool_round_on_cursor(
             executed=False,
             scheduled_auto_iteration=False,
             aborted=False,
+            canceled_tool_names=[],
+            resubmittable_tool_names=[],
         )
 
     await tool_executor.execute_request_tools(
@@ -101,6 +143,10 @@ async def execute_tool_round_on_cursor(
         tool_retries_max=tool_retries_max,
         tool_retries_left=tool_retries_left,
     )
+    canceled_summary = summarize_canceled_tool_calls(
+        all_tool_blocks,
+        non_restartable_tool_names=non_restartable_tool_names,
+    )
 
     aborted = _tool_blocks_have_abort(all_tool_blocks)
     if aborted:
@@ -109,6 +155,8 @@ async def execute_tool_round_on_cursor(
             executed=True,
             scheduled_auto_iteration=False,
             aborted=True,
+            canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
+            resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),
         )
 
     if not _tool_blocks_have_results(all_tool_blocks):
@@ -117,6 +165,8 @@ async def execute_tool_round_on_cursor(
             executed=True,
             scheduled_auto_iteration=False,
             aborted=False,
+            canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
+            resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),
         )
 
     anchor_name = f"{str(auto_anchor_prefix or 'auto_tool')}:{cursor.context_id or getattr(cursor.head, 'gen_id', '') or 'cursor'}"
@@ -175,4 +225,6 @@ async def execute_tool_round_on_cursor(
         scheduled_auto_iteration=True,
         aborted=False,
         tool_result_cursor_id=tool_results_cursor.context_id,
+        canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
+        resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),
     )

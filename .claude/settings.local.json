@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(python test_poc.py:*)",
+      "Bash(python run.py:*)",
+      "Bash(poetry install:*)",
+      "Bash(timeout 5 poetry run python:*)",
+      "Bash(poetry lock:*)"
+    ]
+  }
+}
