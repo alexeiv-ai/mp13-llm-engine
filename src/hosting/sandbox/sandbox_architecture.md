@@ -730,6 +730,49 @@ The same attach path is also exposed as a public app helper:
 3. the same hosted attach helpers are also re-exported from the top-level `app` package for cleaner wrapper imports
 4. `demo/demo_hosted_toolbox_attach.py` is the minimal sample wrapper showing this non-demo attach flow against an existing hosted toolbox deployment
 
+### 14.5 Public Approval Callback Contract
+
+From a wrapper/public-API point of view, the approval contract is intentionally small.
+
+If hosted execution encounters a tool whose gate outcome is `gated_requires_confirmation`:
+
+1. the wrapper-supplied `callback_processor` receives callback name `tool_requires_confirmation`
+2. the callback payload kind is `tool_approval_request`
+3. the payload includes:
+   - `tool_name`
+   - `tool_call_id`
+   - `tool_arguments`
+   - `gate`
+   - current serialized `tools_view`
+   - `decision_options`
+4. valid decisions are:
+   - `deny`
+   - `allow_once`
+   - `add_to_scope`
+5. current decision semantics are:
+   - `deny`: do not execute the tool
+   - `allow_once`: execute only this call
+   - `add_to_scope`: execute this call and persist the approval through a durable scope target when one is available
+6. timeout or invalid decisions default to deny
+
+### 14.6 Wrapper Consistency
+
+Wrapper consistency means every public hosted execution path should give the same answer to one question:
+
+1. if a user approves `add_to_scope`, where does that approval persist?
+
+For this to stay coherent across wrappers:
+
+1. wrappers that want persistent approval must route execution through a path that forwards a durable scope target such as a `ToolBoxRef`
+2. wrappers that cannot provide such a scope target should either:
+   - treat `add_to_scope` as unavailable in their UX
+   - or document clearly that only `allow_once` is effectively durable there
+3. the lightweight helper `execute_tool_round_on_cursor(...)` now does the right thing by auto-forwarding:
+   - the active `cursor`
+   - the context `toolbox_ref`
+
+So “wrapper consistency” is not about transport. It is about making sure approval semantics do not silently differ between public entrypoints.
+
 It validates:
 
 1. multi-profile routing in chat
@@ -820,7 +863,7 @@ The original foundational sandbox plan is largely complete.
 The next active architectural investment is no longer “make hosted sandboxing real.” It is:
 
 1. gated-tool semantics
-2. hosted approval flow for gated tools
+2. completing hosted approval flow for gated tools
 
 ### 18.1 Why This Is Next
 
@@ -850,14 +893,30 @@ Planned phases are:
    - add to scope
 4. explicit guide execution policy for gated tools
 
+Current status:
+
+1. phases 1 and 2 first slice are implemented
+2. the hosted approval callback currently reuses the hosted callback processor with:
+   - callback name: `tool_requires_confirmation`
+   - payload kind: `tool_approval_request`
+   - decisions: `deny`, `allow_once`, `add_to_scope`
+3. `allow_once` only affects the current execution request
+4. `add_to_scope` affects the current execution request immediately and persists through a durable `ToolBoxRef`
+5. the hosted runtime helper now auto-forwards the active cursor and context `toolbox_ref` into approval callback context
+6. repeated-call approval now dedupes by tool name only for sticky decisions:
+   - `deny`
+   - `add_to_scope`
+7. `allow_once` remains per-call and is intentionally not cached
+8. approval timeout defaults to deny
+
 ### 18.3 Main Open Questions
 
 The main unresolved architectural questions are:
 
 1. disabled vs gated precedence
 2. hidden vs gated presentation
-3. per-round dedupe behavior for repeated gated calls
-4. allow-once vs add-to-scope storage semantics
+3. how every public hosted wrapper should expose or hide approval-time timeout controls
+4. how hosted wrappers beyond the current runtime/helper path should supply a durable scope target for `add_to_scope`
 5. whether guides should execute in stripped sandbox or safe in-proc mode
 
 ## 19. Related Sandbox Docs

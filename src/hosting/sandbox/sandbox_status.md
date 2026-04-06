@@ -46,7 +46,7 @@ What is missing:
 
 ### 2.2 Phase 2: Interactive Hosted Approval
 
-Status: blocked on Phase 1 semantics
+Status: first hosted slice implemented
 
 What exists already:
 
@@ -58,13 +58,26 @@ What exists already:
    - tool call id
    - tool arguments
    - caller context
+4. approval callback contract:
+   - callback name: `tool_requires_confirmation`
+   - payload kind: `tool_approval_request`
+   - decisions: `deny`, `allow_once`, `add_to_scope`
+5. current execution semantics:
+   - `allow_once` mutates only the current execution view
+   - `add_to_scope` mutates the current execution view and persists through a provided `ToolBoxRef`
+   - app-level hosted runtime now auto-forwards the active cursor plus context `toolbox_ref` for hosted rounds
+   - delayed or missing approval now defaults to deny by timeout
+   - repeated gated calls in the same hosted round dedupe by tool name for sticky decisions:
+     - `deny`
+     - `add_to_scope`
+   - `allow_once` is intentionally not cached because it is per-call only
+   - default behavior remains deny when no approval processor is present or the decision is invalid
 
 What is missing:
 
-1. approval callback schema
-2. allow-once semantics
-3. add-to-scope semantics
-4. dedupe and timeout rules
+1. final docs for public approval-callback usage
+2. broader wrapper adoption beyond the hosted runtime helper and direct hosted ref path
+3. confirmation of the preferred public timeout override surface
 
 ### 2.3 Phase 3: Guide Policy
 
@@ -88,21 +101,20 @@ Highest-risk areas:
 
 1. disabled vs gated precedence
 2. hidden vs gated presentation
-3. per-round repeated gated calls
-4. scope mutation semantics for `allow_once` vs `add_to_scope`
+3. whether every hosted wrapper path consistently provides a stable scope target for `add_to_scope`
 5. guide execution trust model
-6. approval callback contract once Phase 2 starts
+6. public approval callback ergonomics
 
 ## 4. Recommended Next Step
 
 Recommended next implementation step:
 
-1. consolidate the Phase 1 gated semantics docs
-2. decide the Phase 2 approval callback schema
-3. define `allow_once` / `add_to_scope` mutation semantics
-4. keep the Windows callback relay fix covered in regression runs
+1. propagate the same auto scope-target behavior through any remaining hosted wrapper entrypoints
+2. document the approval callback as a stable hosted contract
+3. start Phase 3 guide-policy work
+4. keep the Windows callback relay fix and the approval slices covered in regression runs
 
-Do not start the interactive approval callback until that semantic base is stable.
+The hosted approval callback is now stable enough for broader wrapper adoption. The remaining work is contract polish and guide policy.
 
 ## 5. Key References
 

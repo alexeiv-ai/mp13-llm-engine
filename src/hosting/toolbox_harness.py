@@ -15,6 +15,7 @@ import threading
 import time
 import venv
 import ctypes
+import concurrent.futures
 import multiprocessing.connection as mp_connection
 from ctypes import wintypes
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
-from mp13_engine.mp13_toolbox import Toolbox, ToolsView
+from mp13_engine.mp13_toolbox import ToolBoxRef, Toolbox, ToolsScope, ToolsView
 from mp13_engine.mp13_tools_parser import UnifiedToolIO
 
 
@@ -173,6 +174,134 @@ class HostedToolCallbackContext:
     callback_payload: Any = None
     callback_signature: Optional[Dict[str, Any]] = None
     user_context: Any = None
+    gate_outcome: Optional[str] = None
+    gate_reason: Optional[str] = None
+    requires_confirmation: bool = False
+
+
+_HOSTED_TOOL_APPROVAL_CALLBACK = "tool_requires_confirmation"
+_HOSTED_TOOL_APPROVAL_DECISIONS = ("deny", "allow_once", "add_to_scope")
+
+
+def _clone_tools_view(tools_view: Optional[ToolsView]) -> Optional[ToolsView]:
+    if tools_view is None:
+        return None
+    return ToolsView(
+        view_id=str(tools_view.view_id or "").strip(),
+        mode=str(tools_view.mode or "").strip() or "advertised",
+        allowed_tools=set(tools_view.allowed_tools or set()),
+        advertised_tools=set(tools_view.advertised_tools or set()),
+        hidden_allowed_tools=set(tools_view.hidden_allowed_tools or set()),
+        disabled_tools=set(tools_view.disabled_tools or set()),
+        gated_tools=set(tools_view.gated_tools or set()),
+    )
+
+
+def _approve_tool_in_view(tools_view: Optional[ToolsView], tool_name: str, *, mutate: bool) -> Optional[ToolsView]:
+    view = tools_view if mutate else _clone_tools_view(tools_view)
+    if view is None:
+        return None
+    name = str(tool_name or "").strip()
+    if not name:
+        return view
+    view.gated_tools.discard(name)
+    if name not in view.disabled_tools:
+        view.allowed_tools.add(name)
+    return view
+
+
+def _resolve_scope_ref_from_callback_context(callback_context: Any) -> Optional[ToolBoxRef]:
+    candidate = None
+    cursor = None
+    if isinstance(callback_context, ToolBoxRef):
+        return callback_context
+    if isinstance(callback_context, dict):
+        candidate = callback_context.get("toolbox_ref") or callback_context.get("scope_ref")
+        cursor = callback_context.get("cursor")
+    else:
+        candidate = getattr(callback_context, "toolbox_ref", None) or getattr(callback_context, "scope_ref", None)
+        cursor = getattr(callback_context, "cursor", None)
+    if isinstance(candidate, ToolBoxRef):
+        return candidate
+    context = getattr(cursor, "context", None) if cursor is not None else None
+    ref = getattr(context, "toolbox_ref", None) if context is not None else None
+    return ref if isinstance(ref, ToolBoxRef) else None
+
+
+def _persist_approved_tool(scope_ref: Optional[ToolBoxRef], tool_name: str) -> bool:
+    if scope_ref is None or not callable(getattr(scope_ref, "mutate_scope", None)):
+        return False
+    name = str(tool_name or "").strip()
+    if not name:
+        return False
+
+    def _update(scope: ToolsScope) -> ToolsScope:
+        scope = scope or ToolsScope()
+        scope.gated_tools.discard(name)
+        return scope
+
+    scope_ref.mutate_scope(_update)
+    return True
+
+
+def _coerce_approval_decision(result: Any) -> str:
+    if isinstance(result, str):
+        decision = str(result or "").strip().lower()
+    elif isinstance(result, dict):
+        decision = str(result.get("decision") or "").strip().lower()
+    else:
+        decision = ""
+    return decision if decision in _HOSTED_TOOL_APPROVAL_DECISIONS else "deny"
+
+
+def _approval_timeout_seconds(callback_context: Any, default_seconds: float = 15.0) -> float:
+    raw: Any = None
+    if isinstance(callback_context, dict):
+        raw = callback_context.get("approval_timeout_seconds")
+    else:
+        raw = getattr(callback_context, "approval_timeout_seconds", None)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default_seconds or 15.0)
+    if value <= 0:
+        value = float(default_seconds or 15.0)
+    return value
+
+
+def _request_hosted_tool_approval_with_timeout(
+    *,
+    processor: Optional[Callable[..., Any]],
+    toolbox_id: str,
+    tool_name: str,
+    tool_call_id: str,
+    tool_arguments: Optional[Dict[str, Any]] = None,
+    callback_context: Any = None,
+    gate_payload: Optional[Dict[str, Any]] = None,
+    tools_view: Optional[ToolsView] = None,
+    timeout_seconds: Optional[float] = None,
+) -> str:
+    if not callable(processor):
+        return "deny"
+    timeout_value = float(timeout_seconds or _approval_timeout_seconds(callback_context))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            _request_hosted_tool_approval,
+            processor=processor,
+            toolbox_id=toolbox_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_arguments=tool_arguments,
+            callback_context=callback_context,
+            gate_payload=gate_payload,
+            tools_view=tools_view,
+        )
+        try:
+            return _coerce_approval_decision(future.result(timeout=timeout_value))
+        except concurrent.futures.TimeoutError:
+            return "deny"
+        except Exception:
+            return "deny"
 
 
 class _HostedToolCallbackRelay:
@@ -330,6 +459,53 @@ class _HostedToolCallbackRelay:
                 conn.close()
             except Exception:
                 pass
+
+
+def _request_hosted_tool_approval(
+    *,
+    processor: Optional[Callable[..., Any]],
+    toolbox_id: str,
+    tool_name: str,
+    tool_call_id: str,
+    tool_arguments: Optional[Dict[str, Any]] = None,
+    callback_context: Any = None,
+    gate_payload: Optional[Dict[str, Any]] = None,
+    tools_view: Optional[ToolsView] = None,
+) -> str:
+    if not callable(processor):
+        return "deny"
+    gate = dict(gate_payload or {})
+    context = HostedToolCallbackContext(
+        toolbox_id=str(toolbox_id or "").strip(),
+        tool_name=str(tool_name or "").strip(),
+        tool_call_id=str(tool_call_id or "").strip() or None,
+        tool_arguments=dict(tool_arguments or {}),
+        callback_name=_HOSTED_TOOL_APPROVAL_CALLBACK,
+        callback_payload={
+            "kind": "tool_approval_request",
+            "decision_options": list(_HOSTED_TOOL_APPROVAL_DECISIONS),
+            "tool_name": str(tool_name or "").strip(),
+            "tool_call_id": str(tool_call_id or "").strip() or None,
+            "tool_arguments": dict(tool_arguments or {}),
+            "gate": {
+                "outcome": str(gate.get("outcome") or "").strip() or "gated_requires_confirmation",
+                "reason": str(gate.get("reason") or "").strip() or "gated_requires_confirmation",
+                "requires_confirmation": bool(gate.get("requires_confirmation", True)),
+            },
+            "tools_view": serialize_tools_view(tools_view),
+        },
+        user_context=callback_context,
+        gate_outcome=str(gate.get("outcome") or "").strip() or "gated_requires_confirmation",
+        gate_reason=str(gate.get("reason") or "").strip() or "gated_requires_confirmation",
+        requires_confirmation=bool(gate.get("requires_confirmation", True)),
+    )
+    result = _HostedToolCallbackRelay._invoke_processor(
+        processor,
+        callback_name=_HOSTED_TOOL_APPROVAL_CALLBACK,
+        payload=context.callback_payload,
+        context=context,
+    )
+    return _coerce_approval_decision(result)
 
 
 @dataclass
@@ -2286,6 +2462,10 @@ class ToolboxExecutionHarness:
             "serial_execution": serial_execution,
         }
         await action_handler(execute_stage="calls_parsed", **parsed_kwargs)
+        approval_state: Dict[str, Any] = {
+            "cache": {},
+            "lock": asyncio.Lock(),
+        }
 
         async def _execute_and_handle(
             tool_call: ToolCall,
@@ -2319,6 +2499,7 @@ class ToolboxExecutionHarness:
                     ),
                     callback_processor=callback_processor,
                     callback_context=callback_context,
+                    approval_state=approval_state,
                 )
                 tool_call.result = executed.result
                 tool_call.error = executed.error
@@ -2377,6 +2558,7 @@ class ToolboxExecutionHarness:
         native_execute_kwargs: Dict[str, Any],
         callback_processor: Optional[Callable[..., Any]] = None,
         callback_context: Any = None,
+        approval_state: Optional[Dict[str, Any]] = None,
     ) -> ToolCall:
         mode = str(self.config.mode or "native").strip().lower()
         if mode == "native":
@@ -2388,7 +2570,8 @@ class ToolboxExecutionHarness:
             return call
         engine_id = await self._select_engine_id()
         toolbox_id = str(self.config.sandbox_toolbox_id or "").strip()
-        tools_view_payload = serialize_tools_view(native_execute_kwargs.get("tools_view"))
+        requested_tools_view = native_execute_kwargs.get("tools_view")
+        tools_view_payload = serialize_tools_view(requested_tools_view)
         gate_payload: Dict[str, Any] = {}
         if hasattr(self.control_channel, "toolbox_gate"):
             if toolbox_id:
@@ -2411,9 +2594,94 @@ class ToolboxExecutionHarness:
                 )
         outcome = str(gate_payload.get("outcome") or "").strip().lower()
         if outcome and outcome != "allowed":
-            reason = str(gate_payload.get("reason") or outcome).strip() or outcome
-            call.error = f"Execution gated: {outcome} - {reason}:{str(call.name or '').strip()}"
-            return call
+            if outcome == "gated_requires_confirmation":
+                decision = ""
+                cache_key = str(call.name or "").strip()
+                cache = dict(approval_state or {}).get("cache") if isinstance(approval_state, dict) else None
+                cache_lock = dict(approval_state or {}).get("lock") if isinstance(approval_state, dict) else None
+                cache_future: Optional[asyncio.Future[str]] = None
+                is_owner = False
+                if cache_key and cache is not None and isinstance(cache_lock, asyncio.Lock):
+                    async with cache_lock:
+                        existing = cache.get(cache_key)
+                        if isinstance(existing, asyncio.Future):
+                            cache_future = existing
+                        elif isinstance(existing, str) and existing in {"deny", "add_to_scope"}:
+                            decision = existing
+                        else:
+                            cache_future = asyncio.get_running_loop().create_future()
+                            cache[cache_key] = cache_future
+                            is_owner = True
+                    if not decision and cache_future is not None:
+                        if is_owner:
+                            timeout_value = _approval_timeout_seconds(callback_context)
+                            try:
+                                decision = await asyncio.wait_for(
+                                    asyncio.to_thread(
+                                        _request_hosted_tool_approval,
+                                        processor=callback_processor,
+                                        toolbox_id=toolbox_id,
+                                        tool_name=cache_key,
+                                        tool_call_id=str(call.id or "").strip(),
+                                        tool_arguments=dict(call.arguments or {}),
+                                        callback_context=callback_context,
+                                        gate_payload=gate_payload,
+                                        tools_view=requested_tools_view,
+                                    ),
+                                    timeout=timeout_value,
+                                )
+                            except Exception:
+                                decision = "deny"
+                            if not cache_future.done():
+                                cache_future.set_result(decision)
+                            async with cache_lock:
+                                if decision in {"deny", "add_to_scope"}:
+                                    cache[cache_key] = decision
+                                elif cache.get(cache_key) is cache_future:
+                                    cache.pop(cache_key, None)
+                        else:
+                            try:
+                                decision = await cache_future
+                            except Exception:
+                                decision = "deny"
+                if not decision:
+                    timeout_value = _approval_timeout_seconds(callback_context)
+                    try:
+                        decision = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _request_hosted_tool_approval,
+                                processor=callback_processor,
+                                toolbox_id=toolbox_id,
+                                tool_name=str(call.name or "").strip(),
+                                tool_call_id=str(call.id or "").strip(),
+                                tool_arguments=dict(call.arguments or {}),
+                                callback_context=callback_context,
+                                gate_payload=gate_payload,
+                                tools_view=requested_tools_view,
+                            ),
+                            timeout=timeout_value,
+                        )
+                    except Exception:
+                        decision = "deny"
+                if decision == "allow_once":
+                    tools_view_payload = serialize_tools_view(
+                        _approve_tool_in_view(requested_tools_view, str(call.name or "").strip(), mutate=False)
+                    )
+                elif decision == "add_to_scope":
+                    _approve_tool_in_view(requested_tools_view, str(call.name or "").strip(), mutate=True)
+                    _persist_approved_tool(
+                        _resolve_scope_ref_from_callback_context(callback_context),
+                        str(call.name or "").strip(),
+                    )
+                    tools_view_payload = serialize_tools_view(requested_tools_view)
+                else:
+                    reason = str(gate_payload.get("reason") or outcome).strip() or outcome
+                    call.error = f"Execution gated: denied - {reason}:{str(call.name or '').strip()}"
+                    return call
+            else:
+                reason = str(gate_payload.get("reason") or outcome).strip() or outcome
+                call.error = f"Execution gated: {outcome} - {reason}:{str(call.name or '').strip()}"
+                return call
         try:
             callback_binding = None
             if callable(callback_processor):
@@ -3040,6 +3308,64 @@ class HostedToolBoxRef:
         if not name:
             raise ValueError("tool_name_required")
         call_id = str(tool_call_id or "").strip() or secrets.token_hex(12)
+        requested_tools_view = tools_view
+        tools_view_payload = serialize_tools_view(requested_tools_view)
+        gate_out: Dict[str, Any] = {}
+        outcome = ""
+        if hasattr(self.host, "toolbox_gate"):
+            gate_out = self.gate(tool_name=name, tools_view=requested_tools_view)
+            outcome = str(gate_out.get("outcome") or "").strip().lower()
+        if outcome and outcome != "allowed":
+            if outcome == "gated_requires_confirmation":
+                decision = _request_hosted_tool_approval_with_timeout(
+                    processor=callback_processor,
+                    toolbox_id=self.toolbox_id,
+                    tool_name=name,
+                    tool_call_id=call_id,
+                    tool_arguments=dict(arguments or {}),
+                    callback_context=callback_context,
+                    gate_payload=gate_out,
+                    tools_view=requested_tools_view,
+                    timeout_seconds=_approval_timeout_seconds(callback_context),
+                )
+                if decision == "allow_once":
+                    tools_view_payload = serialize_tools_view(
+                        _approve_tool_in_view(requested_tools_view, name, mutate=False)
+                    )
+                elif decision == "add_to_scope":
+                    _approve_tool_in_view(requested_tools_view, name, mutate=True)
+                    _persist_approved_tool(_resolve_scope_ref_from_callback_context(callback_context), name)
+                    tools_view_payload = serialize_tools_view(requested_tools_view)
+                else:
+                    return {
+                        "status": "ok",
+                        "tool_call": {
+                            "id": call_id,
+                            "name": name,
+                            "arguments": dict(arguments or {}),
+                            "result": None,
+                            "error": f"Execution gated: denied - {str(gate_out.get('reason') or outcome).strip() or outcome}:{name}",
+                            "raw": None,
+                            "model_format": None,
+                            "parse_errors": [],
+                            "action": [],
+                        },
+                    }
+            else:
+                return {
+                    "status": "ok",
+                    "tool_call": {
+                        "id": call_id,
+                        "name": name,
+                        "arguments": dict(arguments or {}),
+                        "result": None,
+                        "error": f"Execution gated: {outcome} - {str(gate_out.get('reason') or outcome).strip() or outcome}:{name}",
+                        "raw": None,
+                        "model_format": None,
+                        "parse_errors": [],
+                        "action": [],
+                    },
+                }
         callback_binding = None
         if callable(callback_processor):
             if not hasattr(self, "_callback_relay"):
@@ -3069,7 +3395,7 @@ class HostedToolBoxRef:
                         "arguments": dict(arguments or {}),
                     },
                     timeout_seconds=float(timeout_seconds or 30.0),
-                    tools_view=serialize_tools_view(tools_view),
+                    tools_view=tools_view_payload,
                     callback_binding=dict(callback_binding or {}) or None,
                 )
                 or {}

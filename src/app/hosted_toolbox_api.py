@@ -156,6 +156,15 @@ def create_hosted_toolbox_executor(
 ) -> ToolboxExecutionHarness:
     """
     Construct a hosted toolbox execution harness suitable for app/runtime use.
+
+    Public approval-callback note:
+    - gated tools can trigger the hosted callback processor with callback name
+      `tool_requires_confirmation`
+    - the callback payload kind is `tool_approval_request`
+    - supported decisions are `deny`, `allow_once`, and `add_to_scope`
+    - `allow_once` affects only the current call
+    - `add_to_scope` persists only when the caller also supplies a durable
+      scope target such as a `ToolBoxRef`
     """
     return ToolboxExecutionHarness(
         config=ToolboxHarnessConfig(
@@ -195,6 +204,11 @@ class HostedToolExecutionRouter:
     """
     Small app-facing router that preserves a native toolbox execution path while
     allowing actual tool execution to be redirected through hosted sandbox IPC.
+
+    Wrapper consistency rule:
+    wrappers that expose hosted approval should route execution through a path
+    that also forwards a durable scope target when they want `add_to_scope` to
+    persist beyond one call.
     """
 
     def __init__(self) -> None:

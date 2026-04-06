@@ -8,6 +8,12 @@ The new gated-tool semantic slices are passing.
 Update: 2026-04-06
 The Windows generic hosted callback relay regression is fixed.
 Generic hosted callback relay slices now pass on both native Windows and WSL/Linux validation paths.
+Update: 2026-04-06
+The first interactive hosted approval slice is implemented and passing.
+Hosted approval now uses the callback processor with `tool_requires_confirmation` and decision values `deny`, `allow_once`, and `add_to_scope`.
+Update: 2026-04-06
+Hosted approval follow-up behavior is now covered too.
+Repeated gated calls dedupe by tool name for sticky decisions, approval timeout defaults to deny, and the hosted runtime auto-forwards the active cursor plus `toolbox_ref` into callback context.
 
 ## 1. Environment
 
@@ -45,7 +51,14 @@ Current automated coverage includes:
     - callback context propagation
     - callback concurrency
     - hosted execution-harness callback binding forwarding
-14. brokered callback attribution slices:
+14. hosted gated approval slices:
+    - allow-once execution override
+    - add-to-scope mutation for future calls in the same request
+    - hosted ref approval path
+    - timeout -> deny behavior
+    - per-round dedupe for sticky approval decisions
+    - hosted runtime auto scope-target forwarding
+15. brokered callback attribution slices:
     - brokered filesystem / HTTP service echo callback context
     - live toolbox execution proves brokered filesystem callback attribution to original tool call
 
@@ -227,6 +240,16 @@ Verified from this session about WSL:
    - `118 passed`
 23. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'test_hosted_toolbox_execute_routes_generic_callback_with_context or test_hosted_toolbox_callbacks_run_concurrently'`
    - `2 passed, 94 deselected`
+24. `pytest -q tests/test_hosting_toolbox_sandbox.py -k "approval or gated_requires_confirmation or callbacks_run_concurrently or forwards_tools_view or hosted_toolbox_ref_execute_approval"`
+   - `7 passed, 92 deselected`
+25. `pytest -q tests/test_hosted_tool_visibility.py tests/test_hosting_toolbox_sandbox.py tests/test_mp13chat_hosted_toolbox_api.py`
+   - `121 passed`
+26. `pytest -q tests/test_hosting_toolbox_sandbox.py -k "approval or timeout or hosted_toolbox_ref_execute_approval or facade_shapes_requests or aliases_and_ref_style"`
+   - `6 passed, 94 deselected`
+27. `pytest -q tests/test_mp13chat_hosted_toolbox_api.py -k "forwards_callback_processor or auto_forwards_scope_target or blocked_in_scope"`
+   - `2 passed, 14 deselected`
+28. `pytest -q tests/test_hosted_tool_visibility.py tests/test_hosting_toolbox_sandbox.py tests/test_mp13chat_hosted_toolbox_api.py`
+   - `123 passed`
 
 ## 5. Polished Hosted Chat Smoke Flow
 

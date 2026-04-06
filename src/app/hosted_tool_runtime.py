@@ -9,6 +9,20 @@ from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, 
 from mp13_engine.mp13_toolbox import ToolsView
 
 
+def _build_hosted_callback_context(*, cursor: ChatCursor, callback_context: Any) -> Any:
+    toolbox_ref = getattr(getattr(cursor, "context", None), "toolbox_ref", None)
+    if isinstance(callback_context, dict):
+        merged = dict(callback_context)
+    elif callback_context is None:
+        merged = {}
+    else:
+        merged = {"user_context": callback_context}
+    merged.setdefault("cursor", cursor)
+    if toolbox_ref is not None:
+        merged.setdefault("toolbox_ref", toolbox_ref)
+    return merged
+
+
 def _tool_blocks_have_results(blocks: Sequence[ToolCallBlock]) -> bool:
     for block in list(blocks or []):
         for tool_call in list(getattr(block, "calls", []) or []):
@@ -102,6 +116,21 @@ async def execute_tool_round_on_cursor(
     callback_processor: Optional[Callable[..., Any]] = None,
     callback_context: Any = None,
 ) -> ToolRoundResult:
+    """
+    Execute one hosted/native tool round for a chat cursor.
+
+    Public hosted approval contract:
+    - when hosted execution encounters a gated tool, the supplied
+      `callback_processor` can receive `tool_requires_confirmation`
+    - the payload kind is `tool_approval_request`
+    - valid decisions are `deny`, `allow_once`, and `add_to_scope`
+
+    Wrapper behavior:
+    - this helper automatically forwards the active `cursor` and context
+      `toolbox_ref` inside `callback_context`
+    - that gives hosted approval flows a stable scope target so
+      `add_to_scope` can persist for later calls in the same chat context
+    """
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
         if item.tool_blocks:
@@ -145,7 +174,7 @@ async def execute_tool_round_on_cursor(
         tool_retries_max=tool_retries_max,
         tool_retries_left=tool_retries_left,
         callback_processor=callback_processor,
-        callback_context=callback_context,
+        callback_context=_build_hosted_callback_context(cursor=cursor, callback_context=callback_context),
     )
     canceled_summary = summarize_canceled_tool_calls(
         all_tool_blocks,
