@@ -805,22 +805,52 @@ The current polished scenarios prove two important contracts.
 3. operators do not need low-level ids on the default path
 4. concurrent repair attempts against the same toolbox serialize instead of racing
 
-## 18. Short Improvement Bullets
+## 18. Active Roadmap
 
-Near-term:
+The original foundational sandbox plan is largely complete.
 
-1. keep validating remaining app/runtime consumers against the current hosted visibility and gate contract
-2. decide whether client-facing helper coverage around coarse cancel should expand beyond the current retry-decision helpers
-3. keep compact operator UX consistent across all admin outputs
-4. decide whether request-level cancellation is worth the deeper executor redesign
-5. widen locking further only if housekeeping paths beyond registration/repair/reconcile become a real concurrency hotspot
+The next active architectural investment is no longer “make hosted sandboxing real.” It is:
 
-Medium-term:
+1. gated-tool semantics
+2. hosted approval flow for gated tools
 
-1. stronger immutable env/provenance model
-2. deeper reference-tracked GC semantics
-3. broader long-lived server automation/runbook guidance
-4. broader app/runtime adoption beyond the current hosted demo slice
+### 18.1 Why This Is Next
+
+The current system already has the needed foundations:
+
+1. native/hosted gate surfaces
+2. hidden vs advertised visibility split
+3. hosted callback contract with per-call context
+4. brokered fs/http callback follow-through
+5. hosted runtime and wrapper adoption paths
+
+So the next architectural question is semantic:
+
+1. how to represent “visible but not freely executable”
+2. how that state interacts with scope/view
+3. how a hosted client can approve execution safely
+
+### 18.2 Planned Phases
+
+Planned phases are:
+
+1. semantic gated state in native `ToolsView` / `ToolsScope`
+2. hosted/native presentation parity for gated tools
+3. interactive hosted approval:
+   - deny
+   - allow once
+   - add to scope
+4. explicit guide execution policy for gated tools
+
+### 18.3 Main Open Questions
+
+The main unresolved architectural questions are:
+
+1. disabled vs gated precedence
+2. hidden vs gated presentation
+3. per-round dedupe behavior for repeated gated calls
+4. allow-once vs add-to-scope storage semantics
+5. whether guides should execute in stripped sandbox or safe in-proc mode
 
 ## 19. Related Sandbox Docs
 

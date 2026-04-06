@@ -1,225 +1,110 @@
 # Sandbox Status
 
-Date: 2026-04-04
-Purpose: context needed before continuing execution from the current sandbox/toolbox plan.
+Date: 2026-04-05
+Purpose: fresh status snapshot for the new gated-tool roadmap.
 
-## 1. Current State Summary
+## 1. Current Position
 
-The sandbox/toolbox effort is past the fundamentals stage.
+The foundational sandbox/toolbox work is largely complete.
 
-Current status:
+At a coarse level, the current system already provides:
 
-1. hosted sandboxed toolbox execution is real and working
-2. one logical toolbox can route tools across multiple sandbox profiles
-3. chat can run a hosted demo end to end
-4. operator flows now have compact defaults
-5. env management is usable, though not fully production-hardened
-6. hosted gate/execute now accept request-scoped hosted `ToolsView` payloads so host-side dispatch can deny `blocked_in_scope` before sandbox IPC
-7. hosted `describe` now reports separated `all_registered_tool_names`, `advertised_tool_names`, and `hidden_allowed_tool_names`
-8. staged/persisted hosted user-tool requests can now carry hidden membership, and staged manifests preserve hidden user-tool state
-9. app-facing hosted visibility helpers now distinguish hosted advertised tools from hosted hidden-but-allowed tools instead of collapsing both into one advertised-only set
-10. focused hosted runtime tests now cover one round with both `blocked_in_scope` denial and hidden-but-allowed hosted execution using the same hosted `ToolsView`
-11. toolbox consistency/review now probe live executor IPC reachability and surface dead-but-registered workers as explicit consistency issues
-12. env install verification now treats `resolved_install_lock` as a first-class provenance artifact, and receipt verification refuses to certify installs against stale lock state
-13. real chat command coverage now includes `/t` and `/t sc` presentation for hosted visible, hosted hidden-but-allowed, and hosted-gated tools in one integrated flow
-14. `mp13chat` `/t` command handling now delegates to a shared lightweight tools-CLI handler, so the hosted chat test path and live chat tool-management path are aligned instead of duplicated
-15. operator review/admin profile rows now carry `all_registered_tool_names`, `advertised_tool_names`, and `hidden_allowed_tool_names`, so non-chat hosted inspection surfaces reflect the same hosted visibility split
-16. `HostedToolBoxRef` now supports a `.mutate()` builder API, allowing clients to aggregate multiple tool registrations into a single synchronous backend update, significantly minimizing sandbox rollout penalty.
-17. hosted sandbox clients now have a coarse `toolbox.cancel` path that stops targeted executor workers and repairs persisted toolbox state, giving client code a real abort-and-recover operation without requiring per-tool cooperative cancellation
-18. hosted toolbox mutation flows for auto/manual/intrinsic registration are now serialized per `toolbox_id`, reducing state races when the same hosted toolbox ref is used concurrently across client threads
-19. coarse `toolbox.cancel` can now record optional tool-call identity and persist recent cancel events in toolbox runtime metadata so later restart policy can know what caused sandbox recycling
-20. hosted auto/manual tool registrations can now persist a `non_restartable` flag, defaulting to `false`, so future sandbox-restart policy can distinguish tools that should not be auto-resumed
-21. non-chat hosted tool-runtime execution now defaults to parallel multi-call dispatch, so one hosted response can execute multiple tool calls with native-style concurrency even while `mp13chat` remains explicitly serial for now
-22. hosted repair/rebuild flows now serialize per targeted `toolbox_id`, so concurrent repair attempts against the same hosted toolbox do not overlap sandbox respawn or state rewrite work
-23. lightweight hosted tool-round execution now returns coarse-cancel guidance directly in `ToolRoundResult`, including canceled tool names and resubmittable tool names after applying `non_restartable`
-24. hosted demo helpers now expose the exact `execute_tool_round_on_cursor(...)` options a thin client should pass for coarse-cancel retry policy, using the plan's persisted `non_restartable` flags
-25. remaining app-facing hosted presentation helpers no longer fall back to coarse `all_registered_tool_names`; UI-facing hosted visibility now reads the explicit advertised/hidden split only
-26. environment resolution/execution policy is tighter: resolver work and install execution now require an explicit locked install plan instead of proceeding from plan-only state
-27. resolved-lock provenance now includes the resolver report artifact itself: the stored `pip --report` JSON hash is verified alongside the resolved package list, and tampered/missing report artifacts now stale the resolved lock
-28. successful install execution now immediately certifies and persists `install_receipt_verification`, so observed install state is checked against the lock source as part of execution rather than only by a later manual verify step
-29. rollout readiness now treats successful install execution as incomplete unless `install_receipt_verification` is also `ok`, so stale observed install state can block a toolbox from being treated as ready
-30. GC/reference tracking now protects realized toolbox environments by resolved `venv_path` as well as `venv_key`, so referenced environments are not misclassified as stale when the on-disk folder name differs from the logical environment key
-31. `toolbox_references()` now exposes explicit reference reasons for retained environment keys, realized environment roots, and bundle roots, so operators can see why an artifact was kept instead of only seeing stale lists
-32. `toolbox_gc()` now returns collection-side provenance for removed registrations, bundle directories, and environment directories, so GC results explain why stale artifacts were collected instead of only listing names
-33. toolbox worker startup defaults are now platform-correct: sandbox startup specs default to `AF_UNIX` on non-Windows instead of carrying a Windows-biased `AF_PIPE` default into Linux paths
-34. Linux transport selection is now explicitly covered in tests for both the host daemon local IPC endpoint and the toolbox/service IPC allocator, so `AF_UNIX` behavior is validated as a contract instead of being only an implicit non-Windows branch
-35. host-side Unix-socket allocation now uses POSIX path construction directly instead of `pathlib.Path` platform coupling, so Linux IPC address generation is cleaner and less dependent on the current interpreter platform
-36. WSL shared-shadow validation is now real and documented: a WSL-native shadow root can share live code via symlinks while owning its own Linux `poetry.lock` and `.venv`, and focused Linux pytest slices now pass there
-37. Linux toolbox executor startup now keeps sandbox workers on the active project interpreter until the realized environment has recorded both successful install execution and successful receipt verification, so fresh Linux sandbox workers no longer fail to import project dependencies from empty realized envs
-38. the broader Linux backend regression slice now passes in WSL shared-shadow validation:
-   - `tests/test_hosting_toolbox_sandbox.py`
-   - `tests/test_engine_host_channel.py`
-   - `tests/test_hosting_daemon_pidfile.py`
-39. `mp13chat` can now attach to an already provisioned hosted toolbox deployment through explicit host state files and toolbox id, so hosted execution is no longer limited to the built-in demo provisioning path
-40. the same existing-hosted-toolbox attach flow is now exposed as a public app helper in `hosted_toolbox_api.py`, so thin wrappers can reuse the non-demo hosted attach path without copying `mp13chat` CLI glue
-41. hosted attach helpers are now re-exported from the top-level `app` package, so wrapper code can adopt hosted execution without importing lower-level module paths directly
-42. `demo/demo_hosted_toolbox_attach.py` now provides a minimal sample wrapper for attaching to an existing hosted toolbox and optionally executing one tool call through the public app-layer helper path
-43. hosted callback-contract refinement has now started as a real implemented slice:
-   - hosted registrations can persist optional `callback_signature`
-   - hosted direct execute, hosted execution-harness paths, and the lightweight hosted tool-round helper can accept a `callback_processor`
-   - generic tool callbacks can identify `toolbox_id`, `tool_name`, `tool_call_id`, tool arguments, and caller-supplied context
-44. hosted `toolbox.describe` now surfaces `tool_metadata`, including persisted `callback_signature`, from logical-toolbox describe as well as per-executor describe
-45. generic hosted callbacks are now processed concurrently by the hosted callback relay, so one blocked callback processor does not serialize unrelated callbacks on the same hosted execute path
-46. the architecture docs now make the execution contract explicit:
-   - one `toolbox.execute` call means one `ToolCall`
-   - multi-call rounds are provided by native `execute_request_tools(...)` and hosted execution-harness multi-call helpers
-   - `mp13chat` remains intentionally serial by policy, not by backend limitation
-47. brokered filesystem and brokered HTTP callbacks now carry the richer per-call callback context envelope too, so host-side brokered I/O can be attributed to `toolbox_id`, `tool_name`, `tool_call_id`, tool arguments, and caller context instead of only to worker `engine_id`
-48. brokered callback results now preserve that callback context in returned payloads, and live toolbox execution tests now prove brokered filesystem attribution end to end
+1. real hosted sandboxed toolbox execution
+2. logical-toolbox routing across sandbox profiles
+3. hosted/native access-control parity first slice
+4. hidden vs advertised hosted visibility split
+5. compact operator lifecycle flows
+6. coarse executor-level cancellation
+7. generic hosted callbacks
+8. brokered fs/http callback attribution follow-through
+9. WSL-validated Linux backend coverage
+10. app/runtime adoption beyond the original hosted demo path
 
-## 2. Most Important Current Contracts
+So the active work is no longer “finish the sandbox foundation”. The active work is the next semantic feature:
 
-### 2.1 Trust Contract
+1. gated tools
+2. hosted approval flow for gated tools
 
-1. trusted engine workers are not the sandbox target
-2. toolbox executors are the sandbox target
-3. host is the policy and lifecycle authority
+## 2. Active Plan Status
 
-### 2.2 User Contract
+### 2.1 Phase 1: Semantic Gated State
 
-1. hosted tools should feel like normal chat tools
-2. hosted-visible advertisement should align with executability closely enough for practical use
-3. deny paths should show up as tool-result failures, not runtime crashes
-4. hosted execution should preserve native `Toolbox` access semantics, not silently broaden them
-5. the same hosted toolbox ref may be shared across client threads for concurrent describe/gate/execute/cancel use
-6. hosted toolbox mutation is expected to serialize per logical toolbox id rather than racing persisted state
+Status: not started
 
-### 2.2A Access-Control Alignment Contract
+What exists already:
 
-The original/native `Toolbox` contract has two axes:
+1. `disabled` and scoped-deny semantics exist
+2. hidden vs advertised semantics exist
+3. hosted/native gate surfaces already support distinct gate outcomes
 
-1. visibility
-   - governed by global mode, hidden state, and per-turn `ToolsScope`
-2. execution
-   - governed by `ToolsView.is_allowed(...)` and `Toolbox.gate_call(...)`
+What is missing:
 
-Hosted sandbox execution is expected to support and extend that model:
+1. gated state in `ToolsView`
+2. gated state in `ToolsScope`
+3. native `gated_requires_confirmation` outcome
+4. hosted/native presentation of gated state
 
-1. native `Toolbox` remains the semantic source of truth for:
-   - advertised tools
-   - hidden-but-allowed tools
-   - disabled tools
-   - scoped per-turn overlays
-2. hosted sandbox adds only backend-specific concerns:
-   - routed sandbox profile ownership
-   - sandbox policy denials
-   - unavailable executor/backend states
-3. hosted gating must therefore extend native gating, not duplicate it in a separate incompatible form
+### 2.2 Phase 2: Interactive Hosted Approval
 
-### 2.3 Operator Contract
+Status: blocked on Phase 1 semantics
 
-1. persisted logical toolbox state is authoritative
-2. live sandbox workers are disposable
-3. review/repair/reconcile should be compact by default
-4. deep internals are opt-in with `details=true`
+What exists already:
 
-## 3. Important Files
+1. hosted callback relay
+2. generic callback processor contract
+3. per-call callback context:
+   - toolbox id
+   - tool name
+   - tool call id
+   - tool arguments
+   - caller context
 
-Architecture and status docs:
+What is missing:
+
+1. approval callback schema
+2. allow-once semantics
+3. add-to-scope semantics
+4. dedupe and timeout rules
+
+### 2.3 Phase 3: Guide Policy
+
+Status: unresolved design question
+
+What exists already:
+
+1. guides can be surfaced separately from main tools
+2. hosted/native visibility model already distinguishes executability from presentation
+
+What is missing:
+
+1. explicit trust model for guides when the paired tool is gated
+2. decision on stripped-sandbox vs safe in-proc guide execution
+
+## 3. Main Risks
+
+Current implementation risk is no longer foundational breakage. The main risk is semantic inconsistency if gated tools are added without a strict precedence model.
+
+Highest-risk areas:
+
+1. disabled vs gated precedence
+2. hidden vs gated presentation
+3. per-round repeated gated calls
+4. scope mutation semantics for `allow_once` vs `add_to_scope`
+5. guide execution trust model
+
+## 4. Recommended Next Step
+
+Implement Phase 1 only:
+
+1. add gated state to `ToolsView` and `ToolsScope`
+2. define precedence rules explicitly
+3. extend native `Toolbox.gate_call(...)`
+4. mirror the outcome through hosted gate/execute and `/t` presentation
+
+Do not start the interactive approval callback until that semantic base is stable.
+
+## 5. Key References
 
 1. [sandbox_architecture.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_architecture.md)
-2. [sandbox_test_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_test_status.md)
-3. [sandbox_plan.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_plan.md)
-
-Core implementation:
-
-1. [toolbox_harness.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_harness.py)
-2. [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py)
-3. [toolbox_executor_ipc.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_executor_ipc.py)
-4. [toolbox_admin.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_admin.py)
-
-Chat/runtime slice:
-
-1. [hosted_toolbox_api.py](/o:/repos/mp13-llm-engine/src/app/hosted_toolbox_api.py)
-2. [hosted_tool_runtime.py](/o:/repos/mp13-llm-engine/src/app/hosted_tool_runtime.py)
-3. [hosted_chat_demo.py](/o:/repos/mp13-llm-engine/src/app/hosted_chat_demo.py)
-4. [mp13chat.py](/o:/repos/mp13-llm-engine/src/app/mp13chat.py)
-
-## 4. Latest Validated Flows
-
-Validated in the user environment:
-
-1. hosted demo chat works end to end
-2. hosted tool visibility in `/t` and `/t sc` is aligned with the hosted backend
-3. brokered HTTP deny path gives:
-   - `PermissionError - brokered_http_url_not_allowed:https://example.org/`
-4. brokered filesystem traversal deny path gives:
-   - `BrokeredFsError - path_traversal_denied`
-5. healthy `toolbox-review-snapshot` recommends `observe`
-6. healthy `toolbox-repair` returns compact `noop`
-7. healthy `toolbox-reconcile` returns compact `noop`
-
-## 5. Known Gaps That Still Matter
-
-1. hosted semantic parity is improved, but still not fully proven across every app/runtime path
-   - host-side dispatch now accepts request-scoped `ToolsView`
-   - app-side visibility helpers now preserve hosted hidden-but-allowed tools
-   - app-facing hosted presentation helpers now avoid coarse full-membership fallback for visible-tool lists
-   - focused runtime coverage now exercises scoped deny plus hidden-but-allowed hosted execution in one hosted round
-   - real chat coverage now exercises `/t` and `/t sc` presentation for hosted visible, hidden-allowed, and gated states
-   - `mp13chat` tool-management handling now shares the lightweight handler used by hosted tests
-   - operator review/admin now expose the same registered/advertised/hidden split
-   - remaining risk is mostly future consumers, not the current app/admin helpers that have now been re-audited
-2. hosted user-tool hidden state is now representable in staged/persisted hosted requests
-   - remaining gap is broader operator/runtime surface adoption, not manifest-state absence
-3. live dead-worker detection is now present in consistency/review, but operator UX may still want small polish
-   - dead-but-registered executors now surface as explicit consistency issues
-   - remaining question is whether default review output needs any more compact liveness wording
-4. Windows direct-network enforcement is still not a trustworthy claim
-5. env/provenance is still short of a full immutable dependency-management story
-   - resolved lock hash and resolved requirements file are now verified against the current install plan and environment identity
-   - resolved lock now also verifies the persisted resolver report artifact hash
-   - receipt verification now short-circuits on stale lock state instead of validating against a drifted lock source
-   - resolution/execution now require an explicit locked plan instead of tolerating plan-only installs
-   - successful install execution now also records immediate receipt verification
-   - rollout readiness now enforces verified observed install state when an environment has recorded successful install execution
-   - remaining gap is policy depth, not total absence of lock verification
-6. Linux backend is now viable and WSL-validated, but not yet broadly proven across a wider Linux distro/platform matrix
-   - startup specs now default to `AF_UNIX` on non-Windows
-   - host-side local transport and service IPC allocation are explicitly tested for `AF_UNIX`
-   - Unix-socket allocation no longer relies on `pathlib.Path` platform behavior
-   - sandbox worker launch now stays on the active project interpreter until the realized env is actually install-ready
-   - a broader WSL regression slice now passes for toolbox sandbox, engine host channel, and daemon pidfile coverage
-7. broader app/runtime adoption has started, but is not complete yet
-   - `mp13chat` can now attach to an existing hosted toolbox deployment via `--hosted-toolbox-id`, `--hosted-engines-state-file`, and `--hosted-control-state-file`
-   - wrappers can now use `attach_existing_hosted_toolbox(...)` to get a control channel, hosted ref, execution harness, and hosted summary from the same contract
-   - the built-in hosted demo is no longer the only app-facing hosted execution path
-   - remaining gap is adopting the same generic hosted-attachment pattern in any other wrappers or app entry points that should expose hosted tool execution
-8. `toolbox.cancel` now exists only as coarse executor-level cancellation
-   - it cancels by stopping sandbox executor worker(s) and repairing persisted toolbox state
-   - cancel events can now persist `tool_name`, optional `tool_call_id`, and `non_restartable` state for later restart-policy work
-   - remaining gap is finer-grained in-flight request cancellation if that becomes necessary
-9. callback-contract refinement now covers both generic hosted callbacks and brokered fs/http follow-through
-   - generic hosted callbacks use the hosted callback relay and caller-side `callback_processor`
-   - brokered fs/http still authorize primarily by worker `engine_id`, but now also carry rich per-call attribution context
-   - remaining gap is capability/version reporting or deeper policy use of that richer context, not total absence of the envelope
-10. concurrent execution is better than concurrent mutation
-   - same sandbox executor can serve overlapping tool calls
-   - same hosted toolbox ref can now tolerate concurrent read/execute-style use better
-   - non-chat hosted tool rounds no longer force serial execution, so multiple tool calls in one response can overlap through the sandbox harness
-   - repair/rebuild now also serialize per targeted toolbox id
-   - broader housekeeping paths outside the explicit per-toolbox registration and repair flows may still want more locking if concurrency pressure increases
-11. GC/reference tracking is more robust, but still intentionally simple
-   - stale environment detection now considers both logical `venv_key` references and resolved `venv_path` references under `toolbox_venvs`
-   - `toolbox_references()` now also reports retention reasons for referenced env keys, env roots, and bundle roots
-   - `toolbox_gc()` now also reports collection reasons for removed registrations, removed bundle directories, and removed environments
-   - remaining gap is richer lifecycle history if operators later need GC actions tied back to prior rollout/repair events
-
-## 6. Starting Point For The Next Thread
-
-If starting fresh from these docs, assume:
-
-1. architecture is coherent enough to continue implementation
-2. the next recommended execution item, if continuing strictly by the original plan order after Linux backend and broader app adoption, is to deepen callback-contract follow-through only if brokered fs/http or remote wrappers need the same richer per-call context envelope
-3. the highest-priority semantic fixes are:
-   - verify any remaining downstream consumers use hosted `advertised_tool_names` and `hidden_allowed_tool_names` rather than coarse full membership
-   - treat gated tool-call completeness and hosting integration as explicit follow-through work, not just helper parity
-   - re-check whether any non-chat app path still bypasses hosted request-scoped `ToolsView`
-4. env/provenance is somewhat tighter now:
-   - `resolved_install_lock` drift blocks execution
-   - stale lock state also blocks receipt certification
-   - the next env step, if worth doing, is policy hardening such as requiring resolver work to start from an already-locked plan or storing a stronger external resolver provenance model
-5. otherwise move on to the next investment rather than expanding sandbox operator output unnecessarily
-6. if client-facing cancellation needs become more demanding, the next step is request-level cancellation rather than another coarse worker-restart layer
-7. if concurrency becomes a primary product concern, the next step is to widen per-toolbox serialization coverage and then let chat/runtime exploit parallel tool execution more aggressively
-8. if continuing strictly by the original plan order now that Linux backend is WSL-validated, broader app/runtime adoption is materially covered, and the first callback-contract slice is real, the next medium-term decision is whether to unify brokered fs/http onto the richer per-call callback context model or stop here until product pressure appears
+2. [sandbox_plan.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_plan.md)
+3. [sandbox_test_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_test_status.md)
