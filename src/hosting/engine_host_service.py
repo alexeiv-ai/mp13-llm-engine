@@ -12,6 +12,7 @@ import re
 import secrets
 import signal
 import hashlib
+import posixpath
 import subprocess
 import sys
 import time
@@ -5302,8 +5303,8 @@ class EngineHostService:
         nonce = secrets.token_hex(6)
         if os.name == "nt":
             return "AF_PIPE", f"\\\\.\\pipe\\mp13-host-{safe_engine}-{nonce}"
-        base = Path(tempfile.gettempdir()).expanduser().resolve()
-        return "AF_UNIX", str((base / f"mp13-host-{safe_engine}-{nonce}.sock"))
+        base = posixpath.abspath(posixpath.expanduser(str(tempfile.gettempdir() or "/tmp")))
+        return "AF_UNIX", posixpath.join(base, f"mp13-host-{safe_engine}-{nonce}.sock")
 
     @staticmethod
     def _parse_worker_authkey_token(token: Optional[str]) -> bytes:

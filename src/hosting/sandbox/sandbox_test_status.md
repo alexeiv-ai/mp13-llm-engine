@@ -68,6 +68,73 @@ python -m pytest tests/test_mp13chat_hosted_toolbox_api.py tests/test_hosted_cha
 python -m pytest tests/test_toolbox_admin.py -q
 ```
 
+### 3.6 WSL Ubuntu shared-shadow validation slice
+
+Recommended model:
+
+1. keep the main Windows checkout unchanged
+2. create a WSL-native shadow root such as `~/mp13-wsl`
+3. symlink shared code/content from the Windows checkout into that shadow root
+4. keep the Linux `.venv` and Linux `poetry.lock` inside the WSL shadow root
+
+Minimal example:
+
+```bash
+mkdir -p ~/mp13-wsl
+cd ~/mp13-wsl
+
+ln -s /mnt/o/repos/mp13-llm-engine/src src
+ln -s /mnt/o/repos/mp13-llm-engine/tests tests
+ln -s /mnt/o/repos/mp13-llm-engine/misc misc
+ln -s /mnt/o/repos/mp13-llm-engine/pyproject.toml pyproject.toml
+ln -s /mnt/o/repos/mp13-llm-engine/README.md README.md
+ln -s /mnt/o/repos/mp13-llm-engine/mp13chat.py mp13chat.py
+ln -s /mnt/o/repos/mp13-llm-engine/mp13config.py mp13config.py
+ln -s /mnt/o/repos/mp13-llm-engine/configs configs
+```
+
+Then create the Linux env:
+
+```bash
+cd ~/mp13-wsl
+cp /mnt/o/repos/mp13-llm-engine/poetry.lock poetry.lock
+poetry config virtualenvs.in-project true --local
+poetry install --with dev
+```
+
+If the copied lock turns out to be incompatible with Linux, regenerate it in the shadow root:
+
+```bash
+cd ~/mp13-wsl
+rm -f poetry.lock
+poetry lock --no-update
+poetry install --with dev
+```
+
+Before running tests, validate the shadow root:
+
+```bash
+cd ~/mp13-wsl
+python3 misc/wsl_shared_test_setup.py check
+python3 misc/wsl_shared_test_setup.py commands
+```
+
+Main Linux validation commands:
+
+```bash
+cd ~/mp13-wsl
+PYTHONPATH=src poetry run pytest tests/test_hosting_daemon_pidfile.py -q
+PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'startup_spec or spec_path or spec_hosting or toolbox_executor_ipc_end_to_end'
+PYTHONPATH=src poetry run pytest tests/test_engine_host_channel.py -q
+```
+
+Broader Linux backend slice:
+
+```bash
+cd ~/mp13-wsl
+PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_daemon_pidfile.py -q
+```
+
 ## 4. Current Verified Results
 
 Verified in the user environment:
@@ -78,6 +145,19 @@ Verified in the user environment:
    - `69 passed`
 3. `python -c "import app.mp13chat as m; print('ok', hasattr(m, '_handle_live_prompt'), hasattr(m, 'configure_hosted_toolbox_execution'))"`
    - `ok True True`
+
+Verified from this session about WSL:
+
+4. shared-shadow root at `~/mp13-wsl`
+   - Poetry env path: `/home/alx/mp13-wsl/.venv`
+   - import check passed for:
+     - `pydantic`
+     - `pytest`
+     - `hosting.engine_host_service`
+5. `PYTHONPATH=src poetry run pytest tests/test_hosting_daemon_pidfile.py -q`
+   - `19 passed`
+6. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'startup_spec or spec_path or spec_hosting or toolbox_executor_ipc_end_to_end'`
+   - `8 passed`
 
 ## 5. Polished Hosted Chat Smoke Flow
 
@@ -186,4 +266,4 @@ Current polished test story means:
 
 1. live dead-worker detection while registrations still exist
 2. any environment-specific Windows pipe/ACL oddities
-3. future Linux backend testing
+3. broader Linux backend testing beyond the current validated WSL shadow slices

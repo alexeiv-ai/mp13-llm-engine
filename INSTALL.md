@@ -74,29 +74,66 @@ poetry --version
 
 **Note:** If you're stuck with Poetry 1.8.x (e.g., restricted environment), the project will work but use `poetry install` instead of `poetry sync`.
 
-### Important: Cross-Platform Installation and the `poetry.lock` File
+### Important: Cross-Platform Installation and `.venv`
 
-The `poetry.lock` file included in this repository is pre-built for a specific environment to ensure reproducibility for the current/default stack.
+If you use the same repo from both Windows and WSL/Linux, sharing one project-local `.venv` is usually wrong.
 
-**The checked-in `poetry.lock` file is for:**
-- **OS:** Windows
-- **Architecture:** x86_64
-- **CUDA:** 12.6 (for PyTorch 2.9.1+cu126)
-- **GPU Family:** NVIDIA Ada Lovelace series and compatible predecessors
+Typical bad state:
 
-**If your environment is different (except for GPU)** (e.g., you are on Linux, macOS, Linux aarch64 or DGX Spark) you **must delete the existing `poetry.lock` file** before installing dependencies. This will allow Poetry to resolve and lock the correct binary packages for your specific platform.
+- Windows created `.venv/Scripts/python.exe`
+- WSL then tries to use the same `.venv`, but needs `.venv/bin/python`
 
-To do this, run the following command **before** `poetry install` or `poetry sync`:
+For mixed Windows + WSL use, the recommended model is:
+
+1. keep the main Windows checkout as-is
+2. create a separate WSL shadow test root in the Linux filesystem
+3. symlink the live code/content you want to share from the Windows checkout
+4. keep the Linux `poetry.lock` and Linux `.venv` owned by the WSL shadow root
+
+### WSL Shared Shadow Test Root
+
+Example:
 
 ```bash
-# For Linux / macOS
-rm poetry.lock
+mkdir -p ~/mp13-wsl
+cd ~/mp13-wsl
 
-# For Windows (Command Prompt)
-del poetry.lock
+ln -s /mnt/o/repos/mp13-llm-engine/src src
+ln -s /mnt/o/repos/mp13-llm-engine/tests tests
+ln -s /mnt/o/repos/mp13-llm-engine/misc misc
+ln -s /mnt/o/repos/mp13-llm-engine/pyproject.toml pyproject.toml
+ln -s /mnt/o/repos/mp13-llm-engine/README.md README.md
+ln -s /mnt/o/repos/mp13-llm-engine/mp13chat.py mp13chat.py
+ln -s /mnt/o/repos/mp13-llm-engine/mp13config.py mp13config.py
+ln -s /mnt/o/repos/mp13-llm-engine/configs configs
 ```
 
-After deleting the file, you can proceed with the installation commands, and Poetry will automatically generate a new, correct `poetry.lock` file for your system. On slower links or large solver updates, this can add up to about 10 minutes.
+Then keep the Linux lock and Linux venv local to that shadow root:
+
+```bash
+cp /mnt/o/repos/mp13-llm-engine/poetry.lock poetry.lock
+poetry config virtualenvs.in-project true --local
+poetry install --with dev
+```
+
+Validate the setup:
+
+```bash
+cd ~/mp13-wsl
+python3 misc/wsl_shared_test_setup.py check
+python3 misc/wsl_shared_test_setup.py commands
+```
+
+What the helper checks:
+
+1. required symlinked/shared entries are present
+2. Poetry can resolve an environment
+3. `poetry run python` can import:
+   - `pydantic`
+   - `pytest`
+   - `hosting.engine_host_service`
+
+If you prefer full isolation, a separate native WSL checkout is still cleaner than the shadow model.
 
 ### Platform-Specific Configuration
 
@@ -133,8 +170,7 @@ If you plan to run on NVIDIA GPUs:
 
 If you want the default stack, follow the rest of this doc.
 
-**Lock file note:** The checked-in `poetry.lock` corresponds to the default stack (default `pyproject.toml`, primary Windows environment). Alternate stacks require generating a **local** lock file; do not commit it and ingore in git pull.
-One way to do that is to run once:
+**Lock file note:** Alternate stacks still require generating a matching local lock. If you do not want Git churn while experimenting, one way to do that is to run once:
 ```bash
 git update-index --skip-worktree poetry.lock 
 ```

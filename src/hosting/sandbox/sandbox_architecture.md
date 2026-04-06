@@ -711,3 +711,26 @@ Medium-term:
 1. [sandbox_test_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_test_status.md)
 2. [sandbox_plan.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_plan.md)
 3. [sandbox_status.md](/o:/repos/mp13-llm-engine/src/hosting/sandbox/sandbox_status.md)
+
+## 20. WSL Shared Validation Model
+
+Current Linux validation is centered on a WSL-native shadow root rather than on sharing one repo-local `.venv` across Windows and Linux.
+
+Recommended structure:
+
+1. keep the primary Windows checkout unchanged
+2. create a WSL-native shadow root such as `~/mp13-wsl`
+3. symlink live code/content from the Windows checkout into that root
+4. keep the Linux `poetry.lock` and Linux `.venv` owned by the WSL shadow root
+
+Why this model is preferred:
+
+1. it avoids the common broken state where Windows creates `.venv/Scripts/python.exe` and WSL expects `.venv/bin/python`
+2. it keeps Linux dependency installation and Linux test execution in the Linux filesystem
+3. it still allows live source edits from the main Windows checkout to be reflected in WSL tests immediately
+
+Operationally, this means:
+
+1. Windows remains the main editing/control-plane environment
+2. WSL is the Linux validation environment
+3. the helper `misc/wsl_shared_test_setup.py` is the quick check for whether the WSL shadow root is usable before running Linux pytest slices

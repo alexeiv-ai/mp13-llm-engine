@@ -41,6 +41,10 @@ Current status:
 30. GC/reference tracking now protects realized toolbox environments by resolved `venv_path` as well as `venv_key`, so referenced environments are not misclassified as stale when the on-disk folder name differs from the logical environment key
 31. `toolbox_references()` now exposes explicit reference reasons for retained environment keys, realized environment roots, and bundle roots, so operators can see why an artifact was kept instead of only seeing stale lists
 32. `toolbox_gc()` now returns collection-side provenance for removed registrations, bundle directories, and environment directories, so GC results explain why stale artifacts were collected instead of only listing names
+33. toolbox worker startup defaults are now platform-correct: sandbox startup specs default to `AF_UNIX` on non-Windows instead of carrying a Windows-biased `AF_PIPE` default into Linux paths
+34. Linux transport selection is now explicitly covered in tests for both the host daemon local IPC endpoint and the toolbox/service IPC allocator, so `AF_UNIX` behavior is validated as a contract instead of being only an implicit non-Windows branch
+35. host-side Unix-socket allocation now uses POSIX path construction directly instead of `pathlib.Path` platform coupling, so Linux IPC address generation is cleaner and less dependent on the current interpreter platform
+36. WSL shared-shadow validation is now real and documented: a WSL-native shadow root can share live code via symlinks while owning its own Linux `poetry.lock` and `.venv`, and focused Linux pytest slices now pass there
 
 ## 2. Most Important Current Contracts
 
@@ -150,6 +154,11 @@ Validated in the user environment:
    - rollout readiness now enforces verified observed install state when an environment has recorded successful install execution
    - remaining gap is policy depth, not total absence of lock verification
 6. Linux backend is still missing
+   - first platform-bias fix is in place: toolbox startup specs now default to `AF_UNIX` on non-Windows
+   - host-side local transport and service IPC allocation are now also explicitly tested for `AF_UNIX`
+   - Unix-socket allocation no longer relies on `pathlib.Path` platform behavior
+   - a WSL shared-shadow test root with its own Linux `.venv` is now the documented validation path
+   - broader Linux adoption still needs wider backend validation there, not just focused transport/startup slices
 7. `toolbox.cancel` now exists only as coarse executor-level cancellation
    - it cancels by stopping sandbox executor worker(s) and repairing persisted toolbox state
    - cancel events can now persist `tool_name`, optional `tool_call_id`, and `non_restartable` state for later restart-policy work

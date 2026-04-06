@@ -461,7 +461,7 @@ class ToolboxWorkerStartupSpec:
     engines_state_file: Optional[str] = None
     control_state_file: Optional[str] = None
     venv_path: Optional[str] = None
-    ipc_family: str = "AF_PIPE"
+    ipc_family: str = field(default_factory=lambda: "AF_PIPE" if os.name == "nt" else "AF_UNIX")
     ipc_address: str = ""
     auth_token_env: str = "MP13_ENGINE_HOST_TOKEN"
     execution_contract: str = "hosting.toolbox.worker.v1"
@@ -469,6 +469,7 @@ class ToolboxWorkerStartupSpec:
     policy: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        default_ipc_family = "AF_PIPE" if os.name == "nt" else "AF_UNIX"
         return {
             "worker_id": str(self.worker_id or "").strip(),
             "sandbox_id": str(self.sandbox_id or "").strip(),
@@ -478,7 +479,7 @@ class ToolboxWorkerStartupSpec:
             "engines_state_file": str(self.engines_state_file or "").strip() or None,
             "control_state_file": str(self.control_state_file or "").strip() or None,
             "venv_path": str(self.venv_path or "").strip() or None,
-            "ipc_family": str(self.ipc_family or "AF_PIPE").strip() or "AF_PIPE",
+            "ipc_family": str(self.ipc_family or default_ipc_family).strip() or default_ipc_family,
             "ipc_address": str(self.ipc_address or "").strip(),
             "auth_token_env": str(self.auth_token_env or "MP13_ENGINE_HOST_TOKEN").strip() or "MP13_ENGINE_HOST_TOKEN",
             "execution_contract": str(self.execution_contract or "hosting.toolbox.worker.v1").strip() or "hosting.toolbox.worker.v1",
@@ -489,6 +490,7 @@ class ToolboxWorkerStartupSpec:
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "ToolboxWorkerStartupSpec":
         row = dict(payload or {})
+        default_ipc_family = "AF_PIPE" if os.name == "nt" else "AF_UNIX"
         return cls(
             worker_id=str(row.get("worker_id") or "").strip(),
             sandbox_id=str(row.get("sandbox_id") or "").strip(),
@@ -498,7 +500,7 @@ class ToolboxWorkerStartupSpec:
             engines_state_file=str(row.get("engines_state_file") or "").strip() or None,
             control_state_file=str(row.get("control_state_file") or "").strip() or None,
             venv_path=str(row.get("venv_path") or "").strip() or None,
-            ipc_family=str(row.get("ipc_family") or "AF_PIPE").strip() or "AF_PIPE",
+            ipc_family=str(row.get("ipc_family") or default_ipc_family).strip() or default_ipc_family,
             ipc_address=str(row.get("ipc_address") or "").strip(),
             auth_token_env=str(row.get("auth_token_env") or "MP13_ENGINE_HOST_TOKEN").strip() or "MP13_ENGINE_HOST_TOKEN",
             execution_contract=str(row.get("execution_contract") or "hosting.toolbox.worker.v1").strip() or "hosting.toolbox.worker.v1",
@@ -1546,11 +1548,12 @@ class StagedToolboxBundle:
         engines_state_file: Optional[Path] = None,
         control_state_file: Optional[Path] = None,
         venv_path: Optional[str] = None,
-        ipc_family: str = "AF_PIPE",
+        ipc_family: Optional[str] = None,
         ipc_address: str = "",
         policy: Optional[Dict[str, Any]] = None,
     ) -> ToolboxWorkerStartupSpec:
         scratch = Path(scratch_root or (self.bundle_root / "scratch")).expanduser().resolve()
+        default_ipc_family = "AF_PIPE" if os.name == "nt" else "AF_UNIX"
         return ToolboxWorkerStartupSpec(
             worker_id=str(worker_id or "").strip(),
             sandbox_id=str(sandbox_id or worker_id or "").strip(),
@@ -1560,7 +1563,7 @@ class StagedToolboxBundle:
             engines_state_file=str(Path(engines_state_file).expanduser().resolve()) if engines_state_file else None,
             control_state_file=str(Path(control_state_file).expanduser().resolve()) if control_state_file else None,
             venv_path=str(venv_path or "").strip() or None,
-            ipc_family=str(ipc_family or "AF_PIPE").strip() or "AF_PIPE",
+            ipc_family=str(ipc_family or default_ipc_family).strip() or default_ipc_family,
             ipc_address=str(ipc_address or "").strip(),
             policy=dict(policy or {}),
         )
@@ -1584,7 +1587,7 @@ class StagedToolboxBundle:
         engines_state_file: Optional[Path] = None,
         control_state_file: Optional[Path] = None,
         venv_path: Optional[str] = None,
-        ipc_family: str = "AF_PIPE",
+        ipc_family: Optional[str] = None,
         ipc_address: str = "",
         policy: Optional[Dict[str, Any]] = None,
         extra_env: Optional[Dict[str, str]] = None,

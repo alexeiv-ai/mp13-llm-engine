@@ -120,8 +120,9 @@ cd mp13-llm-engine
 - For GPU support: A compatible or lastest NVIDIA driver.
 
 Quick notes:
-- Checked-in `poetry.lock` is for the **current Windows stack**; delete it first if your platform/stack differs.
 - Keep Poetry outside project venv; set local venv before first install.
+- If you want to validate Linux behavior from WSL while keeping the main Windows checkout live, prefer a separate WSL shadow test root instead of sharing one `.venv`.
+- Use `python3 misc/wsl_shared_test_setup.py check` from the WSL shadow root to verify that setup before running Linux tests.
 - For stack-specific compatibility and ARM64/flash-attn details, see **[INSTALL.md](INSTALL.md)**.
 
 Before first install/sync, force a project-local virtual environment:
