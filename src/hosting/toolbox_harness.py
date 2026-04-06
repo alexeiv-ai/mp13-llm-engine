@@ -722,6 +722,27 @@ class ToolboxEnvironmentManager:
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return spec
 
+    def runtime_python_executable(
+        self,
+        spec: ToolboxEnvironmentSpec,
+        *,
+        fallback_python_executable: Optional[str] = None,
+    ) -> str:
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        env_python = str(ensured.python_executable or self.python_executable_path(env_root)).strip()
+        fallback_python = str(fallback_python_executable or "").strip()
+        if not fallback_python:
+            return env_python
+        metadata = self.read_environment_metadata(ensured)
+        install_execution_status = str(dict(metadata.get("install_execution") or {}).get("status") or "").strip().lower()
+        receipt_verification_status = str(
+            dict(metadata.get("install_receipt_verification") or {}).get("status") or ""
+        ).strip().lower()
+        if install_execution_status == "ok" and receipt_verification_status == "ok":
+            return env_python
+        return fallback_python
+
     @staticmethod
     def _unique_names(items: Sequence[Any]) -> List[str]:
         out: List[str] = []
@@ -1814,6 +1835,10 @@ class ToolboxSandboxOrchestrator:
             environment_spec = self.environment_manager.ensure_for_bundle(
                 staged,
                 environment_description=environment_description,
+            )
+            environment_spec.python_executable = self.environment_manager.runtime_python_executable(
+                environment_spec,
+                fallback_python_executable=self.python_executable,
             )
             item.registration = self.service.spawn(
                 engine_id=engine_id,

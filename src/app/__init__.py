@@ -36,6 +36,14 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "ChatForks": ("context_cursor", "ChatForks"),
     "StreamDisplayContext": ("context_cursor", "StreamDisplayContext"),
     "StreamDisplayPlan": ("context_cursor", "StreamDisplayPlan"),
+    "HostedToolboxAttachment": ("hosted_toolbox_api", "HostedToolboxAttachment"),
+    "attach_existing_hosted_toolbox": ("hosted_toolbox_api", "attach_existing_hosted_toolbox"),
+    "create_hosted_control_channel": ("hosted_toolbox_api", "create_hosted_control_channel"),
+    "create_hosted_toolbox_executor": ("hosted_toolbox_api", "create_hosted_toolbox_executor"),
+    "create_hosted_toolbox_ref": ("hosted_toolbox_api", "create_hosted_toolbox_ref"),
+    "is_hosted_tool_call_canceled": ("hosted_toolbox_api", "is_hosted_tool_call_canceled"),
+    "register_hosted_tool_callable": ("hosted_toolbox_api", "register_hosted_tool_callable"),
+    "should_resubmit_hosted_tool_call": ("hosted_toolbox_api", "should_resubmit_hosted_tool_call"),
 }
 
 __all__ = [

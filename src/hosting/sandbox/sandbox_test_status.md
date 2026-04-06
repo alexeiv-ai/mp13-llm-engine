@@ -158,6 +158,8 @@ Verified from this session about WSL:
    - `19 passed`
 6. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'startup_spec or spec_path or spec_hosting or toolbox_executor_ipc_end_to_end'`
    - `8 passed`
+7. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_daemon_pidfile.py -q`
+   - `123 passed`
 
 ## 5. Polished Hosted Chat Smoke Flow
 
@@ -195,6 +197,50 @@ Expected healthy chat/tool visibility:
 2. `/t` shows hosted tools as available via `hosted`
 3. `/t sc` shows only hosted-visible tools under `Advertised tools`
 4. local intrinsics can appear as hosted-gated
+
+Attach `mp13chat` to an existing hosted toolbox instead of provisioning the demo:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m app.mp13chat --hosted-toolbox-id toolbox-admin-demo --hosted-engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --hosted-control-state-file .tmp_toolbox_admin_demo\access_control.json
+```
+
+Expected attach behavior:
+
+1. startup prints `Hosted toolbox attached.`
+2. printed summary includes:
+   - `toolbox_id`
+   - `engines_state_file`
+   - `control_state_file`
+3. if hosted describe succeeds, advertised hosted tool names are printed from the hosted backend summary rather than hardcoded demo data
+
+Thin-wrapper attach path:
+
+```python
+from app.hosted_toolbox_api import attach_existing_hosted_toolbox
+
+attached = attach_existing_hosted_toolbox(
+    toolbox_id="toolbox-admin-demo",
+    engines_state_file=".tmp_toolbox_admin_demo/managed_engines.json",
+    control_state_file=".tmp_toolbox_admin_demo/access_control.json",
+)
+
+assert attached.summary.get("mode") == "sandbox"
+```
+
+Minimal sample wrapper:
+
+```powershell
+$env:PYTHONPATH='src'
+python demo/demo_hosted_toolbox_attach.py --toolbox-id toolbox-admin-demo --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json
+```
+
+Optional single tool execution:
+
+```powershell
+$env:PYTHONPATH='src'
+python demo/demo_hosted_toolbox_attach.py --toolbox-id toolbox-admin-demo --engines-state-file .tmp_toolbox_admin_demo\managed_engines.json --control-state-file .tmp_toolbox_admin_demo\access_control.json --tool-name SimpleCalc --tool-arguments "{\"expr\":\"12 + 3 * 5\"}"
+```
 
 ## 6. Polished Operator Smoke Flow
 
@@ -266,4 +312,4 @@ Current polished test story means:
 
 1. live dead-worker detection while registrations still exist
 2. any environment-specific Windows pipe/ACL oddities
-3. broader Linux backend testing beyond the current validated WSL shadow slices
+3. broader Linux distro/platform coverage beyond the currently validated WSL Ubuntu shadow setup

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import shlex
 import subprocess
@@ -210,6 +211,8 @@ class EngineHostControlChannel:
         raw = str(self._control_state_file or "").strip()
         if not raw:
             return None
+        if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", raw):
+            return Path(raw)
         return Path(raw).expanduser().resolve()
 
     def _read_local_control_snapshot(self) -> Optional[Dict[str, Any]]:

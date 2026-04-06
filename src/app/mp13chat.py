@@ -114,6 +114,7 @@ from .hosted_tool_visibility import annotate_tool_listing, summarize_effective_t
 from .tools_cli_light import LightweightToolsCliHandler
 from .hosted_toolbox_api import (
     HostedToolExecutionRouter,
+    attach_existing_hosted_toolbox,
     create_hosted_toolbox_ref,
     register_hosted_tool_callable,
 )
@@ -12554,6 +12555,35 @@ async def main_logic():
         help="Quit after replay (and optional save)."
     )
     parser.add_argument(
+        "--hosted-toolbox-id",
+        type=str,
+        default=None,
+        help="Attach chat tool execution to an existing hosted toolbox id instead of only using the built-in hosted demo.",
+    )
+    parser.add_argument(
+        "--hosted-engines-state-file",
+        type=str,
+        default=None,
+        help="Engines-state file for an existing hosted toolbox deployment.",
+    )
+    parser.add_argument(
+        "--hosted-control-state-file",
+        type=str,
+        default=None,
+        help="Control-state file for an existing hosted toolbox deployment.",
+    )
+    parser.add_argument(
+        "--hosted-timeout-seconds",
+        type=float,
+        default=15.0,
+        help="Timeout for existing hosted toolbox control calls. Default: 15.0",
+    )
+    parser.add_argument(
+        "--hosted-no-auto-bootstrap",
+        action="store_true",
+        help="Disable automatic daemon bootstrap when attaching to an existing hosted toolbox deployment.",
+    )
+    parser.add_argument(
         "--hosted-demo",
         action="store_true",
         help="Enable a hosted toolbox demo with two sandboxed tools and route chat tool execution through hosting.",
@@ -12583,6 +12613,15 @@ async def main_logic():
         help="Optional config file path or name. Relative names resolve under the default config dir.",
     )
     args = parser.parse_args()
+    if args.hosted_demo and args.hosted_toolbox_id:
+        print("Error: --hosted-demo and --hosted-toolbox-id cannot be used together.")
+        sys.exit(1)
+    if bool(args.hosted_engines_state_file) != bool(args.hosted_control_state_file):
+        print("Error: --hosted-engines-state-file and --hosted-control-state-file must be provided together.")
+        sys.exit(1)
+    if args.hosted_toolbox_id and not args.hosted_engines_state_file:
+        print("Error: attaching to an existing hosted toolbox requires both --hosted-engines-state-file and --hosted-control-state-file.")
+        sys.exit(1)
     DUMP_INIT_ENABLED = args.dump_init # Set the global flag
 
     resolved_theme = Colors.resolve_theme(args.theme)
@@ -12760,6 +12799,37 @@ async def main_logic():
         print(f"{Colors.SYSTEM}  suggested prompts:{Colors.RESET}")
         for prompt in hosted_chat_demo_runtime.plan.suggested_prompts:
             print(f"{Colors.DIM}    - {prompt}{Colors.RESET}")
+    elif args.hosted_toolbox_id:
+        attached = attach_existing_hosted_toolbox(
+            toolbox_id=str(args.hosted_toolbox_id or "").strip(),
+            engines_state_file=Path(str(args.hosted_engines_state_file)).expanduser().resolve(),
+            control_state_file=Path(str(args.hosted_control_state_file)).expanduser().resolve(),
+            timeout_seconds=float(args.hosted_timeout_seconds or 15.0),
+            auto_bootstrap=not bool(args.hosted_no_auto_bootstrap),
+            python_executable=sys.executable,
+        )
+        configure_hosted_toolbox_execution(
+            control_channel=attached.control_channel,
+            toolbox_id=str(args.hosted_toolbox_id or "").strip(),
+        )
+        hosted_summary = dict(attached.summary or {})
+        advertised = [
+            str(item or "").strip()
+            for item in list(hosted_summary.get("advertised_tool_names") or [])
+            if str(item or "").strip()
+        ]
+        print(f"{Colors.SYSTEM}Hosted toolbox attached.{Colors.RESET}")
+        print(f"{Colors.SYSTEM}  toolbox_id: {str(args.hosted_toolbox_id or '').strip()}{Colors.RESET}")
+        print(
+            f"{Colors.SYSTEM}  engines_state_file: "
+            f"{Path(str(args.hosted_engines_state_file)).expanduser().resolve()}{Colors.RESET}"
+        )
+        print(
+            f"{Colors.SYSTEM}  control_state_file: "
+            f"{Path(str(args.hosted_control_state_file)).expanduser().resolve()}{Colors.RESET}"
+        )
+        if advertised:
+            print(f"{Colors.SYSTEM}  advertised tools: {', '.join(advertised)}{Colors.RESET}")
 
     Path(current_config["adapters_root_dir"]).mkdir(parents=True, exist_ok=True)
     Path(current_config["sessions_save_dir"]).mkdir(parents=True, exist_ok=True)

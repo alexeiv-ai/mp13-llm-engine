@@ -5299,12 +5299,16 @@ class EngineHostService:
 
     @staticmethod
     def _allocate_ipc_address(engine_id: str) -> Tuple[str, str]:
-        safe_engine = re.sub(r"[^A-Za-z0-9_-]+", "_", str(engine_id or "engine")).strip("_") or "engine"
+        raw_engine = str(engine_id or "engine")
+        safe_engine = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_engine).strip("_") or "engine"
         nonce = secrets.token_hex(6)
         if os.name == "nt":
             return "AF_PIPE", f"\\\\.\\pipe\\mp13-host-{safe_engine}-{nonce}"
         base = posixpath.abspath(posixpath.expanduser(str(tempfile.gettempdir() or "/tmp")))
-        return "AF_UNIX", posixpath.join(base, f"mp13-host-{safe_engine}-{nonce}.sock")
+        engine_hash = hashlib.sha256(raw_engine.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        short_engine = safe_engine[:24].rstrip("_-") or "engine"
+        filename = f"mp13-host-{short_engine}-{engine_hash}-{nonce}.sock"
+        return "AF_UNIX", posixpath.join(base, filename)
 
     @staticmethod
     def _parse_worker_authkey_token(token: Optional[str]) -> bytes:

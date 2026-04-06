@@ -23,6 +23,13 @@ def _resolve_root(path: str) -> Path:
     return Path(str(path or "").strip()).expanduser().resolve()
 
 
+def _normalize_relative_path(value: Optional[str]) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return raw.replace("\\", "/")
+
+
 def _contains_access(rule: SandboxFsRule, access: str) -> bool:
     return str(access or "").strip().lower() in {str(x) for x in list(rule.access or [])}
 
@@ -43,7 +50,7 @@ class BrokeredFilesystem:
     def _resolve_path(self, root_id: str, relative_path: Optional[str]) -> tuple[SandboxFsRule, Path]:
         rule = self._rule_for_root(root_id)
         root = _resolve_root(rule.path)
-        rel = str(relative_path or "").strip()
+        rel = _normalize_relative_path(relative_path)
         target = (root / rel).resolve() if rel else root
         try:
             target.relative_to(root)

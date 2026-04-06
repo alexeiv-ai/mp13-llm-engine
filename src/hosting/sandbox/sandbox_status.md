@@ -45,6 +45,15 @@ Current status:
 34. Linux transport selection is now explicitly covered in tests for both the host daemon local IPC endpoint and the toolbox/service IPC allocator, so `AF_UNIX` behavior is validated as a contract instead of being only an implicit non-Windows branch
 35. host-side Unix-socket allocation now uses POSIX path construction directly instead of `pathlib.Path` platform coupling, so Linux IPC address generation is cleaner and less dependent on the current interpreter platform
 36. WSL shared-shadow validation is now real and documented: a WSL-native shadow root can share live code via symlinks while owning its own Linux `poetry.lock` and `.venv`, and focused Linux pytest slices now pass there
+37. Linux toolbox executor startup now keeps sandbox workers on the active project interpreter until the realized environment has recorded both successful install execution and successful receipt verification, so fresh Linux sandbox workers no longer fail to import project dependencies from empty realized envs
+38. the broader Linux backend regression slice now passes in WSL shared-shadow validation:
+   - `tests/test_hosting_toolbox_sandbox.py`
+   - `tests/test_engine_host_channel.py`
+   - `tests/test_hosting_daemon_pidfile.py`
+39. `mp13chat` can now attach to an already provisioned hosted toolbox deployment through explicit host state files and toolbox id, so hosted execution is no longer limited to the built-in demo provisioning path
+40. the same existing-hosted-toolbox attach flow is now exposed as a public app helper in `hosted_toolbox_api.py`, so thin wrappers can reuse the non-demo hosted attach path without copying `mp13chat` CLI glue
+41. hosted attach helpers are now re-exported from the top-level `app` package, so wrapper code can adopt hosted execution without importing lower-level module paths directly
+42. `demo/demo_hosted_toolbox_attach.py` now provides a minimal sample wrapper for attaching to an existing hosted toolbox and optionally executing one tool call through the public app-layer helper path
 
 ## 2. Most Important Current Contracts
 
@@ -153,23 +162,28 @@ Validated in the user environment:
    - successful install execution now also records immediate receipt verification
    - rollout readiness now enforces verified observed install state when an environment has recorded successful install execution
    - remaining gap is policy depth, not total absence of lock verification
-6. Linux backend is still missing
-   - first platform-bias fix is in place: toolbox startup specs now default to `AF_UNIX` on non-Windows
-   - host-side local transport and service IPC allocation are now also explicitly tested for `AF_UNIX`
+6. Linux backend is now viable and WSL-validated, but not yet broadly proven across a wider Linux distro/platform matrix
+   - startup specs now default to `AF_UNIX` on non-Windows
+   - host-side local transport and service IPC allocation are explicitly tested for `AF_UNIX`
    - Unix-socket allocation no longer relies on `pathlib.Path` platform behavior
-   - a WSL shared-shadow test root with its own Linux `.venv` is now the documented validation path
-   - broader Linux adoption still needs wider backend validation there, not just focused transport/startup slices
-7. `toolbox.cancel` now exists only as coarse executor-level cancellation
+   - sandbox worker launch now stays on the active project interpreter until the realized env is actually install-ready
+   - a broader WSL regression slice now passes for toolbox sandbox, engine host channel, and daemon pidfile coverage
+7. broader app/runtime adoption has started, but is not complete yet
+   - `mp13chat` can now attach to an existing hosted toolbox deployment via `--hosted-toolbox-id`, `--hosted-engines-state-file`, and `--hosted-control-state-file`
+   - wrappers can now use `attach_existing_hosted_toolbox(...)` to get a control channel, hosted ref, execution harness, and hosted summary from the same contract
+   - the built-in hosted demo is no longer the only app-facing hosted execution path
+   - remaining gap is adopting the same generic hosted-attachment pattern in any other wrappers or app entry points that should expose hosted tool execution
+8. `toolbox.cancel` now exists only as coarse executor-level cancellation
    - it cancels by stopping sandbox executor worker(s) and repairing persisted toolbox state
    - cancel events can now persist `tool_name`, optional `tool_call_id`, and `non_restartable` state for later restart-policy work
    - remaining gap is finer-grained in-flight request cancellation if that becomes necessary
-8. concurrent execution is better than concurrent mutation
+9. concurrent execution is better than concurrent mutation
    - same sandbox executor can serve overlapping tool calls
    - same hosted toolbox ref can now tolerate concurrent read/execute-style use better
    - non-chat hosted tool rounds no longer force serial execution, so multiple tool calls in one response can overlap through the sandbox harness
    - repair/rebuild now also serialize per targeted toolbox id
    - broader housekeeping paths outside the explicit per-toolbox registration and repair flows may still want more locking if concurrency pressure increases
-9. GC/reference tracking is more robust, but still intentionally simple
+10. GC/reference tracking is more robust, but still intentionally simple
    - stale environment detection now considers both logical `venv_key` references and resolved `venv_path` references under `toolbox_venvs`
    - `toolbox_references()` now also reports retention reasons for referenced env keys, env roots, and bundle roots
    - `toolbox_gc()` now also reports collection reasons for removed registrations, removed bundle directories, and removed environments
@@ -180,7 +194,7 @@ Validated in the user environment:
 If starting fresh from these docs, assume:
 
 1. architecture is coherent enough to continue implementation
-2. the next recommended execution item is native/hosted access-control parity
+2. the next recommended execution item, if continuing strictly by the original plan order after Linux backend, is to keep broadening app/runtime adoption beyond the hosted demo and the new direct `mp13chat` attach path
 3. the highest-priority semantic fixes are:
    - verify any remaining downstream consumers use hosted `advertised_tool_names` and `hidden_allowed_tool_names` rather than coarse full membership
    - treat gated tool-call completeness and hosting integration as explicit follow-through work, not just helper parity
@@ -192,4 +206,4 @@ If starting fresh from these docs, assume:
 5. otherwise move on to the next investment rather than expanding sandbox operator output unnecessarily
 6. if client-facing cancellation needs become more demanding, the next step is request-level cancellation rather than another coarse worker-restart layer
 7. if concurrency becomes a primary product concern, the next step is to widen per-toolbox serialization coverage and then let chat/runtime exploit parallel tool execution more aggressively
-8. if continuing strictly by the plan, the next near-term bucket after env/provenance is deeper GC/reference provenance rather than another client/runtime feature
+8. if continuing strictly by the original plan order now that Linux backend is WSL-validated and `mp13chat` has a first non-demo attach path, the next medium-term item is to keep broadening app/runtime adoption across any remaining wrappers or entry points that should expose hosted execution

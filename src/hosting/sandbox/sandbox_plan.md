@@ -21,6 +21,10 @@ Completed at a coarse level:
    - reconcile
    - gc
 10. thin-client / remote hosted-toolbox proxy path
+11. Linux backend validated in a WSL shared-shadow environment
+12. first broader app/runtime adoption slice:
+   - `mp13chat` can now attach to an already provisioned hosted toolbox via explicit host state files and toolbox id
+   - wrappers can now reuse the same attach flow through `attach_existing_hosted_toolbox(...)`
 
 ## 2. Next Steps
 
@@ -79,9 +83,8 @@ Completed at a coarse level:
 
 ### 2.3 Medium-Term Work
 
-1. Linux backend
-2. broader app/runtime adoption beyond the current hosted demo slice
-3. callback-contract refinement if a concrete need appears
+1. broader app/runtime adoption beyond the current hosted demo slice and the new direct `mp13chat` attach path
+2. callback-contract refinement if a concrete need appears
 
 ## 3. Suggested Priority Order
 

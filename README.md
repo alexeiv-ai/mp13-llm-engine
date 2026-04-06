@@ -61,6 +61,17 @@ They provide:
 * cursor-based navigation and dynamic turn-scoped conversation state resolution
 * a CLI for interactive exploration and debugging
 
+Hosted sandbox note:
+
+* the built-in hosted demo is no longer the only app-facing hosted path
+* `mp13chat` can attach to an already provisioned hosted toolbox with:
+  * `--hosted-toolbox-id`
+  * `--hosted-engines-state-file`
+  * `--hosted-control-state-file`
+* thin wrappers can use `app.hosted_toolbox_api.attach_existing_hosted_toolbox(...)` to reuse that same non-demo hosted attach flow
+* those hosted attach helpers are also exported from `app` directly for wrapper code
+* a minimal sample wrapper is available at `demo/demo_hosted_toolbox_attach.py`
+
 **API/design note:** the app-layer APIs may change as the design evolves or be replaced with something drastically different as part of my next project.
 
 More detail:

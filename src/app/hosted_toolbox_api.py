@@ -1,14 +1,92 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import HostedToolBoxRef
 from hosting.toolbox_harness import (
+    HostedToolBoxRef,
     ToolboxExecutionHarness,
     ToolboxHarnessConfig,
     is_canceled_tool_error as _is_canceled_tool_error,
     should_resubmit_canceled_tool_call as _should_resubmit_canceled_tool_call,
 )
+
+
+@dataclass
+class HostedToolboxAttachment:
+    control_channel: EngineHostControlChannel
+    toolbox_ref: HostedToolBoxRef
+    executor: ToolboxExecutionHarness
+    summary: Dict[str, Any]
+
+
+def create_hosted_control_channel(
+    *,
+    engines_state_file: Any,
+    control_state_file: Any,
+    timeout_seconds: float = 15.0,
+    auto_bootstrap: bool = True,
+) -> EngineHostControlChannel:
+    """
+    Build a local hosted-control channel backed by existing host state files.
+    This is the app-facing entry point for attaching to an already provisioned
+    hosted toolbox without going through the demo setup path.
+    """
+    return EngineHostControlChannel(
+        {
+            "engine_host_state_file": str(engines_state_file),
+            "engine_host_control_state_file": str(control_state_file),
+            "engine_host_timeout_seconds": float(timeout_seconds or 15.0),
+            "engine_host_daemon_auto_bootstrap": bool(auto_bootstrap),
+        }
+    )
+
+
+def attach_existing_hosted_toolbox(
+    *,
+    toolbox_id: str,
+    engines_state_file: Any,
+    control_state_file: Any,
+    timeout_seconds: float = 15.0,
+    auto_bootstrap: bool = True,
+    python_executable: Optional[str] = None,
+    worker_profile_class: str = "generic",
+) -> HostedToolboxAttachment:
+    """
+    Public app/helper entry point for attaching to an existing hosted toolbox
+    deployment. This is intended for thin wrappers and automation that want the
+    hosted control channel, hosted ref, execution harness, and current summary
+    without reimplementing the mp13chat CLI wiring.
+    """
+    tid = str(toolbox_id or "").strip()
+    if not tid:
+        raise ValueError("toolbox_id is required")
+    control_channel = create_hosted_control_channel(
+        engines_state_file=engines_state_file,
+        control_state_file=control_state_file,
+        timeout_seconds=timeout_seconds,
+        auto_bootstrap=auto_bootstrap,
+    )
+    toolbox_ref = create_hosted_toolbox_ref(
+        host=control_channel,
+        toolbox_id=tid,
+        python_executable=python_executable,
+        worker_profile_class=worker_profile_class,
+    )
+    router = HostedToolExecutionRouter()
+    executor = router.configure_hosted_execution(
+        control_channel=control_channel,
+        toolbox_id=tid,
+    )
+    summary = dict(router.hosted_toolbox_summary() or {})
+    return HostedToolboxAttachment(
+        control_channel=control_channel,
+        toolbox_ref=toolbox_ref,
+        executor=executor,
+        summary=summary,
+    )
 
 
 def create_hosted_toolbox_ref(

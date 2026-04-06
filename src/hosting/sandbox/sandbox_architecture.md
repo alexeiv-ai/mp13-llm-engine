@@ -583,6 +583,8 @@ Current app-facing helpers:
 2. `register_hosted_tool_callable(...)`
 3. `create_hosted_toolbox_executor(...)`
 4. `HostedToolExecutionRouter`
+5. `create_hosted_control_channel(...)`
+6. `attach_existing_hosted_toolbox(...)`
 5. `execute_tool_round_on_cursor(...)`
 6. `is_hosted_tool_call_canceled(...)`
 7. `should_resubmit_hosted_tool_call(...)`
@@ -613,6 +615,26 @@ Important current split:
 ### 14.4 Hosted Demo
 
 The hosted demo is the main polished scenario at the moment.
+
+There is now also a lighter non-demo adoption path in `mp13chat` itself:
+
+1. attach to an already provisioned hosted toolbox by passing:
+   - `--hosted-toolbox-id`
+   - `--hosted-engines-state-file`
+   - `--hosted-control-state-file`
+2. this reuses the same hosted execution router without provisioning demo tools or demo hosting state
+3. this is the first broader app/runtime adoption slice beyond the built-in hosted demo
+
+The same attach path is also exposed as a public app helper:
+
+1. `attach_existing_hosted_toolbox(...)` builds:
+   - the local hosted control channel
+   - a `HostedToolBoxRef`
+   - a hosted execution harness
+   - the current hosted toolbox summary
+2. wrapper apps can therefore attach to existing hosted toolbox deployments without copying `mp13chat` CLI-specific glue
+3. the same hosted attach helpers are also re-exported from the top-level `app` package for cleaner wrapper imports
+4. `demo/demo_hosted_toolbox_attach.py` is the minimal sample wrapper showing this non-demo attach flow against an existing hosted toolbox deployment
 
 It validates:
 
@@ -665,7 +687,7 @@ These are the main caveats that still matter architecturally.
 5. GC/reference tracking is coherent, but not yet deeply production-style.
 6. Rollout policy is intentionally minimal.
 7. `toolbox.cancel` is only coarse executor-level cancellation.
-8. Linux backend is missing.
+8. Linux backend is now viable and validated in the WSL shared-shadow model, but not yet broadly proven across a wider Linux distro/platform matrix.
 9. Some hosted chat/runtime behavior is polished only in the current hosted slices, not universally across every app path.
 10. Hosted access control is much closer to the original native `Toolbox` design, but broader end-to-end coverage is still more mature in the focused hosted slices than in every possible consumer.
 11. Hosted user-tool hidden state is first-class in persisted requests, but a full native hidden/silent vocabulary is still not expanded into a richer separate hosted reporting contract than the current registered/advertised/hidden split.
@@ -704,7 +726,7 @@ Medium-term:
 1. stronger immutable env/provenance model
 2. deeper reference-tracked GC semantics
 3. broader long-lived server automation/runbook guidance
-4. Linux backend
+4. broader app/runtime adoption beyond the current hosted demo slice
 
 ## 19. Related Sandbox Docs
 
@@ -734,3 +756,6 @@ Operationally, this means:
 1. Windows remains the main editing/control-plane environment
 2. WSL is the Linux validation environment
 3. the helper `misc/wsl_shared_test_setup.py` is the quick check for whether the WSL shadow root is usable before running Linux pytest slices
+4. current Linux worker launch policy is intentionally pragmatic:
+   - sandbox workers stay on the active project interpreter until the realized environment has both successful install execution and successful receipt verification
+   - once that install state is verified, worker launch can switch to the realized environment's Python
