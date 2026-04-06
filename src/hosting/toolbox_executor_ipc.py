@@ -138,11 +138,18 @@ def _invoke_callback_binding(
     context: Dict[str, Any],
 ) -> Dict[str, Any]:
     family = str(binding.get("family") or "").strip() or ("AF_PIPE" if os.name == "nt" else "AF_UNIX")
-    address = str(binding.get("address") or "").strip()
+    raw_address = binding.get("address")
+    address = str(raw_address or "").strip()
     session_token = str(binding.get("session_token") or "").strip()
     if not address or not session_token:
         raise RuntimeError("callback_binding_invalid")
-    conn = Client(address=address, family=family)
+    try:
+        conn = Client(address=address, family=family)
+    except Exception as exc:
+        token_prefix = session_token[:12]
+        raise RuntimeError(
+            f"callback_connect_failed:{family}:{address}:{token_prefix}:{type(exc).__name__}:{exc}"
+        ) from exc
     try:
         conn.send(
             {
@@ -153,7 +160,13 @@ def _invoke_callback_binding(
                 "context": dict(context or {}),
             }
         )
-        response = dict(conn.recv() or {})
+        try:
+            response = dict(conn.recv() or {})
+        except Exception as exc:
+            token_prefix = session_token[:12]
+            raise RuntimeError(
+                f"callback_receive_failed:{family}:{address}:{token_prefix}:{type(exc).__name__}:{exc}"
+            ) from exc
     finally:
         conn.close()
     if str(response.get("status") or "").strip().lower() == "error":

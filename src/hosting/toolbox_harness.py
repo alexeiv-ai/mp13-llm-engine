@@ -7,12 +7,16 @@ import inspect
 import json
 import os
 import secrets
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import venv
+import ctypes
+import multiprocessing.connection as mp_connection
+from ctypes import wintypes
 from dataclasses import dataclass, field
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
@@ -21,6 +25,86 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
 from mp13_engine.mp13_toolbox import Toolbox, ToolsView
 from mp13_engine.mp13_tools_parser import UnifiedToolIO
+
+
+if os.name == "nt":
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    _SDDL_REVISION_1 = 1
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+
+    class _SECURITY_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", wintypes.LPVOID),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    _kernel32.CreateNamedPipeW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_SECURITY_ATTRIBUTES),
+    ]
+    _kernel32.CreateNamedPipeW.restype = wintypes.HANDLE
+    _kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    _kernel32.LocalFree.restype = wintypes.HLOCAL
+
+
+def _create_windows_low_integrity_pipe(address: str, *, first: bool = False) -> Any:
+    if os.name != "nt":
+        raise RuntimeError("windows_pipe_only")
+    pipe_name = str(address or "").strip()
+    if not pipe_name:
+        raise ValueError("pipe_name_required")
+    sd = wintypes.LPVOID()
+    sd_size = wintypes.DWORD(0)
+    if not _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        "S:(ML;;NW;;;LW)",
+        _SDDL_REVISION_1,
+        ctypes.byref(sd),
+        ctypes.byref(sd_size),
+    ):
+        err = ctypes.get_last_error()
+        raise OSError(err, f"ConvertStringSecurityDescriptorToSecurityDescriptorW failed for {pipe_name}")
+    try:
+        security = _SECURITY_ATTRIBUTES(
+            nLength=ctypes.sizeof(_SECURITY_ATTRIBUTES),
+            lpSecurityDescriptor=sd,
+            bInheritHandle=False,
+        )
+        flags = mp_connection._winapi.PIPE_ACCESS_DUPLEX | mp_connection._winapi.FILE_FLAG_OVERLAPPED
+        if first:
+            flags |= mp_connection._winapi.FILE_FLAG_FIRST_PIPE_INSTANCE
+        handle = _kernel32.CreateNamedPipeW(
+            ctypes.c_wchar_p(pipe_name),
+            flags,
+            mp_connection._winapi.PIPE_TYPE_MESSAGE
+            | mp_connection._winapi.PIPE_READMODE_MESSAGE
+            | mp_connection._winapi.PIPE_WAIT,
+            mp_connection._winapi.PIPE_UNLIMITED_INSTANCES,
+            mp_connection.BUFSIZE,
+            mp_connection.BUFSIZE,
+            mp_connection._winapi.NMPWAIT_WAIT_FOREVER,
+            ctypes.byref(security),
+        )
+        if not handle or int(handle) == -1:
+            err = ctypes.get_last_error()
+            raise OSError(err, f"CreateNamedPipeW failed for {pipe_name}")
+        return int(handle)
+    finally:
+        _kernel32.LocalFree(sd)
 
 
 def _stable_json(payload: Any) -> str:
@@ -41,6 +125,7 @@ def serialize_tools_view(tools_view: Optional[ToolsView]) -> Optional[Dict[str, 
         "advertised_tools": sorted(str(item or "").strip() for item in list(tools_view.advertised_tools or []) if str(item or "").strip()),
         "hidden_allowed_tools": sorted(str(item or "").strip() for item in list(tools_view.hidden_allowed_tools or []) if str(item or "").strip()),
         "disabled_tools": sorted(str(item or "").strip() for item in list(tools_view.disabled_tools or []) if str(item or "").strip()),
+        "gated_tools": sorted(str(item or "").strip() for item in list(tools_view.gated_tools or []) if str(item or "").strip()),
     }
 
 
@@ -96,7 +181,7 @@ class _HostedToolCallbackRelay:
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._listener: Optional[Listener] = None
         self._listener_family: Optional[str] = None
-        self._listener_address: Optional[str] = None
+        self._listener_address: Any = None
         self._listener_thread: Optional[threading.Thread] = None
         self._closed = False
 
@@ -111,9 +196,31 @@ class _HostedToolCallbackRelay:
                 family = "AF_UNIX"
                 callback_root = Path(tempfile.mkdtemp(prefix="mp13-toolbox-callback-")).resolve()
                 address = str(callback_root / "callback.sock")
-            self._listener = Listener(address=address, family=family)
+            if os.name == "nt" and family == "AF_PIPE":
+                original_new_handle = mp_connection.PipeListener._new_handle
+
+                def _low_integrity_new_handle(pipe_listener: Any, first: bool = False) -> Any:
+                    return _create_windows_low_integrity_pipe(str(pipe_listener._address or ""), first=bool(first))
+
+                mp_connection.PipeListener._new_handle = _low_integrity_new_handle
+                try:
+                    self._listener = Listener(address=address, family=family)
+                finally:
+                    mp_connection.PipeListener._new_handle = original_new_handle
+                pipe_listener = getattr(self._listener, "_listener", None)
+                if pipe_listener is not None:
+                    setattr(
+                        pipe_listener,
+                        "_new_handle",
+                        lambda first=False, _address=str(getattr(pipe_listener, "_address", "") or ""): _create_windows_low_integrity_pipe(
+                            _address,
+                            first=bool(first),
+                        ),
+                    )
+            else:
+                self._listener = Listener(address=address, family=family)
             self._listener_family = family
-            self._listener_address = str(address)
+            self._listener_address = self._listener.address
             self._listener_thread = threading.Thread(target=self._accept_loop, name="mp13-toolbox-callback-relay", daemon=True)
             self._listener_thread.start()
 
@@ -141,7 +248,7 @@ class _HostedToolCallbackRelay:
                 "user_context": user_context,
             }
             family = str(self._listener_family or ("AF_PIPE" if os.name == "nt" else "AF_UNIX"))
-            address = str(self._listener_address or "")
+            address = self._listener_address
         return {
             "family": family,
             "address": address,

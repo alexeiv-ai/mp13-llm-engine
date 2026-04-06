@@ -360,6 +360,13 @@ Current behavior:
 5. other callbacks on the same hosted execute call can still proceed
 6. unrelated tool calls can still proceed according to the normal sandbox execution contract
 
+Current Windows callback relay note:
+
+1. the generic hosted callback relay path now works again in live native Windows sandbox execution
+2. the native Windows fix keeps the per-execute relay on local `AF_PIPE`
+3. callback relay named pipes are created with a low-integrity security descriptor up front so low-IL sandbox workers can connect back to the hosted caller relay
+4. WSL/Linux validation of the same generic callback slices also passes, which supports the conclusion that the earlier failure was a native Windows named-pipe security regression rather than a broader callback-contract issue
+
 ### 8.4 Important Constraint
 
 No separate sandbox-facing HTTP server is introduced for callbacks.
@@ -785,6 +792,7 @@ These are the main caveats that still matter architecturally.
 9. Some hosted chat/runtime behavior is polished only in the current hosted slices, not universally across every app path.
 10. Hosted access control is much closer to the original native `Toolbox` design, but broader end-to-end coverage is still more mature in the focused hosted slices than in every possible consumer.
 11. Hosted user-tool hidden state is first-class in persisted requests, but a full native hidden/silent vocabulary is still not expanded into a richer separate hosted reporting contract than the current registered/advertised/hidden split.
+12. Windows local IPC still needs ongoing validation because Low-IL and named-pipe security remain nuanced, but the earlier generic hosted callback relay regression on the `AF_PIPE` path is now fixed.
 
 ## 17. What The Current Polished Scenarios Prove
 

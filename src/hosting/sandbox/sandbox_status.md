@@ -1,7 +1,7 @@
 # Sandbox Status
 
-Date: 2026-04-05
-Purpose: fresh status snapshot for the new gated-tool roadmap.
+Date: 2026-04-06
+Purpose: fresh status snapshot for the gated-tool roadmap after Phase 1 implementation and callback-relay validation updates.
 
 ## 1. Current Position
 
@@ -19,6 +19,7 @@ At a coarse level, the current system already provides:
 8. brokered fs/http callback attribution follow-through
 9. WSL-validated Linux backend coverage
 10. app/runtime adoption beyond the original hosted demo path
+11. native Windows generic hosted callback relay restored for low-IL sandbox workers
 
 So the active work is no longer “finish the sandbox foundation”. The active work is the next semantic feature:
 
@@ -29,7 +30,7 @@ So the active work is no longer “finish the sandbox foundation”. The active 
 
 ### 2.1 Phase 1: Semantic Gated State
 
-Status: not started
+Status: implemented first slice
 
 What exists already:
 
@@ -39,10 +40,9 @@ What exists already:
 
 What is missing:
 
-1. gated state in `ToolsView`
-2. gated state in `ToolsScope`
-3. native `gated_requires_confirmation` outcome
-4. hosted/native presentation of gated state
+1. broader doc consolidation across all sandbox/user-facing guides
+2. deeper end-to-end coverage beyond the currently focused hosted slices
+3. final polish around every presentation surface
 
 ### 2.2 Phase 2: Interactive Hosted Approval
 
@@ -91,15 +91,16 @@ Highest-risk areas:
 3. per-round repeated gated calls
 4. scope mutation semantics for `allow_once` vs `add_to_scope`
 5. guide execution trust model
+6. approval callback contract once Phase 2 starts
 
 ## 4. Recommended Next Step
 
-Implement Phase 1 only:
+Recommended next implementation step:
 
-1. add gated state to `ToolsView` and `ToolsScope`
-2. define precedence rules explicitly
-3. extend native `Toolbox.gate_call(...)`
-4. mirror the outcome through hosted gate/execute and `/t` presentation
+1. consolidate the Phase 1 gated semantics docs
+2. decide the Phase 2 approval callback schema
+3. define `allow_once` / `add_to_scope` mutation semantics
+4. keep the Windows callback relay fix covered in regression runs
 
 Do not start the interactive approval callback until that semantic base is stable.
 

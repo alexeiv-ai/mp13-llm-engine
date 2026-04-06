@@ -44,11 +44,13 @@ class ToolsScope:
         advertise_tools: Names that must be advertised (even if hidden globally).
         silent_tools: Names that must stay enabled but hidden from the LLM.
         disabled_tools: Names that must be disabled for this scope.
+        gated_tools: Names that require explicit confirmation before execution.
     """
     mode: Optional[str] = None
     advertise_tools: Set[str] = field(default_factory=set)
     silent_tools: Set[str] = field(default_factory=set)
     disabled_tools: Set[str] = field(default_factory=set)
+    gated_tools: Set[str] = field(default_factory=set)
     label: Optional[str] = None
 
     DEFAULT_MODE = "*"
@@ -62,6 +64,7 @@ class ToolsScope:
         self.advertise_tools = _normalize(self.advertise_tools)
         self.silent_tools = _normalize(self.silent_tools)
         self.disabled_tools = _normalize(self.disabled_tools)
+        self.gated_tools = _normalize(self.gated_tools)
         if self.mode and self.mode not in self.VALID_MODES:
             raise ValueError(f"ToolsScope.mode '{self.mode}' is invalid. Allowed: {sorted(self.VALID_MODES)}")
         return self
@@ -72,6 +75,7 @@ class ToolsScope:
             "advertise_tools": sorted(list(self.advertise_tools)),
             "silent_tools": sorted(list(self.silent_tools)),
             "disabled_tools": sorted(list(self.disabled_tools)),
+            "gated_tools": sorted(list(self.gated_tools)),
             "label": self.label,
         }
 
@@ -84,6 +88,7 @@ class ToolsScope:
             advertise_tools=set(data.get("advertise_tools", data.get("advertise", [])) or []),
             silent_tools=set(data.get("silent_tools", data.get("silent", [])) or []),
             disabled_tools=set(data.get("disabled_tools", data.get("disabled", [])) or []),
+            gated_tools=set(data.get("gated_tools", data.get("gated", [])) or []),
             label=data.get("label"),
         ).clean()
 
@@ -98,10 +103,12 @@ class ToolsScope:
             bits.append(f"silent={','.join(sorted(self.silent_tools))}")
         if self.disabled_tools:
             bits.append(f"disabled={','.join(sorted(self.disabled_tools))}")
+        if self.gated_tools:
+            bits.append(f"gated={','.join(sorted(self.gated_tools))}")
         return " | ".join(bits) if bits else "no-op scope"
 
     def is_noop(self) -> bool:
-        return not (self.mode or self.advertise_tools or self.silent_tools or self.disabled_tools)
+        return not (self.mode or self.advertise_tools or self.silent_tools or self.disabled_tools or self.gated_tools)
 
 
 @dataclass
@@ -113,6 +120,7 @@ class ToolsView:
     advertised_tools: Set[str]
     hidden_allowed_tools: Set[str]
     disabled_tools: Set[str]
+    gated_tools: Set[str] = field(default_factory=set)
 
     def __post_init__(self):
         """Ensures that upon deserialization from a dict (where these might be lists),
@@ -121,12 +129,19 @@ class ToolsView:
         self.advertised_tools = set(self.advertised_tools)
         self.hidden_allowed_tools = set(self.hidden_allowed_tools)
         self.disabled_tools = set(self.disabled_tools)
+        self.gated_tools = set(self.gated_tools)
 
     def should_advertise(self, tool_name: str) -> bool:
         return tool_name in self.advertised_tools
 
     def is_allowed(self, tool_name: str) -> bool:
         return tool_name in self.allowed_tools
+
+    def is_disabled(self, tool_name: str) -> bool:
+        return tool_name in self.disabled_tools
+
+    def is_gated(self, tool_name: str) -> bool:
+        return tool_name in self.gated_tools
 
 
 @dataclass
@@ -529,15 +544,17 @@ class Toolbox:
                 effective_mode = scope.mode
 
         active_names = self._active_tool_names()
-        status_priority = {"silent": 1, "advertised": 2, "disabled": 3}
-        per_tool_status: Dict[str, Tuple[int, int, str]] = {}
+        visible_names: Set[str] = set()
+        hidden_names: Set[str] = set()
+        disabled_names: Set[str] = set(active_names if effective_mode == "disabled" else [])
+        gated_names: Set[str] = set()
 
         if effective_mode != "disabled":
             for name in active_names:
                 if effective_mode == "advertised" and not self._is_hidden(name):
-                    per_tool_status[name] = (0, status_priority["advertised"], "advertised")
+                    visible_names.add(name)
                 else:
-                    per_tool_status[name] = (0, status_priority["silent"], "silent")
+                    hidden_names.add(name)
 
         def resolve_targets(targets: Set[str]) -> Set[str]:
             if not targets:
@@ -550,35 +567,49 @@ class Toolbox:
             resolved = resolve_targets(names)
             if not resolved:
                 return
-            for name in resolved:
-                new_rank = scope_index * 10 + status_priority[status]
-                previous = per_tool_status.get(name)
-                prev_rank = previous[0] * 10 + previous[1] if previous else -1
-                if new_rank >= prev_rank:
-                    per_tool_status[name] = (scope_index, status_priority[status], status)
+            if status == "disabled":
+                disabled_names.update(resolved)
+                visible_names.difference_update(resolved)
+                hidden_names.difference_update(resolved)
+                gated_names.difference_update(resolved)
+                return
+            resolved -= disabled_names
+            if not resolved:
+                return
+            if status == "advertised":
+                visible_names.update(resolved)
+                hidden_names.difference_update(resolved)
+                return
+            if status == "silent":
+                hidden_names.update(resolved)
+                visible_names.difference_update(resolved)
+                return
+            raise ValueError(f"unsupported_tool_status:{status}")
 
         for idx, scope in enumerate(cleaned_scopes, start=1):
             apply_status(scope.disabled_tools, "disabled", idx)
             apply_status(scope.advertise_tools, "advertised", idx)
             apply_status(scope.silent_tools, "silent", idx)
+            gated_names.update(resolve_targets(scope.gated_tools) - disabled_names)
 
         allowed: Set[str] = set()
         advertised: Set[str] = set()
         disabled: Set[str] = set()
         for name in active_names:
-            entry = per_tool_status.get(name)
-            if not entry or entry[2] == "disabled":
+            if name in disabled_names:
                 disabled.add(name)
                 continue
-            allowed.add(name)
-            if entry[2] == "advertised":
+            if name in visible_names:
                 advertised.add(name)
+            if name not in gated_names:
+                allowed.add(name)
 
-        hidden_allowed = allowed - advertised
+        hidden_allowed = (allowed - advertised)
         self._view_seq += 1
         view_id = label or f"tools-view-{self._view_seq}"
 
         disabled.update(set(active_names) - allowed)
+        disabled.difference_update(gated_names)
 
         return ToolsView(
             view_id=view_id,
@@ -587,6 +618,7 @@ class Toolbox:
             advertised_tools=advertised,
             hidden_allowed_tools=hidden_allowed,
             disabled_tools=disabled,
+            gated_tools=gated_names,
         )
 
     def resolve_tool_link(self, name: str, search_scope: Optional[Dict[str, Any]] = None, external_handler: Optional[Callable[..., Any]] = None) -> Tuple[bool, str]: # noqa
@@ -1371,7 +1403,7 @@ class Toolbox:
 
     def is_executable(self, name: str, tools_view: Optional[ToolsView] = None) -> bool:
         """Checks if a tool has a callable implementation (intrinsic, user-defined, or guide)."""
-        if tools_view and not tools_view.is_allowed(name):
+        if tools_view and (tools_view.is_disabled(name) or tools_view.is_gated(name) or not tools_view.is_allowed(name)):
             return False
         if self.global_tools_mode == "disabled" and not tools_view:
             return False
@@ -1405,6 +1437,14 @@ class Toolbox:
                 executable=False,
             )
         if tools_view and not tools_view.is_allowed(tool_name):
+            if tools_view.is_gated(tool_name):
+                return ToolCallGate(
+                    outcome="gated_requires_confirmation",
+                    tool_name=tool_name,
+                    reason="gated_requires_confirmation",
+                    executable=False,
+                    requires_confirmation=True,
+                )
             return ToolCallGate(
                 outcome="denied",
                 tool_name=tool_name,
@@ -1462,6 +1502,8 @@ class Toolbox:
                 tool_call.error = f"Error: Tool '{tool_name}' is not defined."
             elif gate.reason == "blocked_in_scope":
                 tool_call.error = f"Error: Tool '{tool_name}' is not permitted in the current scope."
+            elif gate.reason == "gated_requires_confirmation":
+                tool_call.error = f"Error: Tool '{tool_name}' requires confirmation before execution."
             elif gate.reason == "all_tools_disabled":
                 tool_call.error = "Error: All tools are currently disabled."
             elif gate.reason == "tool_not_active":

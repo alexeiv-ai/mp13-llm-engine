@@ -1890,10 +1890,12 @@ def _print_tools_scope_summary(cursor: ChatCursor, tools_view: ToolsView, entrie
     )
     advertised = ", ".join(list(effective["effective_advertised_tools"])) or "<none>"
     hidden_allowed = ", ".join(list(effective["effective_hidden_allowed_tools"])) or "<none>"
+    gated = ", ".join(list(effective["effective_gated_tools"])) or "<none>"
     disabled = ", ".join(list(effective["disabled_tools"])) or "<none>"
     print(f"{Colors.SYSTEM}Tools mode:{Colors.RESET} {tools_view.mode}")
     print(f"{Colors.SYSTEM}Advertised tools:{Colors.RESET} {advertised}")
     print(f"{Colors.SYSTEM}Hidden but allowed:{Colors.RESET} {hidden_allowed}")
+    print(f"{Colors.SYSTEM}Gated tools:{Colors.RESET} {gated}")
     print(f"{Colors.SYSTEM}Disabled tools:{Colors.RESET} {disabled}")
     hosted = _active_hosted_toolbox_summary()
     if hosted:
@@ -1903,7 +1905,7 @@ def _print_tools_scope_summary(cursor: ChatCursor, tools_view: ToolsView, entrie
         print(f"{Colors.SYSTEM}Hosted-visible tools:{Colors.RESET} {hosted_names}")
         print(f"{Colors.SYSTEM}Hosted hidden-allowed tools:{Colors.RESET} {hosted_hidden}")
         hosted_gated = ", ".join(list(effective["hosted_gated_tools"])) or "<none>"
-        print(f"{Colors.SYSTEM}Hosted-gated tools:{Colors.RESET} {hosted_gated}")
+        print(f"{Colors.SYSTEM}Hosted route-gated tools:{Colors.RESET} {hosted_gated}")
 
 
 def _format_tools_scope_header(cursor: ChatCursor) -> str:

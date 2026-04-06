@@ -3,6 +3,12 @@
 Date: 2026-04-04
 Scope: what is currently tested, how to run it, and what the polished hosted-toolbox smoke flows should look like.
 
+Update: 2026-04-05
+The new gated-tool semantic slices are passing.
+Update: 2026-04-06
+The Windows generic hosted callback relay regression is fixed.
+Generic hosted callback relay slices now pass on both native Windows and WSL/Linux validation paths.
+
 ## 1. Environment
 
 Run from repo root.
@@ -74,6 +80,15 @@ python -m pytest tests/test_mp13chat_hosted_toolbox_api.py tests/test_hosted_cha
 ```powershell
 python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "generic_callback or callbacks_run_concurrently or forwards_callback_processor"
 ```
+
+Current note:
+
+1. native Windows callback relay slices now pass again
+2. WSL/Linux callback relay slices also pass
+3. current Windows fix shape:
+   - the per-execute callback relay still uses local `AF_PIPE`
+   - callback relay named pipes are created up front with a low-integrity security descriptor so low-IL sandbox workers can connect back to the hosted caller relay
+4. brokered callback attribution slices continue to pass
 
 ### 3.4B Brokered callback attribution slices
 
@@ -196,6 +211,22 @@ Verified from this session about WSL:
    - `6 passed`
 15. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'live_callback or context_fs_wrapper or host_call_rpc_uses_host_dispatch'`
    - `2 passed`
+16. `pytest -q tests/test_hosted_tool_visibility.py`
+   - `7 passed`
+17. `pytest -q tests/test_hosting_toolbox_sandbox.py -k "gated or blocked_in_scope or tools_view"`
+   - `6 passed`
+18. `pytest -q tests/test_mp13chat_hosted_toolbox_api.py -k "hosted_visible_hidden_and_gated_states or blocked_in_scope"`
+   - `1 passed`
+19. `pytest -q tests/test_hosted_tool_visibility.py tests/test_hosting_toolbox_sandbox.py -k "not test_hosted_toolbox_execute_routes_generic_callback_with_context and not test_hosted_toolbox_callbacks_run_concurrently"`
+   - `101 passed, 2 deselected`
+20. `pytest -vv tests/test_hosting_toolbox_sandbox.py -k "test_hosted_toolbox_execute_routes_generic_callback_with_context or test_hosted_toolbox_callbacks_run_concurrently"`
+   - `2 passed, 94 deselected`
+21. `pytest -q tests/test_hosting_toolbox_sandbox.py -k "generic_callback or callbacks_run_concurrently or forwards_callback_processor"`
+   - `3 passed, 93 deselected`
+22. `pytest -q tests/test_hosted_tool_visibility.py tests/test_hosting_toolbox_sandbox.py tests/test_mp13chat_hosted_toolbox_api.py`
+   - `118 passed`
+23. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'test_hosted_toolbox_execute_routes_generic_callback_with_context or test_hosted_toolbox_callbacks_run_concurrently'`
+   - `2 passed, 94 deselected`
 
 ## 5. Polished Hosted Chat Smoke Flow
 
@@ -342,10 +373,12 @@ Current polished test story means:
 1. the hosted toolbox core is working
 2. the chat-hosted demo usability path is working
 3. the operator/admin path is working with compact defaults
-4. the remaining gaps are mainly hardening and breadth, not missing fundamentals
+4. the new gated-tool Phase 1 semantics are working in native, hosted, and presentation slices
+5. generic hosted callbacks are working again on both native Windows and WSL/Linux validation paths
+6. the remaining gaps are mainly hardening and breadth rather than a known callback transport regression
 
 ## 8. Still Worth Manual Attention
 
 1. live dead-worker detection while registrations still exist
-2. any environment-specific Windows pipe/ACL oddities
-3. broader Linux distro/platform coverage beyond the currently validated WSL Ubuntu shadow setup
+2. broader Linux distro/platform coverage beyond the currently validated WSL Ubuntu shadow setup
+3. additional Windows hardening around local IPC security descriptors is still worth periodic validation even though the current generic hosted callback relay regression is fixed

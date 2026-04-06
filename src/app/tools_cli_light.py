@@ -288,12 +288,13 @@ class LightweightToolsCliHandler:
         print(f"{Colors.SYSTEM}Tools mode:{Colors.RESET} {tools_view.mode}")
         print(f"{Colors.SYSTEM}Advertised tools:{Colors.RESET} {', '.join(effective['effective_advertised_tools']) or '<none>'}")
         print(f"{Colors.SYSTEM}Hidden but allowed:{Colors.RESET} {', '.join(effective['effective_hidden_allowed_tools']) or '<none>'}")
+        print(f"{Colors.SYSTEM}Gated tools:{Colors.RESET} {', '.join(effective['effective_gated_tools']) or '<none>'}")
         print(f"{Colors.SYSTEM}Disabled tools:{Colors.RESET} {', '.join(effective['disabled_tools']) or '<none>'}")
         if self.get_hosted_summary():
             print(f"{Colors.SYSTEM}Hosted execution:{Colors.RESET} active")
             print(f"{Colors.SYSTEM}Hosted-visible tools:{Colors.RESET} {', '.join(effective['hosted_visible_tools']) or '<none>'}")
             print(f"{Colors.SYSTEM}Hosted hidden-allowed tools:{Colors.RESET} {', '.join(effective['hosted_hidden_allowed_tools']) or '<none>'}")
-            print(f"{Colors.SYSTEM}Hosted-gated tools:{Colors.RESET} {', '.join(effective['hosted_gated_tools']) or '<none>'}")
+            print(f"{Colors.SYSTEM}Hosted route-gated tools:{Colors.RESET} {', '.join(effective['hosted_gated_tools']) or '<none>'}")
 
     async def handle_tools_command(self, args_str: str, cursor: ChatCursor, pt_session: Any) -> Tuple[ChatCursor, bool]:
         toolbox = self.get_toolbox()

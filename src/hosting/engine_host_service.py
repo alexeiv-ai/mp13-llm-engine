@@ -5505,6 +5505,7 @@ class EngineHostService:
                 str(item or "").strip() for item in list(row.get("hidden_allowed_tools") or []) if str(item or "").strip()
             ),
             disabled_tools=set(str(item or "").strip() for item in list(row.get("disabled_tools") or []) if str(item or "").strip()),
+            gated_tools=set(str(item or "").strip() for item in list(row.get("gated_tools") or []) if str(item or "").strip()),
         )
 
     @staticmethod
@@ -6277,6 +6278,17 @@ class EngineHostService:
             allowed_for_toolbox: set[str] = set()
             for item in regs:
                 allowed_for_toolbox.update(self._registration_allowed_tool_names(item) or set())
+            if view is not None and name in allowed_for_toolbox and view.is_gated(name):
+                return {
+                    "status": "ok",
+                    "toolbox_id": tid,
+                    "tool_name": name,
+                    "outcome": "gated_requires_confirmation",
+                    "reason": "gated_requires_confirmation",
+                    "executable": False,
+                    "requires_confirmation": True,
+                    "backend": "sandbox",
+                }
             if view is not None and name in allowed_for_toolbox and not view.is_allowed(name):
                 return {
                     "status": "ok",
@@ -6314,6 +6326,18 @@ class EngineHostService:
                     "reason": "tool_not_allowed",
                     "executable": False,
                     "requires_confirmation": False,
+                    "backend": "sandbox",
+                }
+            if view is not None and allowed_tool_names is not None and name in allowed_tool_names and view.is_gated(name):
+                return {
+                    "status": "ok",
+                    "engine_id": eid,
+                    "toolbox_id": tid or self._registration_toolbox_id(reg),
+                    "tool_name": name,
+                    "outcome": "gated_requires_confirmation",
+                    "reason": "gated_requires_confirmation",
+                    "executable": False,
+                    "requires_confirmation": True,
                     "backend": "sandbox",
                 }
             if view is not None and allowed_tool_names is not None and name in allowed_tool_names and not view.is_allowed(name):
@@ -6371,6 +6395,8 @@ class EngineHostService:
             allowed_tool_names = self._registration_allowed_tool_names(reg)
             if allowed_tool_names is not None and tool_name not in allowed_tool_names:
                 raise PermissionError(f"tool_not_allowed:{tool_name}")
+            if view is not None and allowed_tool_names is not None and tool_name in allowed_tool_names and view.is_gated(tool_name):
+                raise PermissionError(f"gated_requires_confirmation:{tool_name}")
             if view is not None and allowed_tool_names is not None and tool_name in allowed_tool_names and not view.is_allowed(tool_name):
                 raise PermissionError(f"blocked_in_scope:{tool_name}")
         out = self._ipc_call(
