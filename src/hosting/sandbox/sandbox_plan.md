@@ -25,6 +25,11 @@ Completed at a coarse level:
 12. first broader app/runtime adoption slice:
    - `mp13chat` can now attach to an already provisioned hosted toolbox via explicit host state files and toolbox id
    - wrappers can now reuse the same attach flow through `attach_existing_hosted_toolbox(...)`
+13. first callback-contract refinement slice:
+   - hosted registrations can now persist optional `callback_signature`
+   - hosted direct execute and hosted execution-harness paths can accept a `callback_processor`
+   - generic hosted callbacks now carry toolbox/tool/call context plus caller-supplied callback context
+   - hosted callback relay processes concurrent callbacks without forcing one blocked callback to serialize unrelated callbacks
 
 ## 2. Next Steps
 
@@ -84,7 +89,9 @@ Completed at a coarse level:
 ### 2.3 Medium-Term Work
 
 1. broader app/runtime adoption beyond the current hosted demo slice and the new direct `mp13chat` attach path
-2. callback-contract refinement if a concrete need appears
+2. callback-contract refinement follow-through if a concrete need appears:
+   - decide whether brokered fs/http should adopt the same richer per-call callback envelope used by generic hosted callbacks
+   - decide whether remote thin-wrapper flows need more explicit callback capability/version reporting
 
 ## 3. Suggested Priority Order
 

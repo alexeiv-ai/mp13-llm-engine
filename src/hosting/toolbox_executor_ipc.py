@@ -8,7 +8,7 @@ import queue
 import socket
 import threading
 import traceback
-from multiprocessing.connection import Listener
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -80,6 +80,7 @@ def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             engine_id=engine_id,
             root_id=str(req.get("root_id") or ""),
             relative_path=req.get("relative_path"),
+            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
         )
     if meth == "fs.read_text":
         return svc.sandbox_fs_read_text(
@@ -87,6 +88,7 @@ def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             root_id=str(req.get("root_id") or ""),
             relative_path=str(req.get("relative_path") or ""),
             encoding=str(req.get("encoding") or "utf-8"),
+            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
         )
     if meth == "fs.write_text":
         return svc.sandbox_fs_write_text(
@@ -96,6 +98,7 @@ def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             text=str(req.get("text") or ""),
             encoding=str(req.get("encoding") or "utf-8"),
             create_parents=bool(req.get("create_parents", True)),
+            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
         )
     if meth == "fs.mkdir":
         return svc.sandbox_fs_mkdir(
@@ -104,12 +107,14 @@ def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             relative_path=str(req.get("relative_path") or ""),
             parents=bool(req.get("parents", True)),
             exist_ok=bool(req.get("exist_ok", True)),
+            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
         )
     if meth == "fs.stat":
         return svc.sandbox_fs_stat(
             engine_id=engine_id,
             root_id=str(req.get("root_id") or ""),
             relative_path=req.get("relative_path"),
+            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
         )
     if meth == "http.fetch":
         return svc.sandbox_http_fetch(
@@ -120,18 +125,101 @@ def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             body_b64=str(req.get("body_b64") or ""),
             timeout_seconds=float(req.get("timeout_seconds") or 30.0),
             max_response_bytes=int(req.get("max_response_bytes") or 1024 * 1024),
+            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
         )
     raise RuntimeError(f"unsupported_host_callback:{meth}")
 
 
+def _invoke_callback_binding(
+    binding: Dict[str, Any],
+    *,
+    callback_name: str,
+    payload: Any,
+    context: Dict[str, Any],
+) -> Dict[str, Any]:
+    family = str(binding.get("family") or "").strip() or ("AF_PIPE" if os.name == "nt" else "AF_UNIX")
+    address = str(binding.get("address") or "").strip()
+    session_token = str(binding.get("session_token") or "").strip()
+    if not address or not session_token:
+        raise RuntimeError("callback_binding_invalid")
+    conn = Client(address=address, family=family)
+    try:
+        conn.send(
+            {
+                "contract": str(binding.get("contract") or "hosting.toolbox.callbacks.v2"),
+                "session_token": session_token,
+                "callback_name": str(callback_name or "").strip(),
+                "payload": payload,
+                "context": dict(context or {}),
+            }
+        )
+        response = dict(conn.recv() or {})
+    finally:
+        conn.close()
+    if str(response.get("status") or "").strip().lower() == "error":
+        raise RuntimeError(str(response.get("message") or "callback_invoke_failed"))
+    return dict(response or {})
+
+
 class HostCallbackClient:
-    def __init__(self, *, engine_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        engine_id: str,
+        callback_binding: Optional[Dict[str, Any]] = None,
+        toolbox_id: str = "",
+        tool_name: str = "",
+        tool_call_id: str = "",
+        tool_arguments: Optional[Dict[str, Any]] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
+        user_context: Any = None,
+    ) -> None:
         self.engine_id = str(engine_id or "").strip() or _worker_engine_id()
+        self.callback_binding = dict(callback_binding or {})
+        self.toolbox_id = str(toolbox_id or "").strip()
+        self.tool_name = str(tool_name or "").strip()
+        self.tool_call_id = str(tool_call_id or "").strip()
+        self.tool_arguments = dict(tool_arguments or {})
+        self.callback_signature = dict(callback_signature or {}) or None
+        self.user_context = user_context
 
     def call(self, method: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        meth = str(method or "").strip()
         req = dict(arguments or {})
         req.setdefault("engine_id", self.engine_id)
-        return _invoke_host_call(str(method or ""), req)
+        req.setdefault(
+            "callback_context",
+            {
+                "engine_id": self.engine_id,
+                "toolbox_id": self.toolbox_id,
+                "tool_name": self.tool_name,
+                "tool_call_id": self.tool_call_id or None,
+                "tool_arguments": dict(self.tool_arguments or {}),
+                "callback_signature": dict(self.callback_signature or {}) or None,
+                "user_context": self.user_context,
+            },
+        )
+        if meth == "callback.invoke":
+            callback_name = str(req.get("callback_name") or req.get("name") or "").strip()
+            if not callback_name:
+                raise RuntimeError("callback_name_required")
+            if not self.callback_binding:
+                raise RuntimeError("callback_binding_missing")
+            response = _invoke_callback_binding(
+                self.callback_binding,
+                callback_name=callback_name,
+                payload=req.get("payload"),
+                context={
+                    "engine_id": self.engine_id,
+                    "toolbox_id": self.toolbox_id,
+                    "tool_name": self.tool_name,
+                    "tool_call_id": self.tool_call_id or None,
+                    "tool_arguments": dict(self.tool_arguments or {}),
+                    "callback_signature": dict(self.callback_signature or {}) or None,
+                },
+            )
+            return {"status": "ok", "callback_name": callback_name, "result": response.get("result")}
+        return _invoke_host_call(meth, req)
 
 
 class BrokeredFsClient:
@@ -209,12 +297,48 @@ class BrokeredHttpClient:
         )
 
 
+class GenericCallbackClient:
+    def __init__(self, *, host: HostCallbackClient) -> None:
+        self.host = host
+
+    def invoke(self, callback_name: str, payload: Any = None) -> Any:
+        response = self.host.call(
+            "callback.invoke",
+            {
+                "callback_name": str(callback_name or "").strip(),
+                "payload": payload,
+            },
+        )
+        return dict(response or {}).get("result")
+
+
 class ToolboxExecutionContext:
-    def __init__(self, *, engine_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        engine_id: str,
+        toolbox_id: str = "",
+        tool_name: str = "",
+        tool_call_id: str = "",
+        tool_arguments: Optional[Dict[str, Any]] = None,
+        callback_binding: Optional[Dict[str, Any]] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        callback_binding_payload = dict(callback_binding or {})
         self.engine_id = str(engine_id or "").strip() or _worker_engine_id()
-        self.host = HostCallbackClient(engine_id=self.engine_id)
+        self.host = HostCallbackClient(
+            engine_id=self.engine_id,
+            callback_binding=callback_binding_payload,
+            toolbox_id=toolbox_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_arguments=tool_arguments,
+            callback_signature=callback_signature,
+            user_context=callback_binding_payload.get("user_context"),
+        )
         self.fs = BrokeredFsClient(host=self.host)
         self.http = BrokeredHttpClient(host=self.host)
+        self.callbacks = GenericCallbackClient(host=self.host)
 
 
 def _manifest_path() -> Path:
@@ -259,6 +383,15 @@ def _manifest_tool_names(manifest: Dict[str, Any]) -> list[str]:
 async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
     _, manifest = _ensure_toolbox()
     tool_names = _manifest_tool_names(manifest)
+    tool_metadata = {
+        str(item.get("name") or "").strip(): {
+            "callback_signature": dict(item.get("callback_signature") or {}) or None,
+            "non_restartable": bool(item.get("non_restartable", False)),
+            "hidden": bool(item.get("hidden", False)),
+        }
+        for item in list(manifest.get("auto_tools") or []) + list(manifest.get("tools") or [])
+        if str(dict(item or {}).get("name") or "").strip()
+    }
     return {
         "status": "ok",
         "protocol_version": PROTOCOL_VERSION,
@@ -267,6 +400,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
         "async_rpc": True,
         "cancellation": False,
         "all_registered_tool_names": tool_names,
+        "tool_metadata": tool_metadata,
         "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
     }
 
@@ -288,6 +422,15 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     toolbox, manifest = _ensure_toolbox()
     if meth == "toolbox.describe":
         tool_names = _manifest_tool_names(manifest)
+        tool_metadata = {
+            str(item.get("name") or "").strip(): {
+                "callback_signature": dict(item.get("callback_signature") or {}) or None,
+                "non_restartable": bool(item.get("non_restartable", False)),
+                "hidden": bool(item.get("hidden", False)),
+            }
+            for item in list(manifest.get("auto_tools") or []) + list(manifest.get("tools") or [])
+            if str(dict(item or {}).get("name") or "").strip()
+        }
         return {
             "status": "ok",
             "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
@@ -297,6 +440,7 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
                 "manifest_hash": manifest.get("manifest_hash"),
             },
             "all_registered_tool_names": tool_names,
+            "tool_metadata": tool_metadata,
             "parallel_execution": {
                 "async_within_executor": True,
                 "sandbox_pool": False,
@@ -305,12 +449,29 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if meth == "toolbox.execute":
         raw_call = dict(params.get("tool_call") or {})
         call = ToolCall.from_dict(raw_call)
+        callback_binding = dict(params.get("callback_binding") or {})
         tool_names = set(_manifest_tool_names(manifest))
         if call.name not in tool_names:
             call.error = f"Error: Tool '{call.name}' is not staged in this executor."
             return {"status": "ok", "tool_call": call.to_dict()}
-        context = ToolboxExecutionContext(engine_id=_worker_engine_id())
-        result = await toolbox.execute(call, context=context, host=context.host, fs=context.fs, http=context.http)
+        tool_def = toolbox.get_tool(call.name) or {}
+        context = ToolboxExecutionContext(
+            engine_id=_worker_engine_id(),
+            toolbox_id=str(manifest.get("toolbox_id") or ""),
+            tool_name=call.name,
+            tool_call_id=str(call.id or "").strip(),
+            tool_arguments=dict(call.arguments or {}),
+            callback_binding=callback_binding,
+            callback_signature=dict(tool_def.get("callback_signature") or {}) or None,
+        )
+        result = await toolbox.execute(
+            call,
+            context=context,
+            host=context.host,
+            fs=context.fs,
+            http=context.http,
+            callbacks=context.callbacks,
+        )
         if result is not None:
             call.result = result
         return {"status": "ok", "tool_call": call.to_dict()}

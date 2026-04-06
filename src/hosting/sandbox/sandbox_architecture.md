@@ -288,26 +288,83 @@ Current executor RPC surface includes:
 3. `toolbox.execute`
 4. `host.call`
 
-### 8.2 Brokered Callback Model
+### 8.2 Callback Model
 
-Tool code can make host-mediated requests through execution context helpers.
+Tool code can make host-mediated or client-mediated callback requests through execution context helpers.
 
 Current convenience helpers:
 
 1. `context.host.call(...)`
 2. `context.fs.*`
 3. `context.http.fetch(...)`
+4. `context.callbacks.invoke(...)`
 
-This is the supported path for:
+The current callback contract splits into two categories:
 
-1. filesystem reads/writes within brokered roots
-2. HTTP fetches within brokered allowlists
+1. brokered host callbacks
+   - filesystem reads/writes within brokered roots
+   - HTTP fetches within brokered allowlists
+   - host still authorizes these requests primarily by sandbox worker `engine_id`
+   - but the request envelope now also carries per-call callback context:
+     - `toolbox_id`
+     - `tool_name`
+     - `tool_call_id`
+     - tool arguments
+     - persisted `callback_signature`
+     - caller-supplied hosted callback context when present
+2. generic hosted callbacks
+   - tool code can invoke `context.callbacks.invoke(name, payload)`
+   - hosted caller code can pass a `callback_processor` when executing through:
+     - `HostedToolBoxRef.execute(...)`
+     - `ToolboxExecutionHarness.execute_calls(...)`
+     - hosted `ToolboxExecutionHarness.execute_request_tools(...)`
+     - the lightweight hosted runtime helper `execute_tool_round_on_cursor(...)`
+   - the callback is processed on the hosted-caller side rather than by the host service itself
 
-### 8.3 Important Constraint
+Generic hosted callbacks currently carry `HostedToolCallbackContext` with:
+
+1. `toolbox_id`
+2. `tool_name`
+3. `tool_call_id`
+4. `tool_arguments`
+5. `engine_id`
+6. `callback_name`
+7. `callback_payload`
+8. persisted `callback_signature`
+9. caller-supplied `user_context`
+
+Tool registration can now persist optional `callback_signature` metadata for:
+
+1. hosted auto-callable registration
+2. hosted Python-callable registration
+3. hosted manual tool registration
+
+Hosted `describe` now surfaces that metadata through `tool_metadata`.
+
+Current brokered FS/HTTP follow-through:
+
+1. brokered filesystem and brokered HTTP service methods now accept the same callback-context envelope
+2. brokered callback responses now preserve that envelope in their returned payloads
+3. this gives the host and the tool result path direct attribution back to the originating tool call
+
+### 8.3 Callback Concurrency Contract
+
+Generic hosted callbacks are intentionally not serialized through one blocking callback loop.
+
+Current behavior:
+
+1. each hosted execute call binds a callback relay session
+2. the relay accepts callback connections concurrently
+3. each callback connection is handled in its own thread
+4. a blocked callback processor only blocks the callback waiting on that processor result
+5. other callbacks on the same hosted execute call can still proceed
+6. unrelated tool calls can still proceed according to the normal sandbox execution contract
+
+### 8.4 Important Constraint
 
 No separate sandbox-facing HTTP server is introduced for callbacks.
 
-All callback traffic stays on existing hosting IPC.
+All callback traffic stays on existing hosting IPC or the per-execute hosted callback relay path.
 
 ## 9. Logical Toolbox Routing
 
@@ -422,6 +479,32 @@ Remaining architectural limit:
    - focused hosted tool-round runtime
    - operator review/admin surfaces
 3. chat itself is still intentionally serial in the current implementation even though hosted/native toolbox execution can support parallel multi-call execution underneath
+
+### 10.5 Execution Granularity And Multi-Call Contract
+
+Current execution granularity is explicit and should not be inferred from the chat UX.
+
+Single-call contract:
+
+1. native `Toolbox.execute(...)` executes one `ToolCall`
+2. hosted worker RPC `toolbox.execute` executes one `ToolCall`
+3. `HostedToolBoxRef.execute(...)` executes one `ToolCall`
+
+Multi-call contract:
+
+1. multiple tool calls from one LLM response are handled by:
+   - native `Toolbox.execute_request_tools(...)`
+   - hosted `ToolboxExecutionHarness.execute_request_tools(...)`
+   - hosted `ToolboxExecutionHarness.execute_calls(...)`
+2. both native and hosted support sequential or parallel execution controlled by `serial_execution` or `parallel`
+3. non-chat hosted runtime now defaults to parallel multi-call execution
+4. `mp13chat` intentionally still forces serial tool execution for now
+
+Response-boundary contract:
+
+1. multiple tool calls from one LLM response can be processed in one native or hosted tool round
+2. multiple separate LLM responses are not merged into one atomic toolbox RPC
+3. each response or auto-tool round is parsed and executed as its own round, even if the same logical toolbox continues across turns
 
 ## 11. Environment Architecture
 
@@ -611,6 +694,10 @@ Important current split:
 
 1. non-chat hosted tool rounds now default to native-style parallel multi-call execution
 2. `mp13chat` remains intentionally serial for tool execution at the moment
+3. the chat/runtime split is therefore policy, not capability:
+   - native toolbox supports multi-call rounds
+   - hosted harness supports multi-call rounds
+   - chat currently chooses serial execution explicitly
 
 ### 14.4 Hosted Demo
 
@@ -675,6 +762,13 @@ Coarse cancellation contract in the thin-client model:
 2. a successful cancel kills the targeted sandbox worker and can optionally respawn healthy replacement workers from persisted toolbox state
 3. in-flight hosted tool calls that lose their worker are normalized to `canceled` tool-call errors at the harness boundary
 4. wrappers can use `should_resubmit_hosted_tool_call(...)` plus the persisted `non_restartable` flag to choose whether to resubmit on a fresh sandbox
+
+Generic callback contract in the thin-client model:
+
+1. wrappers can register hosted tools with optional `callback_signature`
+2. wrappers can pass a `callback_processor` plus optional caller `callback_context` at execute time
+3. the tool can call back through `context.callbacks.invoke(...)`
+4. the wrapper receives structured callback context identifying the toolbox, tool, call id, and caller-supplied context
 
 ## 16. Current Pitfalls And Limits
 

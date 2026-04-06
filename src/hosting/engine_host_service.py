@@ -829,6 +829,51 @@ class EngineHostService:
                 return bool(request.get("non_restartable", False))
         return False
 
+    @staticmethod
+    def _toolbox_tool_metadata(toolbox_row: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        row = dict(toolbox_row or {})
+        intrinsics = dict(row.get("intrinsics") or {})
+        hidden_intrinsics = {
+            str(item or "").strip()
+            for item in list(intrinsics.get("hidden_tool_names") or row.get("hidden_intrinsic_tool_names") or [])
+            if str(item or "").strip()
+        }
+        metadata: Dict[str, Dict[str, Any]] = {}
+        for req in list(row.get("requests") or []):
+            request = dict(req or {})
+            tool_name = str(request.get("callable_name") or "").strip()
+            if not tool_name:
+                continue
+            metadata[tool_name] = {
+                "callback_signature": dict(request.get("callback_signature") or {}) or None,
+                "non_restartable": bool(request.get("non_restartable", False)),
+                "hidden": False,
+            }
+        for req in list(row.get("manual_requests") or []):
+            request = dict(req or {})
+            fn = dict(dict(request.get("tool_definition") or {}).get("function") or {})
+            tool_name = str(fn.get("name") or "").strip()
+            if not tool_name:
+                continue
+            metadata[tool_name] = {
+                "callback_signature": dict(request.get("callback_signature") or {}) or None,
+                "non_restartable": bool(request.get("non_restartable", False)),
+                "hidden": bool(request.get("hidden", False)),
+            }
+        for tool_name in list(intrinsics.get("names") or row.get("intrinsic_tool_names") or []):
+            name = str(tool_name or "").strip()
+            if not name:
+                continue
+            metadata.setdefault(
+                name,
+                {
+                    "callback_signature": None,
+                    "non_restartable": False,
+                    "hidden": name in hidden_intrinsics,
+                },
+            )
+        return metadata
+
     def _rebuild_toolbox_from_persisted_state(
         self,
         *,
@@ -6147,6 +6192,8 @@ class EngineHostService:
             regs = self._toolbox_executor_registrations(tid)
             if not regs:
                 raise ValueError(f"toolbox '{tid}' has no registered sandbox executors")
+            state = self._read_toolboxes()
+            toolbox_row = dict(dict(state.get("toolboxes") or {}).get(tid) or {})
             tool_names: set[str] = set()
             advertised_tool_names: set[str] = set()
             hidden_allowed_tool_names: set[str] = set()
@@ -6169,6 +6216,7 @@ class EngineHostService:
                 "allowed_tool_names": sorted(tool_names),
                 "advertised_tool_names": sorted(advertised_tool_names or tool_names),
                 "hidden_allowed_tool_names": sorted(hidden_allowed_tool_names),
+                "tool_metadata": self._toolbox_tool_metadata(toolbox_row),
                 "sandbox_profile_ids": sorted([pid for pid in sandbox_profile_ids if pid]),
                 "executor_kind": "toolbox_executor_v1",
                 "mode": "sandbox",
@@ -6300,6 +6348,7 @@ class EngineHostService:
         tool_call: Dict[str, Any],
         timeout_seconds: float = 30.0,
         tools_view: Optional[Dict[str, Any]] = None,
+        callback_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         call = dict(tool_call or {})
@@ -6330,7 +6379,10 @@ class EngineHostService:
                 "kind": "rpc_call",
                 "engine_id": eid,
                 "method": "toolbox.execute",
-                "params": {"tool_call": call},
+                "params": {
+                    "tool_call": call,
+                    "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
+                },
             },
             timeout_seconds=float(timeout_seconds or 30.0),
         )
@@ -7936,8 +7988,12 @@ class EngineHostService:
             self._write_engines(kept)
         return {"engine_id": eid, "removed": changed}
 
-    def sandbox_fs_list(self, *, engine_id: str, root_id: str, relative_path: Optional[str] = None) -> Dict[str, Any]:
-        return self._sandbox_fs_for_engine(engine_id).list_dir(root_id=root_id, relative_path=relative_path)
+    @staticmethod
+    def _sandbox_callback_result(result: Dict[str, Any], *, callback_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = dict(result or {})
+        if isinstance(callback_context, dict) and callback_context:
+            payload["callback_context"] = dict(callback_context)
+        return payload
 
     def sandbox_fs_read_text(
         self,
@@ -7946,11 +8002,15 @@ class EngineHostService:
         root_id: str,
         relative_path: str,
         encoding: str = "utf-8",
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self._sandbox_fs_for_engine(engine_id).read_text(
-            root_id=root_id,
-            relative_path=relative_path,
-            encoding=encoding,
+        return self._sandbox_callback_result(
+            self._sandbox_fs_for_engine(engine_id).read_text(
+                root_id=root_id,
+                relative_path=relative_path,
+                encoding=encoding,
+            ),
+            callback_context=callback_context,
         )
 
     def sandbox_fs_write_text(
@@ -7962,13 +8022,17 @@ class EngineHostService:
         text: str,
         encoding: str = "utf-8",
         create_parents: bool = True,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self._sandbox_fs_for_engine(engine_id).write_text(
-            root_id=root_id,
-            relative_path=relative_path,
-            text=text,
-            encoding=encoding,
-            create_parents=create_parents,
+        return self._sandbox_callback_result(
+            self._sandbox_fs_for_engine(engine_id).write_text(
+                root_id=root_id,
+                relative_path=relative_path,
+                text=text,
+                encoding=encoding,
+                create_parents=create_parents,
+            ),
+            callback_context=callback_context,
         )
 
     def sandbox_fs_mkdir(
@@ -7979,16 +8043,43 @@ class EngineHostService:
         relative_path: str,
         parents: bool = True,
         exist_ok: bool = True,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self._sandbox_fs_for_engine(engine_id).mkdir(
-            root_id=root_id,
-            relative_path=relative_path,
-            parents=parents,
-            exist_ok=exist_ok,
+        return self._sandbox_callback_result(
+            self._sandbox_fs_for_engine(engine_id).mkdir(
+                root_id=root_id,
+                relative_path=relative_path,
+                parents=parents,
+                exist_ok=exist_ok,
+            ),
+            callback_context=callback_context,
         )
 
-    def sandbox_fs_stat(self, *, engine_id: str, root_id: str, relative_path: Optional[str] = None) -> Dict[str, Any]:
-        return self._sandbox_fs_for_engine(engine_id).stat(root_id=root_id, relative_path=relative_path)
+    def sandbox_fs_list(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: Optional[str] = None,
+        callback_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return self._sandbox_callback_result(
+            self._sandbox_fs_for_engine(engine_id).list_dir(root_id=root_id, relative_path=relative_path),
+            callback_context=callback_context,
+        )
+
+    def sandbox_fs_stat(
+        self,
+        *,
+        engine_id: str,
+        root_id: str,
+        relative_path: Optional[str] = None,
+        callback_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return self._sandbox_callback_result(
+            self._sandbox_fs_for_engine(engine_id).stat(root_id=root_id, relative_path=relative_path),
+            callback_context=callback_context,
+        )
 
     def sandbox_http_fetch(
         self,
@@ -8000,6 +8091,7 @@ class EngineHostService:
         body_b64: str = "",
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 1024 * 1024,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         out = self._sandbox_http_for_engine(engine_id).fetch(
             url=url,
@@ -8009,7 +8101,10 @@ class EngineHostService:
             timeout_seconds=timeout_seconds,
             max_response_bytes=max_response_bytes,
         )
-        return {"engine_id": str(engine_id or ""), **dict(out or {})}
+        return self._sandbox_callback_result(
+            {"engine_id": str(engine_id or ""), **dict(out or {})},
+            callback_context=callback_context,
+        )
 
     def shutdown(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         entry = self._find_registration(engine_id)

@@ -1053,6 +1053,7 @@ class EngineHostControlChannel:
         engine_id: str,
         root_id: str,
         relative_path: Optional[str] = None,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "sandbox-fs-list",
@@ -1060,6 +1061,7 @@ class EngineHostControlChannel:
                 "engine_id": str(engine_id or "").strip(),
                 "root_id": str(root_id or "").strip(),
                 "relative_path": relative_path,
+                "callback_context": dict(callback_context or {}) if isinstance(callback_context, dict) else None,
             },
         )
         return dict(res or {})
@@ -1071,6 +1073,7 @@ class EngineHostControlChannel:
         root_id: str,
         relative_path: str,
         encoding: str = "utf-8",
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "sandbox-fs-read-text",
@@ -1079,6 +1082,7 @@ class EngineHostControlChannel:
                 "root_id": str(root_id or "").strip(),
                 "relative_path": str(relative_path or ""),
                 "encoding": str(encoding or "utf-8"),
+                "callback_context": dict(callback_context or {}) if isinstance(callback_context, dict) else None,
             },
         )
         return dict(res or {})
@@ -1092,6 +1096,7 @@ class EngineHostControlChannel:
         text: str,
         encoding: str = "utf-8",
         create_parents: bool = True,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "sandbox-fs-write-text",
@@ -1102,6 +1107,7 @@ class EngineHostControlChannel:
                 "text": str(text or ""),
                 "encoding": str(encoding or "utf-8"),
                 "create_parents": bool(create_parents),
+                "callback_context": dict(callback_context or {}) if isinstance(callback_context, dict) else None,
             },
         )
         return dict(res or {})
@@ -1114,6 +1120,7 @@ class EngineHostControlChannel:
         relative_path: str,
         parents: bool = True,
         exist_ok: bool = True,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "sandbox-fs-mkdir",
@@ -1123,6 +1130,7 @@ class EngineHostControlChannel:
                 "relative_path": str(relative_path or ""),
                 "parents": bool(parents),
                 "exist_ok": bool(exist_ok),
+                "callback_context": dict(callback_context or {}) if isinstance(callback_context, dict) else None,
             },
         )
         return dict(res or {})
@@ -1133,6 +1141,7 @@ class EngineHostControlChannel:
         engine_id: str,
         root_id: str,
         relative_path: Optional[str] = None,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "sandbox-fs-stat",
@@ -1140,6 +1149,7 @@ class EngineHostControlChannel:
                 "engine_id": str(engine_id or "").strip(),
                 "root_id": str(root_id or "").strip(),
                 "relative_path": relative_path,
+                "callback_context": dict(callback_context or {}) if isinstance(callback_context, dict) else None,
             },
         )
         return dict(res or {})
@@ -1154,6 +1164,7 @@ class EngineHostControlChannel:
         body_b64: str = "",
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 1024 * 1024,
+        callback_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "sandbox-http-fetch",
@@ -1165,6 +1176,7 @@ class EngineHostControlChannel:
                 "body_b64": str(body_b64 or ""),
                 "timeout_seconds": float(timeout_seconds or 30.0),
                 "max_response_bytes": int(max_response_bytes or 1024 * 1024),
+                "callback_context": dict(callback_context or {}) if isinstance(callback_context, dict) else None,
             },
         )
         return dict(res or {})
@@ -1213,6 +1225,7 @@ class EngineHostControlChannel:
         tool_call: Dict[str, Any],
         timeout_seconds: float = 30.0,
         tools_view: Optional[Dict[str, Any]] = None,
+        callback_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "toolbox-execute",
@@ -1222,6 +1235,7 @@ class EngineHostControlChannel:
                 "tool_call": dict(tool_call or {}),
                 "timeout_seconds": float(timeout_seconds or 30.0),
                 "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
+                "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
             },
         )
         return dict(res or {})

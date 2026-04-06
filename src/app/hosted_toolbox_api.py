@@ -122,6 +122,7 @@ def register_hosted_tool_callable(
     non_restartable: bool = False,
     guide_content: Optional[Dict[str, List[str]]] = None,
     guide_description: Optional[str] = None,
+    callback_signature: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Convenience wrapper for registering a Python callable into hosted toolbox
@@ -142,6 +143,7 @@ def register_hosted_tool_callable(
         non_restartable=non_restartable,
         guide_content=guide_content,
         guide_description=guide_description,
+        callback_signature=callback_signature,
     )
 
 

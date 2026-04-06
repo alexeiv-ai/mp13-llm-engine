@@ -99,6 +99,8 @@ async def execute_tool_round_on_cursor(
     auto_anchor_prefix: str = "auto_tool",
     serial_execution: bool = False,
     non_restartable_tool_names: Optional[Sequence[str]] = None,
+    callback_processor: Optional[Callable[..., Any]] = None,
+    callback_context: Any = None,
 ) -> ToolRoundResult:
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
@@ -142,6 +144,8 @@ async def execute_tool_round_on_cursor(
         context=cursor.current_turn,
         tool_retries_max=tool_retries_max,
         tool_retries_left=tool_retries_left,
+        callback_processor=callback_processor,
+        callback_context=callback_context,
     )
     canceled_summary = summarize_canceled_tool_calls(
         all_tool_blocks,

@@ -35,6 +35,13 @@ Current automated coverage includes:
     - gc
 11. hosted chat/tool visibility slices
 12. hosted demo and admin review flow
+13. hosted generic callback relay slices:
+    - callback context propagation
+    - callback concurrency
+    - hosted execution-harness callback binding forwarding
+14. brokered callback attribution slices:
+    - brokered filesystem / HTTP service echo callback context
+    - live toolbox execution proves brokered filesystem callback attribution to original tool call
 
 ## 3. Main Test Commands
 
@@ -60,6 +67,19 @@ python -m pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_ch
 
 ```powershell
 python -m pytest tests/test_mp13chat_hosted_toolbox_api.py tests/test_hosted_chat_demo.py tests/test_hosted_tool_visibility.py -q
+```
+
+### 3.4A Hosted callback slices
+
+```powershell
+python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "generic_callback or callbacks_run_concurrently or forwards_callback_processor"
+```
+
+### 3.4B Brokered callback attribution slices
+
+```powershell
+python -m pytest tests/test_hosting_worker_sandbox.py -q -k "brokered_filesystem or brokered_http"
+python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "live_callback or context_fs_wrapper or host_call_rpc_uses_host_dispatch"
 ```
 
 ### 3.5 Admin/operator helper slice
@@ -160,6 +180,22 @@ Verified from this session about WSL:
    - `8 passed`
 7. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_daemon_pidfile.py -q`
    - `123 passed`
+8. `python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "generic_callback or callbacks_run_concurrently or forwards_callback_processor"`
+   - `3 passed`
+9. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'generic_callback or callbacks_run_concurrently or forwards_callback_processor'`
+   - `3 passed`
+10. `python -m pytest tests/test_mp13chat_hosted_toolbox_api.py -q`
+   - `14 passed`
+11. `PYTHONPATH=src poetry run pytest tests/test_mp13chat_hosted_toolbox_api.py -q`
+   - `14 passed`
+12. `python -m pytest tests/test_hosting_worker_sandbox.py -q -k "brokered_filesystem or brokered_http"`
+   - `6 passed`
+13. `python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "live_callback or context_fs_wrapper or host_call_rpc_uses_host_dispatch"`
+   - `2 passed`
+14. `PYTHONPATH=src poetry run pytest tests/test_hosting_worker_sandbox.py -q -k 'brokered_filesystem or brokered_http'`
+   - `6 passed`
+15. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'live_callback or context_fs_wrapper or host_call_rpc_uses_host_dispatch'`
+   - `2 passed`
 
 ## 5. Polished Hosted Chat Smoke Flow
 

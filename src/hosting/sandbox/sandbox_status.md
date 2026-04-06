@@ -54,6 +54,18 @@ Current status:
 40. the same existing-hosted-toolbox attach flow is now exposed as a public app helper in `hosted_toolbox_api.py`, so thin wrappers can reuse the non-demo hosted attach path without copying `mp13chat` CLI glue
 41. hosted attach helpers are now re-exported from the top-level `app` package, so wrapper code can adopt hosted execution without importing lower-level module paths directly
 42. `demo/demo_hosted_toolbox_attach.py` now provides a minimal sample wrapper for attaching to an existing hosted toolbox and optionally executing one tool call through the public app-layer helper path
+43. hosted callback-contract refinement has now started as a real implemented slice:
+   - hosted registrations can persist optional `callback_signature`
+   - hosted direct execute, hosted execution-harness paths, and the lightweight hosted tool-round helper can accept a `callback_processor`
+   - generic tool callbacks can identify `toolbox_id`, `tool_name`, `tool_call_id`, tool arguments, and caller-supplied context
+44. hosted `toolbox.describe` now surfaces `tool_metadata`, including persisted `callback_signature`, from logical-toolbox describe as well as per-executor describe
+45. generic hosted callbacks are now processed concurrently by the hosted callback relay, so one blocked callback processor does not serialize unrelated callbacks on the same hosted execute path
+46. the architecture docs now make the execution contract explicit:
+   - one `toolbox.execute` call means one `ToolCall`
+   - multi-call rounds are provided by native `execute_request_tools(...)` and hosted execution-harness multi-call helpers
+   - `mp13chat` remains intentionally serial by policy, not by backend limitation
+47. brokered filesystem and brokered HTTP callbacks now carry the richer per-call callback context envelope too, so host-side brokered I/O can be attributed to `toolbox_id`, `tool_name`, `tool_call_id`, tool arguments, and caller context instead of only to worker `engine_id`
+48. brokered callback results now preserve that callback context in returned payloads, and live toolbox execution tests now prove brokered filesystem attribution end to end
 
 ## 2. Most Important Current Contracts
 
@@ -177,13 +189,17 @@ Validated in the user environment:
    - it cancels by stopping sandbox executor worker(s) and repairing persisted toolbox state
    - cancel events can now persist `tool_name`, optional `tool_call_id`, and `non_restartable` state for later restart-policy work
    - remaining gap is finer-grained in-flight request cancellation if that becomes necessary
-9. concurrent execution is better than concurrent mutation
+9. callback-contract refinement now covers both generic hosted callbacks and brokered fs/http follow-through
+   - generic hosted callbacks use the hosted callback relay and caller-side `callback_processor`
+   - brokered fs/http still authorize primarily by worker `engine_id`, but now also carry rich per-call attribution context
+   - remaining gap is capability/version reporting or deeper policy use of that richer context, not total absence of the envelope
+10. concurrent execution is better than concurrent mutation
    - same sandbox executor can serve overlapping tool calls
    - same hosted toolbox ref can now tolerate concurrent read/execute-style use better
    - non-chat hosted tool rounds no longer force serial execution, so multiple tool calls in one response can overlap through the sandbox harness
    - repair/rebuild now also serialize per targeted toolbox id
    - broader housekeeping paths outside the explicit per-toolbox registration and repair flows may still want more locking if concurrency pressure increases
-10. GC/reference tracking is more robust, but still intentionally simple
+11. GC/reference tracking is more robust, but still intentionally simple
    - stale environment detection now considers both logical `venv_key` references and resolved `venv_path` references under `toolbox_venvs`
    - `toolbox_references()` now also reports retention reasons for referenced env keys, env roots, and bundle roots
    - `toolbox_gc()` now also reports collection reasons for removed registrations, removed bundle directories, and removed environments
@@ -194,7 +210,7 @@ Validated in the user environment:
 If starting fresh from these docs, assume:
 
 1. architecture is coherent enough to continue implementation
-2. the next recommended execution item, if continuing strictly by the original plan order after Linux backend, is to keep broadening app/runtime adoption beyond the hosted demo and the new direct `mp13chat` attach path
+2. the next recommended execution item, if continuing strictly by the original plan order after Linux backend and broader app adoption, is to deepen callback-contract follow-through only if brokered fs/http or remote wrappers need the same richer per-call context envelope
 3. the highest-priority semantic fixes are:
    - verify any remaining downstream consumers use hosted `advertised_tool_names` and `hidden_allowed_tool_names` rather than coarse full membership
    - treat gated tool-call completeness and hosting integration as explicit follow-through work, not just helper parity
@@ -206,4 +222,4 @@ If starting fresh from these docs, assume:
 5. otherwise move on to the next investment rather than expanding sandbox operator output unnecessarily
 6. if client-facing cancellation needs become more demanding, the next step is request-level cancellation rather than another coarse worker-restart layer
 7. if concurrency becomes a primary product concern, the next step is to widen per-toolbox serialization coverage and then let chat/runtime exploit parallel tool execution more aggressively
-8. if continuing strictly by the original plan order now that Linux backend is WSL-validated and `mp13chat` has a first non-demo attach path, the next medium-term item is to keep broadening app/runtime adoption across any remaining wrappers or entry points that should expose hosted execution
+8. if continuing strictly by the original plan order now that Linux backend is WSL-validated, broader app/runtime adoption is materially covered, and the first callback-contract slice is real, the next medium-term decision is whether to unify brokered fs/http onto the richer per-call callback context model or stop here until product pressure appears

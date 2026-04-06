@@ -1521,6 +1521,7 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or ""),
                 root_id=str(payload.get("root_id") or ""),
                 relative_path=payload.get("relative_path"),
+                callback_context=dict(payload.get("callback_context") or {}) if isinstance(payload.get("callback_context"), dict) else None,
             )
         if cmd == "sandbox-fs-read-text":
             return svc.sandbox_fs_read_text(
@@ -1528,6 +1529,7 @@ class EngineHostDaemon:
                 root_id=str(payload.get("root_id") or ""),
                 relative_path=str(payload.get("relative_path") or ""),
                 encoding=str(payload.get("encoding") or "utf-8"),
+                callback_context=dict(payload.get("callback_context") or {}) if isinstance(payload.get("callback_context"), dict) else None,
             )
         if cmd == "sandbox-fs-write-text":
             return svc.sandbox_fs_write_text(
@@ -1537,6 +1539,7 @@ class EngineHostDaemon:
                 text=str(payload.get("text") or ""),
                 encoding=str(payload.get("encoding") or "utf-8"),
                 create_parents=bool(payload.get("create_parents", True)),
+                callback_context=dict(payload.get("callback_context") or {}) if isinstance(payload.get("callback_context"), dict) else None,
             )
         if cmd == "sandbox-fs-mkdir":
             return svc.sandbox_fs_mkdir(
@@ -1545,12 +1548,14 @@ class EngineHostDaemon:
                 relative_path=str(payload.get("relative_path") or ""),
                 parents=bool(payload.get("parents", True)),
                 exist_ok=bool(payload.get("exist_ok", True)),
+                callback_context=dict(payload.get("callback_context") or {}) if isinstance(payload.get("callback_context"), dict) else None,
             )
         if cmd == "sandbox-fs-stat":
             return svc.sandbox_fs_stat(
                 engine_id=str(payload.get("engine_id") or ""),
                 root_id=str(payload.get("root_id") or ""),
                 relative_path=payload.get("relative_path"),
+                callback_context=dict(payload.get("callback_context") or {}) if isinstance(payload.get("callback_context"), dict) else None,
             )
         if cmd == "sandbox-http-fetch":
             return svc.sandbox_http_fetch(
@@ -1561,6 +1566,7 @@ class EngineHostDaemon:
                 body_b64=str(payload.get("body_b64") or ""),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 max_response_bytes=int(payload.get("max_response_bytes") or 1024 * 1024),
+                callback_context=dict(payload.get("callback_context") or {}) if isinstance(payload.get("callback_context"), dict) else None,
             )
         if cmd == "toolbox-describe":
             return svc.toolbox_describe(
@@ -1582,6 +1588,7 @@ class EngineHostDaemon:
                 tool_call=dict(payload.get("tool_call") or {}),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
+                callback_binding=dict(payload.get("callback_binding") or {}) if isinstance(payload.get("callback_binding"), dict) else None,
             )
         if cmd == "toolbox-cancel":
             return svc.toolbox_cancel(

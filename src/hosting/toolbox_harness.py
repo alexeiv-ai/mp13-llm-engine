@@ -6,12 +6,15 @@ import importlib
 import inspect
 import json
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import venv
 from dataclasses import dataclass, field
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -75,6 +78,154 @@ def _is_coarse_cancel_execution_error(exc: BaseException) -> bool:
 
 
 @dataclass
+class HostedToolCallbackContext:
+    toolbox_id: str
+    tool_name: str
+    tool_call_id: Optional[str] = None
+    tool_arguments: Dict[str, Any] = field(default_factory=dict)
+    engine_id: Optional[str] = None
+    callback_name: str = ""
+    callback_payload: Any = None
+    callback_signature: Optional[Dict[str, Any]] = None
+    user_context: Any = None
+
+
+class _HostedToolCallbackRelay:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._listener: Optional[Listener] = None
+        self._listener_family: Optional[str] = None
+        self._listener_address: Optional[str] = None
+        self._listener_thread: Optional[threading.Thread] = None
+        self._closed = False
+
+    def _ensure_listener(self) -> None:
+        with self._lock:
+            if self._listener is not None:
+                return
+            if os.name == "nt":
+                family = "AF_PIPE"
+                address = rf"\\.\pipe\mp13-toolbox-callback-{os.getpid()}-{secrets.token_hex(8)}"
+            else:
+                family = "AF_UNIX"
+                callback_root = Path(tempfile.mkdtemp(prefix="mp13-toolbox-callback-")).resolve()
+                address = str(callback_root / "callback.sock")
+            self._listener = Listener(address=address, family=family)
+            self._listener_family = family
+            self._listener_address = str(address)
+            self._listener_thread = threading.Thread(target=self._accept_loop, name="mp13-toolbox-callback-relay", daemon=True)
+            self._listener_thread.start()
+
+    def bind_session(
+        self,
+        *,
+        processor: Callable[..., Any],
+        toolbox_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        tool_arguments: Optional[Dict[str, Any]] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
+        user_context: Any = None,
+    ) -> Dict[str, Any]:
+        self._ensure_listener()
+        session_token = secrets.token_hex(16)
+        with self._lock:
+            self._sessions[session_token] = {
+                "processor": processor,
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_name": str(tool_name or "").strip(),
+                "tool_call_id": str(tool_call_id or "").strip() or None,
+                "tool_arguments": dict(tool_arguments or {}),
+                "callback_signature": dict(callback_signature or {}) or None,
+                "user_context": user_context,
+            }
+            family = str(self._listener_family or ("AF_PIPE" if os.name == "nt" else "AF_UNIX"))
+            address = str(self._listener_address or "")
+        return {
+            "family": family,
+            "address": address,
+            "session_token": session_token,
+            "contract": "hosting.toolbox.callbacks.v2",
+            "user_context": user_context,
+        }
+
+    def release_session(self, session_token: str) -> None:
+        token = str(session_token or "").strip()
+        if not token:
+            return
+        with self._lock:
+            self._sessions.pop(token, None)
+
+    def _accept_loop(self) -> None:
+        listener = self._listener
+        if listener is None:
+            return
+        while not self._closed:
+            try:
+                conn = listener.accept()
+            except (OSError, EOFError):
+                return
+            thread = threading.Thread(target=self._handle_connection, args=(conn,), daemon=True)
+            thread.start()
+
+    @staticmethod
+    def _invoke_processor(processor: Callable[..., Any], *, callback_name: str, payload: Any, context: HostedToolCallbackContext) -> Any:
+        try:
+            result = processor(callback_name=callback_name, payload=payload, context=context)
+        except TypeError:
+            result = processor(callback_name, payload, context)
+        if inspect.isawaitable(result):
+            return asyncio.run(result)
+        return result
+
+    def _handle_connection(self, conn: Any) -> None:
+        try:
+            payload = dict(conn.recv() or {})
+            session_token = str(payload.get("session_token") or "").strip()
+            callback_name = str(payload.get("callback_name") or "").strip()
+            callback_payload = payload.get("payload")
+            callback_context = dict(payload.get("context") or {})
+            with self._lock:
+                session = dict(self._sessions.get(session_token) or {})
+            if not session:
+                conn.send({"status": "error", "message": "callback_session_missing"})
+                return
+            processor = session.get("processor")
+            if not callable(processor):
+                conn.send({"status": "error", "message": "callback_processor_missing"})
+                return
+            context = HostedToolCallbackContext(
+                toolbox_id=str(session.get("toolbox_id") or "").strip(),
+                tool_name=str(session.get("tool_name") or "").strip(),
+                tool_call_id=str(session.get("tool_call_id") or "").strip() or None,
+                tool_arguments=dict(session.get("tool_arguments") or {}),
+                engine_id=str(callback_context.get("engine_id") or "").strip() or None,
+                callback_name=callback_name,
+                callback_payload=callback_payload,
+                callback_signature=dict(session.get("callback_signature") or {}) or None,
+                user_context=session.get("user_context"),
+            )
+            result = self._invoke_processor(
+                processor,
+                callback_name=callback_name,
+                payload=callback_payload,
+                context=context,
+            )
+            conn.send({"status": "ok", "result": result})
+        except Exception as exc:
+            try:
+                conn.send({"status": "error", "message": f"callback_processor_failed:{type(exc).__name__}:{exc}"})
+            except Exception:
+                pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@dataclass
 class ToolboxBundleFile:
     relative_path: str
     content: str
@@ -112,6 +263,7 @@ class ToolboxBundleTool:
     entrypoint: str
     hidden: bool = False
     non_restartable: bool = False
+    callback_signature: Optional[Dict[str, Any]] = None
 
     def tool_name(self) -> str:
         fn = dict(self.definition.get("function") or {})
@@ -127,6 +279,7 @@ class ToolboxBundleTool:
             "entrypoint": str(self.entrypoint or "").strip(),
             "hidden": bool(self.hidden),
             "non_restartable": bool(self.non_restartable),
+            "callback_signature": dict(self.callback_signature or {}) or None,
         }
 
 
@@ -139,6 +292,7 @@ class ToolboxBundleAutoTool:
     non_restartable: bool = False
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
+    callback_signature: Optional[Dict[str, Any]] = None
 
     def normalized_module_name(self) -> str:
         raw = str(self.module_name or "").strip()
@@ -165,6 +319,7 @@ class ToolboxBundleAutoTool:
             "non_restartable": bool(self.non_restartable),
             "guide_content": dict(self.guide_content or {}) or None,
             "guide_description": str(self.guide_description or "").strip() or None,
+            "callback_signature": dict(self.callback_signature or {}) or None,
         }
 
 
@@ -249,6 +404,7 @@ class ToolboxAutoAssignmentRequest:
     non_restartable: bool = False
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
+    callback_signature: Optional[Dict[str, Any]] = None
 
     def to_auto_tool(self) -> ToolboxBundleAutoTool:
         return ToolboxBundleAutoTool(
@@ -259,6 +415,7 @@ class ToolboxAutoAssignmentRequest:
             non_restartable=bool(self.non_restartable),
             guide_content=dict(self.guide_content or {}) or None,
             guide_description=str(self.guide_description or "").strip() or None,
+            callback_signature=dict(self.callback_signature or {}) or None,
         )
 
     def stable_key(self) -> str:
@@ -275,6 +432,7 @@ class ToolboxAutoAssignmentRequest:
             "non_restartable": bool(self.non_restartable),
             "guide_content": dict(self.guide_content or {}) or None,
             "guide_description": str(self.guide_description or "").strip() or None,
+            "callback_signature": dict(self.callback_signature or {}) or None,
         }
 
     @classmethod
@@ -290,6 +448,7 @@ class ToolboxAutoAssignmentRequest:
             non_restartable=bool(row.get("non_restartable", False)),
             guide_content=dict(row.get("guide_content") or {}) or None,
             guide_description=str(row.get("guide_description") or "").strip() or None,
+            callback_signature=dict(row.get("callback_signature") or {}) or None,
         )
 
 
@@ -302,6 +461,7 @@ class ToolboxManualAssignmentRequest:
     sandbox_profile: SandboxProfileSpec = field(default_factory=SandboxProfileSpec)
     hidden: bool = False
     non_restartable: bool = False
+    callback_signature: Optional[Dict[str, Any]] = None
 
     def to_bundle_tool(self) -> ToolboxBundleTool:
         return ToolboxBundleTool(
@@ -309,6 +469,7 @@ class ToolboxManualAssignmentRequest:
             entrypoint=f"{str(self.module_name or '').strip()}:{str(self.callable_name or '').strip()}",
             hidden=bool(self.hidden),
             non_restartable=bool(self.non_restartable),
+            callback_signature=dict(self.callback_signature or {}) or None,
         )
 
     def stable_key(self) -> str:
@@ -323,6 +484,7 @@ class ToolboxManualAssignmentRequest:
             "sandbox_profile": self.sandbox_profile.to_dict(),
             "hidden": bool(self.hidden),
             "non_restartable": bool(self.non_restartable),
+            "callback_signature": dict(self.callback_signature or {}) or None,
         }
 
     @classmethod
@@ -336,6 +498,7 @@ class ToolboxManualAssignmentRequest:
             sandbox_profile=SandboxProfileSpec.from_dict(dict(row.get("sandbox_profile") or {})),
             hidden=bool(row.get("hidden", False)),
             non_restartable=bool(row.get("non_restartable", False)),
+            callback_signature=dict(row.get("callback_signature") or {}) or None,
         )
 
 
@@ -1926,6 +2089,8 @@ class ToolboxExecutionHarness:
         parallel: bool = True,
         timeout_seconds: float = 30.0,
         native_execute_kwargs: Optional[Dict[str, Any]] = None,
+        callback_processor: Optional[Callable[..., Any]] = None,
+        callback_context: Any = None,
     ) -> List[ToolCall]:
         calls = [item if isinstance(item, ToolCall) else ToolCall.from_dict(dict(item or {})) for item in list(tool_calls or [])]
         if not calls:
@@ -1938,6 +2103,8 @@ class ToolboxExecutionHarness:
                         call,
                         timeout_seconds=timeout_seconds,
                         native_execute_kwargs=dict(native_execute_kwargs or {}),
+                        callback_processor=callback_processor,
+                        callback_context=callback_context,
                     )
                 )
             return out
@@ -1946,6 +2113,8 @@ class ToolboxExecutionHarness:
                 call,
                 timeout_seconds=timeout_seconds,
                 native_execute_kwargs=dict(native_execute_kwargs or {}),
+                callback_processor=callback_processor,
+                callback_context=callback_context,
             )
             for call in calls
         ]
@@ -1963,6 +2132,8 @@ class ToolboxExecutionHarness:
         tool_retries_max: Optional[int] = None,
         tool_retries_left: Optional[int] = None,
         timeout_seconds: float = 30.0,
+        callback_processor: Optional[Callable[..., Any]] = None,
+        callback_context: Any = None,
         **kwargs: Any,
     ) -> None:
         mode = str(self.config.mode or "native").strip().lower()
@@ -2039,6 +2210,8 @@ class ToolboxExecutionHarness:
                         tool_retries_max=tool_retries_max,
                         tool_retries_left=tool_retries_left,
                     ),
+                    callback_processor=callback_processor,
+                    callback_context=callback_context,
                 )
                 tool_call.result = executed.result
                 tool_call.error = executed.error
@@ -2095,6 +2268,8 @@ class ToolboxExecutionHarness:
         *,
         timeout_seconds: float,
         native_execute_kwargs: Dict[str, Any],
+        callback_processor: Optional[Callable[..., Any]] = None,
+        callback_context: Any = None,
     ) -> ToolCall:
         mode = str(self.config.mode or "native").strip().lower()
         if mode == "native":
@@ -2133,6 +2308,26 @@ class ToolboxExecutionHarness:
             call.error = f"Execution gated: {outcome} - {reason}:{str(call.name or '').strip()}"
             return call
         try:
+            callback_binding = None
+            if callable(callback_processor):
+                if not hasattr(self, "_callback_relay"):
+                    self._callback_relay = _HostedToolCallbackRelay()
+                signature = None
+                try:
+                    described = await self.describe()
+                    tool_meta = dict(described.get("tool_metadata") or {}).get(str(call.name or "").strip()) or {}
+                    signature = dict(tool_meta.get("callback_signature") or {}) or None
+                except Exception:
+                    signature = None
+                callback_binding = self._callback_relay.bind_session(
+                    processor=callback_processor,
+                    toolbox_id=toolbox_id,
+                    tool_name=str(call.name or "").strip(),
+                    tool_call_id=str(call.id or "").strip(),
+                    tool_arguments=dict(call.arguments or {}),
+                    callback_signature=signature,
+                    user_context=callback_context,
+                )
             if toolbox_id:
                 rpc_out = await asyncio.to_thread(
                     self.control_channel.toolbox_execute,
@@ -2140,6 +2335,7 @@ class ToolboxExecutionHarness:
                     tool_call=call.to_dict(),
                     timeout_seconds=float(timeout_seconds or 30.0),
                     tools_view=tools_view_payload,
+                    callback_binding=dict(callback_binding or {}) or None,
                 )
             else:
                 rpc_out = await asyncio.to_thread(
@@ -2148,12 +2344,16 @@ class ToolboxExecutionHarness:
                     tool_call=call.to_dict(),
                     timeout_seconds=float(timeout_seconds or 30.0),
                     tools_view=tools_view_payload,
+                    callback_binding=dict(callback_binding or {}) or None,
                 )
         except Exception as exc:
             if _is_coarse_cancel_execution_error(exc):
                 call.error = f"Execution canceled: sandbox_recycled:{str(call.name or '').strip()}"
                 return call
             raise
+        finally:
+            if 'callback_binding' in locals() and callback_binding and hasattr(self, "_callback_relay"):
+                self._callback_relay.release_session(str(callback_binding.get("session_token") or ""))
         payload = dict(rpc_out or {})
         tool_out = dict(payload.get("tool_call") or {})
         return ToolCall.from_dict(tool_out) if tool_out else call
@@ -2274,6 +2474,7 @@ class HostedToolBoxRef:
         non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request = {
             "files": [
@@ -2294,6 +2495,7 @@ class HostedToolBoxRef:
             "non_restartable": bool(non_restartable),
             "guide_content": dict(guide_content or {}) or None,
             "guide_description": str(guide_description or "").strip() or None,
+            "callback_signature": dict(callback_signature or {}) or None,
         }
         return dict(
             self.host.toolbox_register_auto(
@@ -2320,6 +2522,7 @@ class HostedToolBoxRef:
         non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2347,6 +2550,7 @@ class HostedToolBoxRef:
             non_restartable=non_restartable,
             guide_content=guide_content,
             guide_description=guide_description,
+            callback_signature=callback_signature,
         )
 
     def add_python_callable(self, implementation: Any, **kwargs: Any) -> Dict[str, Any]:
@@ -2362,6 +2566,7 @@ class HostedToolBoxRef:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         hidden: bool = False,
         non_restartable: bool = False,
+        callback_signature: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2397,6 +2602,7 @@ class HostedToolBoxRef:
                         ).to_dict(),
                         "hidden": bool(hidden),
                         "non_restartable": bool(non_restartable),
+                        "callback_signature": dict(callback_signature or {}) or None,
                     }
                 ],
                 python_executable=self.python_executable,
@@ -2719,19 +2925,51 @@ class HostedToolBoxRef:
         arguments: Optional[Dict[str, Any]] = None,
         timeout_seconds: float = 30.0,
         tools_view: Optional[ToolsView] = None,
+        callback_processor: Optional[Callable[..., Any]] = None,
+        callback_context: Any = None,
+        tool_call_id: str = "",
     ) -> Dict[str, Any]:
-        return dict(
-            self.host.toolbox_execute(
+        name = str(tool_name or "").strip()
+        if not name:
+            raise ValueError("tool_name_required")
+        call_id = str(tool_call_id or "").strip() or secrets.token_hex(12)
+        callback_binding = None
+        if callable(callback_processor):
+            if not hasattr(self, "_callback_relay"):
+                self._callback_relay = _HostedToolCallbackRelay()
+            signature = None
+            try:
+                tool_meta = dict(self.describe().get("tool_metadata") or {}).get(name) or {}
+                signature = dict(tool_meta.get("callback_signature") or {}) or None
+            except Exception:
+                signature = None
+            callback_binding = self._callback_relay.bind_session(
+                processor=callback_processor,
                 toolbox_id=self.toolbox_id,
-                tool_call={
-                    "name": str(tool_name or "").strip(),
-                    "arguments": dict(arguments or {}),
-                },
-                timeout_seconds=float(timeout_seconds or 30.0),
-                tools_view=serialize_tools_view(tools_view),
+                tool_name=name,
+                tool_call_id=call_id,
+                tool_arguments=dict(arguments or {}),
+                callback_signature=signature,
+                user_context=callback_context,
             )
-            or {}
-        )
+        try:
+            return dict(
+                self.host.toolbox_execute(
+                    toolbox_id=self.toolbox_id,
+                    tool_call={
+                        "id": call_id,
+                        "name": name,
+                        "arguments": dict(arguments or {}),
+                    },
+                    timeout_seconds=float(timeout_seconds or 30.0),
+                    tools_view=serialize_tools_view(tools_view),
+                    callback_binding=dict(callback_binding or {}) or None,
+                )
+                or {}
+            )
+        finally:
+            if callback_binding and hasattr(self, "_callback_relay"):
+                self._callback_relay.release_session(str(callback_binding.get("session_token") or ""))
 
     def cancel(
         self,
@@ -2775,6 +3013,7 @@ class PendingHostedToolboxRef:
         non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
     ) -> "PendingHostedToolboxRef":
         request = {
             "files": [
@@ -2795,6 +3034,7 @@ class PendingHostedToolboxRef:
             "non_restartable": bool(non_restartable),
             "guide_content": dict(guide_content or {}) or None,
             "guide_description": str(guide_description or "").strip() or None,
+            "callback_signature": dict(callback_signature or {}) or None,
         }
         self._pending_auto_requests.append(request)
         return self
@@ -2814,6 +3054,7 @@ class PendingHostedToolboxRef:
         non_restartable: bool = False,
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
     ) -> "PendingHostedToolboxRef":
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2841,6 +3082,7 @@ class PendingHostedToolboxRef:
             non_restartable=non_restartable,
             guide_content=guide_content,
             guide_description=guide_description,
+            callback_signature=callback_signature,
         )
 
     def add_python_callable(self, implementation: Any, **kwargs: Any) -> "PendingHostedToolboxRef":
@@ -2856,6 +3098,7 @@ class PendingHostedToolboxRef:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         hidden: bool = False,
         non_restartable: bool = False,
+        callback_signature: Optional[Dict[str, Any]] = None,
     ) -> "PendingHostedToolboxRef":
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -2888,6 +3131,7 @@ class PendingHostedToolboxRef:
             ).to_dict(),
             "hidden": bool(hidden),
             "non_restartable": bool(non_restartable),
+            "callback_signature": dict(callback_signature or {}) or None,
         }
         self._pending_manual_requests.append(request)
         return self
@@ -2982,6 +3226,9 @@ def load_toolbox_from_manifest(manifest_path: Path) -> tuple[Toolbox, Dict[str, 
         )
         if not ok:
             raise ValueError(str(msg or "auto_tool_registration_failed"))
+        tool_def = toolbox.get_tool(callable_name)
+        if tool_def is not None:
+            tool_def["callback_signature"] = dict(auto_meta.get("callback_signature") or {}) or None
     for item in list(manifest.get("tools") or []):
         tool_meta = dict(item or {})
         entrypoint = str(tool_meta.get("entrypoint") or "").strip()
@@ -2998,6 +3245,10 @@ def load_toolbox_from_manifest(manifest_path: Path) -> tuple[Toolbox, Dict[str, 
         )
         if not ok:
             raise ValueError(str(msg or "tool_registration_failed"))
+        tool_name = str(dict(tool_meta.get("definition") or {}).get("function", {}).get("name") or "").strip()
+        tool_def = toolbox.get_tool(tool_name) if tool_name else None
+        if tool_def is not None:
+            tool_def["callback_signature"] = dict(tool_meta.get("callback_signature") or {}) or None
     if hidden_user_tools:
         toolbox.hidden_tool_names = [
             name for name in hidden_user_tools if name in toolbox.tools
