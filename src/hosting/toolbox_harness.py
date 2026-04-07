@@ -214,17 +214,33 @@ def _approve_tool_in_view(tools_view: Optional[ToolsView], tool_name: str, *, mu
     return view
 
 
-def _extract_scope_constraints(result: Any, tool_name: str) -> Dict[str, Any]:
+def _extract_scope_constraints(result: Any, tool_name: str) -> Optional[Dict[str, Any]]:
     payload = dict(result or {}) if isinstance(result, dict) else {}
     tool_key = str(tool_name or "").strip()
     scoped = payload.get("scope_constraints")
     if isinstance(scoped, dict):
-        if tool_key and isinstance(scoped.get(tool_key), dict):
-            return json.loads(json.dumps(dict(scoped.get(tool_key) or {})))
-        if any(isinstance(v, dict) for v in scoped.values()):
+        if tool_key and tool_key in scoped:
+            if scoped.get(tool_key) is None:
+                return None
+            if isinstance(scoped.get(tool_key), dict):
+                return json.loads(json.dumps(dict(scoped.get(tool_key) or {})))
+            return {}
+        if any(isinstance(v, dict) or v is None for v in scoped.values()):
             return {}
         return json.loads(json.dumps(scoped))
     return {}
+
+
+def _merge_scope_ref_into_callback_context(callback_context: Any, scope_ref: Optional[ToolBoxRef]) -> Any:
+    if scope_ref is None:
+        return callback_context
+    if isinstance(callback_context, dict):
+        merged = dict(callback_context)
+        merged.setdefault("toolbox_ref", scope_ref)
+        return merged
+    if callback_context is None:
+        return {"toolbox_ref": scope_ref}
+    return {"toolbox_ref": scope_ref, "user_context": callback_context}
 
 
 def _apply_tool_constraints_in_view(
@@ -3378,6 +3394,7 @@ class HostedToolBoxRef:
         tools_view: Optional[ToolsView] = None,
         callback_processor: Optional[Callable[..., Any]] = None,
         callback_context: Any = None,
+        scope_ref: Optional[ToolBoxRef] = None,
         tool_call_id: str = "",
     ) -> Dict[str, Any]:
         """
@@ -3397,6 +3414,7 @@ class HostedToolBoxRef:
         name = str(tool_name or "").strip()
         if not name:
             raise ValueError("tool_name_required")
+        callback_context = _merge_scope_ref_into_callback_context(callback_context, scope_ref)
         call_id = str(tool_call_id or "").strip() or secrets.token_hex(12)
         requested_tools_view = tools_view
         tools_view_payload = serialize_tools_view(requested_tools_view)

@@ -239,8 +239,9 @@ class HostedToolExecutionRouter:
     that also forwards a durable scope target when they want `add_to_scope` to
     persist beyond one call.
     `execute_tool_round_on_cursor(...)` already does this automatically;
-    direct `HostedToolBoxRef.execute(...)` calls do not unless the wrapper
-    passes `callback_context` with `toolbox_ref` or `cursor`.
+    direct `HostedToolBoxRef.execute(...)` calls can now either:
+    - pass `scope_ref=...`
+    - or pass `callback_context` with `toolbox_ref` or `cursor`.
     """
 
     def __init__(self) -> None:

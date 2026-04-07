@@ -34,6 +34,11 @@ Settled points:
 4. dynamic contextual narrowing lives in `tool_constraints`, not static sandbox-policy mutation
 5. guides are separate tools and do not inherit parent-tool gating implicitly
 6. all guides are static-content-backed only
+7. `tool_constraints` now shallow-merge across stacked scope layers:
+   - dict sections merge by key
+   - lists/scalars replace
+   - `tool_constraints={tool_name: None}` explicitly clears inherited constraints for that tool
+   - targeted pop still replays only the surviving layers
 
 ## 3. Wrapper Consistency
 

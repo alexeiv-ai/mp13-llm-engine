@@ -38,6 +38,7 @@ def SimpleCalc(expr: Optional[str] = None, **kwargs: Any) -> str:
 
 def ProjectFilePeek(
     relative_path: str = "src/app/mp13chat.py",
+    root_path: str = "",
     max_chars: int = 400,
     **kwargs: Any,
 ) -> str:
@@ -48,18 +49,28 @@ def ProjectFilePeek(
         relative_path (str): Path relative to the project root.
         max_chars (int): Maximum number of characters to return.
     """
+    scoped = kwargs.get("tool_constraints_view")
+    effective_root = ""
+    if scoped is not None:
+        try:
+            effective_root = str(scoped.resolve_filesystem_root(root_path or None) or "")
+        except Exception as exc:
+            return f"Error: {type(exc).__name__}: {exc}"
+    elif str(root_path or "").strip():
+        effective_root = str(root_path or "").strip()
     root = Path(kwargs.get("project_root") or Path.cwd()).resolve()
-    target = (root / str(relative_path or "")).resolve()
+    target_rel = Path(str(effective_root or "").strip()) / str(relative_path or "")
+    target = (root / target_rel).resolve()
     try:
         target.relative_to(root)
     except Exception:
         return "Error: relative_path escapes the project root."
     if not target.exists() or not target.is_file():
-        return f"Error: file not found: {relative_path}"
+        return f"Error: file not found: {target_rel.as_posix()}"
     limit = max(1, int(max_chars or 400))
     text = target.read_text(encoding="utf-8")
     preview = text[:limit]
-    return f"{relative_path}\n---\n{preview}"
+    return f"{target_rel.as_posix()}\n---\n{preview}"
 
 
 def ExampleHttpPeek(
@@ -158,7 +169,7 @@ def SimpleCalc(expr=None, **kwargs):
         return f'Error: {type(exc).__name__}: {exc}'
 """.strip() + "\n"
     file_source = """
-def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs):
+def ProjectFilePeek(relative_path='src/app/mp13chat.py', root_path='', max_chars=400, **kwargs):
     \"\"\"
     Read a project file and return its first characters for inspection.
 
@@ -166,14 +177,21 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs
         relative_path (str): Path relative to the project root.
         max_chars (int): Maximum number of characters to return.
     \"\"\"
+    helper = kwargs.get('tool_constraints_view')
+    effective_root = ''
+    if helper is not None:
+        effective_root = str(helper.resolve_filesystem_root(root_path or None) or '')
+    elif str(root_path or '').strip():
+        effective_root = str(root_path or '').strip()
     ctx = kwargs.get('context')
     if ctx is None:
         return 'Error: missing execution context.'
-    out = ctx.fs.read_text(root_id='project_ro', relative_path=str(relative_path or ''))
+    effective_path = str((Path(effective_root) / str(relative_path or '')).as_posix()).strip('/') if effective_root else str(relative_path or '')
+    out = ctx.fs.read_text(root_id='project_ro', relative_path=effective_path)
     text = str(dict(out or {}).get('text') or '')
     limit = max(1, int(max_chars or 400))
     preview = text[:limit]
-    return f\"{relative_path}\\n---\\n{preview}\"
+    return f\"{effective_path}\\n---\\n{preview}\"
 """.strip() + "\n"
 
     return HostedChatDemoPlan(

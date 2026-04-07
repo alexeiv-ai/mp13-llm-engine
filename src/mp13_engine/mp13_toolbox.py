@@ -33,13 +33,45 @@ def _get_intrinsics_registry() -> Dict[str, RegisteredTool]:
     return _get_tools_builtin_module().INTRINSICS_REGISTRY
 
 
-def _normalize_tool_constraints(raw: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
+def _normalize_tool_constraints(
+    raw: Optional[Dict[str, Any]],
+    *,
+    allow_clear: bool = False,
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
     for tool_name, payload in dict(raw or {}).items():
         name = str(tool_name or "").strip()
-        if not name or not isinstance(payload, dict):
+        if not name:
+            continue
+        if payload is None and allow_clear:
+            out[name] = None
+            continue
+        if not isinstance(payload, dict):
             continue
         out[name] = copy.deepcopy(dict(payload))
+    return out
+
+
+def _merge_tool_constraint_payload(base: Optional[Dict[str, Any]], overlay: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Merge tool constraint payloads shallowly enough for scope-stack composition.
+
+    Rules:
+    - top-level keys merge by section name
+    - nested dict sections merge recursively
+    - lists and scalars are replaced by the overlay value
+    """
+    left = dict(base or {})
+    right = dict(overlay or {})
+    out: Dict[str, Any] = copy.deepcopy(left)
+    for key, value in right.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[str(key)] = _merge_tool_constraint_payload(
+                dict(out.get(key) or {}),
+                dict(value or {}),
+            )
+            continue
+        out[str(key)] = copy.deepcopy(value)
     return out
 
 
@@ -216,7 +248,7 @@ class ToolsScope:
     silent_tools: Set[str] = field(default_factory=set)
     disabled_tools: Set[str] = field(default_factory=set)
     gated_tools: Set[str] = field(default_factory=set)
-    tool_constraints: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    tool_constraints: Dict[str, Optional[Dict[str, Any]]] = field(default_factory=dict)
     label: Optional[str] = None
 
     DEFAULT_MODE = "*"
@@ -231,7 +263,7 @@ class ToolsScope:
         self.silent_tools = _normalize(self.silent_tools)
         self.disabled_tools = _normalize(self.disabled_tools)
         self.gated_tools = _normalize(self.gated_tools)
-        self.tool_constraints = _normalize_tool_constraints(self.tool_constraints)
+        self.tool_constraints = _normalize_tool_constraints(self.tool_constraints, allow_clear=True)
         if self.mode and self.mode not in self.VALID_MODES:
             raise ValueError(f"ToolsScope.mode '{self.mode}' is invalid. Allowed: {sorted(self.VALID_MODES)}")
         return self
@@ -257,7 +289,7 @@ class ToolsScope:
             silent_tools=set(data.get("silent_tools", data.get("silent", [])) or []),
             disabled_tools=set(data.get("disabled_tools", data.get("disabled", [])) or []),
             gated_tools=set(data.get("gated_tools", data.get("gated", [])) or []),
-            tool_constraints=_normalize_tool_constraints(data.get("tool_constraints")),
+            tool_constraints=_normalize_tool_constraints(data.get("tool_constraints"), allow_clear=True),
             label=data.get("label"),
         ).clean()
 
@@ -881,8 +913,16 @@ class Toolbox:
             gated_names.update(resolve_targets(scope.gated_tools) - disabled_names)
             for tool_name, payload in dict(scope.tool_constraints or {}).items():
                 name = str(tool_name or "").strip()
-                if name in active_names and name not in disabled_names and isinstance(payload, dict):
-                    effective_constraints[name] = copy.deepcopy(dict(payload))
+                if name not in active_names or name in disabled_names:
+                    continue
+                if payload is None:
+                    effective_constraints.pop(name, None)
+                    continue
+                if isinstance(payload, dict):
+                    effective_constraints[name] = _merge_tool_constraint_payload(
+                        effective_constraints.get(name),
+                        dict(payload),
+                    )
 
         allowed: Set[str] = set()
         advertised: Set[str] = set()

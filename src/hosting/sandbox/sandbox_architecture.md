@@ -537,6 +537,19 @@ Suggested generic constraint envelope:
 }
 ```
 
+Current merge semantics are intentionally modest so small partial scopes compose without turning this into a second policy language:
+
+1. per-tool constraint payloads now merge shallowly across the scope stack
+2. dict sections merge recursively by key
+3. lists and scalars are replaced by the later scope layer
+4. `tool_constraints={tool_name: None}` is the explicit clear marker for later scope layers
+4. targeted `pop(stack_id)` still follows normal scope replay semantics:
+   - the removed layer is treated as if it never existed
+   - surviving later partial layers are replayed on their own
+   - so a later layer must still be meaningful if an earlier layer is popped out from under it
+
+That means partial layering is supported for simple cases, but it is not dependency-aware. A later layer that only adds `locked_args` will keep only `locked_args` if the earlier layer that introduced the implied root is removed by targeted pop. A later layer can also explicitly clear inherited constraints for one tool by setting that tool payload to `None`.
+
 Enforcement split:
 
 1. `ToolsView` answers whether a tool is available and carries effective constraints
@@ -888,7 +901,8 @@ For this to stay coherent across wrappers:
    - the active `cursor`
    - the context `toolbox_ref`
 4. direct `HostedToolBoxRef.execute(...)` usage is not auto-persistent by itself:
-   - wrappers must pass `callback_context` with `toolbox_ref`
+   - wrappers can pass `scope_ref=...`
+   - or pass `callback_context` with `toolbox_ref`
    - or pass `callback_context` with `cursor` whose context owns a `toolbox_ref`
 
 So “wrapper consistency” is not about transport. It is about making sure approval semantics do not silently differ between public entrypoints.

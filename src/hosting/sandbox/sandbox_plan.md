@@ -26,6 +26,8 @@ These are no longer active design items:
    - `url_under_implied_prefix`
 6. kwargs-facing `tool_constraints_view`
 7. static-content-only guide execution
+8. shallow partial-merge support for `tool_constraints` across stacked scopes
+9. explicit constraint-clear marker via `tool_constraints={tool_name: None}`
 
 ## 2. Active Follow-Up
 
@@ -40,6 +42,7 @@ Open items:
 1. which future `normalizers` should stay generic
 2. which behaviors should move into tool-specific helper code instead
 3. whether path/url provenance should be surfaced back to tools
+4. whether the current shallow-merge plus replay semantics need anything beyond the new explicit clear marker
 
 ### 2.2 Reference Examples
 
