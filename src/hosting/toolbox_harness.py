@@ -119,7 +119,7 @@ def _sha256_text(text: str) -> str:
 def serialize_tools_view(tools_view: Optional[ToolsView]) -> Optional[Dict[str, Any]]:
     if tools_view is None:
         return None
-    return {
+    payload = {
         "view_id": str(tools_view.view_id or "").strip(),
         "mode": str(tools_view.mode or "").strip(),
         "allowed_tools": sorted(str(item or "").strip() for item in list(tools_view.allowed_tools or []) if str(item or "").strip()),
@@ -128,6 +128,9 @@ def serialize_tools_view(tools_view: Optional[ToolsView]) -> Optional[Dict[str, 
         "disabled_tools": sorted(str(item or "").strip() for item in list(tools_view.disabled_tools or []) if str(item or "").strip()),
         "gated_tools": sorted(str(item or "").strip() for item in list(tools_view.gated_tools or []) if str(item or "").strip()),
     }
+    if dict(tools_view.tool_constraints or {}):
+        payload["tool_constraints"] = json.loads(json.dumps(dict(tools_view.tool_constraints or {})))
+    return payload
 
 
 def is_canceled_tool_error(tool_call: Any) -> bool:
@@ -194,6 +197,7 @@ def _clone_tools_view(tools_view: Optional[ToolsView]) -> Optional[ToolsView]:
         hidden_allowed_tools=set(tools_view.hidden_allowed_tools or set()),
         disabled_tools=set(tools_view.disabled_tools or set()),
         gated_tools=set(tools_view.gated_tools or set()),
+        tool_constraints=json.loads(json.dumps(dict(tools_view.tool_constraints or {}))),
     )
 
 
@@ -207,6 +211,40 @@ def _approve_tool_in_view(tools_view: Optional[ToolsView], tool_name: str, *, mu
     view.gated_tools.discard(name)
     if name not in view.disabled_tools:
         view.allowed_tools.add(name)
+    return view
+
+
+def _extract_scope_constraints(result: Any, tool_name: str) -> Dict[str, Any]:
+    payload = dict(result or {}) if isinstance(result, dict) else {}
+    tool_key = str(tool_name or "").strip()
+    scoped = payload.get("scope_constraints")
+    if isinstance(scoped, dict):
+        if tool_key and isinstance(scoped.get(tool_key), dict):
+            return json.loads(json.dumps(dict(scoped.get(tool_key) or {})))
+        if any(isinstance(v, dict) for v in scoped.values()):
+            return {}
+        return json.loads(json.dumps(scoped))
+    return {}
+
+
+def _apply_tool_constraints_in_view(
+    tools_view: Optional[ToolsView],
+    tool_name: str,
+    constraints: Optional[Dict[str, Any]],
+    *,
+    mutate: bool,
+) -> Optional[ToolsView]:
+    view = tools_view if mutate else _clone_tools_view(tools_view)
+    if view is None:
+        return None
+    name = str(tool_name or "").strip()
+    if not name:
+        return view
+    payload = dict(constraints or {})
+    if payload:
+        view.tool_constraints[name] = json.loads(json.dumps(payload))
+    else:
+        view.tool_constraints.pop(name, None)
     return view
 
 
@@ -238,6 +276,26 @@ def _persist_approved_tool(scope_ref: Optional[ToolBoxRef], tool_name: str) -> b
     def _update(scope: ToolsScope) -> ToolsScope:
         scope = scope or ToolsScope()
         scope.gated_tools.discard(name)
+        return scope
+
+    scope_ref.mutate_scope(_update)
+    return True
+
+
+def _persist_scope_constraints(scope_ref: Optional[ToolBoxRef], tool_name: str, constraints: Optional[Dict[str, Any]]) -> bool:
+    if scope_ref is None or not callable(getattr(scope_ref, "mutate_scope", None)):
+        return False
+    name = str(tool_name or "").strip()
+    if not name:
+        return False
+    payload = dict(constraints or {})
+
+    def _update(scope: ToolsScope) -> ToolsScope:
+        scope = scope or ToolsScope()
+        if payload:
+            scope.tool_constraints[name] = json.loads(json.dumps(payload))
+        else:
+            scope.tool_constraints.pop(name, None)
         return scope
 
     scope_ref.mutate_scope(_update)
@@ -280,9 +338,9 @@ def _request_hosted_tool_approval_with_timeout(
     gate_payload: Optional[Dict[str, Any]] = None,
     tools_view: Optional[ToolsView] = None,
     timeout_seconds: Optional[float] = None,
-) -> str:
+) -> Any:
     if not callable(processor):
-        return "deny"
+        return {"decision": "deny"}
     timeout_value = float(timeout_seconds or _approval_timeout_seconds(callback_context))
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
@@ -297,11 +355,11 @@ def _request_hosted_tool_approval_with_timeout(
             tools_view=tools_view,
         )
         try:
-            return _coerce_approval_decision(future.result(timeout=timeout_value))
+            return future.result(timeout=timeout_value)
         except concurrent.futures.TimeoutError:
-            return "deny"
+            return {"decision": "deny", "error": "approval_timeout"}
         except Exception:
-            return "deny"
+            return {"decision": "deny"}
 
 
 class _HostedToolCallbackRelay:
@@ -505,7 +563,7 @@ def _request_hosted_tool_approval(
         payload=context.callback_payload,
         context=context,
     )
-    return _coerce_approval_decision(result)
+    return result
 
 
 @dataclass
@@ -2596,18 +2654,20 @@ class ToolboxExecutionHarness:
         if outcome and outcome != "allowed":
             if outcome == "gated_requires_confirmation":
                 decision = ""
+                approval_result: Any = None
                 cache_key = str(call.name or "").strip()
                 cache = dict(approval_state or {}).get("cache") if isinstance(approval_state, dict) else None
                 cache_lock = dict(approval_state or {}).get("lock") if isinstance(approval_state, dict) else None
-                cache_future: Optional[asyncio.Future[str]] = None
+                cache_future: Optional[asyncio.Future[Any]] = None
                 is_owner = False
                 if cache_key and cache is not None and isinstance(cache_lock, asyncio.Lock):
                     async with cache_lock:
                         existing = cache.get(cache_key)
                         if isinstance(existing, asyncio.Future):
                             cache_future = existing
-                        elif isinstance(existing, str) and existing in {"deny", "add_to_scope"}:
-                            decision = existing
+                        elif isinstance(existing, dict):
+                            approval_result = dict(existing)
+                            decision = _coerce_approval_decision(approval_result)
                         else:
                             cache_future = asyncio.get_running_loop().create_future()
                             cache[cache_key] = cache_future
@@ -2616,7 +2676,7 @@ class ToolboxExecutionHarness:
                         if is_owner:
                             timeout_value = _approval_timeout_seconds(callback_context)
                             try:
-                                decision = await asyncio.wait_for(
+                                approval_result = await asyncio.wait_for(
                                     asyncio.to_thread(
                                         _request_hosted_tool_approval,
                                         processor=callback_processor,
@@ -2630,24 +2690,27 @@ class ToolboxExecutionHarness:
                                     ),
                                     timeout=timeout_value,
                                 )
+                                decision = _coerce_approval_decision(approval_result)
                             except Exception:
+                                approval_result = {"decision": "deny"}
                                 decision = "deny"
                             if not cache_future.done():
-                                cache_future.set_result(decision)
+                                cache_future.set_result(approval_result)
                             async with cache_lock:
                                 if decision in {"deny", "add_to_scope"}:
-                                    cache[cache_key] = decision
+                                    cache[cache_key] = dict(approval_result or {"decision": decision})
                                 elif cache.get(cache_key) is cache_future:
                                     cache.pop(cache_key, None)
                         else:
                             try:
-                                decision = await cache_future
+                                approval_result = await cache_future
+                                decision = _coerce_approval_decision(approval_result)
                             except Exception:
                                 decision = "deny"
                 if not decision:
                     timeout_value = _approval_timeout_seconds(callback_context)
                     try:
-                        decision = await asyncio.wait_for(
+                        approval_result = await asyncio.wait_for(
                             asyncio.to_thread(
                                 _request_hosted_tool_approval,
                                 processor=callback_processor,
@@ -2661,18 +2724,31 @@ class ToolboxExecutionHarness:
                             ),
                             timeout=timeout_value,
                         )
+                        decision = _coerce_approval_decision(approval_result)
                     except Exception:
+                        approval_result = {"decision": "deny"}
                         decision = "deny"
+                scope_constraints = _extract_scope_constraints(approval_result, str(call.name or "").strip())
                 if decision == "allow_once":
-                    tools_view_payload = serialize_tools_view(
-                        _approve_tool_in_view(requested_tools_view, str(call.name or "").strip(), mutate=False)
+                    updated_view = _approve_tool_in_view(requested_tools_view, str(call.name or "").strip(), mutate=False)
+                    updated_view = _apply_tool_constraints_in_view(
+                        updated_view,
+                        str(call.name or "").strip(),
+                        scope_constraints,
+                        mutate=True,
                     )
+                    tools_view_payload = serialize_tools_view(updated_view)
                 elif decision == "add_to_scope":
                     _approve_tool_in_view(requested_tools_view, str(call.name or "").strip(), mutate=True)
-                    _persist_approved_tool(
-                        _resolve_scope_ref_from_callback_context(callback_context),
+                    _apply_tool_constraints_in_view(
+                        requested_tools_view,
                         str(call.name or "").strip(),
+                        scope_constraints,
+                        mutate=True,
                     )
+                    scope_ref = _resolve_scope_ref_from_callback_context(callback_context)
+                    _persist_approved_tool(scope_ref, str(call.name or "").strip())
+                    _persist_scope_constraints(scope_ref, str(call.name or "").strip(), scope_constraints)
                     tools_view_payload = serialize_tools_view(requested_tools_view)
                 else:
                     reason = str(gate_payload.get("reason") or outcome).strip() or outcome
@@ -3317,7 +3393,7 @@ class HostedToolBoxRef:
             outcome = str(gate_out.get("outcome") or "").strip().lower()
         if outcome and outcome != "allowed":
             if outcome == "gated_requires_confirmation":
-                decision = _request_hosted_tool_approval_with_timeout(
+                approval_result = _request_hosted_tool_approval_with_timeout(
                     processor=callback_processor,
                     toolbox_id=self.toolbox_id,
                     tool_name=name,
@@ -3328,13 +3404,28 @@ class HostedToolBoxRef:
                     tools_view=requested_tools_view,
                     timeout_seconds=_approval_timeout_seconds(callback_context),
                 )
+                decision = _coerce_approval_decision(approval_result)
+                scope_constraints = _extract_scope_constraints(approval_result, name)
                 if decision == "allow_once":
-                    tools_view_payload = serialize_tools_view(
-                        _approve_tool_in_view(requested_tools_view, name, mutate=False)
+                    updated_view = _approve_tool_in_view(requested_tools_view, name, mutate=False)
+                    updated_view = _apply_tool_constraints_in_view(
+                        updated_view,
+                        name,
+                        scope_constraints,
+                        mutate=True,
                     )
+                    tools_view_payload = serialize_tools_view(updated_view)
                 elif decision == "add_to_scope":
                     _approve_tool_in_view(requested_tools_view, name, mutate=True)
-                    _persist_approved_tool(_resolve_scope_ref_from_callback_context(callback_context), name)
+                    _apply_tool_constraints_in_view(
+                        requested_tools_view,
+                        name,
+                        scope_constraints,
+                        mutate=True,
+                    )
+                    scope_ref = _resolve_scope_ref_from_callback_context(callback_context)
+                    _persist_approved_tool(scope_ref, name)
+                    _persist_scope_constraints(scope_ref, name, scope_constraints)
                     tools_view_payload = serialize_tools_view(requested_tools_view)
                 else:
                     return {

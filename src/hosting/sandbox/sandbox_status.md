@@ -79,6 +79,39 @@ What is missing:
 2. broader wrapper adoption beyond the hosted runtime helper and direct hosted ref path
 3. confirmation of the preferred public timeout override surface
 
+### 2.2A Dynamic Constraint Layer
+
+Status: approved design direction, not yet implemented
+
+Motivation:
+
+1. binary `add_to_scope` is too weak for tools that need contextual narrowing
+2. examples include:
+   - implied filesystem roots
+   - narrowed URL prefix usage
+   - data-subscope restrictions
+3. static sandbox policy is intentionally too coarse and too lifecycle-bound to carry every per-context adjustment
+
+Planned design:
+
+1. extend `ToolsScope` with per-tool `tool_constraints`
+2. extend `ToolsView` with resolved effective constraints
+3. keep the same scope-stack model:
+   - `set`
+   - `add`
+   - `pop`
+   - `reset`
+4. let hosted approval optionally return `scope_constraints`
+5. on `add_to_scope`, persist both:
+   - ungating
+   - tool constraints
+
+Security split:
+
+1. static sandbox policy stays the hard outer boundary
+2. dynamic constraints become the fine-grained contextual narrowing layer
+3. brokered execution still enforces the outer sandbox policy
+
 ### 2.3 Phase 3: Guide Policy
 
 Status: unresolved design question
@@ -102,6 +135,7 @@ Highest-risk areas:
 1. disabled vs gated precedence
 2. hidden vs gated presentation
 3. whether every hosted wrapper path consistently provides a stable scope target for `add_to_scope`
+4. keeping the new constraint layer generic without turning it into a second ad-hoc policy engine
 5. guide execution trust model
 6. public approval callback ergonomics
 
@@ -109,12 +143,12 @@ Highest-risk areas:
 
 Recommended next implementation step:
 
-1. propagate the same auto scope-target behavior through any remaining hosted wrapper entrypoints
-2. document the approval callback as a stable hosted contract
-3. start Phase 3 guide-policy work
+1. implement `tool_constraints` in native `ToolsScope` / `ToolsView`
+2. let hosted approval persist `scope_constraints` alongside `add_to_scope`
+3. add one small runtime helper for resolving effective tool constraints
 4. keep the Windows callback relay fix and the approval slices covered in regression runs
 
-The hosted approval callback is now stable enough for broader wrapper adoption. The remaining work is contract polish and guide policy.
+The hosted approval callback is stable enough to carry the next constraint slice. The remaining work is to make contextual narrowing reusable rather than re-asking on every gated call.
 
 ## 5. Key References
 

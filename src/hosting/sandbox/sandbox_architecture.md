@@ -486,6 +486,64 @@ Remaining architectural limit:
    - focused hosted tool-round runtime
    - operator review/admin surfaces
 3. chat itself is still intentionally serial in the current implementation even though hosted/native toolbox execution can support parallel multi-call execution underneath
+4. current `add_to_scope` solves binary ungating, but not contextual narrowing such as implied roots or URL-prefix restrictions
+
+### 10.4A Dynamic Constraint Layer
+
+The next design step is to add a first-class dynamic fine-grained constraint layer
+between:
+
+1. `ToolsScope` / `ToolsView`
+2. static sandbox policy
+
+Reason:
+
+1. static sandbox policy is attached to sandbox profiles and worker rollout
+2. that is the right place for hard outer boundaries
+3. it is the wrong place for per-context dynamic narrowing such as:
+   - implied filesystem roots
+   - explicit-root override rules
+   - URL-prefix narrowing within an already approved hosted toolbox
+   - data-subscope restrictions
+
+Recommended model:
+
+1. keep static sandbox policy as the hard outer boundary
+2. add per-tool dynamic `tool_constraints` into `ToolsScope`
+3. materialize effective constraints into `ToolsView`
+4. keep the existing scope stack semantics:
+   - `set`
+   - `add`
+   - `pop`
+   - `reset`
+5. allow hosted approval to return `scope_constraints` together with `add_to_scope`
+
+That keeps the new layer aligned with the existing toolbox mental model instead of introducing a separate parallel policy store.
+
+Suggested generic constraint envelope:
+
+```json
+{
+  "domains": {
+    "filesystem": {...},
+    "network": {...},
+    "data": {...}
+  },
+  "argument_policy": {
+    "implied_args": {...},
+    "locked_args": [...],
+    "normalizers": {...}
+  }
+}
+```
+
+Enforcement split:
+
+1. `ToolsView` answers whether a tool is available and carries effective constraints
+2. tool/runtime helpers normalize implied and explicit arguments using those constraints
+3. brokered filesystem / HTTP enforcement remains the final physical stop
+
+This means the dynamic layer narrows behavior inside a hard static toolbox/profile boundary; it does not replace sandbox policy.
 
 ### 10.5 Execution Granularity And Multi-Call Contract
 
@@ -755,6 +813,8 @@ If hosted execution encounters a tool whose gate outcome is `gated_requires_conf
    - `add_to_scope`: execute this call and persist the approval through a durable scope target when one is available
 6. timeout or invalid decisions default to deny
 
+Approval responses may also evolve to carry optional `scope_constraints` so the same approval round can persist contextual narrowing together with ungating.
+
 ### 14.6 Wrapper Consistency
 
 Wrapper consistency means every public hosted execution path should give the same answer to one question:
@@ -908,6 +968,7 @@ Current status:
    - `add_to_scope`
 7. `allow_once` remains per-call and is intentionally not cached
 8. approval timeout defaults to deny
+9. the next planned slice is to persist per-tool dynamic `tool_constraints` through the same scope/view stack rather than via static sandbox-policy mutation
 
 ### 18.3 Main Open Questions
 
@@ -917,7 +978,8 @@ The main unresolved architectural questions are:
 2. hidden vs gated presentation
 3. how every public hosted wrapper should expose or hide approval-time timeout controls
 4. how hosted wrappers beyond the current runtime/helper path should supply a durable scope target for `add_to_scope`
-5. whether guides should execute in stripped sandbox or safe in-proc mode
+5. how much generic structure the first `tool_constraints` envelope needs before helper APIs are added
+6. whether guides should execute in stripped sandbox or safe in-proc mode
 
 ## 19. Related Sandbox Docs
 

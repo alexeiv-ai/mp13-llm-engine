@@ -144,6 +144,64 @@ Recommended default:
 1. dedupe by tool name per round
 2. default deny on timeout
 
+### 4.4 Dynamic Fine-Grained Constraints
+
+The first approval slice solved binary execution approval, but not contextual
+execution constraints such as implied roots, allowed URL prefixes, or dataset
+sub-scopes.
+
+The recommended next step is not a separate parallel grant framework. It is:
+
+1. extend native `ToolsScope`
+2. extend native `ToolsView`
+3. persist per-tool dynamic constraint payloads in the same scope stack model
+
+Recommended shape:
+
+1. keep existing scope stack semantics:
+   - `set`
+   - `add`
+   - `pop`
+   - `reset`
+2. add `tool_constraints` keyed by tool name
+3. materialize effective constraints into `ToolsView`
+4. let hosted approval optionally return `scope_constraints`
+5. on `add_to_scope`, store both:
+   - tool ungating
+   - effective per-tool constraints for future calls
+
+Design intent:
+
+1. minimize API surface expansion
+2. avoid pushing dynamic path/url/data policy into static sandbox policy
+3. preserve one logical global tool repository while still supporting per-context implied arguments and narrowing rules
+
+Constraint payloads should stay generic and domain-oriented rather than broker-specific.
+
+Suggested envelope:
+
+```json
+{
+  "domains": {
+    "filesystem": {...},
+    "network": {...},
+    "data": {...}
+  },
+  "argument_policy": {
+    "implied_args": {...},
+    "locked_args": [...],
+    "normalizers": {...}
+  }
+}
+```
+
+Security model:
+
+1. static sandbox policy remains the hard outer boundary
+2. dynamic scope constraints are the finer contextual narrowing layer
+3. tool/runtime helpers apply implied/locked argument behavior before brokered execution
+4. brokered host policy remains the final physical stop
+
 ## 5. Phase 3: Guides And Safe Execution Policy
 
 The current feature idea needs a stricter guide policy decision.

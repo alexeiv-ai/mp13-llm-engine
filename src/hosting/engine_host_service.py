@@ -5506,6 +5506,11 @@ class EngineHostService:
             ),
             disabled_tools=set(str(item or "").strip() for item in list(row.get("disabled_tools") or []) if str(item or "").strip()),
             gated_tools=set(str(item or "").strip() for item in list(row.get("gated_tools") or []) if str(item or "").strip()),
+            tool_constraints={
+                str(tool_name or "").strip(): json.loads(json.dumps(dict(item or {})))
+                for tool_name, item in dict(row.get("tool_constraints") or {}).items()
+                if str(tool_name or "").strip() and isinstance(item, dict)
+            },
         )
 
     @staticmethod

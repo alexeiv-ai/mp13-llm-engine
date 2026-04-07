@@ -33,6 +33,16 @@ def _get_intrinsics_registry() -> Dict[str, RegisteredTool]:
     return _get_tools_builtin_module().INTRINSICS_REGISTRY
 
 
+def _normalize_tool_constraints(raw: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for tool_name, payload in dict(raw or {}).items():
+        name = str(tool_name or "").strip()
+        if not name or not isinstance(payload, dict):
+            continue
+        out[name] = copy.deepcopy(dict(payload))
+    return out
+
+
 @dataclass
 class ToolsScope:
     """
@@ -45,12 +55,14 @@ class ToolsScope:
         silent_tools: Names that must stay enabled but hidden from the LLM.
         disabled_tools: Names that must be disabled for this scope.
         gated_tools: Names that require explicit confirmation before execution.
+        tool_constraints: Per-tool dynamic contextual narrowing payloads.
     """
     mode: Optional[str] = None
     advertise_tools: Set[str] = field(default_factory=set)
     silent_tools: Set[str] = field(default_factory=set)
     disabled_tools: Set[str] = field(default_factory=set)
     gated_tools: Set[str] = field(default_factory=set)
+    tool_constraints: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     label: Optional[str] = None
 
     DEFAULT_MODE = "*"
@@ -65,6 +77,7 @@ class ToolsScope:
         self.silent_tools = _normalize(self.silent_tools)
         self.disabled_tools = _normalize(self.disabled_tools)
         self.gated_tools = _normalize(self.gated_tools)
+        self.tool_constraints = _normalize_tool_constraints(self.tool_constraints)
         if self.mode and self.mode not in self.VALID_MODES:
             raise ValueError(f"ToolsScope.mode '{self.mode}' is invalid. Allowed: {sorted(self.VALID_MODES)}")
         return self
@@ -76,6 +89,7 @@ class ToolsScope:
             "silent_tools": sorted(list(self.silent_tools)),
             "disabled_tools": sorted(list(self.disabled_tools)),
             "gated_tools": sorted(list(self.gated_tools)),
+            "tool_constraints": copy.deepcopy(self.tool_constraints),
             "label": self.label,
         }
 
@@ -89,6 +103,7 @@ class ToolsScope:
             silent_tools=set(data.get("silent_tools", data.get("silent", [])) or []),
             disabled_tools=set(data.get("disabled_tools", data.get("disabled", [])) or []),
             gated_tools=set(data.get("gated_tools", data.get("gated", [])) or []),
+            tool_constraints=_normalize_tool_constraints(data.get("tool_constraints")),
             label=data.get("label"),
         ).clean()
 
@@ -105,10 +120,12 @@ class ToolsScope:
             bits.append(f"disabled={','.join(sorted(self.disabled_tools))}")
         if self.gated_tools:
             bits.append(f"gated={','.join(sorted(self.gated_tools))}")
+        if self.tool_constraints:
+            bits.append(f"constraints={','.join(sorted(self.tool_constraints.keys()))}")
         return " | ".join(bits) if bits else "no-op scope"
 
     def is_noop(self) -> bool:
-        return not (self.mode or self.advertise_tools or self.silent_tools or self.disabled_tools or self.gated_tools)
+        return not (self.mode or self.advertise_tools or self.silent_tools or self.disabled_tools or self.gated_tools or self.tool_constraints)
 
 
 @dataclass
@@ -121,6 +138,7 @@ class ToolsView:
     hidden_allowed_tools: Set[str]
     disabled_tools: Set[str]
     gated_tools: Set[str] = field(default_factory=set)
+    tool_constraints: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):
         """Ensures that upon deserialization from a dict (where these might be lists),
@@ -130,6 +148,7 @@ class ToolsView:
         self.hidden_allowed_tools = set(self.hidden_allowed_tools)
         self.disabled_tools = set(self.disabled_tools)
         self.gated_tools = set(self.gated_tools)
+        self.tool_constraints = _normalize_tool_constraints(self.tool_constraints)
 
     def should_advertise(self, tool_name: str) -> bool:
         return tool_name in self.advertised_tools
@@ -142,6 +161,9 @@ class ToolsView:
 
     def is_gated(self, tool_name: str) -> bool:
         return tool_name in self.gated_tools
+
+    def get_constraints(self, tool_name: str) -> Dict[str, Any]:
+        return copy.deepcopy(dict(self.tool_constraints.get(str(tool_name or "").strip()) or {}))
 
 
 @dataclass
@@ -548,6 +570,7 @@ class Toolbox:
         hidden_names: Set[str] = set()
         disabled_names: Set[str] = set(active_names if effective_mode == "disabled" else [])
         gated_names: Set[str] = set()
+        effective_constraints: Dict[str, Dict[str, Any]] = {}
 
         if effective_mode != "disabled":
             for name in active_names:
@@ -591,6 +614,10 @@ class Toolbox:
             apply_status(scope.advertise_tools, "advertised", idx)
             apply_status(scope.silent_tools, "silent", idx)
             gated_names.update(resolve_targets(scope.gated_tools) - disabled_names)
+            for tool_name, payload in dict(scope.tool_constraints or {}).items():
+                name = str(tool_name or "").strip()
+                if name in active_names and name not in disabled_names and isinstance(payload, dict):
+                    effective_constraints[name] = copy.deepcopy(dict(payload))
 
         allowed: Set[str] = set()
         advertised: Set[str] = set()
@@ -619,6 +646,7 @@ class Toolbox:
             hidden_allowed_tools=hidden_allowed,
             disabled_tools=disabled,
             gated_tools=gated_names,
+            tool_constraints=effective_constraints,
         )
 
     def resolve_tool_link(self, name: str, search_scope: Optional[Dict[str, Any]] = None, external_handler: Optional[Callable[..., Any]] = None) -> Tuple[bool, str]: # noqa
