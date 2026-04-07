@@ -43,6 +43,160 @@ def _normalize_tool_constraints(raw: Optional[Dict[str, Any]]) -> Dict[str, Dict
     return out
 
 
+def _normalize_scoped_path(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    text = raw.replace("\\", "/")
+    drive_match = re.match(r"^(?P<drive>[A-Za-z]:)(?:/|$)", text)
+    drive = (drive_match.group("drive").lower() if drive_match else "")
+    remainder = text[len(drive):] if drive else text
+    is_absolute = bool(drive) or remainder.startswith("/")
+    parts: List[str] = []
+    for part in remainder.split("/"):
+        bit = part.strip()
+        if not bit or bit == ".":
+            continue
+        if bit == "..":
+            if parts and parts[-1] != "..":
+                parts.pop()
+            elif not is_absolute:
+                parts.append(bit)
+            continue
+        parts.append(bit)
+    normalized = "/".join(parts)
+    if drive:
+        return f"{drive}/" + normalized if normalized else f"{drive}/"
+    if is_absolute:
+        return f"/{normalized}" if normalized else "/"
+    return normalized
+
+
+def _path_is_within(candidate: str, allowed_root: str) -> bool:
+    candidate_norm = _normalize_scoped_path(candidate)
+    root_norm = _normalize_scoped_path(allowed_root)
+    if not root_norm:
+        return False
+    cand_abs = bool(re.match(r"^(?:[a-z]:/|/)", candidate_norm, re.IGNORECASE))
+    root_abs = bool(re.match(r"^(?:[a-z]:/|/)", root_norm, re.IGNORECASE))
+    if cand_abs != root_abs:
+        return False
+    cand_drive = re.match(r"^(?P<drive>[a-z]:)/", candidate_norm, re.IGNORECASE)
+    root_drive = re.match(r"^(?P<drive>[a-z]:)/", root_norm, re.IGNORECASE)
+    if bool(cand_drive) != bool(root_drive):
+        return False
+    if cand_drive and root_drive and cand_drive.group("drive").lower() != root_drive.group("drive").lower():
+        return False
+    return candidate_norm == root_norm or candidate_norm.startswith(root_norm.rstrip("/") + "/")
+
+
+def _normalize_scoped_url(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _url_is_within(candidate: str, allowed_prefix: str) -> bool:
+    cand = _normalize_scoped_url(candidate)
+    prefix = _normalize_scoped_url(allowed_prefix)
+    return bool(cand and prefix and cand.startswith(prefix))
+
+
+def _apply_argument_normalizer(
+    *,
+    tool_name: str,
+    arg_name: str,
+    current_value: Any,
+    normalizer_name: str,
+    constraints: Dict[str, Any],
+) -> Any:
+    key = str(arg_name or "").strip()
+    name = str(normalizer_name or "").strip()
+    if not key or not name:
+        return current_value
+    if name == "path_under_implied_root":
+        filesystem = dict(dict(constraints.get("domains") or {}).get("filesystem") or {})
+        implied_root = _normalize_scoped_path(filesystem.get("implied_root"))
+        allowed_roots = [
+            _normalize_scoped_path(item)
+            for item in list(filesystem.get("allowed_roots") or [])
+            if _normalize_scoped_path(item)
+        ]
+        allow_override = bool(filesystem.get("allow_explicit_root_override", True))
+        resolved = _normalize_scoped_path(current_value)
+        if not resolved:
+            resolved = implied_root
+        if not resolved:
+            return current_value
+        if implied_root and not allow_override and resolved != implied_root:
+            raise PermissionError(f"Tool '{tool_name}' argument '{key}' must stay under the implied root '{implied_root}'.")
+        effective_roots = allowed_roots or ([implied_root] if implied_root else [])
+        if effective_roots and not any(_path_is_within(resolved, root) for root in effective_roots):
+            raise PermissionError(f"Tool '{tool_name}' argument '{key}' is outside the allowed scoped roots.")
+        return resolved
+    if name == "url_under_implied_prefix":
+        network = dict(dict(constraints.get("domains") or {}).get("network") or {})
+        implied_prefix = _normalize_scoped_url(network.get("implied_url_prefix"))
+        allowed_prefixes = [
+            _normalize_scoped_url(item)
+            for item in list(network.get("allowed_url_prefixes") or [])
+            if _normalize_scoped_url(item)
+        ]
+        allow_override = bool(network.get("allow_explicit_url_override", True))
+        resolved = _normalize_scoped_url(current_value)
+        if not resolved:
+            resolved = implied_prefix
+        if not resolved:
+            return current_value
+        if implied_prefix and not allow_override and not _url_is_within(resolved, implied_prefix):
+            raise PermissionError(f"Tool '{tool_name}' argument '{key}' must stay under the implied URL prefix.")
+        effective_prefixes = allowed_prefixes or ([implied_prefix] if implied_prefix else [])
+        if effective_prefixes and not any(_url_is_within(resolved, prefix) for prefix in effective_prefixes):
+            raise PermissionError(f"Tool '{tool_name}' argument '{key}' is outside the allowed scoped URL prefixes.")
+        return resolved
+    return current_value
+
+
+def _resolved_tool_arguments(
+    tool_name: str,
+    tool_arguments: Any,
+    tools_view: Optional["ToolsView"],
+) -> Dict[str, Any]:
+    if not isinstance(tool_arguments, dict):
+        return dict(tool_arguments or {})
+    resolved: Dict[str, Any] = dict(tool_arguments)
+    if not tools_view:
+        return resolved
+    constraints = tools_view.get_constraints(tool_name)
+    argument_policy = dict(constraints.get("argument_policy") or {})
+    implied_args = dict(argument_policy.get("implied_args") or {})
+    locked_args = {
+        str(name).strip()
+        for name in list(argument_policy.get("locked_args") or [])
+        if str(name).strip()
+    }
+    normalizers = {
+        str(name).strip(): str(kind).strip()
+        for name, kind in dict(argument_policy.get("normalizers") or {}).items()
+        if str(name).strip() and str(kind).strip()
+    }
+    for arg_name, implied_value in implied_args.items():
+        key = str(arg_name or "").strip()
+        if not key:
+            continue
+        if key in locked_args and key in resolved and resolved.get(key) != implied_value:
+            raise PermissionError(f"Tool '{tool_name}' argument '{key}' is locked by scope constraints.")
+        if key not in resolved:
+            resolved[key] = copy.deepcopy(implied_value)
+    for arg_name, normalizer_name in normalizers.items():
+        resolved[arg_name] = _apply_argument_normalizer(
+            tool_name=tool_name,
+            arg_name=arg_name,
+            current_value=resolved.get(arg_name),
+            normalizer_name=normalizer_name,
+            constraints=constraints,
+        )
+    return resolved
+
+
 @dataclass
 class ToolsScope:
     """
@@ -164,6 +318,82 @@ class ToolsView:
 
     def get_constraints(self, tool_name: str) -> Dict[str, Any]:
         return copy.deepcopy(dict(self.tool_constraints.get(str(tool_name or "").strip()) or {}))
+
+
+@dataclass(frozen=True)
+class ToolConstraintsView:
+    """Read-only helper wrapper around the resolved per-tool constraint payload."""
+    tool_name: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tool_name", str(self.tool_name or "").strip())
+        object.__setattr__(self, "payload", _normalize_tool_constraints({self.tool_name or "_": self.payload}).get(self.tool_name or "_", {}))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+    def get_domain(self, domain_name: str) -> Dict[str, Any]:
+        domains = dict(self.payload.get("domains") or {})
+        return copy.deepcopy(dict(domains.get(str(domain_name or "").strip()) or {}))
+
+    def get_argument_policy(self) -> Dict[str, Any]:
+        return copy.deepcopy(dict(self.payload.get("argument_policy") or {}))
+
+    def get_implied_arg(self, arg_name: str, default: Any = None) -> Any:
+        implied = dict(self.get_argument_policy().get("implied_args") or {})
+        key = str(arg_name or "").strip()
+        if not key:
+            return default
+        value = implied.get(key, default)
+        return copy.deepcopy(value)
+
+    def is_arg_locked(self, arg_name: str) -> bool:
+        key = str(arg_name or "").strip()
+        if not key:
+            return False
+        locked = {str(name).strip() for name in list(self.get_argument_policy().get("locked_args") or []) if str(name).strip()}
+        return key in locked
+
+    def get_normalizer(self, arg_name: str) -> Optional[str]:
+        key = str(arg_name or "").strip()
+        if not key:
+            return None
+        normalizers = {
+            str(name).strip(): str(value).strip()
+            for name, value in dict(self.get_argument_policy().get("normalizers") or {}).items()
+            if str(name).strip() and str(value).strip()
+        }
+        return normalizers.get(key)
+
+    def resolve_argument(self, arg_name: str, value: Any = None) -> Any:
+        key = str(arg_name or "").strip()
+        if not key:
+            return value
+        resolved = copy.deepcopy(value)
+        implied_value = self.get_implied_arg(key, None)
+        if self.is_arg_locked(key) and resolved is not None and implied_value is not None and resolved != implied_value:
+            raise PermissionError(f"Tool '{self.tool_name}' argument '{key}' is locked by scope constraints.")
+        if resolved is None and implied_value is not None:
+            resolved = implied_value
+        normalizer = self.get_normalizer(key)
+        if normalizer:
+            resolved = _apply_argument_normalizer(
+                tool_name=self.tool_name,
+                arg_name=key,
+                current_value=resolved,
+                normalizer_name=normalizer,
+                constraints=self.payload,
+            )
+        return copy.deepcopy(resolved)
+
+    def resolve_filesystem_root(self, value: Any = None, *, arg_name: str = "root_path") -> str:
+        resolved = self.resolve_argument(arg_name, value)
+        return str(resolved or "")
+
+    def resolve_url(self, value: Any = None, *, arg_name: str = "url") -> str:
+        resolved = self.resolve_argument(arg_name, value)
+        return str(resolved or "")
 
 
 @dataclass
@@ -1520,8 +1750,11 @@ class Toolbox:
 
         If the tool's callable accepts `**kwargs`, the following are injected:
         - `toolbox`: The Toolbox instance.
-        - `tool`: The tool's definition dictionary.
+        - `tool_def`: The tool's definition dictionary.
         - `tool_call`: The ToolCall object being executed.
+        - `tools_view`: The resolved ToolsView for this execution, when present.
+        - `tool_constraints`: The resolved per-tool constraint payload for this execution.
+        - `tool_constraints_view`: Helper wrapper around the resolved per-tool constraint payload.
         """
         tool_name = tool_call.name
         gate = self.gate_call(tool_name, tools_view=tools_view)
@@ -1561,58 +1794,67 @@ class Toolbox:
         try:
             # Check if the handler was registered as accepting **kwargs
             accepts_kwargs = tool_def.get("_accepts_kwargs", False)
+            resolved_tool_arguments = _resolved_tool_arguments(tool_name, tool_call.arguments, tools_view)
 
             # --- NEW: Logic to handle malformed arguments ---
             # Detect if the arguments payload is a result of parser salvage/wrapping.
             # This is heuristic-based, checking for a single '_non_parsed' or '_string_value' key.
             is_malformed_payload = False
-            if len(tool_call.arguments) == 1 and ('_non_parsed' in tool_call.arguments or '_string_value' in tool_call.arguments):
+            if len(resolved_tool_arguments) == 1 and ('_non_parsed' in resolved_tool_arguments or '_string_value' in resolved_tool_arguments):
                 is_malformed_payload = True
 
             call_kwargs = {}
             tool_args_issue_payload = None
-            if isinstance(tool_call.arguments, dict):
-                if "tool_args_issue" in tool_call.arguments:
-                    tool_args_issue_payload = tool_call.arguments.get("tool_args_issue")
-                internal_keys = [k for k in tool_call.arguments.keys() if k.startswith("_")]
+            if isinstance(resolved_tool_arguments, dict):
+                if "tool_args_issue" in resolved_tool_arguments:
+                    tool_args_issue_payload = resolved_tool_arguments.get("tool_args_issue")
+                internal_keys = [k for k in resolved_tool_arguments.keys() if k.startswith("_")]
                 if internal_keys:
                     tool_args_issue_payload = tool_args_issue_payload or {
-                        k: tool_call.arguments.get(k) for k in internal_keys
+                        k: resolved_tool_arguments.get(k) for k in internal_keys
                     }
 
             if not accepts_kwargs and is_malformed_payload:
                 # If the payload is malformed and the function is strict about its arguments,
                 # pass the entire raw dictionary under the special 'tool_args_issue' key.
                 # This allows the tool to attempt recovery instead of failing with a TypeError.
-                call_kwargs['tool_args_issue'] = tool_call.arguments
+                call_kwargs['tool_args_issue'] = resolved_tool_arguments
             else:
                 # For well-formed calls, only pass tool_call arguments unless **kwargs are accepted.
                 if accepts_kwargs:
                     # Merge execute() kwargs with tool_call arguments; tool_call takes precedence.
                     final_args = kwargs.copy()
-                    final_args.update(tool_call.arguments)
+                    final_args.update(resolved_tool_arguments)
                     if tool_args_issue_payload is not None:
                         final_args.pop("tool_args_issue", None)
                         for k in list(final_args.keys()):
                             if k.startswith("_"):
                                 final_args.pop(k, None)
                     call_kwargs.update(final_args)
+                    resolved_constraints = copy.deepcopy(
+                        tools_view.get_constraints(tool_name) if tools_view else {}
+                    )
                     call_kwargs['toolbox'] = self
                     call_kwargs['tool_def'] = tool_def
-                    # --- NEW: Inject the tool_call object itself ---
                     call_kwargs['tool_call'] = tool_call
+                    call_kwargs['tools_view'] = tools_view
+                    call_kwargs['tool_constraints'] = resolved_constraints
+                    call_kwargs['tool_constraints_view'] = ToolConstraintsView(
+                        tool_name=tool_name,
+                        payload=resolved_constraints,
+                    )
                     if tool_args_issue_payload is not None:
                         call_kwargs["tool_args_issue"] = tool_args_issue_payload
                 else:
                     # Strict signature: pass only the model-provided tool arguments.
-                    if isinstance(tool_call.arguments, dict):
+                    if isinstance(resolved_tool_arguments, dict):
                         cleaned_args = {
-                            k: v for k, v in tool_call.arguments.items()
+                            k: v for k, v in resolved_tool_arguments.items()
                             if not k.startswith("_") and k != "tool_args_issue"
                         }
                         call_kwargs.update(cleaned_args)
                     else:
-                        call_kwargs.update(tool_call.arguments)
+                        call_kwargs.update(resolved_tool_arguments)
 
             # Check if the function is async and call it accordingly
             is_async_func = inspect.iscoroutinefunction(callable_func)

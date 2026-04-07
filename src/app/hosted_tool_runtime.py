@@ -125,6 +125,15 @@ async def execute_tool_round_on_cursor(
     - the payload kind is `tool_approval_request`
     - valid decisions are `deny`, `allow_once`, and `add_to_scope`
 
+    Constraint-aware tool pattern:
+    - hosted/native execution can inject `tool_constraints_view` into
+      kwargs-capable tools
+    - tools that accept optional contextual narrowing should prefer:
+      `tool_constraints_view.resolve_argument(...)`
+      `tool_constraints_view.resolve_filesystem_root(...)`
+      `tool_constraints_view.resolve_url(...)`
+      instead of re-parsing raw constraint payloads directly
+
     Wrapper behavior:
     - this helper automatically forwards the active `cursor` and context
       `toolbox_ref` inside `callback_context`

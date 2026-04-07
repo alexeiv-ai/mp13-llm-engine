@@ -3380,6 +3380,20 @@ class HostedToolBoxRef:
         callback_context: Any = None,
         tool_call_id: str = "",
     ) -> Dict[str, Any]:
+        """
+        Execute one hosted tool call through the current toolbox routing.
+
+        Approval persistence note:
+        - gated tools can trigger `callback_processor` with callback name
+          `tool_requires_confirmation`
+        - `allow_once` affects only this call
+        - `add_to_scope` persists only when `callback_context` carries a
+          durable scope target such as:
+          - `{"toolbox_ref": some_toolbox_ref}`
+          - `{"cursor": some_cursor_with_toolbox_ref}`
+        - without that durable scope target, `add_to_scope` only mutates the
+          current execution view for this call
+        """
         name = str(tool_name or "").strip()
         if not name:
             raise ValueError("tool_name_required")

@@ -540,8 +540,20 @@ Suggested generic constraint envelope:
 Enforcement split:
 
 1. `ToolsView` answers whether a tool is available and carries effective constraints
-2. tool/runtime helpers normalize implied and explicit arguments using those constraints
-3. brokered filesystem / HTTP enforcement remains the final physical stop
+2. native `Toolbox.execute(...)` now applies the first shared helper slice:
+   - `argument_policy.implied_args` fills missing arguments before dispatch
+   - `argument_policy.locked_args` rejects conflicting overrides before dispatch
+   - `argument_policy.normalizers` now supports a first shared subset:
+     - `path_under_implied_root`
+     - `url_under_implied_prefix`
+   - kwargs-capable tools receive:
+     - the resolved per-call `tool_constraints` payload
+     - current `tools_view`
+     - `tool_constraints_view`, a small helper wrapper over the resolved payload
+       It currently exposes convenience helpers such as:
+       `resolve_argument(...)`, `resolve_filesystem_root(...)`, and `resolve_url(...)`.
+3. tool/runtime helpers can extend that with deeper domain-specific normalization later
+4. brokered filesystem / HTTP enforcement remains the final physical stop
 
 This means the dynamic layer narrows behavior inside a hard static toolbox/profile boundary; it does not replace sandbox policy.
 
@@ -815,6 +827,22 @@ If hosted execution encounters a tool whose gate outcome is `gated_requires_conf
 
 Approval responses may also evolve to carry optional `scope_constraints` so the same approval round can persist contextual narrowing together with ungating.
 
+Minimal recommended pattern for a constraint-aware tool:
+
+```python
+def search_files(name_mask: str, root_path: str = "", **kwargs):
+    scoped = kwargs["tool_constraints_view"]
+    effective_root = scoped.resolve_filesystem_root(root_path or None)
+    # Use effective_root for the actual search or brokered fs call.
+    ...
+```
+
+Recommendation:
+
+1. use normal tool arguments for the public tool schema
+2. use `tool_constraints_view` only to resolve the effective scoped value
+3. rely on sandbox policy and broker enforcement as the hard outer boundary
+
 ### 14.6 Wrapper Consistency
 
 Wrapper consistency means every public hosted execution path should give the same answer to one question:
@@ -830,6 +858,9 @@ For this to stay coherent across wrappers:
 3. the lightweight helper `execute_tool_round_on_cursor(...)` now does the right thing by auto-forwarding:
    - the active `cursor`
    - the context `toolbox_ref`
+4. direct `HostedToolBoxRef.execute(...)` usage is not auto-persistent by itself:
+   - wrappers must pass `callback_context` with `toolbox_ref`
+   - or pass `callback_context` with `cursor` whose context owns a `toolbox_ref`
 
 So “wrapper consistency” is not about transport. It is about making sure approval semantics do not silently differ between public entrypoints.
 

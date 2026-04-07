@@ -169,6 +169,11 @@ Recommended shape:
 5. on `add_to_scope`, store both:
    - tool ungating
    - effective per-tool constraints for future calls
+6. first helper slice is now in place in native `Toolbox.execute(...)`:
+   - `argument_policy.implied_args`
+   - `argument_policy.locked_args`
+   - kwargs-capable tools receive resolved `tool_constraints`, `tools_view`, and `tool_constraints_view`
+     with convenience accessors such as `resolve_argument(...)`, `resolve_filesystem_root(...)`, and `resolve_url(...)`
 
 Design intent:
 
@@ -200,7 +205,10 @@ Security model:
 1. static sandbox policy remains the hard outer boundary
 2. dynamic scope constraints are the finer contextual narrowing layer
 3. tool/runtime helpers apply implied/locked argument behavior before brokered execution
-4. brokered host policy remains the final physical stop
+4. the first shared `normalizers` slice now covers:
+   - `path_under_implied_root`
+   - `url_under_implied_prefix`
+5. brokered host policy remains the final physical stop
 
 ## 5. Phase 3: Guides And Safe Execution Policy
 

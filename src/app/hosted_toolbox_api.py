@@ -165,6 +165,19 @@ def create_hosted_toolbox_executor(
     - `allow_once` affects only the current call
     - `add_to_scope` persists only when the caller also supplies a durable
       scope target such as a `ToolBoxRef`
+    - this helper only constructs the executor; it does not auto-supply that
+      scope target on its own
+
+    Constraint-aware tool note:
+    - kwargs-capable tools can accept `tool_constraints_view`
+    - that helper exposes `resolve_argument(...)`,
+      `resolve_filesystem_root(...)`, and `resolve_url(...)`
+    - example:
+
+      def search_files(name_mask: str, root_path: str = "", **kwargs):
+          scoped = kwargs["tool_constraints_view"]
+          effective_root = scoped.resolve_filesystem_root(root_path or None)
+          ...
     """
     return ToolboxExecutionHarness(
         config=ToolboxHarnessConfig(
@@ -209,6 +222,9 @@ class HostedToolExecutionRouter:
     wrappers that expose hosted approval should route execution through a path
     that also forwards a durable scope target when they want `add_to_scope` to
     persist beyond one call.
+    `execute_tool_round_on_cursor(...)` already does this automatically;
+    direct `HostedToolBoxRef.execute(...)` calls do not unless the wrapper
+    passes `callback_context` with `toolbox_ref` or `cursor`.
     """
 
     def __init__(self) -> None:

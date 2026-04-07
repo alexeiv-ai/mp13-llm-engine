@@ -79,9 +79,17 @@ What is missing:
 2. broader wrapper adoption beyond the hosted runtime helper and direct hosted ref path
 3. confirmation of the preferred public timeout override surface
 
+Wrapper-consistency audit result:
+
+1. `execute_tool_round_on_cursor(...)` is the only public helper that auto-forwards a durable scope target for `add_to_scope`
+2. direct `HostedToolBoxRef.execute(...)` and raw hosted harness usage are consistent only when the caller passes `callback_context` with:
+   - `toolbox_ref`
+   - or `cursor` whose context owns a `toolbox_ref`
+3. current docs now state that explicitly; behavior was not changed in this audit
+
 ### 2.2A Dynamic Constraint Layer
 
-Status: approved design direction, not yet implemented
+Status: first slice implemented
 
 Motivation:
 
@@ -92,7 +100,7 @@ Motivation:
    - data-subscope restrictions
 3. static sandbox policy is intentionally too coarse and too lifecycle-bound to carry every per-context adjustment
 
-Planned design:
+Implemented design:
 
 1. extend `ToolsScope` with per-tool `tool_constraints`
 2. extend `ToolsView` with resolved effective constraints
@@ -105,6 +113,17 @@ Planned design:
 5. on `add_to_scope`, persist both:
    - ungating
    - tool constraints
+6. native `Toolbox.execute(...)` now applies a minimal `argument_policy` slice:
+   - `implied_args` fill missing tool arguments
+   - `locked_args` reject conflicting overrides before tool execution
+   - `normalizers` now support a first shared domain-aware subset:
+     - `path_under_implied_root`
+     - `url_under_implied_prefix`
+   - kwargs-capable tools now receive:
+     - resolved `tool_constraints`
+     - current `tools_view`
+     - `tool_constraints_view` helper
+       The helper currently exposes `resolve_argument(...)`, `resolve_filesystem_root(...)`, and `resolve_url(...)`.
 
 Security split:
 
@@ -143,12 +162,12 @@ Highest-risk areas:
 
 Recommended next implementation step:
 
-1. implement `tool_constraints` in native `ToolsScope` / `ToolsView`
-2. let hosted approval persist `scope_constraints` alongside `add_to_scope`
-3. add one small runtime helper for resolving effective tool constraints
+1. decide how much of `normalizers` should stay generic vs tool-specific helper code
+2. add one or two app-level examples that consume persisted constraints explicitly
+3. decide whether path/url provenance should be surfaced to tools or only enforced silently
 4. keep the Windows callback relay fix and the approval slices covered in regression runs
 
-The hosted approval callback is stable enough to carry the next constraint slice. The remaining work is to make contextual narrowing reusable rather than re-asking on every gated call.
+The hosted approval callback is now stable enough to persist contextual narrowing without re-asking on every gated call. The remaining work is to refine how far the shared normalizer layer should go before tool-specific helper APIs take over.
 
 ## 5. Key References
 
