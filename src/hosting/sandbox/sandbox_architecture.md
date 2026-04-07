@@ -827,6 +827,35 @@ If hosted execution encounters a tool whose gate outcome is `gated_requires_conf
 
 Approval responses may also evolve to carry optional `scope_constraints` so the same approval round can persist contextual narrowing together with ungating.
 
+Minimal approval callback example:
+
+```python
+def callback_processor(*, callback_name, payload, context):
+    if callback_name != "tool_requires_confirmation":
+        raise ValueError(f"Unexpected callback: {callback_name}")
+    if payload.get("tool_name") != "search_files":
+        return {"decision": "deny"}
+    return {
+        "decision": "add_to_scope",
+        "scope_constraints": {
+            "search_files": {
+                "domains": {
+                    "filesystem": {
+                        "implied_root": "docs/api",
+                        "allowed_roots": ["docs/api"],
+                        "allow_explicit_root_override": False,
+                    }
+                },
+                "argument_policy": {
+                    "implied_args": {"root_path": "docs/api"},
+                    "locked_args": ["root_path"],
+                    "normalizers": {"root_path": "path_under_implied_root"},
+                },
+            }
+        },
+    }
+```
+
 Minimal recommended pattern for a constraint-aware tool:
 
 ```python
@@ -999,7 +1028,13 @@ Current status:
    - `add_to_scope`
 7. `allow_once` remains per-call and is intentionally not cached
 8. approval timeout defaults to deny
-9. the next planned slice is to persist per-tool dynamic `tool_constraints` through the same scope/view stack rather than via static sandbox-policy mutation
+9. per-tool dynamic `tool_constraints` now persist through the same scope/view stack rather than via static sandbox-policy mutation
+10. guide policy first slice is now explicit:
+   - guides are separate tools
+   - gating a parent tool does not implicitly gate its guide
+   - guides can still be gated explicitly by guide name
+   - all guides now execute through one static content-backed guide path
+   - intrinsic guides are registered from static guide content, not callable guide implementations
 
 ### 18.3 Main Open Questions
 
@@ -1010,7 +1045,7 @@ The main unresolved architectural questions are:
 3. how every public hosted wrapper should expose or hide approval-time timeout controls
 4. how hosted wrappers beyond the current runtime/helper path should supply a durable scope target for `add_to_scope`
 5. how much generic structure the first `tool_constraints` envelope needs before helper APIs are added
-6. whether guides should execute in stripped sandbox or safe in-proc mode
+6. whether any future stripped guide mode is worth adding beyond the current static-guide execution path
 
 ## 19. Related Sandbox Docs
 

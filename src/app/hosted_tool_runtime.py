@@ -124,6 +124,7 @@ async def execute_tool_round_on_cursor(
       `callback_processor` can receive `tool_requires_confirmation`
     - the payload kind is `tool_approval_request`
     - valid decisions are `deny`, `allow_once`, and `add_to_scope`
+    - `add_to_scope` may also return `scope_constraints` for future calls
 
     Constraint-aware tool pattern:
     - hosted/native execution can inject `tool_constraints_view` into
@@ -133,6 +134,12 @@ async def execute_tool_round_on_cursor(
       `tool_constraints_view.resolve_filesystem_root(...)`
       `tool_constraints_view.resolve_url(...)`
       instead of re-parsing raw constraint payloads directly
+    - compact example:
+
+      def search_files(name_mask: str, root_path: str = "", **kwargs):
+          scoped = kwargs["tool_constraints_view"]
+          effective_root = scoped.resolve_filesystem_root(root_path or None)
+          ...
 
     Wrapper behavior:
     - this helper automatically forwards the active `cursor` and context

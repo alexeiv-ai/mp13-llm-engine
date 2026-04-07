@@ -167,6 +167,22 @@ def create_hosted_toolbox_executor(
       scope target such as a `ToolBoxRef`
     - this helper only constructs the executor; it does not auto-supply that
       scope target on its own
+    - compact approval example:
+
+      def callback_processor(*, callback_name, payload, context):
+          if callback_name != "tool_requires_confirmation":
+              return {"decision": "deny"}
+          return {
+              "decision": "add_to_scope",
+              "scope_constraints": {
+                  "search_files": {
+                      "argument_policy": {
+                          "implied_args": {"root_path": "docs/api"},
+                          "locked_args": ["root_path"],
+                      }
+                  }
+              },
+          }
 
     Constraint-aware tool note:
     - kwargs-capable tools can accept `tool_constraints_view`

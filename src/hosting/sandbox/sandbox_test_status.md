@@ -14,6 +14,12 @@ Hosted approval now uses the callback processor with `tool_requires_confirmation
 Update: 2026-04-06
 Hosted approval follow-up behavior is now covered too.
 Repeated gated calls dedupe by tool name for sticky decisions, approval timeout defaults to deny, and the hosted runtime auto-forwards the active cursor plus `toolbox_ref` into callback context.
+Update: 2026-04-06
+Guide-policy first-slice behavior is now covered.
+User guides resolve as first-class guide tools, do not inherit parent-tool gating implicitly, and can still be gated explicitly by guide name.
+Update: 2026-04-06
+Guide hardening is now in place too.
+All guides execute through the static guide runner; intrinsic guides are now registered from static guide content rather than callable guide implementations.
 
 ## 1. Environment
 
@@ -58,7 +64,11 @@ Current automated coverage includes:
     - timeout -> deny behavior
     - per-round dedupe for sticky approval decisions
     - hosted runtime auto scope-target forwarding
-15. brokered callback attribution slices:
+15. guide-policy slices:
+    - user guides resolve as first-class guide names
+    - gating a parent tool does not implicitly gate its guide
+    - guides can still be explicitly gated by guide name
+16. brokered callback attribution slices:
     - brokered filesystem / HTTP service echo callback context
     - live toolbox execution proves brokered filesystem callback attribution to original tool call
 

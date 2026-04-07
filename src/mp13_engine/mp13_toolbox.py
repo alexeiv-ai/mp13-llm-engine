@@ -538,10 +538,10 @@ class Toolbox:
                 "name": container.name,
                 "is_guide": False,
                 "parent": None,
-                "has_guide": bool(container.guide_definition and container.guide_implementation),
+                "has_guide": bool(container.guide_definition and container.guide_content),
                 "description": base_fn.get("description", ""),
             })
-            if include_guides and container.guide_definition and container.guide_implementation:
+            if include_guides and container.guide_definition and container.guide_content:
                 guide_name = container.guide_definition.get("function", {}).get("name")
                 if guide_name:
                     items.append({
@@ -568,16 +568,20 @@ class Toolbox:
                 continue
             include_base = (targets is None and tool_container.name not in self.intrinsic_tools) or (targets is not None and tool_container.name in targets)
             if include_base:
-                self.intrinsic_tools[tool_container.name] = tool_container.definition
+                base_definition = copy.deepcopy(dict(tool_container.definition or {}))
+                if tool_container.guide_content:
+                    base_definition["guide_content"] = copy.deepcopy(dict(tool_container.guide_content))
+                self.intrinsic_tools[tool_container.name] = base_definition
                 self.intrinsic_tool_callables[tool_container.name] = tool_container.implementation
-            if tool_container.guide_definition and tool_container.guide_implementation:
+            if tool_container.guide_definition and tool_container.guide_content:
                 include_this_guide = bool(include_guides)
                 if guide_name and targets is not None and guide_name in targets:
                     include_this_guide = True
                 if include_this_guide:
                     guide_name = tool_container.guide_definition["function"]["name"]
-                    self.intrinsic_tools[guide_name] = tool_container.guide_definition
-                    self.intrinsic_tool_callables[guide_name] = tool_container.guide_implementation
+                    guide_definition = copy.deepcopy(dict(tool_container.guide_definition or {}))
+                    guide_definition["guide_content"] = copy.deepcopy(dict(tool_container.guide_content or {}))
+                    self.intrinsic_tools[guide_name] = guide_definition
 
     def from_dict(self, data: Dict[str, Any], search_scope: Optional[Dict[str, Any]] = None, external_handler: Optional[Callable[..., Any]] = None): # noqa
         """Loads tool state from a dictionary and re-links callables."""
@@ -764,6 +768,11 @@ class Toolbox:
         """Returns the set of tool names currently marked as active (user + intrinsic)."""
         active = set(self.active_tool_names or [])
         active.update(self.active_intrinsic_tool_names or [])
+        for tool_name in list(self.active_tool_names or []):
+            tool_def = self.tools.get(tool_name) or {}
+            guide_name = str(dict(dict(tool_def).get("guide_definition") or {}).get("function", {}).get("name") or "").strip()
+            if guide_name:
+                active.add(guide_name)
         return active
 
     def _registered_tool_names(self) -> Set[str]:
@@ -776,9 +785,35 @@ class Toolbox:
                 names.add(guide_name)
         return names
 
+    def _guide_content_for_tool_name(self, name: str) -> Optional[Dict[str, Any]]:
+        guide_name = str(name or "").strip()
+        if not guide_name:
+            return None
+        direct_intrinsic = dict(self.intrinsic_tools.get(guide_name) or {})
+        direct_content = dict(direct_intrinsic.get("guide_content") or {})
+        if direct_content:
+            return copy.deepcopy(direct_content)
+        for tool_def in list(self.tools.values()) + list(self.intrinsic_tools.values()):
+            guide_def = dict(tool_def.get("guide_definition") or {})
+            linked_name = str(dict(guide_def.get("function") or {}).get("name") or "").strip()
+            if linked_name != guide_name:
+                continue
+            content = dict(tool_def.get("guide_content") or {}) or dict(guide_def.get("guide_content") or {})
+            if content:
+                return copy.deepcopy(content)
+        return None
+
     def get_tool(self, name: str) -> Optional[Dict[str, Any]]:
         """Gets the full definition of a tool by name."""
-        return self.tools.get(name) or self.intrinsic_tools.get(name)
+        direct = self.tools.get(name) or self.intrinsic_tools.get(name)
+        if direct:
+            return direct
+        for tool_def in self.tools.values():
+            guide_def = dict(tool_def.get("guide_definition") or {})
+            guide_name = str(dict(guide_def.get("function") or {}).get("name") or "").strip()
+            if guide_name == str(name or "").strip():
+                return guide_def
+        return None
 
     def build_view(self, scopes: Optional[List[ToolsScope]] = None, label: Optional[str] = None) -> ToolsView:
         """
@@ -977,10 +1012,12 @@ class Toolbox:
             if not temp_def["guide_content"]:
                 parent_tool_name = tool_name_to_edit.removesuffix("_guide")
                 registry = _get_intrinsics_registry()
-                if parent_tool_name in registry and registry[parent_tool_name].guide_implementation:
-                    guide_impl = registry[parent_tool_name].guide_implementation
-                    if hasattr(guide_impl, "_content_map"):
-                        temp_def["guide_content"] = {k: v for k, v in guide_impl._content_map.items() if isinstance(v, list)}
+                if parent_tool_name in registry and registry[parent_tool_name].guide_content:
+                    temp_def["guide_content"] = {
+                        k: copy.deepcopy(v)
+                        for k, v in dict(registry[parent_tool_name].guide_content or {}).items()
+                        if isinstance(v, list)
+                    }
 
             original_name = tool_name_to_edit
         elif is_create_mode:
@@ -1665,6 +1702,8 @@ class Toolbox:
             return False
         if self.global_tools_mode == "disabled" and not tools_view:
             return False
+        if self._guide_content_for_tool_name(name):
+            return True
         if name in self.intrinsic_tool_callables:
             # This covers both python functions and the default_handler for interactive tools.
             return True
@@ -1782,12 +1821,14 @@ class Toolbox:
         elif tool_name in self.user_tool_callables:
             callable_func = self.user_tool_callables.get(tool_name)
         else:
-            # Check if it's a user-defined guide, which is a special case.
-            for t_def in self.tools.values():
-                if t_def.get("guide_definition", {}).get("function", {}).get("name") == tool_name:
-                    return self._execute_user_guide(tool_call)
+            guide_content = self._guide_content_for_tool_name(tool_name)
+            if guide_content:
+                return self._execute_static_guide(tool_call, guide_content)
 
         if not callable_func:
+            guide_content = self._guide_content_for_tool_name(tool_name)
+            if guide_content:
+                return self._execute_static_guide(tool_call, guide_content)
             tool_call.error = f"Error: Tool '{tool_name}' is defined but has no executable implementation."
             return None
 
@@ -1889,8 +1930,8 @@ class Toolbox:
             tool_call.error = f"Error executing tool '{tool_name}': {type(e).__name__} - {e}"
             return None
 
-    def _execute_user_guide(self, tool_call: ToolCall) -> str:
-        """Executes a user-defined guide tool."""
+    def _execute_static_guide(self, tool_call: ToolCall, guide_content: Dict[str, Any]) -> str:
+        """Executes a static content-backed guide."""
         def _query_guide_content(content_map: Dict[str, Any], topic: str, search: Optional[str] = None) -> List[str]:
             topics = sorted(list(content_map.keys()))
             if topic not in topics and topic != "all":
@@ -1913,15 +1954,11 @@ class Toolbox:
 
             return results or ["No results found for your search criteria."]
 
-        for tool_def in self.tools.values():
-            if tool_def.get("guide_definition", {}).get("function", {}).get("name") == tool_call.name:
-                guide_content = tool_def.get("guide_content", {})
-                if not guide_content:
-                    return "Error: This guide has no content."
-                topic = tool_call.arguments.get("topic", "help")
-                search = tool_call.arguments.get("search")
-                return str(_query_guide_content(guide_content, topic, search))
-        return f"Error: Could not find implementation for user-defined guide '{tool_call.name}'."
+        if not guide_content:
+            return "Error: This guide has no content."
+        topic = tool_call.arguments.get("topic", "help")
+        search = tool_call.arguments.get("search")
+        return str(_query_guide_content(guide_content, topic, search))
 
     async def execute_request_tools(
         self,

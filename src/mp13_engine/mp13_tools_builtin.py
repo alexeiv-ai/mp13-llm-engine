@@ -721,7 +721,7 @@ INTRINSICS_REGISTRY: Dict[str, RegisteredTool] = {
         definition=symbolic_algebra_def,
         implementation=symbolic_algebra,
         guide_definition=symbolic_algebra_guide_def,
-        guide_implementation=symbolic_algebra_guide,
+        guide_content=_SYMBOLIC_ALGEBRA_GUIDE_CONTENT,
         is_intrinsic=True
     ),
     "scriptable_calculator": RegisteredTool(
@@ -729,7 +729,7 @@ INTRINSICS_REGISTRY: Dict[str, RegisteredTool] = {
         definition=scriptable_calculator_def,
         implementation=scriptable_calculator,
         guide_definition=scriptable_calculator_guide_def,
-        guide_implementation=scriptable_calculator_guide,
+        guide_content=_SCRIPTABLE_CALCULATOR_GUIDE_CONTENT,
         is_intrinsic=True
     ),
 }

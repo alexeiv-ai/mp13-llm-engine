@@ -632,7 +632,7 @@ class RegisteredTool:
     definition: Dict[str, Any]
     implementation: Callable[..., Any]
     guide_definition: Optional[Dict[str, Any]] = None
-    guide_implementation: Optional[Callable[..., Any]] = None
+    guide_content: Optional[Dict[str, Any]] = None
     is_intrinsic: bool = False
 
 # ============================================================
