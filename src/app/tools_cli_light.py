@@ -64,6 +64,7 @@ def parse_scope_cli_args(arg_str: str) -> Optional[ToolsScope]:
     advertise: Set[str] = set()
     silent: Set[str] = set()
     disabled: Set[str] = set()
+    gated: Set[str] = set()
     label: Optional[str] = None
     for token in shlex.split(arg_str):
         if "=" not in token:
@@ -75,12 +76,14 @@ def parse_scope_cli_args(arg_str: str) -> Optional[ToolsScope]:
             continue
         if key in {"mode", "m"}:
             mode = value.lower()
-        elif key in {"advertise", "adv", "a"}:
+        elif key in {"advertise", "advertised", "adv", "a"}:
             advertise.update(split_tool_arg_list(value))
         elif key in {"silent", "hide", "s"}:
             silent.update(split_tool_arg_list(value))
         elif key in {"disabled", "deny", "d"}:
             disabled.update(split_tool_arg_list(value))
+        elif key in {"gated", "gate", "g"}:
+            gated.update(split_tool_arg_list(value))
         elif key in {"label", "name", "l"}:
             label = value
     scope = ToolsScope(
@@ -88,6 +91,7 @@ def parse_scope_cli_args(arg_str: str) -> Optional[ToolsScope]:
         advertise_tools=advertise,
         silent_tools=silent,
         disabled_tools=disabled,
+        gated_tools=gated,
         label=label,
     ).clean()
     return None if scope.is_noop() else scope
@@ -129,6 +133,7 @@ def normalize_scope_tool_names(scope: ToolsScope, toolbox: Toolbox) -> Tuple[Too
             advertise_tools=normalize_set(scope.advertise_tools),
             silent_tools=normalize_set(scope.silent_tools),
             disabled_tools=normalize_set(scope.disabled_tools),
+            gated_tools=normalize_set(scope.gated_tools),
             label=scope.label,
         ).clean(),
         warnings,
@@ -598,11 +603,11 @@ class LightweightToolsCliHandler:
                 if not remainder or remainder in {"?", "help"}:
                     verb = "set" if action == "set" else "add"
                     hint = " (use mode=* to reset to defaults)" if action == "set" else ""
-                    print(f"Usage: /t scope {verb} m[ode]=... a[dvertised]=... s[ilent]=... d[isabled]=...{hint}")
+                    print(f"Usage: /t scope {verb} m[ode]=... a[dvertise|d]=... s[ilent]=... d[isabled]=... g[ated]=...{hint}")
                     return cursor, True
                 scope_obj = parse_scope_cli_args(remainder)
                 if not scope_obj:
-                    print(f"{Colors.ERROR}No valid scope options provided. Example: mode=silent advertise=search{Colors.RESET}")
+                    print(f"{Colors.ERROR}No valid scope options provided. Example: mode=silent advertise=search gated=db{Colors.RESET}")
                     return cursor, True
                 normalized_scope, warnings = normalize_scope_tool_names(scope_obj, toolbox)
                 for warning in warnings:

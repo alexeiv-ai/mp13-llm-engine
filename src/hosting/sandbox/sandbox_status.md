@@ -21,6 +21,7 @@ Implemented and validated:
 7. kwargs-facing `tool_constraints_view` helper injection
 8. static-content-only guide execution
 9. Windows and WSL/Linux callback validation
+10. optional hosted-demo approval callback wiring for scoped `ProjectFilePeek`
 
 ## 2. Settled Semantics
 
@@ -46,6 +47,7 @@ Current public wrapper behavior:
 
 1. `execute_tool_round_on_cursor(...)` auto-forwards a durable scope target
 2. direct `HostedToolBoxRef.execute(...)` persists `add_to_scope` only when the caller passes:
+   - `scope_ref=...`
    - `callback_context["toolbox_ref"]`
    - or `callback_context["cursor"]` whose context owns a `toolbox_ref`
 3. `create_hosted_toolbox_executor(...)` builds the harness only; it does not auto-supply persistence context

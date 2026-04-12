@@ -457,7 +457,6 @@ class _HostedToolCallbackRelay:
             "address": address,
             "session_token": session_token,
             "contract": "hosting.toolbox.callbacks.v2",
-            "user_context": user_context,
         }
 
     def release_session(self, session_token: str) -> None:

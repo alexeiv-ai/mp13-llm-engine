@@ -50,6 +50,7 @@ Add one or two compact examples of the intended usage pattern:
 
 1. hosted approval returning `scope_constraints`
 2. a kwargs-capable tool using `tool_constraints_view`
+3. the stock hosted demo now has an optional `ProjectFilePeek` approval-callback path for manual testing
 
 ### 2.3 Wrapper Polish
 

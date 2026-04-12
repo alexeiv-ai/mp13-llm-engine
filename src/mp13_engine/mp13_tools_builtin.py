@@ -285,7 +285,7 @@ _SCRIPTABLE_CALCULATOR_GUIDE_CONTENT = {
         "The script must be self-contained. It cannot call external libraries or access the file system.",
         "Lambda functions and Python function definitions ('def') are not supported.",
     ],
-    "allowed_symbols": lambda: sorted(list(ALLOWED_FUNCTIONS_AND_CONSTANTS) + ['radians', 'degrees']),
+    "allowed_symbols": [],
     "errors": [
         "KeyError: Occurs if you use a variable that has not been defined in the script or passed in the 'variables' dict. e.g., 'a + b' without defining 'a' or 'b'.",
         "ValueError: Occurs for illegal tokens (e.g., trying to use a disallowed function like 'eval') or syntax errors.",
@@ -293,11 +293,6 @@ _SCRIPTABLE_CALCULATOR_GUIDE_CONTENT = {
         "TypeError: Can occur if the final expression is not a valid numerical formula. Note that tuples are only supported if they contain only variable names (e.g., 'a, b'), not expressions (e.g., 'a+1, b').",
     ],
 }
-_scriptable_calculator_guide = Guide(_SCRIPTABLE_CALCULATOR_GUIDE_CONTENT)
-
-def scriptable_calculator_guide(topic: str, search: Optional[str] = None) -> List[str]:
-    """Provides detailed, searchable guidance on using the scriptable_calculator tool."""
-    return _scriptable_calculator_guide.query(topic, search)
 
 #: Constants that must be manually added to the numexpr environment because
 #: providing a `local_dict` bypasses the compiler's special handling for them.
@@ -331,6 +326,13 @@ def _discover_allowed() -> FrozenSet[str]:
 
 
 ALLOWED_FUNCTIONS_AND_CONSTANTS: FrozenSet[str] = _discover_allowed()
+_SCRIPTABLE_CALCULATOR_GUIDE_CONTENT["allowed_symbols"] = sorted(list(ALLOWED_FUNCTIONS_AND_CONSTANTS) + ["radians", "degrees"])
+_scriptable_calculator_guide = Guide(_SCRIPTABLE_CALCULATOR_GUIDE_CONTENT)
+
+
+def scriptable_calculator_guide(topic: str, search: Optional[str] = None) -> List[str]:
+    """Provides detailed, searchable guidance on using the scriptable_calculator tool."""
+    return _scriptable_calculator_guide.query(topic, search)
 # ------------------------------------------------------------------ validation
 
 # Matches standalone import/from lines without consuming following statements.

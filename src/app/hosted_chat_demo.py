@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import functools
 import math
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from hosting import HostedToolBoxRef
 from hosting.engine_host_service import EngineHostService
@@ -95,6 +96,10 @@ def ExampleHttpPeek(
     return f"{url}\n---\n{preview}"
 
 
+def _project_file_peek_with_root(*, project_root: Path, **kwargs: Any) -> str:
+    return ProjectFilePeek(project_root=project_root, **kwargs)
+
+
 @dataclass
 class HostedChatDemoPlan:
     toolbox_id: str
@@ -109,6 +114,7 @@ class HostedChatDemoRuntime:
     service: EngineHostService
     toolbox_ref: HostedToolBoxRef
     plan: HostedChatDemoPlan
+    callback_processor: Optional[Callable[..., Dict[str, Any]]] = None
 
 
 def hosted_demo_non_restartable_tool_names(
@@ -130,9 +136,57 @@ def hosted_demo_non_restartable_tool_names(
 def hosted_demo_tool_round_options(
     runtime_or_plan: HostedChatDemoRuntime | HostedChatDemoPlan,
 ) -> Dict[str, Any]:
-    return {
+    out = {
         "non_restartable_tool_names": hosted_demo_non_restartable_tool_names(runtime_or_plan),
     }
+    if isinstance(runtime_or_plan, HostedChatDemoRuntime) and callable(runtime_or_plan.callback_processor):
+        out["callback_processor"] = runtime_or_plan.callback_processor
+    return out
+
+
+def make_hosted_demo_callback_processor(
+    *,
+    project_file_peek_root: Optional[str] = None,
+) -> Callable[..., Dict[str, Any]]:
+    scoped_root = str(project_file_peek_root or "").strip().replace("\\", "/").strip("/")
+    approval_seen: set[str] = set()
+
+    def _callback_processor(*, callback_name: str, payload: Dict[str, Any], context: Any) -> Dict[str, Any]:
+        if str(callback_name or "").strip() != "tool_requires_confirmation":
+            return {"decision": "deny"}
+        tool_name = str(dict(payload or {}).get("tool_name") or "").strip()
+        if tool_name != "ProjectFilePeek":
+            return {"decision": "deny"}
+        call_id = str(getattr(context, "tool_call_id", "") or "").strip()
+        if not scoped_root:
+            if call_id and call_id not in approval_seen:
+                approval_seen.add(call_id)
+                print("[hosted-demo approval] Auto-approved ProjectFilePeek for one call.")
+            return {"decision": "allow_once"}
+        if call_id and call_id not in approval_seen:
+            approval_seen.add(call_id)
+            print(f"[hosted-demo approval] Auto-approved ProjectFilePeek with scoped root: {scoped_root}")
+        return {
+            "decision": "add_to_scope",
+            "scope_constraints": {
+                "ProjectFilePeek": {
+                    "domains": {
+                        "filesystem": {
+                            "implied_root": scoped_root,
+                            "allowed_roots": [scoped_root],
+                            "allow_explicit_root_override": False,
+                        }
+                    },
+                    "argument_policy": {
+                        "implied_args": {"root_path": scoped_root},
+                        "locked_args": ["root_path"],
+                        "normalizers": {"root_path": "path_under_implied_root"},
+                    },
+                }
+            },
+        }
+
+    return _callback_processor
 
 
 def build_hosted_chat_demo_plan(
@@ -303,7 +357,10 @@ def register_local_hosted_chat_demo_tools(toolbox: Toolbox, *, project_root: Pat
         toolbox.add_tool_callable(ProjectFilePeek, activate=True)
     else:
         toolbox.activate_tool("ProjectFilePeek")
-    toolbox.user_tool_callables["ProjectFilePeek"] = lambda **kwargs: ProjectFilePeek(project_root=project_root, **kwargs)
+    toolbox.user_tool_callables["ProjectFilePeek"] = functools.partial(
+        _project_file_peek_with_root,
+        project_root=project_root,
+    )
     names.append("ProjectFilePeek")
     if not toolbox.get_tool("ExampleHttpPeek"):
         toolbox.add_tool_callable(ExampleHttpPeek, activate=True)
@@ -320,6 +377,7 @@ def setup_hosted_chat_demo(
     hosting_root: Path,
     project_root: Path,
     toolbox_id: str,
+    project_file_peek_scope_root: Optional[str] = None,
     python_executable: Optional[str] = None,
     worker_profile_class: str = "generic",
 ) -> HostedChatDemoRuntime:
@@ -350,7 +408,17 @@ def setup_hosted_chat_demo(
             non_restartable=bool(request.get("non_restartable", False)),
         )
     builder.resolve_sandbox()
-    return HostedChatDemoRuntime(service=service, toolbox_ref=toolbox_ref, plan=plan)
+    callback_processor = None
+    if project_file_peek_scope_root is not None:
+        callback_processor = make_hosted_demo_callback_processor(
+            project_file_peek_root=project_file_peek_scope_root,
+        )
+    return HostedChatDemoRuntime(
+        service=service,
+        toolbox_ref=toolbox_ref,
+        plan=plan,
+        callback_processor=callback_processor,
+    )
 
 
 def shutdown_hosted_chat_demo(runtime: Optional[HostedChatDemoRuntime]) -> None:

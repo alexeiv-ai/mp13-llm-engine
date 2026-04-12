@@ -333,6 +333,11 @@ Generic hosted callbacks currently carry `HostedToolCallbackContext` with:
 8. persisted `callback_signature`
 9. caller-supplied `user_context`
 
+For hosted callback execution, that caller context stays on the host-side callback
+session. It is not serialized through worker IPC inside `callback_binding`, because
+chat/runtime callback context may contain non-picklable objects such as cursors,
+scope refs, or locks.
+
 Tool registration can now persist optional `callback_signature` metadata for:
 
 1. hosted auto-callable registration
@@ -812,6 +817,9 @@ The same attach path is also exposed as a public app helper:
 2. wrapper apps can therefore attach to existing hosted toolbox deployments without copying `mp13chat` CLI-specific glue
 3. the same hosted attach helpers are also re-exported from the top-level `app` package for cleaner wrapper imports
 4. `demo/demo_hosted_toolbox_attach.py` is the minimal sample wrapper showing this non-demo attach flow against an existing hosted toolbox deployment
+5. `mp13chat --hosted-demo --hosted-demo-project-file-peek-scope-root <subdir>` now installs a demo approval callback for `ProjectFilePeek`
+6. that demo callback is only exercised when the chat scope gates `ProjectFilePeek`, for example:
+   - `/t scope add advertised=ProjectFilePeek gated=ProjectFilePeek`
 
 ### 14.5 Public Approval Callback Contract
 

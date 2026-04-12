@@ -347,7 +347,7 @@ class ToolboxExecutionContext:
             tool_call_id=tool_call_id,
             tool_arguments=tool_arguments,
             callback_signature=callback_signature,
-            user_context=callback_binding_payload.get("user_context"),
+            user_context=None,
         )
         self.fs = BrokeredFsClient(host=self.host)
         self.http = BrokeredHttpClient(host=self.host)
