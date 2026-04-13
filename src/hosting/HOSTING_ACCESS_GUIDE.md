@@ -9,8 +9,9 @@ This guide is designed for clients, GUIs, and backend services interacting with 
 The hosting layer operates as a control plane for managing engine worker lifecycles and a traffic bridge for guarded API access. The previous unified TCP daemon has been split to isolate concerns:
 
 1.  **Primary Control Daemon (`--daemon`)**: 
-    - Listens *only* on cross-platform local IPC (Unix Domain Sockets or Windows Named Pipes).
-    - Speaks a custom JSON-RPC protocol over IPC.
+    - Listens on cross-platform local IPC (Unix Domain Sockets or Windows Named Pipes).
+    - Conditionally listens on TCP (`127.0.0.1:19876`) if `require_auth` is enabled and both `admin` and `transport` keys are present.
+    - Speaks a custom JSON-RPC protocol.
     - Used for worker lifecycle (`spawn`, `shutdown`), config management, and stream/RPC proxying.
 2.  **Dedicated HTTP Ingress Daemon (`--daemon-http`)**: 
     - An optional, separate process for handling standard HTTP requests.
@@ -97,4 +98,4 @@ When building or updating a client to interact with the MP13 Hosting APIs, ensur
 3.  [ ] **Implement Contract v2 Structured Denials**: Parse `error_code` and `error_details` from failed responses. Handle codes like `session_token_required`, `insufficient_scope`, `ownership_changed_reclaim_required`, and `engine_exclusive_conflict`.
 4.  [ ] **Handle Actor Identities**: Expect actor IDs in the format `key:<key_id>`. The client-supplied `backend_id` is ignored by the daemon's internal ACLs.
 5.  [ ] **Handle Keepalives**: Implement keepalives to maintain active claims and avoid being marked as an "orphan" owner (default TTL is 120 seconds).
-6.  [ ] **Route Metrics Properly**: Diagnostics from `host-metrics` are process-scoped. Fetch metrics individually per endpoint daemon, not globally across the entire host.
+6.  [ ] **Route Metrics Properly**: Diagnostics from `host-metrics` are process-scoped. Fetch metrics individually per endpoint daemon, not globally across the entire host.stics from `host-metrics` are process-scoped. Fetch metrics individually per endpoint daemon, not globally across the entire host.

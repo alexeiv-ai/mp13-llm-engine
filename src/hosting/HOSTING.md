@@ -59,9 +59,39 @@ Because IPC cannot serve standard network requests, a separate HTTP ingress daem
     *   Limited to HTTP verbs/traffic (cannot serve full host-control RPC or async streams).
     *   Requires managing a second daemon process.
 
-#### 3. TCP Port Forwarding (Deprecated)
-*   **Boundary**: Legacy daemon setups used to expose a local TCP port (19876) that accepted all control commands. This is explicitly deprecated and removed from the v2 architecture in favor of IPC.
-*   **Cons**: Vulnerable to port scanning, lacks inherent OS-level access controls (which IPC provides via file permissions), and requires complex SSH port forwarding instead of a simple subprocess relay.
+#### 3. TCP Port Forwarding (Conditional Remote Access)
+*   **Boundary**: The primary control daemon can bind to a local TCP port (`127.0.0.1:19876`) to support secure SSH port forwarding (`ssh -L 19876:127.0.0.1:19876`).
+*   **Security Guardrail**: The TCP listener is **disabled by default**. It is only enabled when the daemon meets all of the following conditions:
+    1.  `require_auth` is set to `true`.
+    2.  At least one `admin` key is configured in the keyring.
+    3.  At least one `transport` key is configured in the keyring.
+
+##### The "Temp Admin Access" Lock-down Workflow
+If a remote client relies solely on the `--relay` subprocess via IPC, the host's `~/.ssh/authorized_keys` must allow that SSH identity to execute commands. However, leaving terminal/command execution open is a significant security hole: if the key is compromised, an attacker can spawn a shell and read the physical `.json` keyrings.
+
+TCP Port Forwarding exists specifically to allow operators to lock down this hole while retaining daemon control. The workflow relies on **temporary admin access**:
+1.  **Temp Admin Access:** The operator connects to the host using an unrestricted terminal session (e.g., via a standard SSH login). This makes life easier because you do not need complex system services (like systemd) to manage the daemon.
+2.  **Start the Daemon:** The operator manually starts the daemon in the background (`python -m hosting.engine_host_cli --daemon --background`).
+3.  **Lock Down the Session:** The operator edits their host's `~/.ssh/authorized_keys` to completely disable terminal and command execution for the `transport` key, restricting it *only* to port forwarding:
+    ```text
+    command="/bin/false",no-pty,permitopen="127.0.0.1:19876" ssh-ed25519 AAAA... transport_user@machine
+    ```
+4.  **Steady State:** The SSH key is now perfectly secured. The operator can use standard SSH tunnels to control the daemon over TCP, but they are physically locked out of the terminal. The security hole is closed.
+5.  **Recovery (When the Daemon Dies):** If the daemon crashes or the host reboots, the TCP port will no longer answer. Because the terminal is locked down with `command="/bin/false"`, standard remote restart scripts (like `EngineHostControlChannel.restart_remote_daemon` which uses SSH exec) will be denied by the SSH server. 
+6.  **The "Service Managed" Remote Restart Pattern:** To solve the locked-down recovery problem, operators should wrap the daemon in an OS-level service manager (like `systemd` on Linux or Windows Services) configured to always restart the process on exit (`Restart=always`). This creates an elegant remote-restart loop: an operator connects over the secured TCP tunnel, issues the `__shutdown__` JSON-RPC command, the daemon exits gracefully, and `systemd` immediately spawns a fresh instance. This achieves a perfect remote restart without ever requiring SSH command-execution privileges.
+
+### Daemon Lifecycle Profiles: Foreground vs. Detached
+The daemon **does not** automatically detach by default. You must explicitly choose its lifecycle behavior depending on your current configuration phase:
+
+*   **Before Auth is Configured (Bootstrap Phase):** We recommend running the daemon in the foreground (`python -m hosting.engine_host_cli --daemon`). Because the daemon is temporarily unauthenticated, running it attached to your terminal ensures that if you walk away or close the SSH session, the daemon dies immediately, securely closing the temporary access hole.
+*   **After Auth is Configured (Steady State):** Once keys are provisioned and `require_auth=true` is set, you should transition to a durable lifecycle. 
+    *   *If you have root/admin rights:* Wrap the daemon in an OS-level service manager (`systemd` or Windows Services). This provides the **Service Managed** remote restart pattern described above, allowing auto-recovery and remote restarts even when your terminal is locked down.
+    *   *If you do not have root/admin rights:* You must manually start the daemon as a **Detached User Process** (`python -m hosting.engine_host_cli --daemon --background`). The daemon will survive when you close your terminal, allowing you to control it remotely via SSH Relay. However, be aware that if the daemon crashes, you *cannot* restart it remotely if you have locked down your terminal with `command="/bin/false"`. You will need to regain temporary terminal access to manually restart it.
+
+### Can the Daemon be Exposed Directly to the Internet?
+**No, natively it cannot.** By hardcoded design, both the Conditional TCP Port (`127.0.0.1:19876`) and the HTTP Ingress Daemon (`127.0.0.1:19877`) bind strictly to the local loopback interface. 
+
+If you want to expose the control plane or the HTTP proxy routes to the broader local network or the public internet, you *must* run a Reverse Proxy (like NGINX, HAProxy, or Traefik) on the host machine to bridge public traffic to the local `127.0.0.1` sockets. The daemon will never natively bind to `0.0.0.0`.
 
 ## 2. Developer Workflows & CLI Examples
 

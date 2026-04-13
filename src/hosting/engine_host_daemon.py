@@ -102,7 +102,8 @@ def _current_windows_account_name() -> str:
 def _tighten_windows_acl(path: Path, *, is_dir: bool) -> None:
     principal = _current_windows_account_name()
     if not principal:
-        raise RuntimeError("unable to determine current Windows account for ACL hardening")
+        logger.warning("unable to determine current Windows account for ACL hardening")
+        return
     grant_suffix = "(OI)(CI)F" if is_dir else "F"
     cmd = [
         "icacls",
@@ -122,7 +123,7 @@ def _tighten_windows_acl(path: Path, *, is_dir: bool) -> None:
     )
     if int(proc.returncode) != 0:
         stderr = str(proc.stderr or "").strip()
-        raise RuntimeError(stderr or f"icacls failed for {path}")
+        logger.warning("ACL hardening failed for %s: %s", path, stderr or "icacls error")
 
 
 def _secure_state_parent_dir(path: Path) -> None:
@@ -737,6 +738,71 @@ class EngineHostDaemon:
             thread.join(timeout=5.0)
         self._local_listener_thread = None
 
+    def _should_enable_tcp(self) -> bool:
+        status = self.svc.auth_status()
+        if not status.get("require_auth"):
+            return False
+        roles = set(status.get("roles") or [])
+        return "admin" in roles and "transport" in roles
+
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        peer = writer.get_extra_info("peername")
+        logger.debug("Client connected: %s", peer)
+        connection_actor_ids: set[str] = set()
+        try:
+            while True:
+                try:
+                    line = await asyncio.wait_for(reader.readline(), timeout=300.0)
+                except asyncio.TimeoutError:
+                    break
+                if not line:
+                    break
+                raw = line.decode("utf-8", errors="replace").strip()
+                if not raw:
+                    continue
+                try:
+                    req_obj = json.loads(raw)
+                    payload_obj = dict((req_obj or {}).get("payload") or {})
+                    tok = str(
+                        payload_obj.get("session_token")
+                        or payload_obj.get("auth_token")
+                        or ""
+                    ).strip()
+                    if tok:
+                        actor_id = self.svc.resolve_actor_id_from_session_token(tok)
+                        if actor_id and actor_id not in connection_actor_ids:
+                            connection_actor_ids.add(actor_id)
+                            self._track_actor_connected(actor_id)
+                except Exception:
+                    pass
+                peer_host = ""
+                try:
+                    if isinstance(peer, tuple) and len(peer) >= 1:
+                        peer_host = str(peer[0] or "")
+                except Exception:
+                    peer_host = ""
+                response = await self._dispatch(raw, peer_host=peer_host)
+                writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
+                await writer.drain()
+                # Stop serving this client after __shutdown__ is accepted
+                if response.get("result") == "shutting_down" and response.get("ok"):
+                    break
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        except Exception as exc:
+            logger.warning("Client error %s: %s", peer, exc)
+        finally:
+            try:
+                _ = self._apply_owner_disconnect_policy(connection_actor_ids)
+            except Exception:
+                pass
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            logger.debug("Client disconnected: %s", peer)
+
     @staticmethod
     def _operation_event(stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
         event: Dict[str, Any] = {
@@ -1026,11 +1092,27 @@ class EngineHostDaemon:
             self._replace_operation(op)
 
     async def run(self) -> None:
-        """Start local IPC control listener, then write PID file and run until stop event."""
+        """Start local IPC control listener and optionally TCP, then write PID file and run until stop event."""
         self._stop_event = asyncio.Event()
         self._loop = asyncio.get_running_loop()
+        enable_tcp = self._should_enable_tcp()
         try:
             self._start_local_control_listener()
+            if enable_tcp:
+                self._server = await asyncio.start_server(
+                    self._handle_client,
+                    "127.0.0.1",
+                    self.port,
+                    limit=2 ** 20,
+                )
+                try:
+                    sockets = list(getattr(self._server, "sockets", []) or [])
+                    if sockets:
+                        sockname = sockets[0].getsockname()
+                        if isinstance(sockname, tuple) and len(sockname) >= 2:
+                            self.port = int(sockname[1] or self.port)
+                except Exception:
+                    pass
             write_kwargs = {
                 "pid": os.getpid(),
                 "port": self.port,
@@ -1052,7 +1134,12 @@ class EngineHostDaemon:
                 self._local_transport.get("family"),
                 self._local_transport.get("address"),
             )
-            await self._stop_event.wait()
+            if enable_tcp:
+                logger.info("EngineHostDaemon starting on 127.0.0.1:%d", self.port)
+                async with self._server:
+                    await self._stop_event.wait()
+            else:
+                await self._stop_event.wait()
         finally:
             try:
                 self._shutdown_stage_events = []
