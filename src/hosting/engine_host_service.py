@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from mp13_engine.mp13_toolbox import ToolsView
+from ._process_utils import pid_alive
 
 from .sandbox import (
     BrokeredFilesystem,
@@ -329,17 +330,7 @@ class EngineHostService:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        if int(pid or 0) <= 0:
-            return False
-        try:
-            os.kill(int(pid), 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except Exception:
-            return False
+        return pid_alive(pid)
 
     @staticmethod
     def _normalize_backend_id(backend_id: Optional[str]) -> str:

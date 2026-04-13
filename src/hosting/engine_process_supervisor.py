@@ -19,6 +19,8 @@ from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ._process_utils import pid_alive
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_STATE_DIR = Path.home() / ".mp13-llm" / "hosting" / "state"
@@ -64,18 +66,7 @@ class EngineProcessSupervisor:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        if pid <= 0:
-            return False
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # Running but inaccessible.
-            return True
-        except Exception:
-            return False
+        return pid_alive(pid)
 
     def list_registered(self) -> List[Dict[str, Any]]:
         return self._read_state()

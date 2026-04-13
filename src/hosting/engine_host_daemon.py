@@ -33,6 +33,7 @@ import secrets
 import signal
 import subprocess
 import sys
+from ._process_utils import pid_alive
 import tempfile
 import threading
 import time
@@ -215,23 +216,7 @@ class DaemonPidFile:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        try:
-            p = int(pid or 0)
-            if p <= 0:
-                return False
-            os.kill(p, 0)
-            return True
-        except SystemError:
-            # On some Windows detached-process code paths, os.kill(pid, 0) can
-            # succeed but still raise SystemError due to interpreter state.
-            # Treat that as alive.
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except Exception:
-            return False
+        return pid_alive(pid)
 
     def is_alive(self) -> bool:
         info = self.read()

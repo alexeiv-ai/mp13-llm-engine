@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+from ._process_utils import pid_alive
 from .engine_host_connection import CommandError
 
 # Keywords that indicate an expired or invalid session token in daemon error strings.
@@ -2107,15 +2108,4 @@ class EngineHostControlChannel:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        try:
-            p = int(pid or 0)
-            if p <= 0:
-                return False
-            os.kill(p, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except Exception:
-            return False
+        return pid_alive(pid)
