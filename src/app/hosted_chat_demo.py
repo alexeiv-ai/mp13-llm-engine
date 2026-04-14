@@ -155,17 +155,28 @@ def make_hosted_demo_callback_processor(
         if str(callback_name or "").strip() != "tool_requires_confirmation":
             return {"decision": "deny"}
         tool_name = str(dict(payload or {}).get("tool_name") or "").strip()
+        requested_arguments = dict(dict(payload or {}).get("tool_arguments") or {})
         if tool_name != "ProjectFilePeek":
+            print(
+                f"[hosted-demo approval] Denied gated tool {tool_name or '<unknown>'}; "
+                f"demo auto-approval only supports ProjectFilePeek. args={requested_arguments}"
+            )
             return {"decision": "deny"}
         call_id = str(getattr(context, "tool_call_id", "") or "").strip()
         if not scoped_root:
             if call_id and call_id not in approval_seen:
                 approval_seen.add(call_id)
-                print("[hosted-demo approval] Auto-approved ProjectFilePeek for one call.")
+                print(
+                    f"[hosted-demo approval] Auto-approved ProjectFilePeek for one call. "
+                    f"args={requested_arguments}"
+                )
             return {"decision": "allow_once"}
         if call_id and call_id not in approval_seen:
             approval_seen.add(call_id)
-            print(f"[hosted-demo approval] Auto-approved ProjectFilePeek with scoped root: {scoped_root}")
+            print(
+                f"[hosted-demo approval] Auto-approved ProjectFilePeek with scoped root: {scoped_root}. "
+                f"args={requested_arguments}"
+            )
         return {
             "decision": "add_to_scope",
             "scope_constraints": {
