@@ -10,8 +10,20 @@ import torch
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a minimal torch CUDA kernel smoke test.")
-    parser.add_argument("--device", type=int, default=0, help="CUDA device index (default: 0).")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Minimal CUDA smoke test for the PyTorch runtime.\n\n"
+            "Purpose:\n"
+            "  This script verifies that PyTorch is compiled with CUDA support, can successfully\n"
+            "  communicate with the Nvidia driver, allocate memory on the GPU, and execute a basic\n"
+            "  tensor operation. It is useful for diagnosing environment or driver issues.\n\n"
+            "Usage:\n"
+            "  python cuda_kernel_smoke.py           # Tests the default GPU (cuda:0)\n"
+            "  python cuda_kernel_smoke.py --device 1 # Tests a specific GPU index"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("--device", type=int, default=0, help="CUDA device index to test (default: 0).")
     args = parser.parse_args()
 
     print(f"torch: {torch.__version__} cuda: {torch.version.cuda}")

@@ -230,7 +230,16 @@ def _print_template_info(tokenizer):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="GPU/CPU sanity check for model logits and generation.",
+        description=(
+            "GPU/CPU sanity check for model logits and generation.\n\n"
+            "Purpose:\n"
+            "  This script loads an LLM and performs an end-to-end forward pass to verify\n"
+            "  that the model produces finite, expected logits and can successfully generate\n"
+            "  tokens. It can be used to compare outputs between CPU and GPU, or to verify\n"
+            "  if specific attention implementations (e.g., SDPA, FlashAttention) or Dtypes\n"
+            "  are causing numerical instability or NaNs on your hardware.\n\n"
+            "  It is highly recommended to run this when debugging silent generation failures."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "Examples:\n"

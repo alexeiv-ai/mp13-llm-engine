@@ -132,12 +132,23 @@ def cmd_commands(root: Path) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Check and print commands for the WSL shared shadow test setup."
+        description=(
+            "Helper script to validate and run tests in a WSL (Windows Subsystem for Linux) 'shadow' setup.\n\n"
+            "Purpose:\n"
+            "  When working on a project from Windows but running tests in WSL, this script helps\n"
+            "  ensure that your WSL environment has the correct symlinks or mounted files\n"
+            "  (src, tests, configs, etc.) and that the Poetry environment is correctly configured.\n\n"
+            "Usage:\n"
+            "  python wsl_shared_test_setup.py check     # Validates the directory structure and imports\n"
+            "  python wsl_shared_test_setup.py commands  # Prints recommended pytest commands to run"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("--root", help="Shadow project root. Defaults to the current working directory.")
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("check", help="Validate the current WSL shadow setup.")
-    sub.add_parser("commands", help="Print the recommended WSL test commands.")
+    parser.add_argument("--root", type=str, help="Path to the shadow project root in WSL. Defaults to the current working directory.")
+    sub = parser.add_subparsers(dest="command", required=True, help="Command to execute")
+    
+    sub.add_parser("check", help="Validate the current WSL shadow setup (checks files, poetry env, and imports).")
+    sub.add_parser("commands", help="Print the recommended WSL test commands to run manually.")
     return parser
 
 
