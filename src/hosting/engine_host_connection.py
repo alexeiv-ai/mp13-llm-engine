@@ -284,10 +284,9 @@ class SSHRelayConnection(BaseConnection):
                     "-o", f"UserKnownHostsFile={tmppath}",
                 ]
             except Exception:
-                # Fallback: accept-new if temp file creation fails
-                argv += ["-o", "StrictHostKeyChecking=accept-new"]
+                raise RuntimeError("strict SSH host-key verification requires writable temporary known_hosts file")
         else:
-            argv += ["-o", "StrictHostKeyChecking=accept-new"]
+            raise RuntimeError("ssh_known_hosts_line is required for SSH relay connections")
         if self._ssh_key:
             argv += ["-i", self._ssh_key]
         argv.append(self._ssh_target)

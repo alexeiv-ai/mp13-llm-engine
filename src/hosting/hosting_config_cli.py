@@ -447,6 +447,38 @@ def _classify_config_state(summary: Dict[str, Any], probe: Dict[str, Any]) -> Di
     }
 
 
+def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
+    payload = _read_json(keys_file, {"keys": {}})
+    row = dict(dict(payload.get("keys") or {}).get(str(admin_key_id or "").strip()) or {})
+    if not row:
+        return {}
+    key_origin = str(row.get("key_origin") or row.get("key_source") or "imported").strip().lower()
+    public_key_source = str(row.get("public_key_source") or key_origin or "unknown").strip()
+    private_key_storage = str(row.get("private_key_storage") or "").strip()
+    private_key_export_path = str(row.get("private_key_export_path") or "").strip()
+    warning = str(row.get("private_key_warning") or "").strip()
+    if not private_key_storage:
+        if str(row.get("private_key_openssh") or "").strip():
+            private_key_storage = "embedded_keyring"
+        elif key_origin == "generated":
+            private_key_storage = "unknown_generated_location"
+        else:
+            private_key_storage = "not_managed"
+    export_exists = bool(private_key_export_path and Path(private_key_export_path).exists())
+    if private_key_storage == "embedded_keyring" and not warning:
+        warning = "Generated private key is still embedded in keys.json; export/move it or rotate it."
+    if private_key_storage == "exported_file" and private_key_export_path and not export_exists:
+        warning = f"Expected exported private key file is missing: {private_key_export_path}"
+    return {
+        "key_origin": key_origin,
+        "public_key_source": public_key_source,
+        "private_key_storage": private_key_storage,
+        "private_key_export_path": private_key_export_path or None,
+        "private_key_export_exists": export_exists if private_key_export_path else None,
+        "private_key_warning": warning or None,
+    }
+
+
 def _print_current_probe(summary: Dict[str, Any], probe: Dict[str, Any], state: Dict[str, Any]) -> None:
     _print_rule("=")
     _print_title("Current config snapshot")
@@ -580,16 +612,34 @@ def _print_status_report(result: Dict[str, Any]) -> None:
     summary = dict(result.get("summary") or {})
     probe = dict(result.get("probe") or {})
     state = dict(result.get("state") or {})
+    key_meta = dict(result.get("admin_key_metadata") or {})
     _print_wizard_home(summary, probe, state)
     _print_rule("-")
-    _kv_rows(
-        [
-            ("control_state_file", result.get("control_state_file")),
-            ("access_control_file", result.get("access_control_file")),
-            ("keys_file", result.get("keys_file")),
-            ("admin_key_count", summary.get("admin_key_count")),
-        ]
-    )
+    rows: list[Tuple[str, Any]] = [
+        ("control_state_file", result.get("control_state_file")),
+        ("access_control_file", result.get("access_control_file")),
+        ("keys_file", result.get("keys_file")),
+        ("admin_key_count", summary.get("admin_key_count")),
+    ]
+    if key_meta:
+        rows.extend(
+            [
+                ("admin_key_origin", key_meta.get("key_origin") or "unknown"),
+                ("admin_public_key_source", key_meta.get("public_key_source") or "unknown"),
+                ("admin_private_key_storage", key_meta.get("private_key_storage") or "unknown"),
+            ]
+        )
+        if key_meta.get("private_key_export_path"):
+            rows.append(("admin_private_key_path", key_meta.get("private_key_export_path")))
+            rows.append(
+                (
+                    "admin_private_key_path_exists",
+                    _status_text(bool(key_meta.get("private_key_export_exists"))),
+                )
+            )
+        if key_meta.get("private_key_warning"):
+            rows.append(("admin_key_warning", key_meta.get("private_key_warning")))
+    _kv_rows(rows)
 
 
 def _print_setup_result_report(result: Dict[str, Any]) -> None:
@@ -603,11 +653,18 @@ def _print_setup_result_report(result: Dict[str, Any]) -> None:
             ("lifecycle_profile", result.get("lifecycle_profile")),
             ("require_auth", _status_text(bool(result.get("require_auth")))),
             ("admin_key_id", result.get("admin_key_id")),
+            ("admin_key_origin", result.get("admin_key_origin") or "unknown"),
+            ("admin_public_key_source", result.get("admin_public_key_source") or "unknown"),
+            ("admin_private_key_storage", result.get("admin_private_key_storage") or "unknown"),
             ("setup_scope", result.get("setup_scope")),
             ("key_action", result.get("key_action")),
             ("permission_action", result.get("permission_action")),
         ]
     )
+    if result.get("admin_private_key_path"):
+        _kv_rows([("admin_private_key_path", result.get("admin_private_key_path"))])
+    if result.get("admin_private_key_warning"):
+        _kv_rows([("admin_key_warning", result.get("admin_private_key_warning"))])
     _print_rule("-")
     _print_title("Changes applied")
     changes = list(result.get("changes") or [])
@@ -881,6 +938,11 @@ def _store_importable_key_record(
     public_key: str,
     private_key_openssh: Optional[str] = None,
     key_source: Optional[str] = None,
+    key_origin: Optional[str] = None,
+    public_key_source: Optional[str] = None,
+    private_key_storage: Optional[str] = None,
+    private_key_export_path: Optional[str] = None,
+    private_key_warning: Optional[str] = None,
 ) -> None:
     payload = _read_json(keys_file, {"version": 1, "keys": {}})
     keys = dict(payload.get("keys") or {})
@@ -894,10 +956,32 @@ def _store_importable_key_record(
         row["private_key_openssh"] = str(private_key_openssh).strip()
     if key_source:
         row["key_source"] = str(key_source).strip()
+    if key_origin:
+        row["key_origin"] = str(key_origin).strip()
+    if public_key_source:
+        row["public_key_source"] = str(public_key_source).strip()
+    if private_key_storage:
+        row["private_key_storage"] = str(private_key_storage).strip()
+    if private_key_export_path:
+        row["private_key_export_path"] = str(private_key_export_path).strip()
+    if private_key_warning:
+        row["private_key_warning"] = str(private_key_warning).strip()
     preserved = {
         str(k): v
         for k, v in existing.items()
-        if str(k) not in {"role", "auth_method", "public_key", "private_key_openssh", "key_source"}
+        if str(k)
+        not in {
+            "role",
+            "auth_method",
+            "public_key",
+            "private_key_openssh",
+            "key_source",
+            "key_origin",
+            "public_key_source",
+            "private_key_storage",
+            "private_key_export_path",
+            "private_key_warning",
+        }
     }
     keys[str(key_id)] = preserved | row
     payload["version"] = 1
@@ -1022,11 +1106,13 @@ def run_status(args: argparse.Namespace) -> Dict[str, Any]:
     )
     state = _classify_config_state(summary, probe)
     summary["exists"] = bool(state.get("configured"))
+    key_meta = _admin_key_metadata(paths["keys_file"], str(summary.get("admin_key_id") or ""))
     return {
         "status": "ok",
         "state": state,
         "summary": summary,
         "probe": probe,
+        "admin_key_metadata": key_meta,
         "control_state_file": str(paths["control_state_path"]),
         "access_control_file": str(paths["access_file"]),
         "keys_file": str(paths["keys_file"]),
@@ -1406,6 +1492,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         if str(args.export_private_key_path or "").strip()
         else None
     )
+    key_origin = "imported"
+    public_key_source = "existing_keyring" if key_action == "keep_existing" else "inline"
+    private_key_storage = "not_managed"
+    private_key_warning: Optional[str] = None
 
     if key_action == "keep_existing":
         keyring_existing = _read_json(keys_file, {"keys": {}})
@@ -1417,8 +1507,21 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 f"key_action=keep_existing requested but key_id={admin_key_id} has no existing public key"
             )
         key_source = "import"
+        key_origin = str(row.get("key_origin") or row.get("key_source") or "imported").strip().lower() or "imported"
+        public_key_source = str(row.get("public_key_source") or "existing_keyring").strip() or "existing_keyring"
+        private_key_storage = str(row.get("private_key_storage") or "").strip() or (
+            "embedded_keyring" if str(row.get("private_key_openssh") or "").strip() else "not_managed"
+        )
+        private_key_warning = str(row.get("private_key_warning") or "").strip() or None
+        export_private_path = (
+            Path(str(row.get("private_key_export_path"))).expanduser().resolve()
+            if str(row.get("private_key_export_path") or "").strip()
+            else export_private_path
+        )
     else:
         if key_source == "generate":
+            key_origin = "generated"
+            public_key_source = "generated"
             passphrase = str(args.generated_key_passphrase or "")
             if interactive and not args.generated_key_passphrase:
                 if _bool_prompt("Protect generated private key with passphrase?", False):
@@ -1434,7 +1537,16 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             if export_private and export_private_path is not None:
                 export_private_path.parent.mkdir(parents=True, exist_ok=True)
                 export_private_path.write_text(str(generated_private), encoding="utf-8")
+                private_key_storage = "exported_file"
+            else:
+                private_key_storage = "embedded_keyring"
+                private_key_warning = (
+                    "Generated private key remains embedded in hosting key metadata. "
+                    "Export/move it to a managed location or rotate it."
+                )
         else:
+            key_origin = "imported"
+            public_key_source = "file" if admin_public_key_file_value else "inline"
             admin_public_key = _import_public_key(
                 public_key_file=admin_public_key_file_value,
                 public_key_inline=admin_public_key_inline_value,
@@ -1462,6 +1574,11 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         public_key=admin_public_key,
         private_key_openssh=admin_private_key_text,
         key_source=key_source,
+        key_origin=key_origin,
+        public_key_source=public_key_source,
+        private_key_storage=private_key_storage,
+        private_key_export_path=str(export_private_path) if export_private_path else None,
+        private_key_warning=private_key_warning,
     )
 
     if permission_action == "tighten":
@@ -1589,6 +1706,11 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "permission_action": permission_action,
         "permission_result": permission_result,
         "changes": changes,
+        "admin_key_origin": key_origin,
+        "admin_public_key_source": public_key_source,
+        "admin_private_key_storage": private_key_storage,
+        "admin_private_key_path": str(export_private_path) if export_private_path else None,
+        "admin_private_key_warning": private_key_warning,
     }
 
 

@@ -27,12 +27,13 @@ Client migration checklist and breaking payload/role changes are documented in:
 1. Engine package is installed from a terminal (local console or remote shell).
 2. SSH is a hard dependency (OS built-in or OpenSSH) for remote-capable deployments.
 3. SSH keys are long-lived identities; short-lived tokens are issued when access duration must be bounded.
-4. Endpoint means the whole hosting daemon plus all hosted resources, not a single worker.
-5. Exclusive/shared is a daemon-level effective mode:
+4. Non-local SSH-capable operation requires explicit SSH host-key pinning on the client side; opportunistic first-connect host trust is not a supported baseline mode.
+5. Endpoint means the whole hosting daemon plus all hosted resources, not a single worker.
+6. Exclusive/shared is a daemon-level effective mode:
    - default persistent mode from config
    - admin may override temporarily (runtime) or permanently (config)
-6. Root/admin privileges may be unavailable; baseline flow must work in user context.
-7. If local terminal access is fully compromised, local files may be rewritten; design targets containment, auditability, and explicit ownership transitions.
+7. Root/admin privileges may be unavailable; baseline flow must work in user context.
+8. If local terminal access is fully compromised, local files may be rewritten; design targets containment, auditability, and explicit ownership transitions.
 
 ### 2.1 Residual risk boundary (explicit)
 
@@ -102,6 +103,48 @@ Implementation may internally use scope primitives, but this is not an external 
 3. Access duration: session/token TTL controls, not key expiration.
 4. SSH private-key passphrases are external user/agent controls; hosting does not store or verify those passphrases directly.
 
+### 4.1.1 Private-key handling
+
+The short version:
+1. Hosting needs the public key to recognize an identity.
+2. The user who installed the hosting component is still responsible for the private key.
+3. Clients should assume they must already have the private key through some normal local SSH/key-management workflow.
+4. Hosting should make it obvious whether a key was imported or generated, and where the private key is expected to be.
+
+What this means in practice:
+1. If you import an existing key, hosting stores the public key only.
+2. If hosting generates a new keypair for convenience, the public key is registered with hosting and the private key must be accounted for clearly.
+3. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
+
+Imported-key example:
+1. A user already has `C:\Users\me\.ssh\id_ed25519` and `C:\Users\me\.ssh\id_ed25519.pub`.
+2. The setup flow imports `id_ed25519.pub`.
+3. Hosting records that the admin key is `imported`.
+4. The private key remains where the user already keeps it.
+5. In this case hosting may know the public key came from a file, but it does not manage the private key.
+
+Generated-key example:
+1. A user asks the setup flow to generate a new admin keypair.
+2. Hosting registers the generated public key.
+3. The private key must then be either:
+   - written to an explicit file path the user can keep, or
+   - treated as temporary/bootstrap-only material that the user must move, replace, or rotate immediately
+4. If hosting-generated private key material is still embedded in local hosting metadata, that is not the preferred steady state and should be treated as follow-up work.
+
+What the user who installed the hosting component should do:
+1. If the setup output says `imported`, use the private key you already had before running setup.
+2. If the setup output says `generated` and shows a file path, that file is the private key location clients should use.
+3. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata" or "expected exported key file is missing", fix that before treating the setup as complete.
+4. For `transport` keys, keep the private key outside hosting-managed files; hosting should only track the public key reference.
+
+What client code or client UX should assume:
+1. The client already has the private key or knows where to find it.
+2. Hosting will report useful metadata about the key:
+   - whether it was `imported` or `generated`
+   - how the public key was supplied
+   - whether the private key is externally managed, exported to a file, or still requires user follow-up
+3. The client should show that information plainly to the user instead of making them infer it.
+
 ### 4.2 Keyring paradigm
 
 Use a dedicated keyring structure under default config root:
@@ -113,6 +156,13 @@ Suggested contents:
 2. `keyring/` (active keys and metadata)
 3. `audit/` (bounded append-only audit records)
 4. `state/` (claims/sessions/runtime state checkpoints)
+
+Key metadata expectations:
+1. Persisted key metadata should record whether a public key was `imported` or `generated`.
+2. When known, persisted metadata should also record:
+   - how the public key was supplied (`file`, `inline`, generated, existing keyring)
+   - whether private key material is not managed, exported to a file, or still embedded locally
+   - any operator warning that requires follow-up
 
 Migration rule:
 1. If legacy key file is detected, move it to `<name>.migrated` before importing into keyring metadata.
@@ -195,6 +245,7 @@ Implementation baseline status:
 9. Lifecycle profiles/policies, terminal-control gating, and shutdown sequencing/checkpoints are implemented.
 10. Legacy runtime role bridge is removed for cutover scope.
 11. Contract metadata (`daemon_version`, `capabilities`) is exposed by `auth-status`, but retrieval depends on a valid command auth path when auth is enabled.
+12. SSH-targeted control paths require explicit pinned SSH host-key input from the client side; `accept-new` host-key onboarding is not part of the supported baseline.
 
 Remaining baseline gaps before Phase 7 feasibility discussion:
 1. Emergency takeover predicates are now code-enforced and test-mapped; keep operator docs aligned to denial taxonomy.
@@ -442,7 +493,7 @@ Unmitigated or weakly mitigated vectors:
 
 Minimum controls to remain in this scenario:
 1. host daemon control stays local-IPC-only
-2. SSH relay endpoint hardening is applied outside daemon (host/network policy)
+2. clients pin and verify the SSH host key explicitly; opportunistic `accept-new` onboarding is not supported
 3. short session/token TTL and strict role separation
 4. regular claim/auth audit review for suspicious takeover/auth patterns
 

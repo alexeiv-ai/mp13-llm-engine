@@ -764,6 +764,8 @@ class EngineHostControlChannel:
             "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={max(5, int(self._timeout))}",
         ]
+        if not known_hosts_line:
+            raise RuntimeError("ssh_known_hosts_line is required for restart_remote_daemon in SSH mode")
         if known_hosts_line:
             import tempfile as _tempfile, os as _os
             try:
@@ -772,9 +774,7 @@ class EngineHostControlChannel:
                     f.write(known_hosts_line + "\n")
                 argv += ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={tmppath}"]
             except Exception:
-                argv += ["-o", "StrictHostKeyChecking=accept-new"]
-        else:
-            argv += ["-o", "StrictHostKeyChecking=accept-new"]
+                raise RuntimeError("strict SSH host-key verification requires writable temporary known_hosts file")
         if ssh_key:
             argv += ["-i", ssh_key]
         argv.append(ssh_target)
