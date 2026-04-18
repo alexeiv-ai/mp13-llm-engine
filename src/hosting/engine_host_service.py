@@ -4654,8 +4654,11 @@ class EngineHostService:
                 self._metrics_auth_denied(str(exc))
                 raise
             return
-        # Bootstrap: allow key provisioning if no keys are present.
+        # Bootstrap: allow first-key provisioning only for local-only access.
         if c in {"auth-upsert-key", "auth-status"} and keys_count == 0:
+            if self._requires_ssh_binding(cfg):
+                self._metrics_auth_denied("zero_key_bootstrap_local_only")
+                raise PermissionError("zero_key_bootstrap_local_only")
             return
         if c in {"auth-issue-session"}:
             # Session issuance authenticates with key_id/key_secret in payload.

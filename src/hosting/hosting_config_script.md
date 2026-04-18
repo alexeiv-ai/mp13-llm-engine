@@ -213,3 +213,4 @@ Current implementation note:
    - issued-token listing
    - auth-audit listing
 9. Lifecycle profile selection is supported via setup flags and persisted into control/setup artifacts.
+10. Zero-key bootstrap under `require_auth=true` is local-only; remote-capable modes must have a pre-provisioned key before normal remote auth flows can begin.

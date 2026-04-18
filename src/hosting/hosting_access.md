@@ -103,6 +103,24 @@ Implementation may internally use scope primitives, but this is not an external 
 3. Access duration: session/token TTL controls, not key expiration.
 4. SSH private-key passphrases are external user/agent controls; hosting does not store or verify those passphrases directly.
 
+Bootstrap, as used in this document, means the first step that gets hosting from "no trusted identity exists yet" to "at least one trusted admin identity exists and can start normal authenticated session flows."
+
+There are two different bootstrap situations:
+1. First-key bootstrap
+   - the daemon has `require_auth=true` but no keys yet
+   - the service allows only minimal first-key provisioning commands such as `auth-upsert-key`
+   - this is local-only; remote-capable connectivity must not expose zero-key bootstrap
+   - after the first admin key is added, normal authenticated flows take over
+2. Local recovery bootstrap
+   - a local-only helper may temporarily force a safe no-auth profile with `require_auth=false`
+   - this is for local recovery or initial local startup convenience
+   - it is not the normal remote-capable bootstrap model and should not be treated as steady-state policy
+
+These are different on purpose:
+1. `require_auth=true` with zero keys means auth is conceptually on, but the system still needs one initial trusted key.
+2. `require_auth=false` means the daemon is temporarily allowing unauthenticated local access under a tightly restricted safe profile.
+3. Remote-capable bootstrap should use the first model, not the second.
+
 ### 4.1.1 Private-key handling
 
 The short version:
@@ -279,6 +297,7 @@ Current implementation note:
 Rationale:
 1. Prevent accidental unauthenticated multi-user or remote exposure.
 2. Preserve simple local bootstrap/dev use case.
+3. Keep temporary no-auth recovery distinct from first-key bootstrap under `require_auth=true`.
 
 ## 8. Minimal Configuration Flow (Daemon Not Started)
 
@@ -352,6 +371,14 @@ Unsupported client takeover path:
 1. There is no supported daemon command that lets a normal client take full control without first configuring access control.
 2. There is no supported daemon command that lets a normal client flip an already configured/authenticated daemon to `require_auth=false`.
 3. `set-control-config` remains an authenticated admin control operation once auth is active.
+
+Current implementation note:
+1. `require_auth=true` with `keys_count == 0` is still supported in code as the first-key bootstrap state.
+2. It is not marked deprecated in the daemon code path.
+3. In that state, `authorize_command()` allows `auth-upsert-key` and `auth-status` without a session token so the first key can be provisioned, but only for `local_only` connectivity.
+4. Remote-capable profiles reject zero-key bootstrap with:
+   - `zero_key_bootstrap_local_only`
+5. This is narrower than `require_auth=false` because the daemon is not generally open; only the first-key provisioning path is open.
 
 Local operator caveat:
 1. If the caller can execute arbitrary local Python or otherwise read/write local state files as the daemon user, the caller is outside the daemon's client trust boundary and effectively has local-operator powers.

@@ -36,6 +36,19 @@ from .engine_host_connection import (
 )
 from .engine_host_channel import EngineHostControlChannel
 from .engine_process_supervisor import EngineProcessSupervisor
+from .client_realm import (
+    CLIENT_REALM_ROOT_SUBDIR,
+    VALID_SECRET_RECORD_ENCRYPTION,
+    SecretRecord,
+    FileSecretStore,
+    get_default_client_realm_root,
+    client_realm_layout,
+    ensure_client_realm_dirs,
+    secret_record_path,
+    write_client_access,
+    read_client_access,
+    iter_secret_ids,
+)
 from .sandbox import WorkerSandboxPolicy
 from .toolbox_harness import (
     ToolboxBundleFile,
@@ -71,6 +84,17 @@ __all__ = [
     "ConnectionError",
     "EngineHostControlChannel",
     "EngineProcessSupervisor",
+    "CLIENT_REALM_ROOT_SUBDIR",
+    "VALID_SECRET_RECORD_ENCRYPTION",
+    "SecretRecord",
+    "FileSecretStore",
+    "get_default_client_realm_root",
+    "client_realm_layout",
+    "ensure_client_realm_dirs",
+    "secret_record_path",
+    "write_client_access",
+    "read_client_access",
+    "iter_secret_ids",
     "WorkerSandboxPolicy",
     "ToolboxBundleFile",
     "ToolboxBundleAutoTool",

@@ -27,13 +27,18 @@ Do not use it as the implementation-aligned architecture document; that role bel
    - `keyring/keys.json`
    - `state/*.json`
    - `audit/*.json`
-3. `hosting_config_cli` already supports:
+3. Client-realm foundation now exists:
+   - dedicated client realm root/layout helpers
+   - `client_access.json`
+   - file-backed tagged secret records
+4. `hosting_config_cli` already supports:
    - public-key import
    - generated keypair creation
    - optional file export of generated private keys
    - metadata about key origin and private-key storage state
-4. Current private-key handling is metadata/file oriented, not secret-store oriented.
-5. Current client control settings are plain values such as:
+5. New generated-key steady state can use client-realm secret storage instead of embedding raw private keys in `keys.json`.
+6. Password-encrypted secret records are planned in the interface but not implemented yet because no crypto backend/dependency has been adopted.
+7. Current client control settings are plain values such as:
    - `control_ssh_key`
    - `ssh_known_hosts_line`
    - `control_ssh_fingerprint`

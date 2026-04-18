@@ -24,8 +24,18 @@ if __package__ in {None, ""}:
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
     from hosting.engine_host_service import EngineHostService, VALID_AUTH_ROLES
+    from hosting.client_realm import (
+        FileSecretStore,
+        get_default_client_realm_root,
+        secret_record_path,
+    )
 else:
     from .engine_host_service import EngineHostService, VALID_AUTH_ROLES
+    from .client_realm import (
+        FileSecretStore,
+        get_default_client_realm_root,
+        secret_record_path,
+    )
 
 
 VALID_CONNECTIVITY_MODES = {"local_only", "ssh_tunnel_only", "truly_remote"}
@@ -162,6 +172,10 @@ def _default_paths() -> Tuple[Path, Path]:
 
 def _hosting_root(default_config_dir: Path) -> Path:
     return (default_config_dir / "hosting").resolve()
+
+
+def _client_realm_root(default_config_dir: Path, realm: str = "default") -> Path:
+    return get_default_client_realm_root(default_config_dir=default_config_dir, realm=realm)
 
 
 def _read_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
@@ -425,12 +439,21 @@ def _classify_config_state(summary: Dict[str, Any], probe: Dict[str, Any]) -> Di
     managed_files_present = sum(1 for flag in managed_file_flags if flag)
     admin_key_count = int(summary.get("admin_key_count") or 0)
     bootstrap_admin_key_id = str(probe.get("bootstrap_admin_key_id") or "").strip()
+    connectivity_mode = _normalize_mode(str(summary.get("connectivity_mode") or "local_only"), "local_only")
+    require_auth = bool(summary.get("require_auth"))
     if managed_files_present == 0 and admin_key_count == 0 and not bootstrap_admin_key_id:
         return {
             "code": "clean",
             "label": "Not configured yet",
             "configured": False,
             "details": "No hosting access files or admin keys were detected.",
+        }
+    if admin_key_count == 0 and require_auth and connectivity_mode != "local_only":
+        return {
+            "code": "blocked_remote_bootstrap",
+            "label": "Blocked setup state",
+            "configured": False,
+            "details": "Remote-capable auth is enabled, but no admin key is provisioned yet. Pre-provision a key locally before remote use.",
         }
     if admin_key_count == 0:
         return {
@@ -452,6 +475,15 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
     row = dict(dict(payload.get("keys") or {}).get(str(admin_key_id or "").strip()) or {})
     if not row:
         return {}
+    hosting_root = keys_file.parent.parent.resolve()
+    default_config_dir = hosting_root.parent.resolve()
+    secret_id = str(row.get("private_key_secret_id") or "").strip()
+    secret_realm = str(row.get("private_key_secret_realm") or "default").strip() or "default"
+    secret_path = None
+    secret_exists = None
+    if secret_id:
+        secret_path = secret_record_path(_client_realm_root(default_config_dir, secret_realm), secret_id)
+        secret_exists = secret_path.exists()
     key_origin = str(row.get("key_origin") or row.get("key_source") or "imported").strip().lower()
     public_key_source = str(row.get("public_key_source") or key_origin or "unknown").strip()
     private_key_storage = str(row.get("private_key_storage") or "").strip()
@@ -460,6 +492,8 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
     if not private_key_storage:
         if str(row.get("private_key_openssh") or "").strip():
             private_key_storage = "embedded_keyring"
+        elif secret_id:
+            private_key_storage = "client_realm_secret"
         elif key_origin == "generated":
             private_key_storage = "unknown_generated_location"
         else:
@@ -469,12 +503,18 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
         warning = "Generated private key is still embedded in keys.json; export/move it or rotate it."
     if private_key_storage == "exported_file" and private_key_export_path and not export_exists:
         warning = f"Expected exported private key file is missing: {private_key_export_path}"
+    if private_key_storage == "client_realm_secret" and secret_id and not bool(secret_exists):
+        warning = f"Expected client realm secret record is missing: {secret_path}"
     return {
         "key_origin": key_origin,
         "public_key_source": public_key_source,
         "private_key_storage": private_key_storage,
         "private_key_export_path": private_key_export_path or None,
         "private_key_export_exists": export_exists if private_key_export_path else None,
+        "private_key_secret_id": secret_id or None,
+        "private_key_secret_realm": secret_realm if secret_id else None,
+        "private_key_secret_path": str(secret_path) if secret_path else None,
+        "private_key_secret_exists": secret_exists if secret_id else None,
         "private_key_warning": warning or None,
     }
 
@@ -637,6 +677,16 @@ def _print_status_report(result: Dict[str, Any]) -> None:
                     _status_text(bool(key_meta.get("private_key_export_exists"))),
                 )
             )
+        if key_meta.get("private_key_secret_id"):
+            rows.append(("admin_private_key_secret_id", key_meta.get("private_key_secret_id")))
+        if key_meta.get("private_key_secret_path"):
+            rows.append(("admin_private_key_secret_path", key_meta.get("private_key_secret_path")))
+            rows.append(
+                (
+                    "admin_private_key_secret_exists",
+                    _status_text(bool(key_meta.get("private_key_secret_exists"))),
+                )
+            )
         if key_meta.get("private_key_warning"):
             rows.append(("admin_key_warning", key_meta.get("private_key_warning")))
     _kv_rows(rows)
@@ -663,6 +713,10 @@ def _print_setup_result_report(result: Dict[str, Any]) -> None:
     )
     if result.get("admin_private_key_path"):
         _kv_rows([("admin_private_key_path", result.get("admin_private_key_path"))])
+    if result.get("admin_private_key_secret_id"):
+        _kv_rows([("admin_private_key_secret_id", result.get("admin_private_key_secret_id"))])
+    if result.get("admin_private_key_secret_path"):
+        _kv_rows([("admin_private_key_secret_path", result.get("admin_private_key_secret_path"))])
     if result.get("admin_private_key_warning"):
         _kv_rows([("admin_key_warning", result.get("admin_private_key_warning"))])
     _print_rule("-")
@@ -942,6 +996,8 @@ def _store_importable_key_record(
     public_key_source: Optional[str] = None,
     private_key_storage: Optional[str] = None,
     private_key_export_path: Optional[str] = None,
+    private_key_secret_id: Optional[str] = None,
+    private_key_secret_realm: Optional[str] = None,
     private_key_warning: Optional[str] = None,
 ) -> None:
     payload = _read_json(keys_file, {"version": 1, "keys": {}})
@@ -964,6 +1020,10 @@ def _store_importable_key_record(
         row["private_key_storage"] = str(private_key_storage).strip()
     if private_key_export_path:
         row["private_key_export_path"] = str(private_key_export_path).strip()
+    if private_key_secret_id:
+        row["private_key_secret_id"] = str(private_key_secret_id).strip()
+    if private_key_secret_realm:
+        row["private_key_secret_realm"] = str(private_key_secret_realm).strip()
     if private_key_warning:
         row["private_key_warning"] = str(private_key_warning).strip()
     preserved = {
@@ -980,6 +1040,8 @@ def _store_importable_key_record(
             "public_key_source",
             "private_key_storage",
             "private_key_export_path",
+            "private_key_secret_id",
+            "private_key_secret_realm",
             "private_key_warning",
         }
     }
@@ -1486,6 +1548,9 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     admin_public_key = ""
     admin_private_key_text: Optional[str] = None
     admin_public_key_path: Optional[Path] = None
+    admin_private_key_secret_id: Optional[str] = None
+    admin_private_key_secret_realm: Optional[str] = None
+    admin_private_key_secret_path: Optional[Path] = None
     export_private = bool(args.export_private_key)
     export_private_path = (
         Path(str(args.export_private_key_path)).expanduser().resolve()
@@ -1513,6 +1578,13 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "embedded_keyring" if str(row.get("private_key_openssh") or "").strip() else "not_managed"
         )
         private_key_warning = str(row.get("private_key_warning") or "").strip() or None
+        admin_private_key_secret_id = str(row.get("private_key_secret_id") or "").strip() or None
+        admin_private_key_secret_realm = str(row.get("private_key_secret_realm") or "default").strip() or None
+        if admin_private_key_secret_id:
+            admin_private_key_secret_path = secret_record_path(
+                _client_realm_root(default_config_dir, admin_private_key_secret_realm or "default"),
+                admin_private_key_secret_id,
+            )
         export_private_path = (
             Path(str(row.get("private_key_export_path"))).expanduser().resolve()
             if str(row.get("private_key_export_path") or "").strip()
@@ -1539,11 +1611,24 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 export_private_path.write_text(str(generated_private), encoding="utf-8")
                 private_key_storage = "exported_file"
             else:
-                private_key_storage = "embedded_keyring"
-                private_key_warning = (
-                    "Generated private key remains embedded in hosting key metadata. "
-                    "Export/move it to a managed location or rotate it."
+                admin_private_key_secret_realm = "default"
+                client_realm_root = _client_realm_root(default_config_dir, admin_private_key_secret_realm)
+                secret_store = FileSecretStore(client_realm_root, realm=admin_private_key_secret_realm)
+                secret_record = secret_store.put_secret(
+                    tag="rbac_private_key",
+                    payload=str(generated_private),
+                    secret_id=f"rbac-{admin_key_id}-private",
+                    metadata={
+                        "key_id": admin_key_id,
+                        "role": "admin",
+                        "auth_method": "public_key",
+                        "source": "hosting_config_generate",
+                    },
                 )
+                admin_private_key_secret_id = secret_record.secret_id
+                admin_private_key_secret_path = secret_record_path(client_realm_root, secret_record.secret_id)
+                private_key_storage = "client_realm_secret"
+                private_key_warning = None
         else:
             key_origin = "imported"
             public_key_source = "file" if admin_public_key_file_value else "inline"
@@ -1572,12 +1657,18 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         role="admin",
         auth_method="public_key",
         public_key=admin_public_key,
-        private_key_openssh=admin_private_key_text,
+        private_key_openssh=(
+            admin_private_key_text
+            if private_key_storage == "embedded_keyring"
+            else None
+        ),
         key_source=key_source,
         key_origin=key_origin,
         public_key_source=public_key_source,
         private_key_storage=private_key_storage,
         private_key_export_path=str(export_private_path) if export_private_path else None,
+        private_key_secret_id=admin_private_key_secret_id,
+        private_key_secret_realm=admin_private_key_secret_realm,
         private_key_warning=private_key_warning,
     )
 
@@ -1594,6 +1685,16 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 mappings_file,
                 bootstrap_state_file,
                 audit_file,
+                *(
+                    [(_client_realm_root(default_config_dir, admin_private_key_secret_realm or "default"))]
+                    if admin_private_key_secret_id
+                    else []
+                ),
+                *(
+                    [admin_private_key_secret_path]
+                    if admin_private_key_secret_path is not None
+                    else []
+                ),
             ]
         )
 
@@ -1634,6 +1735,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 "key_source": key_source,
                 "key_action": key_action,
                 "permission_action": permission_action,
+                "admin_private_key_storage": private_key_storage,
+                "admin_private_key_export_path": str(export_private_path) if export_private_path else None,
+                "admin_private_key_secret_id": admin_private_key_secret_id,
+                "admin_private_key_secret_realm": admin_private_key_secret_realm,
             },
             "files": {
                 "control_state_file": str(control_state_path),
@@ -1641,6 +1746,12 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 "keys_file": str(keys_file),
                 "client_mapping_file": str(mappings_file),
                 "audit_file": str(audit_file),
+                "client_realm_root": (
+                    str(_client_realm_root(default_config_dir, admin_private_key_secret_realm or "default"))
+                    if admin_private_key_secret_id
+                    else None
+                ),
+                "client_realm_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
             },
             "legacy_migration": migration_result,
         },
@@ -1681,6 +1792,8 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         changes.append(f"legacy key files migrated: {migration_result.get('migrated_count')}")
     if bool(export_private and export_private_path):
         changes.append(f"generated private key exported to {export_private_path}")
+    if bool(admin_private_key_secret_id and admin_private_key_secret_path):
+        changes.append(f"generated private key stored in client realm secret {admin_private_key_secret_path}")
     if permission_action == "tighten":
         changes.append("permission hardening attempted on hosting directories/files")
     return {
@@ -1710,6 +1823,8 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "admin_public_key_source": public_key_source,
         "admin_private_key_storage": private_key_storage,
         "admin_private_key_path": str(export_private_path) if export_private_path else None,
+        "admin_private_key_secret_id": admin_private_key_secret_id,
+        "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
         "admin_private_key_warning": private_key_warning,
     }
 
@@ -1807,6 +1922,21 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
         svc = EngineHostService(control_state_file=control_state_path)
         cfg = svc.get_control_config()
         _record("control_config_readable", True, {"require_auth": bool(cfg.get("require_auth", False))})
+        connectivity_mode = _normalize_mode(
+            str(dict(cfg.get("access_profile") or {}).get("connectivity_mode") or "local_only"),
+            "local_only",
+        )
+        keys_count = int(cfg.get("keys_count") or 0)
+        require_auth = bool(cfg.get("require_auth", False))
+        zero_key_remote_ok = not (require_auth and connectivity_mode != "local_only" and keys_count == 0)
+        zero_key_remote_details = {
+            "require_auth": require_auth,
+            "connectivity_mode": connectivity_mode,
+            "keys_count": keys_count,
+        }
+        if not zero_key_remote_ok:
+            zero_key_remote_details["error"] = "Remote-capable mode requires a pre-provisioned key before auth can work."
+        _record("zero_key_remote_bootstrap_policy", zero_key_remote_ok, zero_key_remote_details)
         try:
             svc.assert_runtime_policy_safe()
             _record("runtime_policy_safe", True)
