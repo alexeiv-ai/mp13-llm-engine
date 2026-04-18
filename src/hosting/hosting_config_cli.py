@@ -62,6 +62,7 @@ else:
 
 VALID_CONNECTIVITY_MODES = {"local_only", "ssh_tunnel_only", "truly_remote"}
 VALID_ENDPOINT_MODES = {"exclusive", "shared"}
+VALID_USAGE_INTENTS = {"single_admin", "role_split", "multi_user"}
 VALID_LIFECYCLE_PROFILES = {
     "foreground_terminal_bound",
     "detached_user_process",
@@ -74,7 +75,7 @@ VALID_COLOR_SCHEMES = {"dark", "light"}
 
 CONNECTIVITY_INTENT_GUIDANCE: Dict[str, Dict[str, str]] = {
     "local_only": {
-        "intent": "Single host usage with no off-host clients.",
+        "intent": "Same box/user account with no off-host clients.",
         "provides": "Lowest setup overhead. Optional no-auth is possible only in strict safe profile.",
         "precautions": "Keep loopback-only bind and exclusive endpoint mode when auth is disabled.",
     },
@@ -90,10 +91,56 @@ CONNECTIVITY_INTENT_GUIDANCE: Dict[str, Dict[str, str]] = {
     },
 }
 
+USAGE_INTENT_GUIDANCE: Dict[str, Dict[str, str]] = {
+    "single_admin": {
+        "label": "Single user, same as admin",
+        "hint": "one operator; one key/password, or local no-auth when safe",
+        "projection": "Projects to local-only, exclusive access, and minimal key management.",
+    },
+    "role_split": {
+        "label": "Many roles",
+        "hint": "separate admin and user access keys",
+        "projection": "Projects to authenticated access; setup creates/administers bootstrap admin first.",
+    },
+    "multi_user": {
+        "label": "Multi-user",
+        "hint": "more users, granular roles, more keys/passwords",
+        "projection": "Projects to authenticated shared access; users can be managed later by admin tooling/GUI.",
+    },
+}
+
+OPTION_HINTS: Dict[str, str] = {
+    "exclusive": "one controlled endpoint; safest for local/no-auth",
+    "shared": "multiple clients may share access; auth required",
+    "foreground_terminal_bound": "stops when the terminal/session ends",
+    "detached_user_process": "continues under the current user account",
+    "service_managed": "managed by service/supervisor integration",
+    "local_only": "same box/user account; no off-host clients",
+    "ssh_tunnel_only": "remote clients enter through SSH tunnel",
+    "truly_remote": "direct/proxied remote clients; strongest policy needed",
+    "keep_existing": "reuse the current registered key",
+    "replace": "replace/register the setup key",
+    "generate": "create a new keypair locally",
+    "import": "use an existing public key",
+    "none": "leave filesystem permissions unchanged",
+    "tighten": "best-effort private permissions on hosting files",
+    "yes": "require key/session authentication",
+    "no": "only allowed for local_only + exclusive",
+}
+
 
 _COLOR_SCHEME = "dark"
 _ANSI_ENABLED = False
 _COLOR_TOKENS: Dict[str, str] = {}
+_PENDING_STAGED_SETUP: Dict[str, Any] = {}
+
+
+class UserCancelled(RuntimeError):
+    """Raised when an interactive user intentionally exits the setup flow."""
+
+    def __init__(self, message: str = "cancelled by user", *, via_keyboard: bool = False) -> None:
+        super().__init__(message)
+        self.via_keyboard = bool(via_keyboard)
 
 
 def _enable_ansi_if_supported() -> bool:
@@ -123,7 +170,7 @@ def _set_color_scheme(scheme: str) -> None:
     _COLOR_SCHEME = scheme if scheme in VALID_COLOR_SCHEMES else "dark"
     _ANSI_ENABLED = _enable_ansi_if_supported()
     if not _ANSI_ENABLED:
-        _COLOR_TOKENS = {k: "" for k in {"reset", "title", "label", "value", "muted", "good", "warn", "bad", "accent"}}
+        _COLOR_TOKENS = {k: "" for k in {"reset", "title", "label", "value", "muted", "good", "warn", "bad", "accent", "rule"}}
         return
     if _COLOR_SCHEME == "light":
         _COLOR_TOKENS = {
@@ -133,9 +180,10 @@ def _set_color_scheme(scheme: str) -> None:
             "value": "\033[0;30m",
             "muted": "\033[0;90m",
             "good": "\033[0;32m",
-            "warn": "\033[0;33m",
-            "bad": "\033[0;31m",
+            "warn": "\033[0;35m",
+            "bad": "\033[1;31m",
             "accent": "\033[0;36m",
+            "rule": "\033[0;33m",
         }
     else:
         _COLOR_TOKENS = {
@@ -145,9 +193,10 @@ def _set_color_scheme(scheme: str) -> None:
             "value": "\033[0;97m",
             "muted": "\033[0;90m",
             "good": "\033[0;92m",
-            "warn": "\033[0;93m",
-            "bad": "\033[0;91m",
+            "warn": "\033[0;95m",
+            "bad": "\033[1;91m",
             "accent": "\033[0;96m",
+            "rule": "\033[0;93m",
         }
 
 
@@ -163,17 +212,318 @@ def _print_title(text: str) -> None:
 
 
 def _print_rule(char: str = "-", width: int = 72) -> None:
-    print(_c("muted", char * width))
+    if char == "=":
+        char = "."
+    kind = "rule" if char in {"=", "."} else "muted"
+    print(_c(kind, char * width))
 
 
-def _kv_rows(rows: list[Tuple[str, Any]], *, indent: str = "  ") -> None:
-    width = max((len(str(label)) for label, _ in rows), default=0)
+def _print_block(title: str, *, kind: str = "accent", width: int = 78) -> None:
+    label = title.strip()
+    if not label:
+        return
+    print(f"\n{_c(kind, label)}")
+    _print_rule(".", width=width)
+
+
+def _recommended_action(summary: Dict[str, Any], state: Dict[str, Any]) -> str:
+    code = str(state.get("code") or "").strip()
+    if code == "clean":
+        return "Start guided setup to create access files and register the first admin key."
+    if code == "partial":
+        return "Run guided setup to finish provisioning the missing admin key."
+    if code == "blocked_remote_bootstrap":
+        return "Provision an admin key locally before using a remote-capable connectivity mode."
+    if bool(state.get("configured")):
+        mode = str(summary.get("connectivity_mode") or "local_only")
+        return f"Configuration is usable. Run diagnostics after changing keys, profiles, or {mode} access settings."
+    return "Run diagnostics, then guided setup, to repair the current configuration state."
+
+
+def _format_state_banner(summary: Dict[str, Any], state: Dict[str, Any]) -> str:
+    label = str(state.get("label") or "Unknown")
+    details = str(state.get("details") or "").strip()
+    return f"{label}. {details}" if details else label
+
+
+def _kv_rows(rows: list[Tuple[str, Any]], *, indent: str = "  ", min_width: int = 24) -> None:
+    width = max([min_width, *[len(str(label)) for label, _ in rows]])
     for label, value in rows:
         print(f"{indent}{_c('label', str(label).ljust(width))} : {_c('value', value)}")
 
 
+def _print_recommendations(recommendations: list[str]) -> None:
+    rows = [str(item).strip() for item in recommendations if str(item).strip()]
+    if not rows:
+        return
+    _print_rule("-")
+    _print_title("Recommended Next Actions")
+    for idx, item in enumerate(rows, start=1):
+        print(f"  {_badge('warn', str(idx))} {_c('value', item)}")
+
+
+def _staged_setup_rows(
+    *,
+    setup_scope: str,
+    usage_intent: str = "",
+    mode: str,
+    endpoint_mode: str,
+    lifecycle_profile: str,
+    require_auth: bool,
+    key_action: str,
+    key_source: str,
+    admin_key_id: str,
+    permission_action: str,
+    admin_public_key_file: str = "",
+    admin_public_key_inline: str = "",
+) -> list[Tuple[str, Any]]:
+    rows: list[Tuple[str, Any]] = [
+        ("workflow", setup_scope),
+        ("hosting_usage", _option_label(usage_intent) if usage_intent else "n/a"),
+        ("connectivity_mode", mode),
+        ("endpoint_mode_default", endpoint_mode),
+        ("lifecycle_profile", lifecycle_profile),
+        ("require_auth", "yes" if require_auth else "no"),
+        ("key_action", key_action),
+    ]
+    if key_action != "keep_existing":
+        rows.append(("key_source", key_source))
+        if key_source == "import":
+            rows.append(("import_source", admin_public_key_file or ("<inline public key>" if admin_public_key_inline else "<not provided>")))
+    rows.extend(
+        [
+            ("admin_key_id", admin_key_id),
+            ("permission_action", permission_action),
+        ]
+    )
+    return rows
+
+
+def _print_staged_setup(
+    *,
+    setup_scope: str,
+    usage_intent: str = "",
+    mode: str,
+    endpoint_mode: str,
+    lifecycle_profile: str,
+    require_auth: bool,
+    key_action: str,
+    key_source: str,
+    admin_key_id: str,
+    permission_action: str,
+    admin_public_key_file: str = "",
+    admin_public_key_inline: str = "",
+) -> None:
+    _print_block("Staged Setup Changes", kind="warn")
+    _kv_rows(
+        _staged_setup_rows(
+            setup_scope=setup_scope,
+            usage_intent=usage_intent,
+            mode=mode,
+            endpoint_mode=endpoint_mode,
+            lifecycle_profile=lifecycle_profile,
+            require_auth=require_auth,
+            key_action=key_action,
+            key_source=key_source,
+            admin_key_id=admin_key_id,
+            permission_action=permission_action,
+            admin_public_key_file=admin_public_key_file,
+            admin_public_key_inline=admin_public_key_inline,
+        )
+    )
+
+
+def _set_pending_staged_setup(**kwargs: Any) -> None:
+    _PENDING_STAGED_SETUP.clear()
+    _PENDING_STAGED_SETUP.update(dict(kwargs))
+
+
+def _clear_pending_staged_setup() -> None:
+    _PENDING_STAGED_SETUP.clear()
+
+
+def _has_pending_staged_setup() -> bool:
+    return bool(_PENDING_STAGED_SETUP)
+
+
+def _print_pending_staged_setup() -> None:
+    if not _PENDING_STAGED_SETUP:
+        return
+    _print_staged_setup(**_PENDING_STAGED_SETUP)
+
+
+def _plain_yes_no(question: str, default: bool = False) -> bool:
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    try:
+        raw = input(question + suffix).strip().lower()
+    except KeyboardInterrupt:
+        return False
+    if not raw:
+        return bool(default)
+    return raw in {"y", "yes", "1", "true"}
+
+
+def _pending_staged_setup_args(args: argparse.Namespace) -> argparse.Namespace:
+    staged = dict(_PENDING_STAGED_SETUP)
+    save_args = argparse.Namespace(**vars(args))
+    save_args.interactive = False
+    save_args.setup_scope = str(staged.get("setup_scope") or "server")
+    save_args.usage_intent = str(staged.get("usage_intent") or "")
+    save_args.mode = str(staged.get("mode") or "local_only")
+    save_args.endpoint_mode = str(staged.get("endpoint_mode") or "exclusive")
+    save_args.lifecycle_profile = str(staged.get("lifecycle_profile") or "detached_user_process")
+    save_args.require_auth = bool(staged.get("require_auth"))
+    save_args.key_action = str(staged.get("key_action") or "replace")
+    save_args.key_source = str(staged.get("key_source") or "generate")
+    save_args.admin_key_id = str(staged.get("admin_key_id") or "admin-main")
+    save_args.permission_action = str(staged.get("permission_action") or "none")
+    save_args.admin_public_key_file = str(staged.get("admin_public_key_file") or "")
+    save_args.admin_public_key = str(staged.get("admin_public_key_inline") or "")
+    return save_args
+
+
+def _print_staged_setup_dropped(*, via_keyboard: bool) -> None:
+    _print_block("Cancelled", kind="warn")
+    if _has_pending_staged_setup():
+        _print_pending_staged_setup()
+        _kv_rows([("result", "Staged setup changes were dropped.")])
+    else:
+        _kv_rows([("result", "No further action requested.")])
+    change_note = "Ctrl+C quits immediately and does not apply staged setup changes." if via_keyboard else "No setup changes were written."
+    _kv_rows([("changes", change_note)])
+
+
+def _save_pending_staged_setup(args: argparse.Namespace) -> Dict[str, Any]:
+    save_args = _pending_staged_setup_args(args)
+    _clear_pending_staged_setup()
+    return run_setup(save_args)
+
+
 def _status_text(value: bool) -> str:
     return _c("good", "yes") if value else _c("muted", "no")
+
+
+def _badge(kind: str, text: str) -> str:
+    palette = {
+        "ok": "good",
+        "issue": "bad",
+        "warn": "warn",
+        "info": "accent",
+    }
+    return _c(palette.get(kind, "value"), f"[{text}]")
+
+
+def _compact_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _doctor_guidance(name: str, ok: bool, details: Dict[str, Any]) -> Dict[str, str]:
+    error = str(details.get("error") or "").strip()
+    if name == "ssh_dependency":
+        if ok:
+            return {
+                "impact": "OpenSSH key tooling is reachable for key generation and public-key derivation.",
+                "recommendation": "No action needed.",
+            }
+        return {
+            "root_cause": error or "The `ssh-keygen` executable was not reachable or did not respond.",
+            "impact": "Generated-key setup and key import helpers may fail or hang.",
+            "recommendation": "Install OpenSSH client tools, ensure `ssh-keygen` is on PATH, then rerun diagnostics.",
+        }
+    if name == "control_state_exists":
+        path = str(details.get("path") or "").strip()
+        if ok:
+            return {
+                "impact": "Hosting access control state exists.",
+                "recommendation": "No action needed.",
+            }
+        return {
+            "root_cause": f"Hosting has not been configured yet; expected control state file is missing: {path}",
+            "impact": "Daemon startup may use bootstrap/recovery defaults and authenticated access is not ready.",
+            "recommendation": "Run guided setup from this menu, or run `python -m hosting.hosting_config_cli --interactive`.",
+        }
+    if name == "hosting_root_exists":
+        if ok:
+            return {"impact": "Hosting root directory exists.", "recommendation": "No action needed."}
+        return {
+            "root_cause": "The hosting configuration directory does not exist yet.",
+            "impact": "No access/keyring/audit state can be found.",
+            "recommendation": "Run guided setup to create the hosting directory and initial access files.",
+        }
+    if name == "hosting_root_writable":
+        if ok:
+            return {"impact": "Hosting root is writable by the current process.", "recommendation": "No action needed."}
+        if error == "missing_directory":
+            return {
+                "root_cause": "The hosting root does not exist yet, so writability could not be checked directly.",
+                "impact": "This is expected before first setup, but setup must be able to create the directory.",
+                "recommendation": "Run guided setup. If directory creation fails, choose a writable `--default-config-dir`.",
+            }
+        return {
+            "root_cause": error or "The current process cannot write to the hosting root.",
+            "impact": "Setup, migration, audit, and key storage updates may fail.",
+            "recommendation": "Fix filesystem permissions or choose a writable `--default-config-dir`.",
+        }
+    if name == "zero_key_remote_bootstrap_policy":
+        if ok:
+            return {"impact": "Zero-key bootstrap policy is safe for the current connectivity mode.", "recommendation": "No action needed."}
+        return {
+            "root_cause": str(details.get("error") or "Remote-capable mode has auth enabled but no configured keys."),
+            "impact": "Remote clients cannot authenticate and zero-key bootstrap is intentionally denied remotely.",
+            "recommendation": "Provision an admin public key locally before enabling remote-capable connectivity.",
+        }
+    if name == "runtime_policy_safe":
+        if ok:
+            return {"impact": "Current runtime auth policy passes safety checks.", "recommendation": "No action needed."}
+        return {
+            "root_cause": error or "Runtime auth policy violates hosting safety constraints.",
+            "impact": "Daemon startup or control-config updates may be denied.",
+            "recommendation": "Use guided setup to restore a safe profile, or inspect `access_control.json` before retrying.",
+        }
+    if name == "admin_client_secret_encrypted":
+        encryption = str(details.get("encryption") or "unknown")
+        if ok:
+            return {
+                "impact": "Generated client private key is stored in encrypted client-realm form.",
+                "recommendation": "Keep the client secret password in user custody; it is not persisted by hosting.",
+            }
+        return {
+            "root_cause": f"Client-realm private key secret is stored with encryption={encryption}.",
+            "impact": "A local file disclosure can reveal the private key more directly.",
+            "recommendation": "Recreate or re-import the client key with `--client-secret-password`, or migrate to encrypted storage.",
+        }
+    if name == "admin_client_secret_present":
+        if ok:
+            return {"impact": "Referenced admin client secret record exists.", "recommendation": "No action needed."}
+        return {
+            "root_cause": "Keyring metadata references a client-realm secret file that is missing.",
+            "impact": "The client may be unable to materialize or use the generated private key.",
+            "recommendation": "Restore the secret file, re-import the private key, or rotate the admin key.",
+        }
+    if name == "client_transport_profiles_integrity":
+        invalid = list(details.get("invalid_profiles") or [])
+        if ok:
+            return {"impact": "Client transport profiles reference existing key and host-pin files.", "recommendation": "No action needed."}
+        return {
+            "root_cause": f"{len(invalid)} client transport profile(s) reference missing or inconsistent files.",
+            "impact": "Affected remote profiles may fail strict SSH validation or connection setup.",
+            "recommendation": "Re-import the transport bootstrap bundle or repair the missing known_hosts/secret files.",
+        }
+    if name == "ssh_keygen_host_path_probe":
+        if ok:
+            return {"impact": "OpenSSH can write generated keys under the hosting keyring path.", "recommendation": "No action needed."}
+        return {
+            "root_cause": error or str(details.get("stderr") or "OpenSSH key generation failed in the hosting keyring path."),
+            "impact": "Generated-key setup may fail on this filesystem/path.",
+            "recommendation": "Use imported public keys or choose a config directory on a filesystem supported by OpenSSH.",
+        }
+    if ok:
+        return {"impact": "Check passed.", "recommendation": "No action needed."}
+    return {
+        "root_cause": error or "The check failed.",
+        "impact": "Hosting access setup may be incomplete or unsafe.",
+        "recommendation": "Review the check details and rerun diagnostics after fixing the underlying condition.",
+    }
 
 
 def _default_paths() -> Tuple[Path, Path]:
@@ -234,31 +584,160 @@ def _normalize_lifecycle_profile(value: str, default: str) -> str:
     return v if v in VALID_LIFECYCLE_PROFILES else default
 
 
+def _normalize_usage_intent(value: str, default: str = "single_admin") -> str:
+    v = str(value or "").strip().lower()
+    return v if v in VALID_USAGE_INTENTS else default
+
+
+def _project_usage_intent(intent: str) -> Dict[str, Any]:
+    if intent == "role_split":
+        return {
+            "mode": "ssh_tunnel_only",
+            "endpoint_mode": "exclusive",
+            "require_auth": True,
+            "key_action": "replace",
+            "permission_action": "tighten",
+            "note": "Setup provisions the bootstrap admin key; add operator/user keys later from admin tooling.",
+        }
+    if intent == "multi_user":
+        return {
+            "mode": "truly_remote",
+            "endpoint_mode": "shared",
+            "require_auth": True,
+            "key_action": "replace",
+            "permission_action": "tighten",
+            "note": "Setup enables shared authenticated access; manage additional users and roles after bootstrap.",
+        }
+    return {
+        "mode": "local_only",
+        "endpoint_mode": "exclusive",
+        "require_auth": False,
+        "key_action": "replace",
+        "permission_action": "none",
+        "note": "Same user is the operator/admin; local no-auth is allowed only for local_only + exclusive.",
+    }
+
+
+def _input_or_quit(prompt: str, *, lower: bool = False) -> str:
+    try:
+        raw = input(prompt).strip()
+    except KeyboardInterrupt as exc:
+        raise UserCancelled("cancelled by user", via_keyboard=True) from exc
+    value = raw.lower() if lower else raw
+    if value in {"q", "quit", "exit"}:
+        raise UserCancelled("cancelled by user")
+    return value
+
+
+def _option_label(value: str) -> str:
+    if value in USAGE_INTENT_GUIDANCE:
+        return str(USAGE_INTENT_GUIDANCE[value].get("label") or value)
+    return value
+
+
+def _option_hint(value: str, explicit: str = "") -> str:
+    return str(explicit or OPTION_HINTS.get(value) or "").strip()
+
+
+def _print_prompt_help(*, allow_back: bool = True, allow_changes: bool = True) -> None:
+    controls = ["Enter=default/keep"]
+    if allow_back:
+        controls.append("b=back")
+    if allow_changes:
+        controls.append("c=changes")
+    controls.append("q=quit")
+    print(f"  {_c('muted', ' | '.join(controls))}")
+
+
+def _print_options(
+    options: list[Tuple[str, str, str]],
+    *,
+    default: str,
+    label_width: int = 34,
+) -> Dict[str, str]:
+    index: Dict[str, str] = {}
+    for idx, (value, label, hint) in enumerate(options, start=1):
+        marker = "default" if value == default else ""
+        index[str(idx)] = value
+        index[value.lower()] = value
+        right = f"{hint} {marker}".strip()
+        print(f"  {_c('accent', str(idx) + '.')} {_c('value', label.ljust(label_width))} {_c('muted', right)}")
+    return index
+
+
+def _print_changes_or_empty() -> None:
+    if _has_pending_staged_setup():
+        _print_pending_staged_setup()
+    else:
+        _kv_rows([("staged_changes", "none")])
+
+
 def _bool_prompt(question: str, default: bool) -> bool:
     suffix = " [Y/n]: " if default else " [y/N]: "
-    raw = input(question + suffix).strip().lower()
+    raw = _input_or_quit(question + suffix, lower=True)
     if not raw:
         return bool(default)
     return raw in {"y", "yes", "1", "true"}
 
 
-def _prompt_choice(question: str, valid: set[str], default: str) -> str:
-    raw = input(f"{question} ({', '.join(sorted(valid))}) [{default}]: ").strip().lower()
-    if not raw:
-        return default
-    return raw if raw in valid else default
+def _prompt_choice(
+    question: str,
+    valid: set[str],
+    default: str,
+    *,
+    hints: Optional[Dict[str, str]] = None,
+    allow_back: bool = False,
+    allow_changes: bool = True,
+) -> str:
+    while True:
+        _print_title(question)
+        option_rows = [
+            (value, _option_label(value), _option_hint(value, (hints or {}).get(value, "")))
+            for value in sorted(valid)
+        ]
+        index = _print_options(option_rows, default=default)
+        _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
+        raw = _input_or_quit(f"Select [{default}]: ", lower=True)
+        if raw == "c" and allow_changes:
+            _print_changes_or_empty()
+            continue
+        if raw == "b" and allow_back:
+            return "back"
+        if not raw:
+            return default
+        return index.get(raw, default)
 
 
-def _prompt_menu(question: str, options: Dict[str, str], default: str) -> str:
-    _print_rule("=")
-    print(_c("title", question))
-    for key, label in options.items():
-        print(f"  {_c('accent', key + ')')} {_c('value', label)}")
-    _print_rule("-")
-    raw = input(f"Select [{default}]: ").strip().lower()
+def _prompt_menu(
+    question: str,
+    options: Dict[str, Any],
+    default: str,
+    *,
+    allow_back: bool = False,
+    allow_changes: bool = True,
+) -> str:
+    _print_block(question.strip(": \n") or "Menu", kind="accent")
+    normalized: list[Tuple[str, str, str]] = []
+    for key, item in options.items():
+        if isinstance(item, tuple):
+            label = str(item[0])
+            hint = str(item[1]) if len(item) > 1 else ""
+        else:
+            label = str(item)
+            hint = ""
+        normalized.append((str(key), label, hint))
+    index = _print_options(normalized, default=default, label_width=30)
+    _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
+    _print_rule(".", width=78)
+    raw = _input_or_quit(f"Select [{default}]: ", lower=True)
+    if raw == "c" and allow_changes:
+        _print_changes_or_empty()
+        return "changes"
+    if raw == "b" and allow_back:
+        return "back"
     if not raw:
         return default
-    return raw if raw in options else default
+    return index.get(raw, default)
 
 
 def _wizard_choice_prompt(
@@ -268,37 +747,50 @@ def _wizard_choice_prompt(
     current: str,
     allow_skip: bool = True,
 ) -> Tuple[str, str]:
-    print(_c("title", title))
-    print(f"  {_c('muted', 'options:')} {_c('value', ', '.join(sorted(valid)))}")
-    nav = " prev=p, skip=s, enter=keep/current" if allow_skip else " prev=p, enter=keep/current"
-    raw = input(f"  current={current}; choose value ({nav}): ").strip().lower()
-    if raw in {"p", "prev"}:
-        return "prev", current
-    if allow_skip and raw in {"s", "skip"}:
-        return "skip", current
-    if not raw:
-        return "next", current
-    if raw in valid:
-        return "next", raw
-    print(f"  invalid choice '{raw}', keeping current value")
-    return "next", current
+    while True:
+        print(_c("title", title))
+        option_rows = [(value, _option_label(value), _option_hint(value)) for value in sorted(valid)]
+        index = _print_options(option_rows, default=current)
+        _print_prompt_help(allow_back=True, allow_changes=True)
+        raw = _input_or_quit(f"  current={current}; select [{current}]: ", lower=True)
+        if raw in {"p", "prev", "b", "back"}:
+            return "prev", current
+        if raw == "c":
+            _print_changes_or_empty()
+            continue
+        if not raw:
+            return "next", current
+        if raw in index:
+            return "next", index[raw]
+        print(f"  {_c('warn', 'invalid choice')} {_c('muted', raw)}")
 
 
 def _wizard_bool_prompt(*, title: str, current: bool, allow_skip: bool = True) -> Tuple[str, bool]:
-    nav = " prev=p, skip=s, enter=keep/current" if allow_skip else " prev=p, enter=keep/current"
-    raw = input(f"{title} current={'yes' if current else 'no'} ({nav}): ").strip().lower()
-    if raw in {"p", "prev"}:
-        return "prev", current
-    if allow_skip and raw in {"s", "skip"}:
-        return "skip", current
-    if not raw:
-        return "next", current
-    if raw in {"y", "yes", "1", "true"}:
-        return "next", True
-    if raw in {"n", "no", "0", "false"}:
-        return "next", False
-    print(f"  invalid boolean '{raw}', keeping current value")
-    return "next", current
+    current_value = "yes" if current else "no"
+    while True:
+        print(_c("title", title))
+        index = _print_options(
+            [
+                ("yes", "Yes", _option_hint("yes")),
+                ("no", "No", _option_hint("no")),
+            ],
+            default=current_value,
+        )
+        _print_prompt_help(allow_back=True, allow_changes=True)
+        raw = _input_or_quit(f"  current={current_value}; select [{current_value}]: ", lower=True)
+        if raw in {"p", "prev", "b", "back"}:
+            return "prev", current
+        if raw == "c":
+            _print_changes_or_empty()
+            continue
+        if not raw:
+            return "next", current
+        value = index.get(raw, raw)
+        if value in {"yes", "y", "1", "true"}:
+            return "next", True
+        if value in {"no", "n", "0", "false"}:
+            return "next", False
+        print(f"  {_c('warn', 'invalid boolean')} {_c('muted', raw)}")
 
 
 def _wizard_text_prompt(
@@ -307,12 +799,16 @@ def _wizard_text_prompt(
     current: str,
     allow_skip: bool = True,
 ) -> Tuple[str, str]:
-    nav = " prev=p, skip=s, enter=keep/current" if allow_skip else " prev=p, enter=keep/current"
-    raw = input(f"{title} current={current} ({nav}): ").strip()
+    _print_title(title)
+    _print_prompt_help(allow_back=True, allow_changes=True)
+    raw = _input_or_quit(f"  current={current}; enter value [{current}]: ")
     if raw.lower() in {"p", "prev"}:
         return "prev", current
-    if allow_skip and raw.lower() in {"s", "skip"}:
-        return "skip", current
+    if raw.lower() in {"b", "back"}:
+        return "prev", current
+    if raw.lower() == "c":
+        _print_changes_or_empty()
+        return _wizard_text_prompt(title=title, current=current, allow_skip=allow_skip)
     if not raw:
         return "next", current
     return "next", raw
@@ -550,11 +1046,12 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
 
 
 def _print_current_probe(summary: Dict[str, Any], probe: Dict[str, Any], state: Dict[str, Any]) -> None:
-    _print_rule("=")
-    _print_title("Current config snapshot")
+    _print_block("Current Configuration", kind="accent")
+    state_kind = "ok" if bool(state.get("configured")) else "warn"
+    print(f"  {_badge(state_kind, str(state.get('label') or 'unknown'))} {_c('value', _format_state_banner(summary, state))}")
+    _print_rule(".", width=78)
     _kv_rows(
         [
-            ("status", state.get("label")),
             ("configured", _status_text(bool(state.get("configured")))),
             ("connectivity_mode", summary.get("connectivity_mode")),
             ("endpoint_mode_default", summary.get("endpoint_mode_default")),
@@ -565,7 +1062,7 @@ def _print_current_probe(summary: Dict[str, Any], probe: Dict[str, Any], state: 
         ]
     )
     _print_rule("-")
-    _print_title("Config probes")
+    _print_title("File Probes")
     _kv_rows(
         [
             ("control_state_file", probe.get("control_state_path")),
@@ -585,16 +1082,17 @@ def _print_current_probe(summary: Dict[str, Any], probe: Dict[str, Any], state: 
         _kv_rows([("previous_key_action", probe.get("setup_key_action"))])
     if str(probe.get("setup_permission_action") or "").strip():
         _kv_rows([("previous_permission_action", probe.get("setup_permission_action"))])
+    _print_recommendations([_recommended_action(summary, state)])
     _print_rule("=")
 
 
 def _print_wizard_home(summary: Dict[str, Any], probe: Dict[str, Any], state: Dict[str, Any]) -> None:
-    _print_rule("=")
-    _print_title("=== Hosting Access Wizard ===")
+    _print_block("Hosting Access Wizard", kind="accent")
+    state_kind = "ok" if bool(state.get("configured")) else "warn"
+    print(f"  {_badge(state_kind, str(state.get('label') or 'unknown'))} {_c('value', _format_state_banner(summary, state))}")
+    _print_rule(".", width=78)
     _kv_rows(
         [
-            ("status", state.get("label")),
-            ("summary", state.get("details")),
             ("hosting_root", probe.get("hosting_root_path")),
             ("connectivity_mode", summary.get("connectivity_mode")),
             ("endpoint_mode", summary.get("endpoint_mode_default")),
@@ -610,22 +1108,86 @@ def _print_wizard_home(summary: Dict[str, Any], probe: Dict[str, Any], state: Di
         )
     else:
         _kv_rows([("admin_key", "not configured")])
-    _print_rule("=")
+    _print_recommendations([_recommended_action(summary, state)])
+    _print_rule("=", width=78)
 
 
 def _print_doctor_report(result: Dict[str, Any]) -> None:
-    _print_rule("=")
-    _print_title("Doctor checks")
-    for row in list(result.get("checks") or []):
+    _print_block("Hosting Doctor", kind="accent")
+    checks = list(result.get("checks") or [])
+    issues = [dict(row or {}) for row in checks if not bool((row or {}).get("ok")) and bool((row or {}).get("blocking", True))]
+    warnings = [dict(row or {}) for row in checks if not bool((row or {}).get("ok")) and not bool((row or {}).get("blocking", True))]
+    status_kind = "issue" if issues else "warn" if warnings else "ok"
+    headline = "Must fix issues before relying on this hosting configuration." if issues else (
+        "Review warnings before production use." if warnings else "No blocking issues or warnings detected."
+    )
+    print(f"  {_badge(status_kind, str(result.get('status') or 'unknown'))} {_c('value', headline)}")
+    _kv_rows(
+        [
+            ("blocking_issues", len(issues)),
+            ("warnings", len(warnings)),
+            ("checks_total", len(checks)),
+        ]
+    )
+    if not issues and not warnings:
+        _print_rule(".", width=78)
+    _print_rule("-")
+    _print_title("All Checks")
+    check_name_width = max([34, *[len(str((row or {}).get("check") or "")) for row in checks]])
+    for row in checks:
         ok = bool(row.get("ok"))
-        status = _c("good", "ok") if ok else _c("bad", "issue")
+        raw_status = "ok" if ok else ("issue" if bool(row.get("blocking", True)) else "warn")
+        status = _c({"ok": "good", "issue": "bad", "warn": "warn"}.get(raw_status, "value"), f"[{raw_status}]".ljust(8))
         details = dict(row.get("details") or {})
-        suffix = f" {json.dumps(details, ensure_ascii=False)}" if details else ""
-        print(f"  [{status}] {_c('label', row.get('check'))}{_c('muted', suffix)}")
+        compact_details = {
+            k: v
+            for k, v in details.items()
+            if k not in {"root_cause", "impact", "recommendation"}
+        }
+        suffix = f" {_compact_json(compact_details)}" if compact_details else ""
+        check_name = _c("label", str(row.get("check") or "").ljust(check_name_width))
+        print(f"  {status} {check_name} {_c('muted', suffix)}")
     _print_rule("-")
     _print_title("Doctor summary")
     _kv_rows([("status", result.get("status")), ("issues_count", result.get("issues_count"))])
-    _print_rule("=")
+    for group_title, group_rows, group_kind in (
+        ("Must Fix", issues, "issue"),
+        ("Warnings To Review", warnings, "warn"),
+    ):
+        if not group_rows:
+            continue
+        _print_rule("-")
+        _print_title(group_title)
+        for row in group_rows:
+            details = dict(row.get("details") or {})
+            print(f"  {_badge(group_kind, group_kind)} {_c('label', str(row.get('check') or 'check'))}")
+            for key in ("root_cause", "impact"):
+                value = str(details.get(key) or "").strip()
+                if value:
+                    print(f"    {_c('label', key.ljust(14))} : {_c('value', value)}")
+            compact_details = {
+                k: v
+                for k, v in details.items()
+                if k not in {"root_cause", "impact", "recommendation"}
+            }
+            if compact_details:
+                print(f"    {_c('label', 'details'.ljust(14))} : {_c('muted', _compact_json(compact_details))}")
+    recommendations: list[str] = []
+    for row in [*issues, *warnings]:
+        rec = str(dict(row.get("details") or {}).get("recommendation") or "").strip()
+        if rec and rec not in recommendations:
+            recommendations.append(rec)
+    _print_recommendations(recommendations)
+    _print_rule("=", width=78)
+
+
+def _doctor_followup_action(result: Dict[str, Any]) -> str:
+    issues = [dict(row or {}) for row in list(result.get("issues") or [])]
+    issue_names = {str(row.get("check") or "") for row in issues}
+    if "control_state_exists" in issue_names or "hosting_root_exists" in issue_names:
+        if _plain_yes_no("Start guided setup now?", True):
+            return "setup"
+    return ""
 
 
 def _resolve_import_source(
@@ -668,7 +1230,7 @@ def _resolve_import_source(
 def _print_intent_guidance(mode: str) -> None:
     _print_rule("-")
     g = dict(CONNECTIVITY_INTENT_GUIDANCE.get(mode) or {})
-    _print_title(f"Intent `{mode}`")
+    _print_title(f"Clients Connectivity `{mode}`")
     _kv_rows(
         [
             ("usage", str(g.get("intent") or "n/a")),
@@ -683,7 +1245,22 @@ def _print_status_report(result: Dict[str, Any]) -> None:
     probe = dict(result.get("probe") or {})
     state = dict(result.get("state") or {})
     key_meta = dict(result.get("admin_key_metadata") or {})
-    _print_wizard_home(summary, probe, state)
+    _print_block("Hosting Status", kind="accent")
+    state_kind = "ok" if bool(state.get("configured")) else "warn"
+    print(f"  {_badge(state_kind, str(state.get('label') or 'unknown'))} {_c('value', _format_state_banner(summary, state))}")
+    _print_rule(".", width=78)
+    _kv_rows(
+        [
+            ("connectivity_mode", summary.get("connectivity_mode")),
+            ("endpoint_mode", summary.get("endpoint_mode_default")),
+            ("lifecycle_profile", summary.get("lifecycle_profile")),
+            ("require_auth", _status_text(bool(summary.get("require_auth")))),
+            (
+                "admin_key",
+                summary.get("admin_key_id") if int(summary.get("admin_key_count") or 0) > 0 else "not configured",
+            ),
+        ]
+    )
     _print_rule("-")
     rows: list[Tuple[str, Any]] = [
         ("control_state_file", result.get("control_state_file")),
@@ -723,6 +1300,7 @@ def _print_status_report(result: Dict[str, Any]) -> None:
         if key_meta.get("private_key_warning"):
             rows.append(("admin_key_warning", key_meta.get("private_key_warning")))
     _kv_rows(rows)
+    _print_recommendations([_recommended_action(summary, state)])
 
 
 def _print_setup_result_report(result: Dict[str, Any]) -> None:
@@ -1661,9 +2239,14 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     if key_source not in VALID_KEY_SOURCES:
         key_source = "import"
     admin_key_id = str(args.admin_key_id or "").strip() or "admin-main"
-    key_action = "replace"
-    permission_action = "none"
+    key_action = str(getattr(args, "key_action", "") or "replace").strip().lower()
+    if key_action not in {"keep_existing", "replace"}:
+        key_action = "replace"
+    permission_action = str(getattr(args, "permission_action", "") or "none").strip().lower()
+    if permission_action not in {"none", "tighten"}:
+        permission_action = "none"
     setup_scope = "fresh_setup"
+    usage_intent = _normalize_usage_intent(getattr(args, "usage_intent", "") or "single_admin")
     setup_notes: list[str] = []
     permission_result: Dict[str, Any] = {"attempted": [], "errors": []}
     admin_public_key_file_value = str(args.admin_public_key_file or "").strip()
@@ -1687,6 +2270,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     existing_summary["exists"] = bool(config_state.get("configured"))
 
     if interactive:
+        _clear_pending_staged_setup()
         assumed_intent = "local_only" if str(config_state.get("code")) == "clean" else _normalize_mode(
             existing_summary.get("connectivity_mode", mode),
             mode,
@@ -1707,46 +2291,92 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         if bool(config_state.get("configured")):
             key_action = "keep_existing"
 
-        while True:
-            operator_choice = _prompt_menu(
-                "\nMain menu:",
-                {
-                    "1": "Start guided setup",
-                    "2": "Review detailed status",
-                    "3": "Run diagnostics",
-                    "4": "Exit without changes",
-                },
-                "1",
-            )
-            if operator_choice == "1":
-                break
-            if operator_choice == "2":
-                _print_current_probe(existing_summary, current_probe, config_state)
-                continue
-            if operator_choice == "3":
-                _print_doctor_report(run_doctor(args))
-                continue
-            if operator_choice == "4":
-                raise RuntimeError("interactive setup cancelled by user")
+        def _run_main_menu() -> None:
+            while True:
+                operator_choice = _prompt_menu(
+                    "Hosting Access Main Menu",
+                    {
+                        "1": ("Configure hosting now", "guided setup using usage/access projections"),
+                        "2": ("Review status details", "show current files, keys, and config state"),
+                        "3": ("Run doctor diagnostics", "validate setup and suggest fixes"),
+                    },
+                    "1",
+                    allow_back=False,
+                )
+                if operator_choice == "1":
+                    return
+                if operator_choice == "2":
+                    _print_current_probe(existing_summary, current_probe, config_state)
+                    continue
+                if operator_choice == "3":
+                    doctor_result = run_doctor(args)
+                    _print_doctor_report(doctor_result)
+                    if _doctor_followup_action(doctor_result) == "setup":
+                        return
+                    continue
+                if operator_choice == "changes":
+                    continue
 
-        workflow_choice = _prompt_menu(
-            "\nChoose workflow path:",
-            {
-                "1": "Keep current connectivity intent",
-                "2": "Choose a different connectivity intent",
-            },
-            "1" if bool(config_state.get("configured")) else "2",
-        )
-        if workflow_choice == "2":
-            setup_scope = "full_reconfigure_new_intent"
-            print("\nConnectivity intent")
-            for k in sorted(VALID_CONNECTIVITY_MODES):
-                _print_intent_guidance(k)
-            mode = _prompt_choice("Connectivity mode", VALID_CONNECTIVITY_MODES, mode)
-            setup_notes.append("Full reconfigure selected: all grouped steps reviewed.")
-        else:
-            setup_scope = "adjust_within_intent"
-            setup_notes.append("Within-intent adjustment selected.")
+        _run_main_menu()
+
+        while True:
+            while True:
+                usage_choice = _prompt_menu(
+                    "Hosting Access",
+                    {
+                        "single_admin": (
+                            str(USAGE_INTENT_GUIDANCE["single_admin"]["label"]),
+                            str(USAGE_INTENT_GUIDANCE["single_admin"]["hint"]),
+                        ),
+                        "role_split": (
+                            str(USAGE_INTENT_GUIDANCE["role_split"]["label"]),
+                            str(USAGE_INTENT_GUIDANCE["role_split"]["hint"]),
+                        ),
+                        "multi_user": (
+                            str(USAGE_INTENT_GUIDANCE["multi_user"]["label"]),
+                            str(USAGE_INTENT_GUIDANCE["multi_user"]["hint"]),
+                        ),
+                    },
+                    usage_intent,
+                    allow_back=True,
+                )
+                if usage_choice == "back":
+                    _run_main_menu()
+                    continue
+                if usage_choice == "changes":
+                    continue
+                usage_intent = _normalize_usage_intent(usage_choice, usage_intent)
+                break
+
+            projection = _project_usage_intent(usage_intent)
+            setup_scope = usage_intent
+            mode = str(projection.get("mode") or mode)
+            endpoint_mode = str(projection.get("endpoint_mode") or endpoint_mode)
+            current_projection_auth = bool(projection.get("require_auth"))
+            key_action = str(projection.get("key_action") or key_action)
+            permission_action = str(projection.get("permission_action") or permission_action)
+
+            _print_title("Hosting Access Projection")
+            _kv_rows(
+                [
+                    ("usage_intent", _option_label(usage_intent)),
+                    ("clients_connectivity", mode),
+                    ("endpoint_mode", endpoint_mode),
+                    ("require_auth", "yes" if current_projection_auth else "no"),
+                    ("keys", str(projection.get("note") or "")),
+                ]
+            )
+            mode_choice = _prompt_choice(
+                "Clients Connectivity",
+                VALID_CONNECTIVITY_MODES,
+                mode,
+                allow_back=True,
+            )
+            if mode_choice == "back":
+                continue
+            mode = _normalize_mode(mode_choice, mode)
+            setup_notes.append(str(projection.get("note") or ""))
+            break
 
         grouped_steps = [
             "endpoint_mode",
@@ -1761,10 +2391,27 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         current_require_auth = _safe_require_auth(
             connectivity_mode=mode,
             endpoint_mode=endpoint_mode,
-            requested=args.require_auth if args.require_auth is not None else require_auth_seed,
+            requested=args.require_auth if args.require_auth is not None else current_projection_auth,
         )
+        def _stage_current() -> None:
+            _set_pending_staged_setup(
+                setup_scope=setup_scope,
+                usage_intent=usage_intent,
+                mode=mode,
+                endpoint_mode=endpoint_mode,
+                lifecycle_profile=lifecycle_profile,
+                require_auth=current_require_auth,
+                key_action=key_action,
+                key_source=key_source,
+                admin_key_id=admin_key_id,
+                permission_action=permission_action,
+                admin_public_key_file=admin_public_key_file_value,
+                admin_public_key_inline=admin_public_key_inline_value,
+            )
+
+        _stage_current()
         print("\nConfiguration steps")
-        print("Use Enter to keep the current value, `p` for previous, `s` to skip.")
+        print(_c("muted", "Use Enter to keep the current value, `b` for back, `c` for staged changes, `q` to quit."))
         while step_idx < len(grouped_steps):
             step = grouped_steps[step_idx]
             if step == "endpoint_mode":
@@ -1784,6 +2431,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                         endpoint_mode=endpoint_mode,
                         requested=current_require_auth,
                     )
+                    _stage_current()
                 step_idx += 1
                 continue
             if step == "lifecycle_profile":
@@ -1797,13 +2445,16 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                     continue
                 if cmd == "next":
                     lifecycle_profile = val
+                    _stage_current()
                 step_idx += 1
                 continue
             if step == "require_auth":
-                print(
-                    "Step 3: Require auth\n"
-                    "  - value: protects multi-user and remote/tunnel workflows.\n"
-                    "  - constraint: no-auth allowed only for local_only + exclusive."
+                _print_title("Step 3: Require auth")
+                _kv_rows(
+                    [
+                        ("value", "protects multi-user and remote/tunnel workflows"),
+                        ("constraint", "no-auth allowed only for local_only + exclusive"),
+                    ]
                 )
                 cmd, val = _wizard_bool_prompt(
                     title="Enable require_auth?",
@@ -1818,6 +2469,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                         endpoint_mode=endpoint_mode,
                         requested=val,
                     )
+                    _stage_current()
                 step_idx += 1
                 continue
             if step == "key_action":
@@ -1832,6 +2484,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                     continue
                 if cmd == "next":
                     key_action = val
+                    _stage_current()
                 step_idx += 1
                 continue
             if step == "key_source":
@@ -1848,6 +2501,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                     continue
                 if cmd == "next":
                     key_source = val
+                    _stage_current()
                 step_idx += 1
                 continue
             if step == "admin_key_id":
@@ -1866,6 +2520,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                         if existing_row:
                             admin_public_key_file_value = ""
                             admin_public_key_inline_value = str(existing_row.get("public_key") or "").strip()
+                    _stage_current()
                 step_idx += 1
                 continue
             if step == "permission_action":
@@ -1882,6 +2537,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                     continue
                 if cmd == "next":
                     permission_action = val
+                    _stage_current()
                 step_idx += 1
                 continue
 
@@ -1892,6 +2548,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 current_file=admin_public_key_file_value,
                 current_inline=admin_public_key_inline_value,
             )
+            _stage_current()
         print("\nPlanned result:")
         print(f"  - workflow: {setup_scope}")
         print(f"  - connectivity_mode: {mode}")
@@ -1908,8 +2565,11 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         print(f"  - permission_action: {permission_action}")
         _print_intent_guidance(mode)
         if not _bool_prompt("Apply this configuration now?", True):
-            raise RuntimeError("interactive setup cancelled by user")
+            _clear_pending_staged_setup()
+            raise UserCancelled("cancelled by user")
+        _clear_pending_staged_setup()
     else:
+        _clear_pending_staged_setup()
         require_auth = _safe_require_auth(
             connectivity_mode=mode,
             endpoint_mode=endpoint_mode,
@@ -1982,7 +2642,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             passphrase = str(args.generated_key_passphrase or "")
             if interactive and not args.generated_key_passphrase:
                 if _bool_prompt("Protect generated private key with passphrase?", False):
-                    passphrase = input("Passphrase: ")
+                    passphrase = _input_or_quit("Passphrase: ")
             generated_private, generated_public = _generate_keypair(
                 key_id=admin_key_id,
                 passphrase=passphrase or None,
@@ -2234,14 +2894,24 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
         *,
         blocking: bool = True,
     ) -> None:
-        entry = {"check": name, "ok": bool(ok), "details": dict(details or {})}
+        enriched_details = dict(details or {})
+        guidance = _doctor_guidance(name, bool(ok), enriched_details)
+        for key, value in guidance.items():
+            if str(value or "").strip() and key not in enriched_details:
+                enriched_details[key] = value
+        entry = {
+            "check": name,
+            "ok": bool(ok),
+            "blocking": bool(blocking),
+            "details": enriched_details,
+        }
         checks.append(entry)
         if (not ok) and bool(blocking):
             issues.append(entry)
 
     try:
         proc = subprocess.run(  # noqa: S603
-            ["ssh-keygen", "-h"],
+            ["ssh-keygen", "-?"],
             capture_output=True,
             text=True,
             timeout=10.0,
@@ -2265,7 +2935,12 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
         except Exception as exc:
             _record("hosting_root_writable", False, {"path": str(hosting_root), "error": str(exc)})
     else:
-        _record("hosting_root_writable", False, {"path": str(hosting_root), "error": "missing_directory"})
+        _record(
+            "hosting_root_writable",
+            False,
+            {"path": str(hosting_root), "error": "missing_directory"},
+            blocking=False,
+        )
 
     # Readiness probe for Windows/mapped-path keygen behavior.
     # This check is non-blocking for baseline setup because key import remains valid,
@@ -2456,6 +3131,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Disable wizard and use flags only",
     )
     p.add_argument("--mode", default="local_only", choices=sorted(VALID_CONNECTIVITY_MODES))
+    p.add_argument("--usage-intent", default="single_admin", choices=sorted(VALID_USAGE_INTENTS), help=argparse.SUPPRESS)
     p.add_argument("--endpoint-mode", default="exclusive", choices=sorted(VALID_ENDPOINT_MODES))
     p.add_argument("--lifecycle-profile", default="detached_user_process", choices=sorted(VALID_LIFECYCLE_PROFILES))
     p.add_argument(
@@ -2517,6 +3193,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=100, help="List command page size")
     p.add_argument("--offset", type=int, default=0, help="List command page offset")
     p.add_argument("--key-source", default="import", choices=sorted(VALID_KEY_SOURCES))
+    p.add_argument("--key-action", default="replace", choices=["keep_existing", "replace"], help=argparse.SUPPRESS)
+    p.add_argument("--permission-action", default="none", choices=["none", "tighten"], help=argparse.SUPPRESS)
     p.add_argument("--admin-key-id", default="admin-main")
     p.add_argument("--admin-public-key-file", default="")
     p.add_argument("--admin-public-key", default="")
@@ -2610,6 +3288,27 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         return 0
     except Exception as exc:
+        if isinstance(exc, UserCancelled):
+            if bool(getattr(args, "json_output", False)):
+                print(json.dumps({"ok": False, "cancelled": True, "error": str(exc)}, ensure_ascii=False))
+            else:
+                via_keyboard = bool(getattr(exc, "via_keyboard", False))
+                if via_keyboard:
+                    _print_staged_setup_dropped(via_keyboard=True)
+                    _clear_pending_staged_setup()
+                elif _has_pending_staged_setup():
+                    _print_pending_staged_setup()
+                    if _plain_yes_no("Save these staged setup changes now?", False):
+                        result = _save_pending_staged_setup(args)
+                        _print_setup_result_report(result)
+                        if bool(args.json_output):
+                            print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
+                    else:
+                        _print_staged_setup_dropped(via_keyboard=False)
+                        _clear_pending_staged_setup()
+                else:
+                    _print_staged_setup_dropped(via_keyboard=False)
+            return 0
         if bool(getattr(args, "json_output", False)):
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         else:
