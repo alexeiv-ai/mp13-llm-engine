@@ -26,7 +26,10 @@ if __package__ in {None, ""}:
     from hosting.engine_host_service import EngineHostService, VALID_AUTH_ROLES
     from hosting.client_realm import (
         FileSecretStore,
+        append_client_audit_event,
+        ensure_client_realm_dirs,
         get_default_client_realm_root,
+        read_client_access,
         read_client_profile,
         secret_record_path,
     )
@@ -41,7 +44,10 @@ else:
     from .engine_host_service import EngineHostService, VALID_AUTH_ROLES
     from .client_realm import (
         FileSecretStore,
+        append_client_audit_event,
+        ensure_client_realm_dirs,
         get_default_client_realm_root,
+        read_client_access,
         read_client_profile,
         secret_record_path,
     )
@@ -904,6 +910,41 @@ def _print_tokens_report(result: Dict[str, Any]) -> None:
     _print_rule("=")
 
 
+def _print_client_key_report(result: Dict[str, Any]) -> None:
+    _print_rule("=")
+    _print_title("Client keys")
+    if str(result.get("action") or "") == "client_list_keys":
+        rows = dict(result.get("keys") or {})
+        if not rows:
+            print(f"  {_c('muted', 'No client keys.')}") 
+        else:
+            for key_id, row in sorted(rows.items()):
+                item = dict(row or {})
+                _kv_rows(
+                    [
+                        ("key_id", key_id),
+                        ("role", item.get("role") or "n/a"),
+                        ("public_key_source", item.get("public_key_source") or "unknown"),
+                        ("private_key_storage", item.get("private_key_storage") or "unknown"),
+                        ("private_key_secret_id", item.get("private_key_secret_id") or "n/a"),
+                    ]
+                )
+                _print_rule("-")
+    else:
+        _kv_rows(
+            [
+                ("status", result.get("status")),
+                ("action", result.get("action")),
+                ("key_id", result.get("key_id")),
+                ("tag", result.get("tag")),
+                ("secret_id", result.get("secret_id") or "n/a"),
+                ("secret_encryption", result.get("secret_encryption") or "n/a"),
+                ("export_path", result.get("export_path") or "n/a"),
+            ]
+        )
+    _print_rule("=")
+
+
 def _print_audit_report(result: Dict[str, Any]) -> None:
     _print_rule("=")
     _print_title("Auth audit")
@@ -1012,6 +1053,32 @@ def _generate_keypair(
     if not private_text or not public_text:
         raise RuntimeError("failed to generate importable key material")
     return private_text, public_text
+
+
+def _derive_public_key_from_private(private_key_text: str) -> str:
+    tmpdir = Path(tempfile.mkdtemp(prefix="hosting_pubderive_")).resolve()
+    try:
+        tmp_private = (tmpdir / "derived_ed25519").resolve()
+        tmp_private.write_text(str(private_key_text or "").strip() + "\n", encoding="utf-8")
+        try:
+            tmp_private.chmod(0o600)
+        except Exception:
+            pass
+        proc = subprocess.run(  # noqa: S603
+            ["ssh-keygen", "-y", "-f", str(tmp_private)],
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        if int(proc.returncode) != 0:
+            raise RuntimeError(str(proc.stderr or "").strip() or "ssh-keygen -y failed")
+        public_text = str(proc.stdout or "").strip()
+        if not public_text:
+            raise RuntimeError("ssh-keygen -y returned empty public key")
+        return public_text
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _build_access_control_payload(
@@ -1442,6 +1509,135 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
         "action": "transport_validate_profile",
         "client_realm_root": str(client_realm_root),
         **result,
+    }
+
+
+def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
+    action_list = bool(getattr(args, "client_list_keys", False))
+    action_generate = bool(getattr(args, "client_generate_key", False))
+    action_import = bool(getattr(args, "client_import_key", False))
+    action_export = bool(getattr(args, "client_export_key", False))
+    selected_count = sum(1 for flag in (action_list, action_generate, action_import, action_export) if flag)
+    if selected_count != 1:
+        raise ValueError(
+            "Choose exactly one of --client-list-keys, --client-generate-key, --client-import-key, or --client-export-key"
+        )
+    client_realm_root = _resolve_client_realm_root(args)
+    realm = str(getattr(args, "client_realm", "") or "default").strip() or "default"
+    layout = ensure_client_realm_dirs(client_realm_root)
+    keys_file = layout["keys"]
+    if action_list:
+        payload = _read_json(keys_file, {"keys": {}})
+        return {
+            "status": "ok",
+            "action": "client_list_keys",
+            "client_realm_root": str(client_realm_root),
+            "realm": realm,
+            "keys": dict(payload.get("keys") or {}),
+        }
+    key_id = str(getattr(args, "client_key_id", "") or "").strip()
+    if not key_id:
+        raise ValueError("--client-key-id is required")
+    tag = str(getattr(args, "client_key_tag", "") or "rbac_private_key").strip() or "rbac_private_key"
+    if tag not in {"rbac_private_key", "transport_private_key"}:
+        raise ValueError("--client-key-tag must be rbac_private_key or transport_private_key")
+    if action_export:
+        row = dict(_read_json(keys_file, {"keys": {}}).get("keys", {}).get(key_id) or {})
+        secret_id = str(row.get("private_key_secret_id") or "").strip()
+        if not secret_id:
+            raise ValueError(f"client key {key_id!r} does not reference a client-realm secret")
+        export_path_raw = str(getattr(args, "client_export_key_path", "") or "").strip()
+        if not export_path_raw:
+            raise ValueError("--client-export-key-path is required for --client-export-key")
+        export_path = Path(export_path_raw).expanduser().resolve()
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        store = FileSecretStore(client_realm_root, realm=realm)
+        export_path.write_text(
+            str(store.get_secret_payload(secret_id, password=str(getattr(args, "client_secret_password", "") or "")) or ""),
+            encoding="utf-8",
+        )
+        try:
+            export_path.chmod(0o600)
+        except Exception:
+            pass
+        audit_path = append_client_audit_event(
+            client_realm_root,
+            event_type="client_key_export",
+            realm=realm,
+            payload={"key_id": key_id, "tag": tag, "path": str(export_path)},
+        )
+        return {
+            "status": "ok",
+            "action": "client_export_key",
+            "client_realm_root": str(client_realm_root),
+            "realm": realm,
+            "key_id": key_id,
+            "tag": tag,
+            "export_path": str(export_path),
+            "audit_path": str(audit_path),
+        }
+
+    if action_generate:
+        private_key_text, public_key_text = _generate_keypair(
+            key_id=key_id,
+            passphrase=str(getattr(args, "generated_key_passphrase", "") or "") or None,
+        )
+        source = "client_generate"
+    else:
+        private_key_text = _read_text_or_file(
+            inline_value="",
+            file_value=str(getattr(args, "client_private_key_file", "") or ""),
+            field_name="client private key",
+        )
+        public_key_text = _read_text_or_file(
+            inline_value=str(getattr(args, "client_public_key_inline", "") or ""),
+            file_value=str(getattr(args, "client_public_key_file", "") or ""),
+            field_name="client public key",
+        ) if (str(getattr(args, "client_public_key_inline", "") or "").strip() or str(getattr(args, "client_public_key_file", "") or "").strip()) else _derive_public_key_from_private(private_key_text)
+        source = "client_import"
+
+    secret_store = FileSecretStore(client_realm_root, realm=realm)
+    secret_record = secret_store.put_secret(
+        tag=tag,
+        payload=private_key_text,
+        secret_id=f"{tag.replace('_private_key', '')}-{key_id}-private",
+        metadata={"key_id": key_id, "tag": tag, "source": source},
+        encryption="password_v1" if str(getattr(args, "client_secret_password", "") or "") else "none",
+        password=str(getattr(args, "client_secret_password", "") or ""),
+    )
+    role = "transport" if tag == "transport_private_key" else "admin"
+    _store_importable_key_record(
+        keys_file=keys_file,
+        key_id=key_id,
+        role=role,
+        auth_method="public_key",
+        public_key=public_key_text,
+        key_origin="generated" if action_generate else "imported",
+        key_source="generate" if action_generate else "import",
+        public_key_source="generated" if action_generate else ("file" if str(getattr(args, "client_public_key_file", "") or "").strip() else "derived_or_inline"),
+        private_key_storage="client_realm_secret",
+        private_key_secret_id=secret_record.secret_id,
+        private_key_secret_realm=realm,
+    )
+    audit_path = append_client_audit_event(
+        client_realm_root,
+        event_type="client_key_generate" if action_generate else "client_key_import",
+        realm=realm,
+        payload={"key_id": key_id, "tag": tag, "secret_id": secret_record.secret_id, "encryption": secret_record.encryption},
+    )
+    return {
+        "status": "ok",
+        "action": "client_generate_key" if action_generate else "client_import_key",
+        "client_realm_root": str(client_realm_root),
+        "realm": realm,
+        "key_id": key_id,
+        "tag": tag,
+        "public_key": public_key_text,
+        "secret_id": secret_record.secret_id,
+        "secret_path": str(secret_record_path(client_realm_root, secret_record.secret_id)),
+        "secret_encryption": secret_record.encryption,
+        "keys_file": str(keys_file),
+        "audit_path": str(audit_path),
     }
 
 
@@ -2139,6 +2335,89 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     except Exception as exc:
         _record("control_config_readable", False, {"error": str(exc)})
 
+    summary = _summarize_existing_config(
+        control_state_path=control_state_path,
+        access_file=paths["access_file"],
+        keys_file=paths["keys_file"],
+    )
+    admin_key_id = str(summary.get("admin_key_id") or "").strip()
+    key_meta = _admin_key_metadata(paths["keys_file"], admin_key_id) if admin_key_id else {}
+    if key_meta:
+        storage = str(key_meta.get("private_key_storage") or "")
+        if storage == "client_realm_secret":
+            secret_exists = bool(key_meta.get("private_key_secret_exists"))
+            _record(
+                "admin_client_secret_present",
+                secret_exists,
+                {
+                    "key_id": admin_key_id,
+                    "secret_id": key_meta.get("private_key_secret_id"),
+                    "secret_path": key_meta.get("private_key_secret_path"),
+                },
+            )
+            encryption = str(key_meta.get("private_key_secret_encryption") or "").strip() or "unknown"
+            _record(
+                "admin_client_secret_encrypted",
+                encryption == "password_v1",
+                {
+                    "key_id": admin_key_id,
+                    "secret_id": key_meta.get("private_key_secret_id"),
+                    "encryption": encryption,
+                },
+                blocking=False,
+            )
+        elif storage == "exported_file":
+            _record(
+                "admin_exported_private_key_present",
+                bool(key_meta.get("private_key_export_exists")),
+                {
+                    "key_id": admin_key_id,
+                    "path": key_meta.get("private_key_export_path"),
+                },
+            )
+        elif storage == "embedded_keyring":
+            _record(
+                "admin_embedded_private_key_legacy",
+                False,
+                {"key_id": admin_key_id, "storage": storage},
+                blocking=False,
+            )
+
+    try:
+        client_access = read_client_access(get_default_client_realm_root(default_config_dir=default_config_dir))
+        profiles = dict(client_access.get("client_access", {}).get("profiles") or {})
+        _record(
+            "client_realm_access_readable",
+            True,
+            {"profiles_count": len(profiles)},
+            blocking=False,
+        )
+        bad_profiles: list[Dict[str, Any]] = []
+        for name, row in sorted(profiles.items()):
+            profile_row = dict(row or {})
+            known_hosts_file = str(profile_row.get("ssh_known_hosts_file") or "").strip()
+            secret_id = str(profile_row.get("control_ssh_key_secret_id") or "").strip()
+            if known_hosts_file and not Path(known_hosts_file).expanduser().resolve().exists():
+                bad_profiles.append(
+                    {"profile_name": name, "error": "missing_known_hosts_file", "path": known_hosts_file}
+                )
+            if secret_id:
+                secret_path = secret_record_path(
+                    get_default_client_realm_root(default_config_dir=default_config_dir),
+                    secret_id,
+                )
+                if not secret_path.exists():
+                    bad_profiles.append(
+                        {"profile_name": name, "error": "missing_secret_record", "path": str(secret_path)}
+                    )
+        _record(
+            "client_transport_profiles_integrity",
+            not bad_profiles,
+            {"invalid_profiles": bad_profiles, "profiles_count": len(profiles)},
+        )
+    except Exception as exc:
+        _record("client_realm_access_readable", False, {"error": str(exc)}, blocking=False)
+
     return {
         "status": "ok" if not issues else "issues_found",
         "issues_count": len(issues),
@@ -2197,9 +2476,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list-issued-tokens", action="store_true", help="List issued runtime tokens and exit")
     p.add_argument("--list-auth-audit", action="store_true", help="List auth audit events and exit")
     p.add_argument("--upsert-key", action="store_true", help="Create or update one RBAC key and exit")
+    p.add_argument("--client-list-keys", action="store_true", help="List client-realm private-key metadata and exit")
+    p.add_argument("--client-generate-key", action="store_true", help="Generate a client-realm private key and metadata record")
+    p.add_argument("--client-import-key", action="store_true", help="Import a client private key into the client realm")
+    p.add_argument("--client-export-key", action="store_true", help="Export a client-realm private key to a file")
     p.add_argument("--revoke-key-id", default="", help="Revoke one RBAC key_id and its sessions, then exit")
     p.add_argument("--revoke-session", default="", help="Revoke one session token and exit")
     p.add_argument("--key-id", default="", help="RBAC key_id for --upsert-key")
+    p.add_argument("--client-key-id", default="", help="Client-realm key id for local key lifecycle commands")
+    p.add_argument("--client-key-tag", default="rbac_private_key", help="Client secret tag: rbac_private_key or transport_private_key")
+    p.add_argument("--client-private-key-file", default="", help="Private key file for --client-import-key")
+    p.add_argument("--client-public-key-file", default="", help="Public key file for --client-import-key")
+    p.add_argument("--client-public-key-inline", default="", help="Inline public key for --client-import-key")
+    p.add_argument("--client-export-key-path", default="", help="Output file for --client-export-key")
     p.add_argument("--key-role", default="", choices=sorted(VALID_AUTH_ROLES), help="RBAC role for --upsert-key")
     p.add_argument(
         "--auth-method",
@@ -2302,6 +2591,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _print_audit_report(result)
             else:
                 _print_key_change_report(result)
+        elif bool(
+            args.client_list_keys
+            or args.client_generate_key
+            or args.client_import_key
+            or args.client_export_key
+        ):
+            result = run_client_keys(args)
+            _print_client_key_report(result)
         elif bool(args.transport_export_bootstrap or args.transport_import_bootstrap):
             result = run_transport_bootstrap(args)
             _print_transport_bootstrap_report(result)

@@ -52,6 +52,7 @@ Do not use it as the implementation-aligned architecture document; that role bel
    - `control_ssh_fingerprint`
    - `engine_host_session_token`
 11. Imported transport profiles can now be validated through a strict SSH probe path or a local consistency-only validation path.
+12. Client-local RBAC/transport key lifecycle helpers now exist for generate, import, export, list, and audit within the client realm.
 
 ## 4. Target Outcome
 
