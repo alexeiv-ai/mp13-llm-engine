@@ -1,7 +1,7 @@
 # Hosting Access Design (Security, Roles, Keys, Lifecycle)
 
 Date: 2026-03-16
-Status: Design + implementation-aligned baseline (functional-first, Phase 7 planned)
+Status: Implementation-aligned architecture document
 Scope: `src/hosting` daemon/channel/auth/claim/lifecycle on Windows and Linux
 
 ## 0. Design policy (breaking change)
@@ -249,28 +249,22 @@ Current implementation note:
    - `owner_malicious` and `security_incident` require at least one active conflicting owner
    - denial details include `predicate`, `active_conflicting_owners`, `orphan_conflicting_owners`
 
-## 6. Auth/AuthZ Current Status (Implementation-Aligned)
+## 6. Auth/AuthZ Design Notes (Implementation-Aligned)
 
-Implementation baseline status:
-1. Phase 1/2/3/4/5/6/8 access-control scope is implemented and validated per `hosting_access_plan.md`.
-2. Clean-slate role model is active across service/daemon/channel/client helper paths.
-3. Endpoint default mode + runtime override + displaced-owner deterministic denial/reclaim behavior are implemented.
-4. Setup + diagnostics flows (`hosting_config`, `--doctor`) and key migration (`.migrated`) are implemented.
-5. Safe-only no-auth policy is enforced at startup and on runtime drift (`set-control-config` partial updates).
-6. Non-local auth bootstrap uses public-key challenge with SSH session binding context.
-7. Shared-secret session issuance (`auth-issue-session`) is local-only and denied for non-local connectivity profiles.
-8. Auth lifecycle audit events and admin audit query command (`auth-audit-list`) are implemented.
-9. Lifecycle profiles/policies, terminal-control gating, and shutdown sequencing/checkpoints are implemented.
-10. Legacy runtime role bridge is removed for cutover scope.
-11. Contract metadata (`daemon_version`, `capabilities`) is exposed by `auth-status`, but retrieval depends on a valid command auth path when auth is enabled.
-12. SSH-targeted control paths require explicit pinned SSH host-key input from the client side; `accept-new` host-key onboarding is not part of the supported baseline.
-
-Remaining baseline gaps before Phase 7 feasibility discussion:
-1. Emergency takeover predicates are now code-enforced and test-mapped; keep operator docs aligned to denial taxonomy.
-2. Troubleshooting artifacts should expand beyond initial `--doctor` into explicit error catalog + playbooks.
-3. Generated-key validation across constrained Windows filesystem variants needs host-path confirmation coverage.
-4. Scenario runbooks must retain explicit minimum controls and escalation triggers (captured in Section 10).
-5. Client-side contract probes must treat missing `daemon_version` as auth/reachability-path failure first (not automatically as daemon-version incompatibility).
+The following points are intended as stable design notes rather than phased status updates:
+1. The clean-slate role model is the only supported runtime auth model for hosting.
+2. Endpoint default mode, runtime override, and deterministic displaced-owner denial/reclaim behavior are part of the baseline command contract.
+3. Setup, diagnostics, and migration helpers are expected operator surfaces:
+   - `hosting_config`
+   - `hosting_config --doctor`
+   - legacy key migration to `.migrated`
+4. Safe-only no-auth policy is enforced both at startup and on runtime control-config changes.
+5. Non-local auth bootstrap uses public-key challenge plus SSH session binding context.
+6. Shared-secret session issuance (`auth-issue-session`) is local-only and must be denied for non-local connectivity profiles.
+7. Auth lifecycle audit events and admin audit query surfaces are baseline operator controls, not optional add-ons.
+8. Lifecycle profiles/policies, terminal-control gating, and shutdown sequencing are part of the supported lifecycle contract.
+9. `auth-status` exposes contract metadata such as `daemon_version` and `capabilities`, but clients must treat retrieval failure under `require_auth=true` primarily as an auth/reachability-path problem.
+10. SSH-targeted control paths require explicit pinned SSH host-key input from the client side; `accept-new` host-key onboarding is not a supported baseline mode.
 
 ## 7. `require_auth=false` Safe-Only Policy
 
@@ -555,7 +549,79 @@ Escalate beyond baseline (Phase 7 candidates) when:
 2. compliance or assurance requires hardware-backed keys
 3. attack volume requires adaptive lockout/anomaly controls
 
-## 11. Advanced Hardening and Risk Assessment (Later Stages)
+## 11. Client Integration Contract
+
+This section replaces the former standalone client guide as the authoritative client-facing contract.
+
+### 11.1 Transport choices
+
+1. Local control access uses local IPC discovered from the daemon PID file under `hosting/state/daemon.pid`.
+2. The PID file carries local connection metadata such as:
+   - `ipc_family`
+   - `ipc_address`
+   - `shutdown_token`
+3. Remote control access uses the SSH relay pattern:
+   - open SSH to the target host
+   - execute `python -m hosting.engine_host_cli --relay`
+   - bridge JSON-RPC traffic over SSH stdio
+4. Remote clients must not rely on opportunistic first-connect SSH trust; pinned host-key material is required.
+5. Standard HTTP ingress, when needed, is handled by the separate `--daemon-http` process or by an external reverse proxy in front of loopback-only listeners.
+
+### 11.2 Client-local realm and key custody
+
+1. The client side may maintain its own hosting realm under `<default_engine_config_dir>/hosting_client/<realm>/`.
+2. The client realm may contain:
+   - `client_access.json`
+   - `keyring/keys.json`
+   - `secrets/`
+   - `known_hosts/`
+   - `profiles/`
+   - `audit/`
+3. Long-lived client private keys should live in client-local custody:
+   - imported existing file
+   - exported managed file
+   - client-realm secret record
+4. Client secret records may be plaintext (`none`) or password-protected (`password_v1`).
+5. Hosting must not use normal runtime daemon RPC as the mechanism that returns private keys back to clients.
+
+### 11.3 Auth flows clients must support
+
+1. Local-only bootstrap may use `auth-issue-session` with shared secret, but only for `local_only` connectivity.
+2. Remote-capable clients must support the public-key challenge flow:
+   - `auth-begin-challenge`
+   - local signature generation
+   - `auth-complete-challenge`
+3. Remote-capable clients must include `_ssh_session_binding` metadata so issued sessions remain tied to the expected SSH route.
+4. Clients must treat missing or rejected SSH binding as a hard security failure, not as a retry-without-binding hint.
+
+### 11.4 Transport bootstrap and profile handling
+
+1. MITM-resistant first remote connection requires both:
+   - transport private key material
+   - pinned SSH host key (`ssh_known_hosts_line`)
+2. Supported client bootstrap flow is:
+   - import out-of-band bootstrap bundle
+   - store transport private key in client-local custody
+   - persist pinned host-key material
+   - create/update a named client profile
+   - validate the profile with strict SSH options before normal use
+3. Imported client profiles may be consumed directly by `EngineHostControlChannel` through client-realm profile resolution and managed-key materialization.
+
+### 11.5 Client behavior checklist
+
+1. Read local PID/control metadata for local IPC instead of guessing transport details.
+2. Use SSH relay or explicitly configured HTTP ingress according to deployment mode.
+3. Implement public-key challenge auth for remote-capable clients.
+4. Inject `_ssh_session_binding` for SSH-mediated sessions.
+5. Parse structured denials (`error_code`, `error_details`) and preserve them in UX/logs.
+6. Distinguish auth-path failure from daemon-version incompatibility when `auth-status` metadata is unavailable.
+7. Surface key provenance and custody state clearly:
+   - `imported` vs `generated`
+   - exported file vs client-realm secret
+   - plaintext vs `password_v1`
+8. Validate imported transport profiles with strict host-key checking before treating them as ready.
+
+## 12. Advanced Hardening and Risk Assessment (Later Stages)
 
 These are intentionally secondary to functional/usability baseline:
 1. key rotation automation
@@ -571,13 +637,10 @@ Each must be documented with:
 2. compensating controls
 3. scope of impact (for example local-only admin-only deployment may not need it)
 
-## 12. Phase 7 Readiness Prerequisites (Before Feasibility Decision)
+## 13. Documentation Maintenance Requirements
 
-1. Docs are status-aligned across:
-   - `hosting_access.md`
-   - `hosting_access_plan.md`
-   - `HOSTING_PYTEST_STATUS.md`
-2. Emergency takeover contract includes explicit eligibility predicates and denial semantics.
-3. Validation evidence includes required outside-sandbox reruns for ACL- and lifecycle-sensitive suites when sandbox teardown ACL issues occur.
-4. Generated-key path behavior is validated on host paths where OpenSSH write semantics are supported.
-5. Scenario-specific minimum controls and escalation triggers remain current with implementation.
+1. `hosting_access.md` is the implementation-aligned architecture reference for hosting access.
+2. `hosting_access_plan.md` remains the forward-looking plan document and should not duplicate the architecture contract.
+3. Scenario-specific minimum controls and escalation triggers in Section 10 must stay current with the implemented command and policy behavior.
+4. Client-facing guidance should be maintained in Section 11 instead of being split across drifting duplicate documents.
+5. Any change to first-key bootstrap, no-auth safety rules, SSH host-key requirements, or client-realm custody rules must be reflected here at the same time as the code change.

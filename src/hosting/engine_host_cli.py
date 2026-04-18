@@ -619,7 +619,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     # Mode 2b: --hosting-config  →  run setup/reconfiguration wizard/tool
     # ------------------------------------------------------------------
     if "--hosting-config" in argv:
-        from .hosting_config import main as hosting_config_main
+        from .hosting_config_cli import main as hosting_config_main
 
         forwarded = [a for a in argv if a != "--hosting-config"]
         return int(hosting_config_main(forwarded))
