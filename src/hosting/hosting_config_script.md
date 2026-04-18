@@ -1,11 +1,15 @@
-# `hosting_config` Script Specification
+# `hosting_config_cli` Script Specification
 
 Date: 2026-03-14
 Status: Draft implementation contract (functional-first)
 
 ## 1. Purpose
 
-`hosting_config` is a user-facing setup/reconfiguration script for hosting access control.
+`hosting_config_cli` is a user-facing setup/reconfiguration script for hosting access control.
+
+Entrypoints:
+1. `python -m hosting.hosting_config_cli`
+2. `py hosting_config.py` from the repo root
 
 It must:
 1. Work before daemon startup.
@@ -19,6 +23,8 @@ Supported modes:
 1. Interactive wizard (default).
 2. Non-interactive flags (CI/provisioning).
 3. Reconfigure existing installation.
+4. Read-only operator status/reporting.
+5. Operator-oriented RBAC/session inspection and revocation.
 
 Primary intent input:
 1. `local_only`
@@ -33,6 +39,17 @@ Secondary inputs:
    - `service_managed`
 3. Auth mode (`require_auth=true` unless safe-profile exception is valid).
 4. Role/key setup plan (who gets which role).
+
+Operator command surfaces:
+1. `--status`
+2. `--doctor`
+3. `--list-keys`
+4. `--upsert-key`
+5. `--revoke-key-id`
+6. `--list-sessions`
+7. `--revoke-session`
+8. `--list-issued-tokens`
+9. `--list-auth-audit`
 
 ## 3. Output layout and files
 
@@ -59,6 +76,11 @@ Non-destructive migration:
 1. Detect legacy auth/key files.
 2. Detect existing `hosting/` config.
 3. Show summary: new install vs reconfigure.
+4. Provide an operator menu before mutation:
+   - review current config/file probes
+   - run `--doctor`-style diagnostics
+   - continue into guided configure/reconfigure
+   - exit without changes
 
 ## 4.2 Connectivity intent selection
 
@@ -83,6 +105,9 @@ For each planned identity:
    - generate new keypair (script-assisted)
    - import existing public key
 3. Assign `key_id`.
+4. If importing interactively, prompt for either:
+   - public-key file path
+   - pasted inline public key
 4. Apply role-specific constraints (allowed engines/config selectors).
 
 ## 4.5 Key export policy guidance
@@ -121,6 +146,25 @@ Example output fields:
    - endpoint mode changes
 4. Emit restart guidance when changes require daemon restart.
 
+## 4.8 Operator-oriented runtime actions
+
+Read-only commands:
+1. `--status` prints a short human-readable hosting-access summary.
+2. `--doctor` prints diagnostics without mutating configuration.
+3. `--list-keys` shows persisted RBAC keys.
+4. `--list-sessions` shows active auth sessions with role, scope, TTL, and SSH binding.
+5. `--list-issued-tokens` shows issued runtime engine/resource tokens.
+6. `--list-auth-audit` shows auth audit events.
+
+Mutating operator commands:
+1. `--upsert-key` creates or updates one persisted RBAC key.
+2. `--revoke-key-id` revokes one key and any sessions issued from it.
+3. `--revoke-session` revokes one active session token.
+
+Output contract:
+1. Human-readable terminal output is the default.
+2. `--json-output` is optional for automation/integration scenarios.
+
 ## 5. First implementation scope
 
 1. Configuration authoring and validation.
@@ -156,7 +200,16 @@ Planned test suites:
 5. Reconfiguration idempotency and rollback safety tests.
 
 Current implementation note:
-1. Initial `--doctor` command is implemented with SSH dependency, path readability/writability, and runtime policy checks.
-2. Import-key setup path is smoke-validated end-to-end.
-3. Generated-key setup path includes temp-path generation plus direct-path fallback for filesystem compatibility; some mapped-drive Windows environments still require external key generation/import due OpenSSH path constraints.
-4. Lifecycle profile selection is now supported via setup flags and persisted into control/setup artifacts.
+1. Interactive mode is the default entry path; use `--no-interactive` for flag-only operation.
+2. The main implementation lives in `src/hosting/hosting_config_cli.py`.
+3. Repo-root `hosting_config.py` proxies to that CLI entrypoint.
+4. Human-readable output is the default; `--json-output` is available when machine-readable output is needed.
+5. Initial `--doctor` command is implemented with SSH dependency, path readability/writability, and runtime policy checks.
+6. Interactive import-key setup now prompts for public-key source material instead of requiring separate CLI flags.
+7. Generated-key setup uses `--generated-key-passphrase` as the primary option name; `--key-passphrase` remains as a compatibility alias.
+8. Operator-oriented RBAC essentials are implemented for persisted keys and runtime inspection:
+   - key list/create-update/revoke
+   - session list/revoke
+   - issued-token listing
+   - auth-audit listing
+9. Lifecycle profile selection is supported via setup flags and persisted into control/setup artifacts.
