@@ -6,7 +6,11 @@ swap in OS-specific secret storage without changing higher-level workflows.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -18,6 +22,102 @@ from mp13_engine.mp13_config_paths import get_default_config_dir
 
 CLIENT_REALM_ROOT_SUBDIR = "hosting_client"
 VALID_SECRET_RECORD_ENCRYPTION = {"none", "password_v1"}
+_PASSWORD_V1_SCRYPT_N = 1 << 14
+_PASSWORD_V1_SCRYPT_R = 8
+_PASSWORD_V1_SCRYPT_P = 1
+_PASSWORD_V1_KEY_LEN = 64
+_PASSWORD_V1_NONCE_LEN = 16
+
+
+def _b64e(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _b64d(raw: str) -> bytes:
+    return base64.b64decode(str(raw or "").encode("ascii"))
+
+
+def _xor_bytes(left: bytes, right: bytes) -> bytes:
+    return bytes(a ^ b for a, b in zip(left, right))
+
+
+def _password_v1_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    out = bytearray()
+    counter = 0
+    while len(out) < length:
+        block = hmac.new(key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(out[:length])
+
+
+def _password_v1_encrypt(plaintext: str, password: str) -> str:
+    pwd = str(password or "")
+    if not pwd:
+        raise ValueError("password is required for password_v1 encryption")
+    plaintext_bytes = str(plaintext or "").encode("utf-8")
+    salt = secrets.token_bytes(16)
+    nonce = secrets.token_bytes(_PASSWORD_V1_NONCE_LEN)
+    key_material = hashlib.scrypt(
+        pwd.encode("utf-8"),
+        salt=salt,
+        n=_PASSWORD_V1_SCRYPT_N,
+        r=_PASSWORD_V1_SCRYPT_R,
+        p=_PASSWORD_V1_SCRYPT_P,
+        dklen=_PASSWORD_V1_KEY_LEN,
+    )
+    enc_key = key_material[:32]
+    mac_key = key_material[32:]
+    ciphertext = _xor_bytes(plaintext_bytes, _password_v1_keystream(enc_key, nonce, len(plaintext_bytes)))
+    tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+    envelope = {
+        "scheme": "password_v1",
+        "kdf": {
+            "name": "scrypt",
+            "salt_b64": _b64e(salt),
+            "n": _PASSWORD_V1_SCRYPT_N,
+            "r": _PASSWORD_V1_SCRYPT_R,
+            "p": _PASSWORD_V1_SCRYPT_P,
+            "dklen": _PASSWORD_V1_KEY_LEN,
+        },
+        "cipher": {
+            "name": "hmac_sha256_xor_stream",
+            "nonce_b64": _b64e(nonce),
+            "ciphertext_b64": _b64e(ciphertext),
+            "tag_b64": _b64e(tag),
+        },
+    }
+    return json.dumps(envelope, ensure_ascii=False, sort_keys=True)
+
+
+def _password_v1_decrypt(payload: str, password: str) -> str:
+    pwd = str(password or "")
+    if not pwd:
+        raise ValueError("password is required for password_v1 decryption")
+    envelope = dict(json.loads(str(payload or "")))
+    if str(envelope.get("scheme") or "") != "password_v1":
+        raise ValueError("password_v1 payload is missing scheme marker")
+    kdf = dict(envelope.get("kdf") or {})
+    cipher = dict(envelope.get("cipher") or {})
+    salt = _b64d(str(kdf.get("salt_b64") or ""))
+    nonce = _b64d(str(cipher.get("nonce_b64") or ""))
+    ciphertext = _b64d(str(cipher.get("ciphertext_b64") or ""))
+    tag = _b64d(str(cipher.get("tag_b64") or ""))
+    key_material = hashlib.scrypt(
+        pwd.encode("utf-8"),
+        salt=salt,
+        n=max(2, int(kdf.get("n") or _PASSWORD_V1_SCRYPT_N)),
+        r=max(1, int(kdf.get("r") or _PASSWORD_V1_SCRYPT_R)),
+        p=max(1, int(kdf.get("p") or _PASSWORD_V1_SCRYPT_P)),
+        dklen=max(32, int(kdf.get("dklen") or _PASSWORD_V1_KEY_LEN)),
+    )
+    enc_key = key_material[:32]
+    mac_key = key_material[32:64]
+    expected_tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expected_tag):
+        raise ValueError("password_v1 authentication failed")
+    plaintext = _xor_bytes(ciphertext, _password_v1_keystream(enc_key, nonce, len(ciphertext)))
+    return plaintext.decode("utf-8")
 
 
 def get_default_client_realm_root(*, default_config_dir: Optional[Path] = None, realm: str = "default") -> Path:
@@ -34,6 +134,7 @@ def client_realm_layout(root: Path) -> Dict[str, Path]:
         "keyring": realm_root / "keyring",
         "keys": realm_root / "keyring" / "keys.json",
         "secrets": realm_root / "secrets",
+        "managed_keys": realm_root / "managed_keys",
         "known_hosts": realm_root / "known_hosts",
         "audit": realm_root / "audit",
         "profiles": realm_root / "profiles",
@@ -42,7 +143,7 @@ def client_realm_layout(root: Path) -> Dict[str, Path]:
 
 def ensure_client_realm_dirs(root: Path) -> Dict[str, Path]:
     layout = client_realm_layout(root)
-    for key in ("root", "keyring", "secrets", "known_hosts", "audit", "profiles"):
+    for key in ("root", "keyring", "secrets", "managed_keys", "known_hosts", "audit", "profiles"):
         layout[key].mkdir(parents=True, exist_ok=True)
     return layout
 
@@ -52,6 +153,20 @@ def secret_record_path(root: Path, secret_id: str) -> Path:
     if not sid:
         raise ValueError("secret_id is required")
     return (client_realm_layout(root)["secrets"] / f"{sid}.json").resolve()
+
+
+def profile_path(root: Path, profile_name: str) -> Path:
+    name = str(profile_name or "").strip()
+    if not name:
+        raise ValueError("profile_name is required")
+    return (client_realm_layout(root)["profiles"] / f"{name}.json").resolve()
+
+
+def managed_key_path(root: Path, name: str) -> Path:
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name or "").strip()).strip("._")
+    if not stem:
+        raise ValueError("managed key name is required")
+    return (client_realm_layout(root)["managed_keys"] / f"{stem}.key").resolve()
 
 
 @dataclass(frozen=True)
@@ -120,6 +235,7 @@ class FileSecretStore:
         secret_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         encryption: str = "none",
+        password: Optional[str] = None,
     ) -> SecretRecord:
         tag_norm = str(tag or "").strip()
         if not tag_norm:
@@ -130,8 +246,9 @@ class FileSecretStore:
                 "encryption must be one of: "
                 + ", ".join(sorted(VALID_SECRET_RECORD_ENCRYPTION))
             )
-        if enc != "none":
-            raise NotImplementedError("password-encrypted secret records are not implemented yet")
+        payload_text = str(payload or "")
+        if enc == "password_v1":
+            payload_text = _password_v1_encrypt(payload_text, str(password or ""))
         sid = str(secret_id or "").strip() or secrets.token_urlsafe(12)
         now = time.time()
         existing = self.get_secret_record(sid)
@@ -144,7 +261,7 @@ class FileSecretStore:
             created_at=created_at,
             updated_at=now,
             encryption=enc,
-            payload=str(payload or ""),
+            payload=payload_text,
             metadata=dict(metadata or {}),
         )
         path = self._record_path(sid)
@@ -167,9 +284,15 @@ class FileSecretStore:
             raise ValueError(f"secret record {path} belongs to realm {record.realm}, expected {self.realm}")
         return record
 
-    def get_secret_payload(self, secret_id: str) -> Optional[str]:
+    def get_secret_payload(self, secret_id: str, *, password: Optional[str] = None) -> Optional[str]:
         record = self.get_secret_record(secret_id)
-        return None if record is None else str(record.payload)
+        if record is None:
+            return None
+        if record.encryption == "none":
+            return str(record.payload)
+        if record.encryption == "password_v1":
+            return _password_v1_decrypt(str(record.payload), str(password or ""))
+        raise ValueError(f"Unsupported secret-record encryption: {record.encryption}")
 
     def delete_secret(self, secret_id: str) -> bool:
         path = self._record_path(secret_id)
@@ -191,7 +314,14 @@ class FileSecretStore:
             records.append(record)
         return records
 
-    def reencrypt_secret(self, secret_id: str, *, encryption: str) -> SecretRecord:
+    def reencrypt_secret(
+        self,
+        secret_id: str,
+        *,
+        encryption: str,
+        password: Optional[str] = None,
+        current_password: Optional[str] = None,
+    ) -> SecretRecord:
         record = self.get_secret_record(secret_id)
         if record is None:
             raise ValueError("secret_id is not present")
@@ -200,14 +330,14 @@ class FileSecretStore:
             raise ValueError("encryption is required")
         if enc == record.encryption:
             return record
-        if enc != "none":
-            raise NotImplementedError("password-encrypted secret records are not implemented yet")
+        plaintext = self.get_secret_payload(secret_id, password=current_password)
         return self.put_secret(
             tag=record.tag,
-            payload=record.payload,
+            payload=str(plaintext or ""),
             secret_id=record.secret_id,
             metadata=dict(record.metadata or {}),
             encryption=enc,
+            password=password,
         )
 
 
@@ -246,7 +376,190 @@ def read_client_access(root: Path) -> Dict[str, Any]:
     }
 
 
+def write_client_profile(
+    root: Path,
+    profile_name: str,
+    payload: Dict[str, Any],
+    *,
+    realm: str = "default",
+) -> Path:
+    layout = ensure_client_realm_dirs(root)
+    out = {
+        "version": 1,
+        "realm": str(realm or "default").strip() or "default",
+        "profile_name": str(profile_name or "").strip(),
+        "updated_at": time.time(),
+        "profile": dict(payload or {}),
+    }
+    path = profile_path(root, profile_name)
+    path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except Exception:
+        pass
+    return path
+
+
+def read_client_profile(root: Path, profile_name: str) -> Dict[str, Any]:
+    path = profile_path(root, profile_name)
+    if not path.exists():
+        return {
+            "version": 1,
+            "realm": "default",
+            "profile_name": str(profile_name or "").strip(),
+            "profile": {},
+        }
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "version": max(1, int(payload.get("version") or 1)),
+        "realm": str(payload.get("realm") or "default").strip() or "default",
+        "profile_name": str(payload.get("profile_name") or profile_name).strip(),
+        "updated_at": float(payload.get("updated_at") or 0.0),
+        "profile": dict(payload.get("profile") or {}),
+    }
+
+
+def list_client_profiles(root: Path) -> list[str]:
+    layout = client_realm_layout(root)
+    if not layout["profiles"].exists():
+        return []
+    return sorted(path.stem for path in layout["profiles"].glob("*.json") if path.is_file())
+
+
 def iter_secret_ids(root: Path, *, realm: str = "default", tag: Optional[str] = None) -> Iterable[str]:
     store = FileSecretStore(root, realm=realm)
     for record in store.list_records(tag=tag):
         yield record.secret_id
+
+
+def append_client_audit_event(
+    root: Path,
+    *,
+    event_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    realm: str = "default",
+) -> Path:
+    layout = ensure_client_realm_dirs(root)
+    event_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(event_type or "").strip()).strip("._")
+    if not event_name:
+        raise ValueError("event_type is required")
+    event_path = layout["audit"] / f"{int(time.time() * 1000)}-{event_name}.json"
+    out = {
+        "version": 1,
+        "realm": str(realm or "default").strip() or "default",
+        "event_type": event_name,
+        "created_at": time.time(),
+        "payload": dict(payload or {}),
+    }
+    event_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        event_path.chmod(0o600)
+    except Exception:
+        pass
+    return event_path
+
+
+def list_client_audit_events(root: Path, *, event_type: str = "") -> list[Dict[str, Any]]:
+    layout = client_realm_layout(root)
+    audit_dir = layout["audit"]
+    if not audit_dir.exists():
+        return []
+    want_type = str(event_type or "").strip()
+    rows: list[Dict[str, Any]] = []
+    for path in sorted(audit_dir.glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        row = {
+            "version": max(1, int(payload.get("version") or 1)),
+            "realm": str(payload.get("realm") or "default").strip() or "default",
+            "event_type": str(payload.get("event_type") or "").strip(),
+            "created_at": float(payload.get("created_at") or 0.0),
+            "payload": dict(payload.get("payload") or {}),
+            "path": str(path.resolve()),
+        }
+        if want_type and row["event_type"] != want_type:
+            continue
+        rows.append(row)
+    return rows
+
+
+def materialize_secret_file(
+    root: Path,
+    *,
+    secret_id: str,
+    realm: str = "default",
+    name: Optional[str] = None,
+    password: Optional[str] = None,
+) -> Path:
+    store = FileSecretStore(root, realm=realm)
+    record = store.get_secret_record(secret_id)
+    if record is None:
+        raise ValueError(f"secret_id {secret_id!r} is not present")
+    out_path = managed_key_path(root, name or secret_id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(str(store.get_secret_payload(secret_id, password=password) or ""), encoding="utf-8")
+    try:
+        out_path.chmod(0o600)
+    except Exception:
+        pass
+    return out_path
+
+
+def resolve_client_profile_control_settings(
+    control_settings: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    raw = dict(control_settings or {})
+    profile_name = str(
+        raw.get("engine_host_client_profile")
+        or raw.get("client_profile_name")
+        or ""
+    ).strip()
+    if not profile_name:
+        return raw
+    realm = str(
+        raw.get("engine_host_client_realm")
+        or raw.get("client_realm")
+        or "default"
+    ).strip() or "default"
+    root_raw = str(
+        raw.get("engine_host_client_realm_root")
+        or raw.get("client_realm_root")
+        or ""
+    ).strip()
+    if root_raw:
+        root = Path(root_raw).expanduser().resolve()
+    else:
+        default_config_dir = raw.get("engine_host_default_config_dir") or raw.get("default_config_dir")
+        cfg_root = None if default_config_dir in (None, "") else Path(str(default_config_dir)).expanduser().resolve()
+        root = get_default_client_realm_root(default_config_dir=cfg_root, realm=realm)
+    profile_payload = read_client_profile(root, profile_name)
+    profile = dict(profile_payload.get("profile") or {})
+    if not profile:
+        raise ValueError(f"client profile {profile_name!r} was not found in realm {realm!r}")
+    resolved = dict(profile)
+    resolved["engine_host_client_profile"] = profile_name
+    resolved["engine_host_client_realm"] = realm
+    resolved["engine_host_client_realm_root"] = str(root)
+    secret_id = str(
+        profile.get("control_ssh_key_secret_id")
+        or profile.get("ssh_key_secret_id")
+        or ""
+    ).strip()
+    if secret_id and not str(raw.get("control_ssh_key") or "").strip():
+        managed_name = f"{profile_name}-{secret_id}"
+        resolved["control_ssh_key"] = str(
+            materialize_secret_file(
+                root,
+                secret_id=secret_id,
+                realm=realm,
+                name=managed_name,
+                password=raw.get("engine_host_client_secret_password") or raw.get("client_secret_password"),
+            )
+        )
+    if not str(resolved.get("ssh_known_hosts_line") or "").strip():
+        known_hosts_file = str(profile.get("ssh_known_hosts_file") or "").strip()
+        if known_hosts_file:
+            line = Path(known_hosts_file).expanduser().resolve().read_text(encoding="utf-8").strip()
+            if line:
+                resolved["ssh_known_hosts_line"] = line.splitlines()[0].strip()
+    resolved.update(raw)
+    return resolved

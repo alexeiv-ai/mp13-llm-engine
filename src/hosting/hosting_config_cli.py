@@ -27,14 +27,30 @@ if __package__ in {None, ""}:
     from hosting.client_realm import (
         FileSecretStore,
         get_default_client_realm_root,
+        read_client_profile,
         secret_record_path,
+    )
+    from hosting.transport_bootstrap import (
+        import_transport_bootstrap_bundle,
+        make_transport_bootstrap_bundle,
+        read_transport_bootstrap_bundle,
+        validate_client_transport_profile,
+        write_transport_bootstrap_bundle,
     )
 else:
     from .engine_host_service import EngineHostService, VALID_AUTH_ROLES
     from .client_realm import (
         FileSecretStore,
         get_default_client_realm_root,
+        read_client_profile,
         secret_record_path,
+    )
+    from .transport_bootstrap import (
+        import_transport_bootstrap_bundle,
+        make_transport_bootstrap_bundle,
+        read_transport_bootstrap_bundle,
+        validate_client_transport_profile,
+        write_transport_bootstrap_bundle,
     )
 
 
@@ -481,9 +497,16 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
     secret_realm = str(row.get("private_key_secret_realm") or "default").strip() or "default"
     secret_path = None
     secret_exists = None
+    secret_encryption = None
     if secret_id:
         secret_path = secret_record_path(_client_realm_root(default_config_dir, secret_realm), secret_id)
         secret_exists = secret_path.exists()
+        if secret_exists:
+            try:
+                secret_payload = json.loads(secret_path.read_text(encoding="utf-8"))
+                secret_encryption = str(secret_payload.get("encryption") or "").strip() or None
+            except Exception:
+                secret_encryption = None
     key_origin = str(row.get("key_origin") or row.get("key_source") or "imported").strip().lower()
     public_key_source = str(row.get("public_key_source") or key_origin or "unknown").strip()
     private_key_storage = str(row.get("private_key_storage") or "").strip()
@@ -515,6 +538,7 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
         "private_key_secret_realm": secret_realm if secret_id else None,
         "private_key_secret_path": str(secret_path) if secret_path else None,
         "private_key_secret_exists": secret_exists if secret_id else None,
+        "private_key_secret_encryption": secret_encryption if secret_id else None,
         "private_key_warning": warning or None,
     }
 
@@ -681,6 +705,9 @@ def _print_status_report(result: Dict[str, Any]) -> None:
             rows.append(("admin_private_key_secret_id", key_meta.get("private_key_secret_id")))
         if key_meta.get("private_key_secret_path"):
             rows.append(("admin_private_key_secret_path", key_meta.get("private_key_secret_path")))
+        if key_meta.get("private_key_secret_encryption"):
+            rows.append(("admin_private_key_secret_encryption", key_meta.get("private_key_secret_encryption")))
+        if key_meta.get("private_key_secret_path"):
             rows.append(
                 (
                     "admin_private_key_secret_exists",
@@ -717,6 +744,8 @@ def _print_setup_result_report(result: Dict[str, Any]) -> None:
         _kv_rows([("admin_private_key_secret_id", result.get("admin_private_key_secret_id"))])
     if result.get("admin_private_key_secret_path"):
         _kv_rows([("admin_private_key_secret_path", result.get("admin_private_key_secret_path"))])
+    if result.get("admin_private_key_secret_encryption"):
+        _kv_rows([("admin_private_key_secret_encryption", result.get("admin_private_key_secret_encryption"))])
     if result.get("admin_private_key_warning"):
         _kv_rows([("admin_key_warning", result.get("admin_private_key_warning"))])
     _print_rule("-")
@@ -727,6 +756,30 @@ def _print_setup_result_report(result: Dict[str, Any]) -> None:
     else:
         for item in changes:
             print(f"  {_c('accent', '-')} {_c('value', item)}")
+    _print_rule("=")
+
+
+def _print_transport_bootstrap_report(result: Dict[str, Any]) -> None:
+    _print_rule("=")
+    _print_title("Transport bootstrap")
+    rows: list[Tuple[str, Any]] = [
+        ("status", result.get("status")),
+        ("action", result.get("action")),
+    ]
+    for key in (
+        "bundle_file",
+        "profile_name",
+        "profile_path",
+        "known_hosts_file",
+        "secret_id",
+        "secret_path",
+        "client_realm_root",
+        "target",
+        "transport_key_id",
+    ):
+        if result.get(key):
+            rows.append((key, result.get(key)))
+    _kv_rows(rows)
     _print_rule("=")
 
 
@@ -1151,6 +1204,26 @@ def _resolve_paths(args: argparse.Namespace, *, create_dirs: bool = False) -> Di
     }
 
 
+def _resolve_client_realm_root(args: argparse.Namespace) -> Path:
+    default_config_dir, _ = _default_paths()
+    if str(args.default_config_dir or "").strip():
+        default_config_dir = Path(str(args.default_config_dir)).expanduser().resolve()
+    if str(getattr(args, "client_realm_root", "") or "").strip():
+        return Path(str(args.client_realm_root)).expanduser().resolve()
+    realm = str(getattr(args, "client_realm", "") or "default").strip() or "default"
+    return _client_realm_root(default_config_dir, realm)
+
+
+def _read_text_or_file(*, inline_value: str, file_value: str, field_name: str) -> str:
+    inline = str(inline_value or "").strip()
+    if inline:
+        return inline
+    file_raw = str(file_value or "").strip()
+    if file_raw:
+        return Path(file_raw).expanduser().resolve().read_text(encoding="utf-8").strip()
+    raise ValueError(f"{field_name} is required")
+
+
 def run_status(args: argparse.Namespace) -> Dict[str, Any]:
     paths = _resolve_paths(args, create_dirs=False)
     summary = _summarize_existing_config(
@@ -1261,6 +1334,115 @@ def run_rbac(args: argparse.Namespace) -> Dict[str, Any]:
         )
         return {"status": "ok", "action": "upsert_key", **out}
     raise ValueError("No RBAC action selected")
+
+
+def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
+    action_export = bool(getattr(args, "transport_export_bootstrap", False))
+    action_import = bool(getattr(args, "transport_import_bootstrap", False))
+    action_validate = bool(getattr(args, "transport_validate_profile", False))
+    selected_count = sum(1 for flag in (action_export, action_import, action_validate) if flag)
+    if selected_count > 1:
+        raise ValueError(
+            "Choose only one of --transport-export-bootstrap, --transport-import-bootstrap, or --transport-validate-profile"
+        )
+    if selected_count == 0:
+        raise ValueError("No transport bootstrap action selected")
+    if action_export:
+        target = str(args.transport_target or "").strip()
+        if not target:
+            raise ValueError("--transport-target is required for --transport-export-bootstrap")
+        transport_key_id = str(args.transport_key_id or "").strip()
+        if not transport_key_id:
+            raise ValueError("--transport-key-id is required for --transport-export-bootstrap")
+        bundle_file_raw = str(args.bootstrap_bundle_file or "").strip()
+        if not bundle_file_raw:
+            raise ValueError("--bootstrap-bundle-file is required for --transport-export-bootstrap")
+        transport_public_key = _read_text_or_file(
+            inline_value=str(args.transport_public_key_inline or ""),
+            file_value=str(args.transport_public_key_file or ""),
+            field_name="transport public key",
+        )
+        transport_private_key = _read_text_or_file(
+            inline_value=str(args.transport_private_key_inline or ""),
+            file_value=str(args.transport_private_key_file or ""),
+            field_name="transport private key",
+        )
+        known_hosts_line = _read_text_or_file(
+            inline_value=str(args.ssh_known_hosts_line or ""),
+            file_value=str(args.ssh_known_hosts_file or ""),
+            field_name="ssh known_hosts line",
+        )
+        bundle = make_transport_bootstrap_bundle(
+            target=target,
+            ssh_known_hosts_line=known_hosts_line,
+            transport_key_id=transport_key_id,
+            transport_public_key=transport_public_key,
+            transport_private_key_openssh=transport_private_key,
+            bundle_password=str(getattr(args, "bootstrap_password", "") or ""),
+            control_ssh_fingerprint=str(args.control_ssh_fingerprint or "").strip(),
+            profile_name=str(args.transport_profile_name or "").strip(),
+        )
+        bundle_path = write_transport_bootstrap_bundle(
+            bundle,
+            Path(bundle_file_raw).expanduser().resolve(),
+        )
+        return {
+            "status": "ok",
+            "action": "transport_export_bootstrap",
+            "bundle_file": str(bundle_path),
+            "target": target,
+            "transport_key_id": transport_key_id,
+        }
+    client_realm_root = _resolve_client_realm_root(args)
+    realm = str(getattr(args, "client_realm", "") or "default").strip() or "default"
+    if action_import:
+        bundle_file_raw = str(args.bootstrap_bundle_file or "").strip()
+        if not bundle_file_raw:
+            raise ValueError("--bootstrap-bundle-file is required for --transport-import-bootstrap")
+        bundle = read_transport_bootstrap_bundle(Path(bundle_file_raw).expanduser().resolve())
+        result = import_transport_bootstrap_bundle(
+            bundle=bundle,
+            client_realm_root=client_realm_root,
+            realm=realm,
+            profile_name=str(args.transport_profile_name or "").strip() or None,
+            overwrite_profile=bool(getattr(args, "overwrite_profile", False)),
+            bundle_password=str(getattr(args, "bootstrap_password", "") or ""),
+            secret_password=str(getattr(args, "client_secret_password", "") or ""),
+        )
+        profile = read_client_profile(client_realm_root, str(result.get("profile_name") or ""))
+        return {
+            "status": "ok",
+            "action": "transport_import_bootstrap",
+            "bundle_file": str(Path(bundle_file_raw).expanduser().resolve()),
+            "client_realm_root": str(client_realm_root),
+            "profile_name": result.get("profile_name"),
+            "profile_path": result.get("profile_path"),
+            "known_hosts_file": result.get("known_hosts_file"),
+            "secret_id": result.get("secret_id"),
+            "secret_path": result.get("secret_path"),
+            "secret_encryption": result.get("secret_encryption"),
+            "target": dict(profile.get("profile") or {}).get("engine_host_ssh_target"),
+            "transport_key_id": dict(profile.get("profile") or {}).get("transport_key_id"),
+        }
+    profile_name = str(args.transport_profile_name or "").strip()
+    if not profile_name:
+        raise ValueError("--transport-profile-name is required for --transport-validate-profile")
+    result = validate_client_transport_profile(
+        client_realm_root=client_realm_root,
+        profile_name=profile_name,
+        realm=realm,
+        run_ssh=not bool(getattr(args, "validation_no_ssh_run", False)),
+        ssh_bin=str(getattr(args, "validation_ssh_bin", "") or "ssh").strip() or "ssh",
+        remote_command=str(getattr(args, "validation_remote_command", "") or "exit 0").strip() or "exit 0",
+        timeout_seconds=float(getattr(args, "validation_timeout_seconds", 15.0) or 15.0),
+        secret_password=str(getattr(args, "client_secret_password", "") or ""),
+    )
+    return {
+        "status": str(result.get("status") or "ok"),
+        "action": "transport_validate_profile",
+        "client_realm_root": str(client_realm_root),
+        **result,
+    }
 
 
 def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
@@ -1551,6 +1733,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     admin_private_key_secret_id: Optional[str] = None
     admin_private_key_secret_realm: Optional[str] = None
     admin_private_key_secret_path: Optional[Path] = None
+    admin_private_key_secret_encryption: Optional[str] = None
     export_private = bool(args.export_private_key)
     export_private_path = (
         Path(str(args.export_private_key_path)).expanduser().resolve()
@@ -1585,6 +1768,12 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 _client_realm_root(default_config_dir, admin_private_key_secret_realm or "default"),
                 admin_private_key_secret_id,
             )
+            if admin_private_key_secret_path.exists():
+                try:
+                    secret_payload = json.loads(admin_private_key_secret_path.read_text(encoding="utf-8"))
+                    admin_private_key_secret_encryption = str(secret_payload.get("encryption") or "").strip() or None
+                except Exception:
+                    admin_private_key_secret_encryption = None
         export_private_path = (
             Path(str(row.get("private_key_export_path"))).expanduser().resolve()
             if str(row.get("private_key_export_path") or "").strip()
@@ -1624,9 +1813,12 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                         "auth_method": "public_key",
                         "source": "hosting_config_generate",
                     },
+                    encryption="password_v1" if str(getattr(args, "client_secret_password", "") or "") else "none",
+                    password=str(getattr(args, "client_secret_password", "") or ""),
                 )
                 admin_private_key_secret_id = secret_record.secret_id
                 admin_private_key_secret_path = secret_record_path(client_realm_root, secret_record.secret_id)
+                admin_private_key_secret_encryption = str(secret_record.encryption)
                 private_key_storage = "client_realm_secret"
                 private_key_warning = None
         else:
@@ -1739,6 +1931,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 "admin_private_key_export_path": str(export_private_path) if export_private_path else None,
                 "admin_private_key_secret_id": admin_private_key_secret_id,
                 "admin_private_key_secret_realm": admin_private_key_secret_realm,
+                "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
             },
             "files": {
                 "control_state_file": str(control_state_path),
@@ -1825,6 +2018,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "admin_private_key_path": str(export_private_path) if export_private_path else None,
         "admin_private_key_secret_id": admin_private_key_secret_id,
         "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
+        "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
         "admin_private_key_warning": private_key_warning,
     }
 
@@ -2051,6 +2245,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--export-private-key", action="store_true", default=False)
     p.add_argument("--export-private-key-path", default="")
+    p.add_argument("--client-realm", default="default", help="Client realm name for client-local secret/profile operations")
+    p.add_argument("--client-realm-root", default="", help="Override client realm root path")
+    p.add_argument("--transport-export-bootstrap", action="store_true", help="Export a transport bootstrap bundle and exit")
+    p.add_argument("--transport-import-bootstrap", action="store_true", help="Import a transport bootstrap bundle into the client realm and exit")
+    p.add_argument("--transport-validate-profile", action="store_true", help="Validate an imported transport client profile and exit")
+    p.add_argument("--bootstrap-bundle-file", default="", help="Transport bootstrap bundle file path for export/import")
+    p.add_argument("--transport-target", default="", help="SSH target for transport bootstrap export")
+    p.add_argument("--transport-key-id", default="", help="Transport key id for transport bootstrap export")
+    p.add_argument("--transport-public-key-file", default="", help="Transport public key file for transport bootstrap export")
+    p.add_argument("--transport-public-key-inline", default="", help="Inline transport public key for transport bootstrap export")
+    p.add_argument("--transport-private-key-file", default="", help="Transport private key file for transport bootstrap export")
+    p.add_argument("--transport-private-key-inline", default="", help="Inline transport private key for transport bootstrap export")
+    p.add_argument("--ssh-known-hosts-file", default="", help="Known hosts line file for transport bootstrap export")
+    p.add_argument("--ssh-known-hosts-line", default="", help="Inline known hosts line for transport bootstrap export")
+    p.add_argument("--transport-profile-name", default="", help="Suggested/imported client profile name for transport bootstrap")
+    p.add_argument("--control-ssh-fingerprint", default="", help="Optional SSH host fingerprint metadata for transport bootstrap")
+    p.add_argument("--overwrite-profile", action="store_true", default=False, help="Allow transport bootstrap import to overwrite an existing profile")
+    p.add_argument("--bootstrap-password", default="", help="Password for encrypting or decrypting transport bootstrap private-key payloads")
+    p.add_argument("--client-secret-password", default="", help="Password for storing or materializing encrypted client-realm secret records")
+    p.add_argument("--validation-no-ssh-run", action="store_true", default=False, help="Validate transport profile files/settings without running SSH")
+    p.add_argument("--validation-ssh-bin", default="ssh", help="SSH binary used for transport profile validation")
+    p.add_argument("--validation-remote-command", default="exit 0", help="Remote command for transport profile SSH validation")
+    p.add_argument("--validation-timeout-seconds", type=float, default=15.0, help="Timeout for transport profile SSH validation")
     return p
 
 
@@ -2085,6 +2302,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _print_audit_report(result)
             else:
                 _print_key_change_report(result)
+        elif bool(args.transport_export_bootstrap or args.transport_import_bootstrap):
+            result = run_transport_bootstrap(args)
+            _print_transport_bootstrap_report(result)
         else:
             result = run_setup(args)
             if not bool(args.interactive):

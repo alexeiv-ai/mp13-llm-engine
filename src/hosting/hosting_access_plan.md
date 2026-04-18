@@ -31,18 +31,27 @@ Do not use it as the implementation-aligned architecture document; that role bel
    - dedicated client realm root/layout helpers
    - `client_access.json`
    - file-backed tagged secret records
-4. `hosting_config_cli` already supports:
+   - client profile persistence
+   - client-local audit event records
+4. Transport bootstrap bundle helpers now exist at module level:
+   - bundle creation/validation
+   - file export/import helpers
+   - client-realm import with strict `ssh_known_hosts_line` requirement
+5. `hosting_config_cli` now exposes local-helper transport bootstrap export/import commands for file-based out-of-band transfer.
+6. `hosting_config_cli` already supports:
    - public-key import
    - generated keypair creation
    - optional file export of generated private keys
    - metadata about key origin and private-key storage state
-5. New generated-key steady state can use client-realm secret storage instead of embedding raw private keys in `keys.json`.
-6. Password-encrypted secret records are planned in the interface but not implemented yet because no crypto backend/dependency has been adopted.
-7. Current client control settings are plain values such as:
+7. New generated-key steady state can use client-realm secret storage instead of embedding raw private keys in `keys.json`.
+8. Password-encrypted secret records and password-encrypted transport bootstrap private-key payloads now exist through the `password_v1` file/envelope path.
+9. Imported client profiles can now automatically feed `EngineHostControlChannel` construction paths through client-realm profile resolution and managed SSH-key materialization.
+10. Current client control settings are plain values such as:
    - `control_ssh_key`
    - `ssh_known_hosts_line`
    - `control_ssh_fingerprint`
    - `engine_host_session_token`
+11. Imported transport profiles can now be validated through a strict SSH probe path or a local consistency-only validation path.
 
 ## 4. Target Outcome
 
@@ -143,18 +152,11 @@ Each secret record should carry:
 
 Password encryption requirements:
 
-1. Use a standard KDF and authenticated encryption primitive from Python crypto dependencies already permitted by the project, or add one explicitly as part of this work.
+1. The current `password_v1` path uses a stdlib-only envelope built from `hashlib.scrypt` for KDF plus an authenticated ciphertext wrapper, so it can ship without adding a new dependency.
 2. Store KDF parameters with the record.
 3. Never persist the supplied password.
 4. Permit future rewrapping into OS-native secret backends.
-
-If crypto dependency policy is not yet settled:
-
-1. Phase 1 may define the storage interface and record schema first.
-2. Implementation may initially support:
-   - unencrypted tagged files
-   - password-encrypted OpenSSH private-key files where applicable
-3. The plan should still reserve the `password_v1` envelope shape so migration is deterministic.
+5. Keep the `password_v1` envelope versioned so it can later be replaced or migrated onto OS-native secret backends or a dedicated crypto library.
 
 ### 6.3 Transport Bootstrap Artifact
 
@@ -288,7 +290,7 @@ Scope:
 Deliverables:
 
 1. Import command/API.
-2. Profile update logic for `EngineHostControlChannel` settings.
+2. Profile update logic for `EngineHostControlChannel` settings, including managed SSH-key materialization from client-realm secret records.
 3. Validation command that proves strict host-key verification is active.
 
 Exit criteria:
@@ -400,8 +402,8 @@ Manual validation:
 
 ## 12. Open Decisions
 
-1. Exact crypto library and password-encryption primitive for file secret records.
-2. Whether bootstrap bundle encryption reuses the same secret-record envelope or a separate transfer-oriented envelope.
+1. Whether the current stdlib `password_v1` envelope should later be replaced by a dedicated crypto library or OS-native protection layer.
+2. Whether bootstrap bundle encryption should remain aligned with the same `password_v1` envelope or split into a transfer-specific format later.
 3. Whether client profiles live inside hosting realm files or remain external config objects with hosting-managed references.
 4. Whether transport bootstrap export also writes SSH config snippets or leaves that strictly optional.
 5. Whether plaintext copy/paste export is allowed by default in interactive mode or must always be explicitly enabled.

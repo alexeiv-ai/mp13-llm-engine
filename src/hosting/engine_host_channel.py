@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 from ._process_utils import pid_alive
+from .client_realm import resolve_client_profile_control_settings
 from .engine_host_connection import CommandError
 
 # Keywords that indicate an expired or invalid session token in daemon error strings.
@@ -50,7 +51,7 @@ class EngineHostControlChannel:
     """Command-channel wrapper — persistent daemon connection with subprocess fallback."""
 
     def __init__(self, control_settings: Optional[Dict[str, Any]] = None):
-        self.control_settings: Dict[str, Any] = dict(control_settings or {})
+        self.control_settings: Dict[str, Any] = resolve_client_profile_control_settings(control_settings)
         self._base_cmd: List[str] = []
         self._engines_state_file = self.control_settings.get("engine_host_state_file")
         self._control_state_file = self.control_settings.get("engine_host_control_state_file")
