@@ -2872,78 +2872,129 @@ class EngineSession:
             return None
         return self._serialize_system_message_segments(segments)
 
-    @_with_read_lock
-    def get_effective_adapters(self, active_turn: Optional[Turn]) -> List[str]:
+    def _get_effective_stack_commands_unlocked(
+        self,
+        active_turn: Optional[Turn],
+        *,
+        change_key: str,
+        command_type: Optional[str] = None,
+        default_op: str = "add",
+    ) -> List[Tuple[Optional[str], Command]]:
         """
-        Calculates the effective adapter stack for a given turn by replaying commands
-        from the session history, including the new 'pop <target>' logic.
+        Return effective stack-mutating commands for a change key after applying pop commands.
+
+        This is intentionally Turn/Command-only so callers can build typed state while preserving
+        stack_id metadata for display or targeted pop UIs.
         """
         if not active_turn:
             return []
-
         path: List[Turn] = self.get_active_path_for_llm(active_turn)
         if not path:
             return []
 
-        # 1. Collect all relevant commands
         all_ops: List[Tuple[Turn, Command]] = []
         for turn in path:
-            for cmd in turn.cmd:
-                if cmd.cmd_type == Command.STATE_CHANGE and cmd.data.get("change") == "adapters_command":
+            for cmd in getattr(turn, "cmd", []) or []:
+                if command_type and cmd.cmd_type != command_type:
+                    continue
+                if cmd.data.get("change") == change_key:
                     all_ops.append((turn, cmd))
 
-        # 2. Process pops inline to build the effective command list.
         filtered_ops: List[Tuple[Turn, Command]] = []
         for turn, cmd in all_ops:
-            op_type = cmd.data.get("op")
+            op_type = (cmd.data.get("op") or default_op).lower()
             if op_type != "pop":
                 filtered_ops.append((turn, cmd))
                 continue
 
             target_id = cmd.data.get("stack_id")
             if not target_id:
-                # simple pop: drop the most recent set/add
                 for idx in range(len(filtered_ops) - 1, -1, -1):
-                    if filtered_ops[idx][1].data.get("op") in {"set", "add"}:
+                    if (filtered_ops[idx][1].data.get("op") or default_op).lower() in {"set", "add"}:
                         filtered_ops.pop(idx)
                         break
                 continue
 
-            removed = False
             for idx, (_, candidate_cmd) in enumerate(filtered_ops):
-                if candidate_cmd.data.get("stack_id") == target_id and candidate_cmd.data.get("change") == "adapters_command":
+                if (
+                    candidate_cmd.data.get("stack_id") == target_id
+                    and candidate_cmd.data.get("change") == change_key
+                ):
                     filtered_ops.pop(idx)
-                    removed = True
                     break
-            if removed:
-                continue
 
-        valid_ops: List[Command] = [cmd for _, cmd in filtered_ops]
-        
-        # 3. Process the filtered operations to build the final adapter stack
-        adapter_stack: List[List[str]] = []
+        return [(cmd.data.get("stack_id"), cmd) for _, cmd in filtered_ops]
 
-        for cmd in valid_ops:
-            op = cmd.data.get("op")
-            if op == "set":
-                adapter_stack = [cmd.data.get("adapters", [])]
-            elif op == "add":
-                adapter_stack.append(cmd.data.get("adapters", []))
-            elif op == "pop":
-                # This is a simple pop, as targeted pops were already handled
-                if adapter_stack:
-                    adapter_stack.pop()
+    @_with_read_lock
+    def get_effective_stack_commands(
+        self,
+        active_turn: Optional[Turn],
+        *,
+        change_key: str,
+        command_type: Optional[str] = None,
+        default_op: str = "add",
+    ) -> List[Tuple[Optional[str], Command]]:
+        return self._get_effective_stack_commands_unlocked(
+            active_turn,
+            change_key=change_key,
+            command_type=command_type,
+            default_op=default_op,
+        )
 
-        # The effective adapters are the top of the stack
-        if not adapter_stack:
+    def _adapter_list_from_command(self, cmd: Command) -> List[str]:
+        adapters = cmd.data.get("adapters") if "adapters" in cmd.data else cmd.data.get("value")
+        if isinstance(adapters, str):
+            return [adapters]
+        return list(adapters or [])
+
+    def _get_effective_adapter_entries_unlocked(
+        self,
+        active_turn: Optional[Turn],
+    ) -> List[Tuple[Optional[str], List[str]]]:
+        entries: List[Tuple[Optional[str], List[str]]] = []
+        for stack_id, cmd in self._get_effective_stack_commands_unlocked(
+            active_turn,
+            change_key="adapters_command",
+            command_type=Command.STATE_CHANGE,
+            default_op="set",
+        ):
+            op = (cmd.data.get("op") or "set").lower()
+            adapter_list = self._adapter_list_from_command(cmd)
+            if op == "add":
+                entries.append((stack_id, adapter_list))
+            elif op == "set":
+                entries = [(stack_id, adapter_list)] if adapter_list else []
+            elif op == "reset":
+                entries = []
+        return entries
+
+    @_with_read_lock
+    def get_effective_adapter_entries(
+        self,
+        active_turn: Optional[Turn],
+    ) -> List[Tuple[Optional[str], List[str]]]:
+        return self._get_effective_adapter_entries_unlocked(active_turn)
+
+    @_with_read_lock
+    def get_effective_adapters(self, active_turn: Optional[Turn]) -> List[str]:
+        """
+        Calculates the effective adapter stack for a given turn by replaying commands
+        from the session history, including the new 'pop <target>' logic.
+        """
+        entries = self._get_effective_adapter_entries_unlocked(active_turn)
+        if not entries:
             return [] 
         
-        final_adapters = adapter_stack[-1]
+        final_adapters = entries[-1][1]
         # Ensure __base__ is returned for an empty list, but allow an empty list if it was explicitly set
         if not final_adapters:
-             # Check if the last operation was an explicit set to empty
-            last_op = valid_ops[-1] if valid_ops else None
-            if last_op and last_op.data.get("op") == "set" and last_op.data.get("adapters") == []:
+            last_cmd = self._get_effective_stack_commands_unlocked(
+                active_turn,
+                change_key="adapters_command",
+                command_type=Command.STATE_CHANGE,
+                default_op="set",
+            )[-1][1] if active_turn else None
+            if last_cmd and last_cmd.data.get("op") == "set" and last_cmd.data.get("adapters") == []:
                 return []
             return ["__base__"]
 
@@ -3883,59 +3934,36 @@ class EngineSession:
           overrides earlier ones for the view; otherwise it inherits the prior effective mode.
         - "pop"/"reset" remove scope layers (pop targets the newest or a specific id).
         """
-        path: List["Turn"] = self.get_active_path_for_llm(current_turn) if current_turn else []
-        scopes: List[ToolsScope] = []
+        return [scope for _, scope in self._get_effective_tools_scope_entries_unlocked(current_turn)]
 
-        # 1) Collect all tools_scope commands along the active LLM path.
-        all_ops: List[Tuple["Turn", Command]] = []
-        for turn in path:
-            for cmd in turn.cmd:
-                if cmd.cmd_type == Command.STATE_CHANGE and cmd.data.get("change") == "tools_scope":
-                    all_ops.append((turn, cmd))
-
-        # 2) Process pops inline to build the effective command list.
-        filtered_ops: List[Tuple["Turn", Command]] = []
-        for turn, cmd in all_ops:
-            op_type = (cmd.data.get("op") or "add").lower()
-            if op_type != "pop":
-                filtered_ops.append((turn, cmd))
-                continue
-
-            target_id = cmd.data.get("stack_id")
-            if not target_id:
-                for idx in range(len(filtered_ops) - 1, -1, -1):
-                    if (filtered_ops[idx][1].data.get("op") or "add").lower() in {"set", "add"}:
-                        filtered_ops.pop(idx)
-                        break
-                continue
-
-            removed = False
-            for idx, (_, candidate_cmd) in enumerate(filtered_ops):
-                if candidate_cmd.data.get("stack_id") == target_id and candidate_cmd.data.get("change") == "tools_scope":
-                    filtered_ops.pop(idx)
-                    removed = True
-                    break
-            if removed:
-                continue
-
-        valid_ops = [cmd for _, cmd in filtered_ops]
-
-        # 4) Replay filtered operations to reconstruct the scope stack.
-        for cmd in valid_ops:
+    def _get_effective_tools_scope_entries_unlocked(
+        self,
+        current_turn: Optional["Turn"],
+    ) -> List[Tuple[Optional[str], ToolsScope]]:
+        entries: List[Tuple[Optional[str], ToolsScope]] = []
+        for stack_id, cmd in self._get_effective_stack_commands_unlocked(
+            current_turn,
+            change_key="tools_scope",
+            command_type=Command.STATE_CHANGE,
+            default_op="add",
+        ):
             op = (cmd.data.get("op") or "add").lower()
             scope_payload = cmd.data.get("scope")
             scope_obj = ToolsScope.from_dict(scope_payload) if scope_payload else None
             if op == "add":
-                scopes.append(scope_obj or ToolsScope())
+                entries.append((stack_id, scope_obj or ToolsScope()))
             elif op == "set":
-                scopes = [scope_obj] if scope_obj and not scope_obj.is_noop() else []
-            elif op == "pop":
-                if scopes:
-                    scopes.pop()
+                entries = [(stack_id, scope_obj)] if scope_obj and not scope_obj.is_noop() else []
             elif op == "reset":
-                scopes = []
+                entries = []
+        return entries
 
-        return scopes
+    @_with_read_lock
+    def get_effective_tools_scope_entries(
+        self,
+        current_turn: Optional["Turn"],
+    ) -> List[Tuple[Optional[str], ToolsScope]]:
+        return self._get_effective_tools_scope_entries_unlocked(current_turn)
 
     @_with_read_lock
     def get_tools_access(

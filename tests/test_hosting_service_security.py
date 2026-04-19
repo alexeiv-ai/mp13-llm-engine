@@ -1,0 +1,511 @@
+from __future__ import annotations
+
+import base64
+import os
+import time
+from pathlib import Path
+
+import pytest
+
+from hosting.engine_host_service import EngineHostService
+
+
+def _make_service(tmp_path: Path) -> EngineHostService:
+    return EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+
+def _install_ipc_http_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _stub(
+        self,
+        *,
+        reg,
+        engine_id: str,
+        method: str,
+        path: str,
+        query: str,
+        headers: dict[str, str],
+        body_b64: str,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        body = b'{"ok":true}' if str(path).startswith("/health") else b"not found"
+        status = 200 if str(path).startswith("/health") else 404
+        return {
+            "engine_id": str(engine_id),
+            "endpoint": "ipc://local",
+            "url": f"ipc://{engine_id}{path}",
+            "status_code": status,
+            "headers": {"content-type": "application/json" if status == 200 else "text/plain"},
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_size": len(body),
+            "truncated": False,
+        }
+
+    monkeypatch.setattr(EngineHostService, "_proxy_request_via_ipc", _stub)
+
+
+def test_auth_bootstrap_and_session_enforcement(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+
+    # Bootstrap admin key and require auth.
+    upsert = svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
+    assert upsert["key_id"] == "mgmt1"
+    cfg = svc.set_control_config(require_auth=True)
+    assert cfg["require_auth"] is True
+
+    with pytest.raises(PermissionError):
+        svc.authorize_command("discover-running", {})
+
+    issued = svc.auth_issue_session(key_id="mgmt1", key_secret="secret1", scope="control", ttl_seconds=300)
+    token = str(issued["token"])
+    svc.authorize_command("discover-running", {"session_token": token})
+
+
+def test_reset_hosting_access_clears_only_auth_state(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
+    svc.set_control_config(
+        require_auth=True,
+        access_profile={"connectivity_mode": "local_only"},
+        endpoint_mode_default="shared",
+    )
+    issued = svc.auth_issue_session(key_id="mgmt1", key_secret="secret1", scope="control", ttl_seconds=300)
+    assert str(issued.get("token") or "")
+
+    out = svc.reset_hosting_access()
+
+    assert out["status"] == "ok"
+    assert out["cleared_keys"] == 1
+    assert out["cleared_sessions"] == 1
+    cfg = svc.get_control_config()
+    assert cfg["require_auth"] is True
+    assert str(cfg["endpoint_mode_default"] or "") == "shared"
+    assert cfg["keys_count"] == 0
+    assert cfg["sessions_count"] == 0
+
+
+def test_traffic_scope_engine_allowlist_enforced(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(
+        key_id="traffic1",
+        key_secret="secret1",
+        role="model_user",
+        allowed_engines=["worker_a"],
+    )
+    svc.set_control_config(require_auth=True)
+
+    issued = svc.auth_issue_session(
+        key_id="traffic1",
+        key_secret="secret1",
+        scope="traffic",
+        engine_ids=["worker_a"],
+        ttl_seconds=300,
+    )
+    token = str(issued["token"])
+
+    # Allowed engine.
+    svc.authorize_command("proxy-request", {"session_token": token, "engine_id": "worker_a"})
+
+    # Disallowed engine.
+    with pytest.raises(PermissionError):
+        svc.authorize_command("proxy-request", {"session_token": token, "engine_id": "worker_b"})
+
+
+def test_config_selector_restriction_blocks_path_traversal(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    with pytest.raises(ValueError):
+        svc.models_from_config("../secrets")
+
+    with pytest.raises(ValueError):
+        svc.connect_from_config(config_path="C:\\windows\\system32\\x.json")
+
+
+def test_proxy_request_policy_and_metrics_ring_buffer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = _make_service(tmp_path)
+    _install_ipc_http_stub(monkeypatch)
+    svc.register_spawned(
+        engine_id="worker1",
+        pid=os.getpid(),
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+    )
+
+    # Restrict to GET /health path.
+    svc.set_control_config(
+        traffic_policy={
+            "allowed_methods": ["GET"],
+            "allowed_path_prefixes": ["/health"],
+        }
+    )
+
+    with pytest.raises(PermissionError):
+        svc.proxy_request(engine_id="worker1", method="POST", path="/health")
+
+    with pytest.raises(PermissionError):
+        svc.proxy_request(engine_id="worker1", method="GET", path="/other")
+
+    ok = svc.proxy_request(engine_id="worker1", method="GET", path="/health")
+    assert int(ok["status_code"]) == 200
+    assert ok["truncated"] is False
+    payload = base64.b64decode(str(ok["body_b64"]))
+    assert b'"ok":true' in payload
+
+    metrics = svc.get_host_metrics()
+    proxy = dict(metrics.get("proxy") or {})
+    assert int(proxy.get("total") or 0) >= 1
+    assert int(proxy.get("ok") or 0) >= 1
+    assert int(proxy.get("inflight_total") or 0) == 0
+    recent = list(proxy.get("recent_requests") or [])
+    assert len(recent) >= 1
+    last = dict(recent[-1])
+    assert str(last.get("engine_id") or "") == "worker1"
+    assert str(last.get("method") or "") == "GET"
+    assert str(last.get("path") or "") == "/health"
+    assert int(last.get("status_code") or 0) == 200
+    assert str(last.get("outcome") or "") == "ok"
+
+
+def test_per_engine_traffic_policy_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = _make_service(tmp_path)
+    _install_ipc_http_stub(monkeypatch)
+    svc.register_spawned(
+        engine_id="worker1",
+        pid=os.getpid(),
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+    )
+    svc.register_spawned(
+        engine_id="worker2",
+        pid=os.getpid(),
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+    )
+    svc.set_control_config(
+        traffic_policy={
+            "allowed_methods": ["GET"],
+            "allowed_path_prefixes": ["/health"],
+        },
+        engine_traffic_policies={
+            "worker2": {
+                "allowed_methods": ["GET"],
+                "allowed_path_prefixes": ["/other"],
+            }
+        },
+    )
+
+    with pytest.raises(PermissionError):
+        svc.proxy_request(engine_id="worker1", method="GET", path="/other")
+
+    # worker2 override allows /other path; backend returns 404 but should pass policy.
+    out = svc.proxy_request(engine_id="worker2", method="GET", path="/other")
+    assert int(out["status_code"]) == 404
+
+
+def test_proxy_rpc_reports_clear_error_when_engine_not_registered(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+
+    with pytest.raises(ValueError, match="engine 'missing_worker' is not registered"):
+        svc.proxy_rpc_call(engine_id="missing_worker", method="run-inference", params={})
+
+
+def test_proxy_rpc_reports_clear_error_when_worker_ipc_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="worker_missing_ipc",
+        pid=os.getpid(),
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        worker_ipc_family="AF_PIPE" if os.name == "nt" else "AF_UNIX",
+        worker_ipc_address="\\\\.\\pipe\\mp13-missing-ipc" if os.name == "nt" else str(tmp_path / "missing.sock"),
+    )
+
+    class _MissingPipeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr("hosting.engine_host_service.MPClient", _MissingPipeClient)
+
+    with pytest.raises(RuntimeError, match="worker IPC endpoint is unavailable for engine 'worker_missing_ipc'"):
+        svc.proxy_rpc_call(engine_id="worker_missing_ipc", method="run-inference", params={})
+
+
+def test_auth_audit_sessions_and_tokens_redact_secrets(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
+    svc.set_control_config(require_auth=True)
+    issued = svc.auth_issue_session(
+        key_id="mgmt1",
+        key_secret="secret1",
+        scope="control",
+        ttl_seconds=300,
+    )
+    session_token = str(issued["token"])
+    token_row = svc.issue_token("worker1", backend_id="backend:abc")
+    issued_token = str(token_row["token"])
+
+    sessions = svc.auth_list_sessions()
+    assert int(sessions.get("sessions_count") or 0) >= 1
+    session_rows = list(sessions.get("sessions") or [])
+    assert any(str(r.get("key_id") or "") == "mgmt1" for r in session_rows)
+    for r in session_rows:
+        preview = str(r.get("token_preview") or "")
+        assert preview
+        assert preview != session_token
+
+    tokens = svc.auth_list_issued_tokens()
+    assert int(tokens.get("engine_tokens_count") or 0) >= 1
+    engine_rows = list(tokens.get("engine_tokens") or [])
+    assert any(str(r.get("engine_id") or "") == "worker1" for r in engine_rows)
+    for r in engine_rows:
+        preview = str(r.get("token_preview") or "")
+        assert preview
+        assert preview != issued_token
+
+
+def test_auth_audit_commands_require_control_scope_when_auth_enabled(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
+    svc.set_control_config(require_auth=True)
+
+    with pytest.raises(PermissionError):
+        svc.authorize_command("auth-list-sessions", {})
+    with pytest.raises(PermissionError):
+        svc.authorize_command("auth-list-issued-tokens", {})
+
+    issued = svc.auth_issue_session(
+        key_id="mgmt1",
+        key_secret="secret1",
+        scope="control",
+        ttl_seconds=300,
+    )
+    token = str(issued["token"])
+    svc.authorize_command("auth-list-sessions", {"session_token": token})
+    svc.authorize_command("auth-list-issued-tokens", {"session_token": token})
+
+
+def test_ssh_session_binding_enforced(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
+    svc.set_control_config(require_auth=True)
+    issued = svc.auth_issue_session(
+        key_id="mgmt1",
+        key_secret="secret1",
+        scope="control",
+        ttl_seconds=300,
+        ssh_binding={"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
+    )
+    token = str(issued["token"])
+
+    # Missing binding is denied for bound sessions.
+    with pytest.raises(PermissionError):
+        svc.authorize_command("discover-running", {"session_token": token})
+
+    # Target mismatch is denied.
+    with pytest.raises(PermissionError):
+        svc.authorize_command(
+            "discover-running",
+            {
+                "session_token": token,
+                "_ssh_session_binding": {"target": "user@other-host", "key_fingerprint": "SHA256:abc"},
+            },
+        )
+
+    # Exact binding is accepted.
+    svc.authorize_command(
+        "discover-running",
+        {
+            "session_token": token,
+            "_ssh_session_binding": {"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
+        },
+    )
+
+
+def test_auth_list_sessions_filter_and_pagination(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
+    svc.auth_upsert_key(key_id="traffic1", key_secret="secret2", role="model_user", allowed_engines=["worker1"])
+    svc.set_control_config(require_auth=True)
+    _ = svc.auth_issue_session(key_id="mgmt1", key_secret="secret1", scope="control", ttl_seconds=300)
+    _ = svc.auth_issue_session(key_id="traffic1", key_secret="secret2", scope="traffic", engine_ids=["worker1"], ttl_seconds=300)
+
+    filtered = svc.auth_list_sessions(scope="traffic", limit=10, offset=0)
+    assert int(filtered.get("sessions_count") or 0) >= 1
+    rows = list(filtered.get("sessions") or [])
+    assert rows
+    assert all(str(r.get("scope") or "").lower() == "traffic" for r in rows)
+
+    paged1 = svc.auth_list_sessions(limit=1, offset=0)
+    paged2 = svc.auth_list_sessions(limit=1, offset=1)
+    assert int(paged1.get("count") or 0) == 1
+    assert int(paged2.get("count") or 0) in {0, 1}
+    assert int(paged1.get("offset") or 0) == 0
+    assert int(paged1.get("limit") or 0) == 1
+
+
+def test_auth_list_issued_tokens_filter_and_pagination(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    _ = svc.issue_token("worker1", backend_id="backend:a")
+    _ = svc.issue_token("worker2", backend_id="backend:b")
+    _ = svc.issue_resource_token("dataset", "data1", backend_id="backend:a")
+
+    filtered_engine = svc.auth_list_issued_tokens(engine_id="worker1", limit=10, offset=0)
+    engine_rows = list(filtered_engine.get("engine_tokens") or [])
+    assert engine_rows
+    assert all(str(r.get("engine_id") or "") == "worker1" for r in engine_rows)
+
+    filtered_resource = svc.auth_list_issued_tokens(resource_kind="dataset", resource_id="data1", limit=10, offset=0)
+    resource_rows = list(filtered_resource.get("resource_tokens") or [])
+    assert resource_rows
+    assert all(str(r.get("resource_kind") or "") == "dataset" for r in resource_rows)
+    assert all(str(r.get("resource_id") or "") == "data1" for r in resource_rows)
+
+    page1 = svc.auth_list_issued_tokens(limit=1, offset=0)
+    page2 = svc.auth_list_issued_tokens(limit=1, offset=1)
+    assert int(page1.get("count") or 0) == 1
+    assert int(page2.get("count") or 0) in {0, 1}
+    assert int(page1.get("offset") or 0) == 0
+    assert int(page1.get("limit") or 0) == 1
+
+
+def test_public_key_challenge_flow_issues_session(tmp_path: Path, monkeypatch) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(
+        key_id="admin-pub",
+        role="admin",
+        auth_method="public_key",
+        public_key="ssh-ed25519 AAAATESTKEY comment",
+    )
+    svc.set_control_config(require_auth=True)
+
+    # Shared-secret issuance must be blocked for public_key auth_method.
+    with pytest.raises(PermissionError):
+        svc.auth_issue_session(
+            key_id="admin-pub",
+            key_secret="unused",
+            scope="control",
+            ttl_seconds=300,
+        )
+
+    begin = svc.auth_begin_challenge(key_id="admin-pub", scope="control", ttl_seconds=120)
+    challenge_id = str(begin.get("challenge_id") or "")
+    assert challenge_id
+
+    monkeypatch.setattr(
+        EngineHostService,
+        "_verify_ssh_signature",
+        staticmethod(lambda **_kwargs: True),
+    )
+    out = svc.auth_complete_challenge(
+        challenge_id=challenge_id,
+        signature_ssh="-----BEGIN SSH SIGNATURE-----\nFAKE\n-----END SSH SIGNATURE-----",
+    )
+    assert out["status"] == "ok"
+    assert str(out.get("token") or "")
+
+
+def test_public_key_challenge_invalid_signature_denied(tmp_path: Path, monkeypatch) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(
+        key_id="traffic-pub",
+        role="model_user",
+        auth_method="public_key",
+        public_key="ssh-ed25519 AAAATESTKEY comment",
+        allowed_engines=["worker1"],
+    )
+    svc.set_control_config(require_auth=True)
+    begin = svc.auth_begin_challenge(
+        key_id="traffic-pub",
+        scope="traffic",
+        ttl_seconds=120,
+        engine_ids=["worker1"],
+    )
+    challenge_id = str(begin.get("challenge_id") or "")
+    monkeypatch.setattr(
+        EngineHostService,
+        "_verify_ssh_signature",
+        staticmethod(lambda **_kwargs: False),
+    )
+    with pytest.raises(PermissionError):
+        svc.auth_complete_challenge(
+            challenge_id=challenge_id,
+            signature_ssh="-----BEGIN SSH SIGNATURE-----\nBAD\n-----END SSH SIGNATURE-----",
+        )
+
+
+def test_challenge_telemetry_tracks_success_and_replay_suspected(tmp_path: Path, monkeypatch) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(
+        key_id="admin-pub",
+        role="admin",
+        auth_method="public_key",
+        public_key="ssh-ed25519 AAAATESTKEY comment",
+    )
+    svc.set_control_config(require_auth=True)
+    begin = svc.auth_begin_challenge(key_id="admin-pub", scope="control", ttl_seconds=120)
+    cid = str(begin.get("challenge_id") or "")
+    monkeypatch.setattr(
+        EngineHostService,
+        "_verify_ssh_signature",
+        staticmethod(lambda **_kwargs: True),
+    )
+    _ = svc.auth_complete_challenge(
+        challenge_id=cid,
+        signature_ssh="-----BEGIN SSH SIGNATURE-----\nGOOD\n-----END SSH SIGNATURE-----",
+    )
+    # Re-using the same challenge_id should be treated as replay-suspected.
+    with pytest.raises(PermissionError):
+        svc.auth_complete_challenge(
+            challenge_id=cid,
+            signature_ssh="-----BEGIN SSH SIGNATURE-----\nGOOD\n-----END SSH SIGNATURE-----",
+        )
+
+    metrics = svc.get_host_metrics()
+    auth = dict(metrics.get("auth") or {})
+    assert int(auth.get("challenge_begin_total") or 0) >= 1
+    assert int(auth.get("challenge_complete_ok") or 0) >= 1
+    assert int(auth.get("challenge_replay_suspected") or 0) >= 1
+    recent = list(auth.get("challenge_recent_events") or [])
+    assert recent
+    assert any(str(ev.get("event") or "") == "complete_ok" for ev in recent)
+    assert any(bool(ev.get("replay_suspected")) for ev in recent)
+
+
+def test_challenge_completion_enforces_ssh_binding(tmp_path: Path, monkeypatch) -> None:
+    svc = _make_service(tmp_path)
+    svc.auth_upsert_key(
+        key_id="admin-pub",
+        role="admin",
+        auth_method="public_key",
+        public_key="ssh-ed25519 AAAATESTKEY comment",
+    )
+    svc.set_control_config(require_auth=True)
+    begin = svc.auth_begin_challenge(
+        key_id="admin-pub",
+        scope="control",
+        ttl_seconds=120,
+        ssh_binding={"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
+    )
+    cid = str(begin.get("challenge_id") or "")
+    challenge_txt = str(begin.get("challenge") or "")
+    assert "\"ssh_binding_target\":\"user@example-host\"" in challenge_txt
+    assert "\"ssh_binding_key_fingerprint\":\"SHA256:abc\"" in challenge_txt
+
+    monkeypatch.setattr(
+        EngineHostService,
+        "_verify_ssh_signature",
+        staticmethod(lambda **_kwargs: True),
+    )
+    with pytest.raises(PermissionError):
+        svc.auth_complete_challenge(
+            challenge_id=cid,
+            signature_ssh="-----BEGIN SSH SIGNATURE-----\nGOOD\n-----END SSH SIGNATURE-----",
+            presented_ssh_binding={"target": "user@other-host", "key_fingerprint": "SHA256:abc"},
+        )
+
+    ok = svc.auth_complete_challenge(
+        challenge_id=cid,
+        signature_ssh="-----BEGIN SSH SIGNATURE-----\nGOOD\n-----END SSH SIGNATURE-----",
+        presented_ssh_binding={"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
+    )
+    assert ok["status"] == "ok"

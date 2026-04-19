@@ -111,7 +111,11 @@ from hosting.toolbox_harness import ToolboxExecutionHarness
 from .hosted_tool_runtime import execute_tool_round_on_cursor
 from .hosted_chat_demo import HostedChatDemoRuntime, setup_hosted_chat_demo, shutdown_hosted_chat_demo
 from .hosted_tool_visibility import annotate_tool_listing, summarize_effective_tool_view
-from .tools_cli_light import LightweightToolsCliHandler
+from .mp13chat_tools_cli import (
+    LightweightToolsCliHandler,
+    default_external_tool_handler,
+    print_tools_cli_help,
+)
 from .hosted_toolbox_api import (
     HostedToolExecutionRouter,
     attach_existing_hosted_toolbox,
@@ -1718,196 +1722,6 @@ def _format_state_change_annotations(node: Turn, *, show_logs: bool = False) -> 
     return annotations
 
 
-def _split_tool_arg_list(raw_value: str) -> List[str]:
-    if not raw_value:
-        return []
-    return [item.strip() for item in raw_value.split(",") if item.strip()]
-
-
-def _parse_scope_cli_args(arg_str: str) -> Optional[ToolsScope]:
-    """
-    Parses CLI arguments for /t scope set/add commands.
-    Example: /t scope set mode=silent advertise=search silent=calc disabled=db
-    """
-    arg_str = arg_str.strip()
-    if not arg_str:
-        return None
-
-    mode = None
-    advertise: Set[str] = set()
-    silent: Set[str] = set()
-    disabled: Set[str] = set()
-    label: Optional[str] = None
-
-    for token in shlex.split(arg_str):
-        if "=" not in token:
-            continue
-        key, value = token.split("=", 1)
-        key = key.lower().strip()
-        value = value.strip()
-        if not value:
-            continue
-        if key in {"mode", "m"}:
-            mode = value.lower()
-        elif key in {"advertise", "adv", "a"}:
-            advertise.update(_split_tool_arg_list(value))
-        elif key in {"silent", "hide", "s"}:
-            silent.update(_split_tool_arg_list(value))
-        elif key in {"disabled", "deny", "d"}:
-            disabled.update(_split_tool_arg_list(value))
-        elif key in {"label", "name", "l"}:
-            label = value
-
-    scope = ToolsScope(
-        mode=mode,
-        advertise_tools=advertise,
-        silent_tools=silent,
-        disabled_tools=disabled,
-        label=label,
-    ).clean()
-    return None if scope.is_noop() else scope
-
-
-def _normalize_scope_tool_names(scope: ToolsScope, toolbox: Toolbox) -> Tuple[ToolsScope, List[str]]:
-    """
-    Resolves user-entered tool names against the toolbox, supporting '*' wildcards
-    and case-insensitive unique prefixes. Returns normalized scope plus warnings.
-    """
-    if not toolbox:
-        return scope, []
-
-    known_names = sorted(set(toolbox.tools.keys()) | set(toolbox.intrinsic_tools.keys()))
-    lower_map = {name.lower(): name for name in known_names}
-
-    def resolve_name(raw: str) -> Optional[str]:
-        if raw == "*":
-            return "*"
-        key = raw.lower()
-        if key in lower_map:
-            return lower_map[key]
-        prefix_matches = [name for name in known_names if name.lower().startswith(key)]
-        if len(prefix_matches) == 1:
-            return prefix_matches[0]
-        if len(prefix_matches) > 1:
-            non_guides = [name for name in prefix_matches if not name.lower().endswith("_guide")]
-            if len(non_guides) == 1:
-                return non_guides[0]
-        return None
-
-    warnings: List[str] = []
-
-    def normalize_set(names: Set[str]) -> Set[str]:
-        normalized: Set[str] = set()
-        for raw in names:
-            resolved = resolve_name(raw)
-            if resolved:
-                normalized.add(resolved)
-            else:
-                warnings.append(f"{Colors.TOOL_WARNING}Warning: Tool '{raw}' not recognized for scope.{Colors.RESET}")
-        return normalized
-
-    normalized_scope = ToolsScope(
-        mode=scope.mode,
-        advertise_tools=normalize_set(scope.advertise_tools),
-        silent_tools=normalize_set(scope.silent_tools),
-        disabled_tools=normalize_set(scope.disabled_tools),
-        label=scope.label,
-    ).clean()
-
-    return normalized_scope, warnings
-
-
-def _collect_tools_scope_entries(cursor: ChatCursor) -> List[Tuple[Optional[str], ToolsScope]]:
-    """Return effective tools scope stack entries with stack_ids."""
-    if not cursor or not cursor.current_turn:
-        return []
-    session = cursor.session
-    path: List[Turn] = session.get_active_path_for_llm(cursor.current_turn)
-    if not path:
-        return []
-
-    all_ops: List[Tuple[Turn, Command]] = []
-    for turn in path:
-        for cmd in getattr(turn, "cmd", []) or []:
-            if cmd.cmd_type == Command.STATE_CHANGE and cmd.data.get("change") == "tools_scope":
-                all_ops.append((turn, cmd))
-
-    filtered_ops: List[Tuple[Turn, Command]] = []
-    for _, cmd in all_ops:
-        op_type = (cmd.data.get("op") or "add").lower()
-        if op_type != "pop":
-            filtered_ops.append((cursor.current_turn, cmd))
-            continue
-
-        target_id = cmd.data.get("stack_id")
-        if not target_id:
-            for idx in range(len(filtered_ops) - 1, -1, -1):
-                if (filtered_ops[idx][1].data.get("op") or "add").lower() in {"set", "add"}:
-                    filtered_ops.pop(idx)
-                    break
-            continue
-
-        removed = False
-        for idx, (_, candidate_cmd) in enumerate(filtered_ops):
-            if candidate_cmd.data.get("stack_id") == target_id and candidate_cmd.data.get("change") == "tools_scope":
-                filtered_ops.pop(idx)
-                removed = True
-                break
-        if removed:
-            continue
-
-    entries: List[Tuple[Optional[str], ToolsScope]] = []
-    for _, cmd in filtered_ops:
-        op = (cmd.data.get("op") or "add").lower()
-        scope_payload = cmd.data.get("scope")
-        scope_obj = ToolsScope.from_dict(scope_payload) if scope_payload else None
-        stack_id = cmd.data.get("stack_id")
-        if op == "add":
-            entries.append((stack_id, scope_obj or ToolsScope()))
-        elif op == "set":
-            entries = [(stack_id, scope_obj)] if scope_obj and not scope_obj.is_noop() else []
-        elif op == "pop":
-            if entries:
-                entries.pop()
-        elif op == "reset":
-            entries = []
-    return entries
-
-def _print_tools_scope_summary(cursor: ChatCursor, tools_view: ToolsView, entries: List[Tuple[Optional[str], ToolsScope]]) -> None:
-    """Prints the current tools scope stack and resolved permissions."""
-    if entries:
-        print(f"{Colors.SYSTEM}Tool scope stack (oldest -> newest):{Colors.RESET}")
-        for idx, (stack_id, scope) in enumerate(entries, start=1):
-            label = f"{stack_id}: " if stack_id else ""
-            print(f"  {idx}. {label}{scope.describe()}")
-    else:
-        print(f"{Colors.SYSTEM}No active tool scopes. Using context toolbox defaults.{Colors.RESET}")
-
-    effective = summarize_effective_tool_view(
-        tools_view,
-        hosted_advertised_tool_names=_active_hosted_advertised_tool_names(),
-        hosted_hidden_allowed_tool_names=_active_hosted_hidden_allowed_tool_names(),
-    )
-    advertised = ", ".join(list(effective["effective_advertised_tools"])) or "<none>"
-    hidden_allowed = ", ".join(list(effective["effective_hidden_allowed_tools"])) or "<none>"
-    gated = ", ".join(list(effective["effective_gated_tools"])) or "<none>"
-    disabled = ", ".join(list(effective["disabled_tools"])) or "<none>"
-    print(f"{Colors.SYSTEM}Tools mode:{Colors.RESET} {tools_view.mode}")
-    print(f"{Colors.SYSTEM}Advertised tools:{Colors.RESET} {advertised}")
-    print(f"{Colors.SYSTEM}Hidden but allowed:{Colors.RESET} {hidden_allowed}")
-    print(f"{Colors.SYSTEM}Gated tools:{Colors.RESET} {gated}")
-    print(f"{Colors.SYSTEM}Disabled tools:{Colors.RESET} {disabled}")
-    hosted = _active_hosted_toolbox_summary()
-    if hosted:
-        hosted_names = ", ".join(list(effective["hosted_visible_tools"])) or "<none>"
-        hosted_hidden = ", ".join(list(effective["hosted_hidden_allowed_tools"])) or "<none>"
-        print(f"{Colors.SYSTEM}Hosted execution:{Colors.RESET} active")
-        print(f"{Colors.SYSTEM}Hosted-visible tools:{Colors.RESET} {hosted_names}")
-        print(f"{Colors.SYSTEM}Hosted hidden-allowed tools:{Colors.RESET} {hosted_hidden}")
-        hosted_gated = ", ".join(list(effective["hosted_gated_tools"])) or "<none>"
-        print(f"{Colors.SYSTEM}Hosted route-gated tools:{Colors.RESET} {hosted_gated}")
-
-
 def _format_tools_scope_header(cursor: ChatCursor) -> str:
     """Returns a one-line summary of the current tools view."""
     base = f"{Colors.SYSTEM}Tools Scope:{Colors.RESET} "
@@ -2696,65 +2510,6 @@ def apply_adapter_operation(
     else:
         print(f"{Colors.SYSTEM}Adapter stack pop recorded. Active set: {adapters_display}{Colors.RESET}")
     return cursor
-
-def _collect_adapter_scope_entries(cursor: ChatCursor) -> List[Tuple[Optional[str], List[str]]]:
-    """Return effective adapter stack entries with stack_ids."""
-    if not cursor or not cursor.current_turn:
-        return []
-    session = cursor.session
-    path: List[Turn] = session.get_active_path_for_llm(cursor.current_turn)
-    if not path:
-        return []
-
-    all_ops: List[Tuple[Turn, Command]] = []
-    for turn in path:
-        for cmd in getattr(turn, "cmd", []) or []:
-            if cmd.cmd_type == Command.STATE_CHANGE and cmd.data.get("change") == "adapters_command":
-                all_ops.append((turn, cmd))
-
-    filtered_ops: List[Tuple[Turn, Command]] = []
-    for _, cmd in all_ops:
-        op_type = (cmd.data.get("op") or "set").lower()
-        if op_type != "pop":
-            filtered_ops.append((cursor.current_turn, cmd))
-            continue
-
-        target_id = cmd.data.get("stack_id")
-        if not target_id:
-            for idx in range(len(filtered_ops) - 1, -1, -1):
-                if (filtered_ops[idx][1].data.get("op") or "set").lower() in {"set", "add"}:
-                    filtered_ops.pop(idx)
-                    break
-            continue
-
-        removed = False
-        for idx, (_, candidate_cmd) in enumerate(filtered_ops):
-            if candidate_cmd.data.get("stack_id") == target_id and candidate_cmd.data.get("change") == "adapters_command":
-                filtered_ops.pop(idx)
-                removed = True
-                break
-        if removed:
-            continue
-
-    entries: List[Tuple[Optional[str], List[str]]] = []
-    for _, cmd in filtered_ops:
-        op = (cmd.data.get("op") or "set").lower()
-        adapters = cmd.data.get("adapters") if "adapters" in cmd.data else cmd.data.get("value")
-        if isinstance(adapters, str):
-            adapter_list = [adapters]
-        else:
-            adapter_list = list(adapters or [])
-        stack_id = cmd.data.get("stack_id")
-        if op == "add":
-            entries.append((stack_id, adapter_list))
-        elif op == "set":
-            entries = [(stack_id, adapter_list)] if adapter_list else []
-        elif op == "pop":
-            if entries:
-                entries.pop()
-        elif op == "reset":
-            entries = []
-    return entries
 
 def _print_adapter_scope_summary(cursor: ChatCursor, entries: List[Tuple[Optional[str], List[str]]]) -> None:
     if entries:
@@ -3854,17 +3609,7 @@ def print_help():
 
 
 def _print_tools_cli_help() -> None:
-    print(f"{Colors.HEADER}--- /t (Tools) Commands ---{Colors.RESET}")
-    print("  /t e[num]                  List registered tools.")
-    print("  /t h[ide]/sh[ow] <name|num|*|*i|*c|*e,...>  Hide or reveal tools (*i intrinsic, *c callable, *e external).")
-    print("  /t a[ctivate]/d[eactivate] <name|num|*...>  Enable or disable tools (same wildcard support).")
-    print("  /t u[nregister] <name|num|*...>            Remove tools permanently.")
-    print("  /t g[lobal] <a|s|d>         Set tools mode: advertised, silent, or disabled.")
-    print("  /t sc[ope] s[et] m[ode]=... a=foo s=bar d=baz  Record a stacked override (mode=* resets to default).")
-    print("  /t sc[ope] a[dd] ...        Same syntax as 'set'; pushes a later layer (newest wins).")
-    print("  /t sc[ope] p[op] [--cmd] [pop_id|cmd_id|gen_id|anchor_id]  Undo the latest or targeted scope layer.")
-    print("  /t sc[ope] [gen_id]         Show current tool view summary for a turn with related commands pop_ids.")
-    print("  /t sa[ve]/l[oad]/f[ix]/p[rint]/n[ew]/m[odify] ... (see /help).")
+    print_tools_cli_help()
 
 
 def _print_adapter_cli_help() -> None:
@@ -4919,7 +4664,7 @@ async def _handle_adapter_command(args_str: str, cursor: ChatCursor, pt_session:
                 except ValueError as err:
                     print(f"{Colors.ERROR}{err}{Colors.RESET}")
                     return cursor, True
-            entries = _collect_adapter_scope_entries(target_cursor)
+            entries = target_cursor.session.get_effective_adapter_entries(target_cursor.current_turn)
             _print_adapter_scope_summary(target_cursor, entries)
             return cursor, True
         if action == "set":
@@ -5051,29 +4796,7 @@ async def async_input(prompt: str) -> str:
     )
 
 async def external_tool_handler(**kwargs: Any) -> str:
-    """
-    This async function serves as the default implementation for tools created
-    interactively that are not bound to an existing Python function.
-    It prompts the user in the console to provide the result for the tool call.
-    It receives a kwargs bundle containing 'toolbox', 'tool', and the tool's arguments.
-    """
-    # Pop the context arguments from kwargs; the rest are the tool's arguments.
-    toolbox = kwargs.pop("toolbox", None)
-    tool = kwargs.pop("tool", None)
-
-    if not tool or not isinstance(tool, dict) or not toolbox:
-        return "Error: Interactive handler was called without a valid 'tool' definition object."
-
-    tool_name = tool.get("function", {}).get("name", "unknown_tool")
-    tool_args_str = json.dumps(kwargs) # kwargs are the arguments for the tool call
-
-    print(f"\n{Colors.TOOL}--- Tool Call Requires Your Input ---{Colors.RESET}")
-    print(f"  {Colors.TOOL}Tool:{Colors.RESET} {tool_name}")
-    print(f"  {Colors.TOOL}Arguments:{Colors.RESET} {tool_args_str}")
-    print(f"{Colors.TOOL}-------------------------------------------------{Colors.RESET}")
-
-    user_content_input = await async_input(f"Enter result for {tool_name}: ")
-    return user_content_input
+    return await default_external_tool_handler(async_input, **kwargs)
 
 
 async def _tool_execution_action_handler(

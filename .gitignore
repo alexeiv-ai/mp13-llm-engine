@@ -43,7 +43,8 @@ ENV/
 wheelhouse/
 
 # Test output
-test*/
+test-output/
+test-results/
 adapters/
 
 # Temp review directory
