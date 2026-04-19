@@ -161,7 +161,7 @@ toolbox package during this refactor:
 
 ### Phase 0 - Baseline And Safety
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -185,7 +185,7 @@ Tasks:
 
 ### Phase 1 - Create `hosting/toolbox/` Skeleton
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -211,7 +211,7 @@ Verification:
 
 ### Phase 2 - Move Data Models
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -252,7 +252,7 @@ Verification:
 
 ### Phase 3 - Move Environment Management
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -287,7 +287,7 @@ Verification:
 
 ### Phase 4 - Move Staging And Manifest Loading
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -322,7 +322,7 @@ Verification:
 
 ### Phase 5 - Move Sandbox Orchestration
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -353,7 +353,7 @@ Verification:
 
 ### Phase 6 - Move Callback Relay And Tools-View Approval Helpers
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -398,7 +398,7 @@ Verification:
 
 ### Phase 7 - Move Execution Harness
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -428,7 +428,7 @@ Verification:
 
 ### Phase 8 - Move Hosted Toolbox References
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -460,7 +460,7 @@ Verification:
 
 ### Phase 9 - Convert `toolbox_harness.py` To Shim
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -498,21 +498,42 @@ Verification:
 
 ## Current Status
 
-- Toolbox harness split: Not started.
-- `toolbox_harness.py` remains the implementation file.
-- Proposed package: `src/hosting/toolbox/`.
-- Compatibility shim strategy: Required.
-- Daemon/service code movement: Out of scope.
-- Verification baseline: Not yet captured for this refactor.
+- Toolbox harness split: Completed.
+- `src/hosting/toolbox_harness.py` is now a compatibility shim that re-exports
+  the public API from `hosting.toolbox` and preserves selected legacy globals
+  for monkeypatch compatibility.
+- `src/hosting/toolbox/` is now the implementation package.
+- Implemented modules:
+  - `common.py`: stable JSON and hashing helpers.
+  - `cancellation.py`: canceled-tool and resubmission helpers.
+  - `windows_ipc.py`: Windows low-integrity named-pipe helper.
+  - `tools_view.py`: tools-view serialization, approval, and scope helpers.
+  - `callbacks.py`: hosted callback context, relay, and approval requests.
+  - `bundle_models.py`: bundle, sandbox, assignment, environment, startup, and
+    harness dataclasses/specs.
+  - `environment.py`: `ToolboxEnvironmentManager`.
+  - `staging.py`: `StagedToolboxBundle` and `ToolboxBundleStager`.
+  - `orchestration.py`: `ToolboxSandboxOrchestrator`.
+  - `execution.py`: `ToolboxExecutionHarness`.
+  - `hosted_ref.py`: `HostedToolBoxRef`, `PendingHostedToolboxRef`, and
+    `SandboxedToolboxFacade`.
+  - `manifest.py`: `load_toolbox_from_manifest`.
+- Daemon/service code movement: Out of scope and unchanged by this refactor.
+- Verified:
+  - `poetry run pytest tests/test_hosting_toolbox_sandbox.py::test_load_toolbox_from_manifest_supports_intrinsic_only_revision tests/test_hosting_toolbox_sandbox.py::test_native_toolbox_harness_executes_calls_in_parallel tests/test_mp13chat_hosted_toolbox_api.py -q` passed: 20 passed.
+  - `poetry run pytest tests/test_hosting_toolbox_sandbox.py tests/test_mp13chat_hosted_toolbox_api.py tests/test_toolbox_admin.py -q` passed: 140 passed.
+  - `poetry run pytest tests -q` passed: 314 passed, 1 skipped.
 
-## Open Risks
+## Residual Notes
 
-- `subprocess.run` monkeypatch compatibility for environment install tests is the
-  largest compatibility risk once `ToolboxEnvironmentManager` moves.
-- Callback relay behavior touches IPC, threads, futures, and Windows pipe
-  security; move it only after lower-risk data/staging/environment modules are
-  stable.
-- `HostedToolBoxRef` is app-facing and re-exported from `hosting`; move it late.
-- `load_toolbox_from_manifest` is imported by the executor process entrypoint;
-  keep that import path stable until the shim is verified in the full suite.
+- `hosting.toolbox_harness.subprocess.run` monkeypatch compatibility is
+  preserved by keeping `subprocess` available on the shim; environment code
+  still imports the standard module object, so patching `run` on that module is
+  visible to the moved implementation.
+- `Client`, `Listener`, `os`, and `tempfile` remain available on the shim for
+  legacy callers, while the moved callback implementation owns its direct
+  imports.
+- `load_toolbox_from_manifest` remains importable from
+  `hosting.toolbox_harness`, so `toolbox_executor_ipc.py` keeps its existing
+  import path.
 
