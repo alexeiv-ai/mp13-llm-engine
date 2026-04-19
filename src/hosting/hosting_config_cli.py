@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,7 @@ if __package__ in {None, ""}:
         secret_record_path,
     )
     from hosting.transport_bootstrap import (
+        DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND,
         import_transport_bootstrap_bundle,
         install_transport_authorized_key,
         make_transport_bootstrap_bundle,
@@ -54,6 +56,7 @@ else:
         secret_record_path,
     )
     from .transport_bootstrap import (
+        DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND,
         import_transport_bootstrap_bundle,
         install_transport_authorized_key,
         make_transport_bootstrap_bundle,
@@ -70,6 +73,7 @@ VALID_USAGE_INTENTS = {"single_admin", "role_split", "multi_user"}
 VALID_CONTEXT_CONSUMERS = {"local_experiment", "local_backend", "ssh_relay", "remote_backend"}
 VALID_CONTEXT_LIFECYCLES = {"single_exclusive", "reconnect_shared"}
 VALID_CONTEXT_CREDENTIALS = {"ssh_keys", "password_local", "no_auth_local"}
+VALID_ADMIN_CAPABILITIES = {"no_admin_available", "admin_available_interactive", "admin_managed_externally"}
 VALID_LIFECYCLE_PROFILES = {
     "foreground_terminal_bound",
     "detached_user_process",
@@ -144,6 +148,9 @@ OPTION_HINTS: Dict[str, str] = {
     "no_auth_local": "only for local single-user exclusive access",
     "shared_secret": "local_only session issuance only; remote modes require public-key challenge",
     "public_key": "works for local and remote; required for SSH relay/truly remote",
+    "no_admin_available": "use user-scoped SSH setup only",
+    "admin_available_interactive": "can approve elevated setup prompts; password is not stored",
+    "admin_managed_externally": "generate instructions for an administrator or infrastructure tool",
 }
 
 OPTION_ORDER: Dict[str, int] = {
@@ -159,6 +166,9 @@ OPTION_ORDER: Dict[str, int] = {
     "ssh_keys": 10,
     "password_local": 20,
     "no_auth_local": 30,
+    "no_admin_available": 10,
+    "admin_available_interactive": 20,
+    "admin_managed_externally": 30,
     "local_only": 10,
     "ssh_tunnel_only": 20,
     "truly_remote": 30,
@@ -661,7 +671,7 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
     print(_c("muted", "Answer these first so setup can suggest a safe default configuration."))
     context: Dict[str, str] = {}
     step = 0
-    while step < 4:
+    while step < 5:
         if step == 0:
             value = _prompt_choice(
                 "Who consumes hosting?",
@@ -674,6 +684,7 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
                 context["lifecycle"] = "single_exclusive"
                 context["access"] = "single_admin"
                 context["credentials"] = "no_auth_local"
+                context["admin_capability"] = "no_admin_available"
                 return context
             step += 1
             continue
@@ -732,12 +743,29 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
                 step -= 1
                 continue
             context["credentials"] = value
+            if context.get("consumer") not in {"ssh_relay", "remote_backend"}:
+                context["admin_capability"] = "no_admin_available"
+                break
+            step += 1
+            continue
+        if step == 4:
+            value = _prompt_choice(
+                "Can setup perform administrator/root changes on the target host?",
+                VALID_ADMIN_CAPABILITIES,
+                context.get("admin_capability", "no_admin_available"),
+                allow_back=True,
+            )
+            if value == "back":
+                step -= 1
+                continue
+            context["admin_capability"] = value
             step += 1
     return {
         "consumer": context.get("consumer", "local_backend"),
         "lifecycle": context.get("lifecycle", "single_exclusive"),
         "access": context.get("access", default_usage_intent),
         "credentials": context.get("credentials", "ssh_keys"),
+        "admin_capability": context.get("admin_capability", "no_admin_available"),
     }
 
 
@@ -746,6 +774,9 @@ def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
     lifecycle = str(context.get("lifecycle") or "single_exclusive")
     access = _normalize_usage_intent(context.get("access") or "single_admin")
     credentials = str(context.get("credentials") or "ssh_keys")
+    admin_capability = str(context.get("admin_capability") or "no_admin_available")
+    if admin_capability not in VALID_ADMIN_CAPABILITIES:
+        admin_capability = "no_admin_available"
 
     if consumer == "local_experiment":
         return {
@@ -785,7 +816,13 @@ def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
     if key_source == "generate":
         followups.append("Generated private keys should be exported/imported on the hosting consumer side, preferably encrypted with a password.")
     if mode in {"ssh_tunnel_only", "truly_remote"}:
-        followups.append("Remote access requires SSH relay/transport setup and at least one transport-role SSH key.")
+        followups.append("Run SSH transport hardening to install a forced-command transport key, pin the host key, and validate strict SSH.")
+        if admin_capability == "no_admin_available":
+            followups.append("Use user-scoped SSH setup only; service, firewall, and machine-wide sshd changes require an administrator.")
+        elif admin_capability == "admin_available_interactive":
+            followups.append("Administrator/root changes can be offered through explicit elevated steps; setup must not store the password.")
+        else:
+            followups.append("Generate administrator instructions for SSH service, firewall, and daemon auto-start changes, then rerun diagnostics.")
     if access in {"role_split", "multi_user"}:
         followups.append("After bootstrap, add/edit user and role keys from the hosting consumer admin UI or RBAC tooling.")
     if endpoint_mode == "exclusive":
@@ -802,6 +839,7 @@ def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
         "key_action": "replace",
         "permission_action": permission_action,
         "lifecycle_profile": lifecycle_profile,
+        "admin_capability": admin_capability,
         "followups": followups,
     }
 
@@ -814,6 +852,7 @@ def _print_auto_configuration(context: Dict[str, str], suggestion: Dict[str, Any
             ("consumer_lifecycle", _option_label(str(context.get("lifecycle") or ""))),
             ("access_model", _option_label(str(context.get("access") or ""))),
             ("credentials", _option_label(str(context.get("credentials") or ""))),
+            ("admin_capability", _option_label(str(context.get("admin_capability") or "no_admin_available"))),
             ("usage_intent", _option_label(str(suggestion.get("usage_intent") or ""))),
             ("clients_connectivity", suggestion.get("mode")),
             ("endpoint_mode", suggestion.get("endpoint_mode")),
@@ -852,6 +891,9 @@ def _option_label(value: str) -> str:
         "ssh_keys": "SSH keys",
         "password_local": "Local password convenience",
         "no_auth_local": "No auth, local only",
+        "no_admin_available": "No admin/root access",
+        "admin_available_interactive": "Admin/root available",
+        "admin_managed_externally": "Admin managed externally",
     }
     if value in labels:
         return labels[value]
@@ -1610,12 +1652,52 @@ def _print_transport_bootstrap_report(result: Dict[str, Any]) -> None:
         "ssh_config_file",
         "identity_file",
         "authorized_keys_file",
+        "forced_command",
+        "restrict_options",
+        "rbac_key_id",
+        "rbac_role",
+        "admin_capability",
         "ssh_command",
+        "validation_status",
+        "ssh_probe_ran",
+        "ssh_probe_returncode",
         "marker",
     ):
-        if result.get(key):
+        if key in result and result.get(key) is not None:
             rows.append((key, result.get(key)))
     _kv_rows(rows)
+    followups = [str(item).strip() for item in list(result.get("followups") or []) if str(item).strip()]
+    if followups:
+        _print_recommendations(followups)
+    _print_rule("=")
+
+
+def _print_admin_setup_report(result: Dict[str, Any]) -> None:
+    _print_rule("=")
+    _print_title("Admin setup")
+    rows: list[Tuple[str, Any]] = [
+        ("status", result.get("status")),
+        ("action", result.get("action")),
+        ("platform", result.get("platform")),
+        ("execute", _status_text(bool(result.get("execute")))),
+    ]
+    for key in (
+        "script_file",
+        "elevation_method",
+        "returncode",
+        "ssh_service",
+        "firewall",
+        "user_linger",
+    ):
+        if key in result and result.get(key) is not None:
+            rows.append((key, result.get(key)))
+    _kv_rows(rows)
+    if result.get("script"):
+        _print_rule("-")
+        print(str(result.get("script")))
+    followups = [str(item).strip() for item in list(result.get("followups") or []) if str(item).strip()]
+    if followups:
+        _print_recommendations(followups)
     _print_rule("=")
 
 
@@ -2234,18 +2316,166 @@ def run_rbac(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
+    action_harden = bool(getattr(args, "transport_harden_ssh", False))
     action_export = bool(getattr(args, "transport_export_bootstrap", False))
     action_import = bool(getattr(args, "transport_import_bootstrap", False))
     action_validate = bool(getattr(args, "transport_validate_profile", False))
     action_provision = bool(getattr(args, "transport_provision_ssh_artifacts", False))
     action_install_authorized = bool(getattr(args, "transport_install_authorized_key", False))
-    selected_count = sum(1 for flag in (action_export, action_import, action_validate, action_provision, action_install_authorized) if flag)
+    selected_count = sum(
+        1
+        for flag in (
+            action_harden,
+            action_export,
+            action_import,
+            action_validate,
+            action_provision,
+            action_install_authorized,
+        )
+        if flag
+    )
     if selected_count > 1:
         raise ValueError(
             "Choose only one transport action"
         )
     if selected_count == 0:
         raise ValueError("No transport bootstrap action selected")
+    def _install_authorized_and_register(public_key: str) -> Dict[str, Any]:
+        auth_file_raw = str(getattr(args, "ssh_authorized_keys_file", "") or "").strip()
+        auth_file = (
+            Path(auth_file_raw).expanduser().resolve()
+            if auth_file_raw
+            else (Path.home() / ".ssh" / "authorized_keys").resolve()
+        )
+        unrestricted = bool(getattr(args, "ssh_authorized_key_unrestricted", False))
+        install_result = install_transport_authorized_key(
+            transport_public_key=public_key,
+            authorized_keys_file=auth_file,
+            transport_key_id=str(args.transport_key_id or "").strip(),
+            forced_command=""
+            if unrestricted
+            else str(
+                getattr(args, "ssh_authorized_key_command", DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND)
+                or ""
+            ).strip(),
+            restrict_options=not unrestricted,
+        )
+        paths = _resolve_paths(args, create_dirs=True)
+        svc = EngineHostService(control_state_file=paths["control_state_path"])
+        key_result = svc.auth_upsert_key(
+            key_id=str(install_result.get("transport_key_id") or "transport"),
+            role="transport",
+            auth_method="public_key",
+            public_key=public_key,
+        )
+        return {
+            **install_result,
+            "rbac_key_id": key_result.get("key_id"),
+            "rbac_role": key_result.get("role"),
+        }
+
+    if action_harden:
+        target = str(args.transport_target or "").strip()
+        if not target:
+            raise ValueError("--transport-target is required for --transport-harden-ssh")
+        transport_key_id = str(args.transport_key_id or "").strip()
+        if not transport_key_id:
+            raise ValueError("--transport-key-id is required for --transport-harden-ssh")
+        public_key = _read_text_or_file(
+            inline_value=str(args.transport_public_key_inline or ""),
+            file_value=str(args.transport_public_key_file or ""),
+            field_name="transport public key",
+        )
+        private_key = _read_text_or_file(
+            inline_value=str(args.transport_private_key_inline or ""),
+            file_value=str(args.transport_private_key_file or ""),
+            field_name="transport private key",
+        )
+        known_hosts_line = _read_text_or_file(
+            inline_value=str(args.ssh_known_hosts_line or ""),
+            file_value=str(args.ssh_known_hosts_file or ""),
+            field_name="ssh known_hosts line",
+        )
+        profile_name = str(args.transport_profile_name or "").strip() or transport_key_id
+        realm = str(getattr(args, "client_realm", "") or "default").strip() or "default"
+        client_realm_root = _resolve_client_realm_root(args)
+        bundle = make_transport_bootstrap_bundle(
+            target=target,
+            ssh_known_hosts_line=known_hosts_line,
+            transport_key_id=transport_key_id,
+            transport_public_key=public_key,
+            transport_private_key_openssh=private_key,
+            bundle_password=str(getattr(args, "bootstrap_password", "") or ""),
+            control_ssh_fingerprint=str(args.control_ssh_fingerprint or "").strip(),
+            profile_name=profile_name,
+        )
+        imported = import_transport_bootstrap_bundle(
+            bundle=bundle,
+            client_realm_root=client_realm_root,
+            realm=realm,
+            profile_name=profile_name,
+            overwrite_profile=bool(getattr(args, "overwrite_profile", False)),
+            bundle_password=str(getattr(args, "bootstrap_password", "") or ""),
+            secret_password=str(getattr(args, "client_secret_password", "") or ""),
+        )
+        provisioned = provision_client_ssh_artifacts(
+            client_realm_root=client_realm_root,
+            profile_name=profile_name,
+            realm=realm,
+            ssh_alias=str(getattr(args, "ssh_config_alias", "") or "").strip(),
+            secret_password=str(getattr(args, "client_secret_password", "") or ""),
+            overwrite=True,
+        )
+        installed = _install_authorized_and_register(public_key)
+        validated = validate_client_transport_profile(
+            client_realm_root=client_realm_root,
+            profile_name=profile_name,
+            realm=realm,
+            run_ssh=not bool(getattr(args, "validation_no_ssh_run", False)),
+            ssh_bin=str(getattr(args, "validation_ssh_bin", "") or "ssh").strip() or "ssh",
+            remote_command=str(getattr(args, "validation_remote_command", "") or "exit 0").strip() or "exit 0",
+            timeout_seconds=float(getattr(args, "validation_timeout_seconds", 15.0) or 15.0),
+            secret_password=str(getattr(args, "client_secret_password", "") or ""),
+        )
+        validation_status = str(validated.get("status") or "ok")
+        admin_capability = str(getattr(args, "admin_capability", "") or "no_admin_available").strip()
+        if admin_capability not in VALID_ADMIN_CAPABILITIES:
+            admin_capability = "no_admin_available"
+        followups: list[str] = []
+        if admin_capability == "no_admin_available":
+            followups.append("User-scoped SSH transport was hardened; machine-wide SSH service, firewall, and service-managed daemon setup still require an administrator.")
+        elif admin_capability == "admin_available_interactive":
+            followups.append("Run platform-specific elevated SSH service/firewall/daemon setup only through an explicit UAC/sudo/polkit prompt.")
+        else:
+            followups.append("Provide the generated forced-command authorized_keys entry and strict client profile details to the administrator, then rerun diagnostics.")
+        return {
+            "status": "ok" if validation_status == "ok" else validation_status,
+            "action": "transport_harden_ssh",
+            "client_realm_root": str(client_realm_root),
+            "admin_capability": admin_capability,
+            "profile_name": profile_name,
+            "target": target,
+            "transport_key_id": transport_key_id,
+            "profile_path": imported.get("profile_path"),
+            "known_hosts_file": imported.get("known_hosts_file"),
+            "secret_id": imported.get("secret_id"),
+            "secret_path": imported.get("secret_path"),
+            "secret_encryption": imported.get("secret_encryption"),
+            "ssh_alias": provisioned.get("ssh_alias"),
+            "ssh_config_file": provisioned.get("ssh_config_file"),
+            "identity_file": provisioned.get("identity_file"),
+            "ssh_command": provisioned.get("ssh_command"),
+            "authorized_keys_file": installed.get("authorized_keys_file"),
+            "forced_command": installed.get("forced_command"),
+            "restrict_options": installed.get("restrict_options"),
+            "rbac_key_id": installed.get("rbac_key_id"),
+            "rbac_role": installed.get("rbac_role"),
+            "marker": installed.get("marker"),
+            "validation_status": validation_status,
+            "ssh_probe_ran": bool(validated.get("ssh_probe_ran")),
+            "ssh_probe_returncode": validated.get("ssh_probe_returncode"),
+            "followups": followups,
+        }
     if action_export:
         target = str(args.transport_target or "").strip()
         if not target:
@@ -2298,13 +2528,7 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
             file_value=str(args.transport_public_key_file or ""),
             field_name="transport public key",
         )
-        auth_file_raw = str(getattr(args, "ssh_authorized_keys_file", "") or "").strip()
-        auth_file = Path(auth_file_raw).expanduser().resolve() if auth_file_raw else (Path.home() / ".ssh" / "authorized_keys").resolve()
-        result = install_transport_authorized_key(
-            transport_public_key=public_key,
-            authorized_keys_file=auth_file,
-            transport_key_id=str(args.transport_key_id or "").strip(),
-        )
+        result = _install_authorized_and_register(public_key)
         return {
             "status": str(result.get("status") or "ok"),
             "action": "transport_install_authorized_key",
@@ -2377,6 +2601,208 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
         "client_realm_root": str(client_realm_root),
         **result,
     }
+
+
+def _admin_setup_platform() -> str:
+    if os.name == "nt":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "unix"
+
+
+def _admin_setup_script(args: argparse.Namespace, *, platform_name: str) -> Tuple[str, str, list[str]]:
+    enable_ssh = bool(getattr(args, "admin_setup_enable_ssh_service", True))
+    enable_firewall = bool(getattr(args, "admin_setup_enable_firewall", False))
+    enable_linger = bool(getattr(args, "admin_setup_enable_user_linger", False))
+    target_user = str(getattr(args, "admin_setup_target_user", "") or "").strip()
+    followups: list[str] = []
+    if platform_name == "windows":
+        lines = [
+            "$ErrorActionPreference = 'Stop'",
+            "Write-Host 'mp13 hosting admin setup: Windows OpenSSH/service checks'",
+        ]
+        if enable_ssh:
+            lines.extend(
+                [
+                    "$cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction SilentlyContinue",
+                    "if ($cap -and $cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' }",
+                    "Set-Service -Name sshd -StartupType Automatic",
+                    "Start-Service sshd",
+                ]
+            )
+        if enable_firewall:
+            lines.extend(
+                [
+                    "$rule = Get-NetFirewallRule -Name 'mp13-hosting-sshd' -ErrorAction SilentlyContinue",
+                    "if (-not $rule) { New-NetFirewallRule -Name 'mp13-hosting-sshd' -DisplayName 'mp13 Hosting OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 }",
+                ]
+            )
+        else:
+            followups.append("Firewall rule was not requested; remote SSH may still be blocked by Windows Firewall or network policy.")
+        if enable_linger:
+            followups.append("Windows user daemon auto-start is not configured here; use Task Scheduler or service-managed hosting setup.")
+        lines.append("Write-Host 'mp13 hosting admin setup complete'")
+        return "\r\n".join(lines) + "\r\n", ".ps1", followups
+
+    target_user_expr = shlex.quote(target_user) if target_user else "${SUDO_USER:-$USER}"
+    lines = [
+        "#!/bin/sh",
+        "set -eu",
+        "echo 'mp13 hosting admin setup: SSH/service checks'",
+    ]
+    if enable_ssh:
+        lines.extend(
+            [
+                "if command -v systemctl >/dev/null 2>&1; then",
+                "  if systemctl list-unit-files ssh.service >/dev/null 2>&1; then",
+                "    systemctl enable --now ssh.service",
+                "  elif systemctl list-unit-files sshd.service >/dev/null 2>&1; then",
+                "    systemctl enable --now sshd.service",
+                "  else",
+                "    echo 'No ssh.service or sshd.service unit was found; install/enable OpenSSH server using the platform package manager.'",
+                "  fi",
+                "elif command -v service >/dev/null 2>&1; then",
+                "  service ssh start 2>/dev/null || service sshd start 2>/dev/null || echo 'Could not start ssh/sshd through service(8).'",
+                "else",
+                "  echo 'No supported service manager was found; enable OpenSSH server manually.'",
+                "fi",
+            ]
+        )
+    if enable_firewall:
+        lines.extend(
+            [
+                "if command -v ufw >/dev/null 2>&1; then",
+                "  ufw allow OpenSSH || ufw allow 22/tcp",
+                "elif command -v firewall-cmd >/dev/null 2>&1; then",
+                "  firewall-cmd --add-service=ssh --permanent",
+                "  firewall-cmd --reload",
+                "else",
+                "  echo 'No supported firewall helper was found; allow TCP/22 manually if remote SSH is blocked.'",
+                "fi",
+            ]
+        )
+    else:
+        followups.append("Firewall changes were not requested; remote SSH may still be blocked by host or network policy.")
+    if enable_linger:
+        lines.extend(
+            [
+                "if command -v loginctl >/dev/null 2>&1; then",
+                f"  loginctl enable-linger {target_user_expr}",
+                "else",
+                "  echo 'loginctl is unavailable; configure user daemon persistence manually for this platform.'",
+                "fi",
+            ]
+        )
+    elif platform_name == "macos":
+        followups.append("macOS daemon auto-start is not configured here; use a LaunchAgent or service-managed hosting setup.")
+    else:
+        followups.append("User daemon linger was not requested; detached user daemons may stop after logout on some systemd hosts.")
+    lines.append("echo 'mp13 hosting admin setup complete'")
+    return "\n".join(lines) + "\n", ".sh", followups
+
+
+def _write_admin_setup_script(script: str, suffix: str) -> Path:
+    temp_dir = Path(tempfile.gettempdir()) / "mp13-hosting-admin-setup"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    script_path = (temp_dir / f"admin_setup_{int(time.time())}{suffix}").resolve()
+    script_path.write_text(script, encoding="utf-8")
+    try:
+        script_path.chmod(0o700)
+    except Exception:
+        pass
+    return script_path
+
+
+def _admin_setup_elevation_command(script_path: Path, *, platform_name: str) -> Tuple[list[str], str]:
+    if platform_name == "windows":
+        quoted_path = str(script_path).replace("'", "''")
+        return [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Start-Process -FilePath PowerShell "
+            f"-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{quoted_path}' "
+            "-Verb RunAs -Wait",
+        ], "windows_uac"
+    if platform_name == "macos":
+        quoted = shlex.quote(str(script_path))
+        return [
+            "osascript",
+            "-e",
+            f'do shell script "/bin/sh {quoted}" with administrator privileges',
+        ], "macos_authorization"
+    if (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and shutil.which("pkexec"):
+        return ["pkexec", "/bin/sh", str(script_path)], "pkexec"
+    if shutil.which("sudo"):
+        return ["sudo", "/bin/sh", str(script_path)], "sudo"
+    raise RuntimeError("No supported elevation tool found. Install pkexec/sudo or run the generated script as root.")
+
+
+def run_transport_admin_setup(args: argparse.Namespace) -> Dict[str, Any]:
+    platform_name = _admin_setup_platform()
+    script, suffix, followups = _admin_setup_script(args, platform_name=platform_name)
+    execute = bool(getattr(args, "admin_setup_execute", False))
+    script_path: Optional[Path] = None
+    result: Dict[str, Any] = {
+        "status": "dry_run",
+        "action": "transport_admin_setup",
+        "platform": platform_name,
+        "execute": execute,
+        "ssh_service": bool(getattr(args, "admin_setup_enable_ssh_service", True)),
+        "firewall": bool(getattr(args, "admin_setup_enable_firewall", False)),
+        "user_linger": bool(getattr(args, "admin_setup_enable_user_linger", False)),
+        "script": script,
+        "followups": followups,
+    }
+    if not execute:
+        return result
+    script_path = _write_admin_setup_script(script, suffix)
+    command, method = _admin_setup_elevation_command(script_path, platform_name=platform_name)
+    completed = subprocess.run(command, check=False)
+    result.update(
+        {
+            "status": "ok" if int(completed.returncode) == 0 else "elevation_failed",
+            "script_file": str(script_path),
+            "elevation_method": method,
+            "returncode": int(completed.returncode),
+        }
+    )
+    return result
+
+
+def _interactive_admin_setup_followup(args: argparse.Namespace, suggestion: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    mode = str(suggestion.get("mode") or "")
+    if mode not in {"ssh_tunnel_only", "truly_remote"}:
+        return None
+    admin_capability = str(suggestion.get("admin_capability") or "no_admin_available")
+    if admin_capability == "no_admin_available":
+        return None
+    while True:
+        action = _prompt_menu(
+            "SSH Admin Setup",
+            {
+                "skip": ("Skip admin setup", "continue with hosting config only"),
+                "generate": ("Generate admin setup script", "dry-run script and instructions"),
+                "execute": ("Run elevated admin setup now", "launch platform-native UAC/sudo/pkexec prompt"),
+            },
+            "generate" if admin_capability == "admin_managed_externally" else "skip",
+            allow_back=True,
+        )
+        if action == "changes":
+            continue
+        if action in {"back", "skip"}:
+            return None
+        admin_args = argparse.Namespace(**vars(args))
+        admin_args.admin_setup_execute = action == "execute"
+        admin_args.transport_admin_setup = True
+        if mode == "ssh_tunnel_only":
+            admin_args.admin_setup_enable_user_linger = True
+        result = run_transport_admin_setup(admin_args)
+        _print_admin_setup_report(result)
+        return result
 
 
 def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
@@ -2671,6 +3097,12 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             key_action = str(suggestion.get("key_action") or key_action)
             permission_action = str(suggestion.get("permission_action") or permission_action)
             setup_notes.extend([str(item) for item in list(suggestion.get("followups") or []) if str(item).strip()])
+            admin_setup_result = _interactive_admin_setup_followup(args, suggestion)
+            if admin_setup_result is not None:
+                setup_notes.append(
+                    "SSH admin setup follow-up: "
+                    + str(admin_setup_result.get("status") or "unknown")
+                )
             if suggestion_action == "apply":
                 auto_applied = True
                 break
@@ -3456,6 +3888,92 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     except Exception as exc:
         _record("client_realm_access_readable", False, {"error": str(exc)}, blocking=False)
 
+    transport_key_id = str(getattr(args, "transport_key_id", "") or "").strip()
+    auth_file_raw = str(getattr(args, "ssh_authorized_keys_file", "") or "").strip()
+    if transport_key_id or auth_file_raw:
+        auth_file = (
+            Path(auth_file_raw).expanduser().resolve()
+            if auth_file_raw
+            else (Path.home() / ".ssh" / "authorized_keys").resolve()
+        )
+        block_text = ""
+        public_key = str(getattr(args, "transport_public_key_inline", "") or "").strip()
+        if not public_key and str(getattr(args, "transport_public_key_file", "") or "").strip():
+            try:
+                public_key = Path(str(args.transport_public_key_file)).expanduser().resolve().read_text(encoding="utf-8").strip()
+            except Exception:
+                public_key = ""
+        if auth_file.exists():
+            lines = auth_file.read_text(encoding="utf-8").splitlines()
+            begin = f"# BEGIN mp13-hosting-transport {transport_key_id or 'transport'}"
+            end = f"# END mp13-hosting-transport {transport_key_id or 'transport'}"
+            in_block = False
+            block_lines: list[str] = []
+            for line in lines:
+                if line.strip() == begin:
+                    in_block = True
+                    block_lines.append(line)
+                    continue
+                if in_block:
+                    block_lines.append(line)
+                    if line.strip() == end:
+                        break
+            block_text = "\n".join(block_lines)
+        _record(
+            "transport_authorized_key_present",
+            bool(block_text and (not public_key or public_key in block_text)),
+            {
+                "authorized_keys_file": str(auth_file),
+                "transport_key_id": transport_key_id or "transport",
+                "public_key_checked": bool(public_key),
+            },
+        )
+        hardened = all(
+            item in block_text
+            for item in (
+                'command="',
+                "no-pty",
+                "no-agent-forwarding",
+                "no-X11-forwarding",
+                "no-port-forwarding",
+            )
+        )
+        _record(
+            "transport_authorized_key_hardened",
+            hardened,
+            {
+                "authorized_keys_file": str(auth_file),
+                "transport_key_id": transport_key_id or "transport",
+            },
+        )
+        if transport_key_id:
+            keys_payload = _read_json(paths["keys_file"], {"keys": {}})
+            key_meta = dict(dict(keys_payload.get("keys") or {}).get(transport_key_id) or {})
+            rbac_ok = (
+                str(key_meta.get("role") or "") == "transport"
+                and str(key_meta.get("auth_method") or "") == "public_key"
+                and not bool(key_meta.get("disabled", False))
+            )
+            _record(
+                "transport_rbac_registered",
+                rbac_ok,
+                {
+                    "transport_key_id": transport_key_id,
+                    "role": key_meta.get("role"),
+                    "auth_method": key_meta.get("auth_method"),
+                    "disabled": bool(key_meta.get("disabled", False)) if key_meta else None,
+                },
+            )
+            if public_key:
+                _record(
+                    "transport_rbac_matches_ssh",
+                    str(key_meta.get("public_key") or "").strip() == public_key,
+                    {
+                        "transport_key_id": transport_key_id,
+                        "public_key_checked": True,
+                    },
+                )
+
     return {
         "status": "ok" if not issues else "issues_found",
         "issues_count": len(issues),
@@ -3577,6 +4095,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--export-private-key-path", default="")
     p.add_argument("--client-realm", default="default", help="Client realm name for client-local secret/profile operations")
     p.add_argument("--client-realm-root", default="", help="Override client realm root path")
+    p.add_argument("--transport-harden-ssh", action="store_true", help="Provision and validate hardened SSH transport mutual-auth artifacts")
+    p.add_argument("--transport-admin-setup", action="store_true", help="Generate or execute elevated SSH service/firewall setup")
     p.add_argument("--transport-export-bootstrap", action="store_true", help="Export a transport bootstrap bundle and exit")
     p.add_argument("--transport-import-bootstrap", action="store_true", help="Import a transport bootstrap bundle into the client realm and exit")
     p.add_argument("--transport-validate-profile", action="store_true", help="Validate an imported transport client profile and exit")
@@ -3603,6 +4123,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ssh-config-alias", default="", help="Host alias for --transport-provision-ssh-artifacts")
     p.add_argument("--overwrite-ssh-config", action="store_true", default=False, help="Overwrite existing realm-local SSH config snippet")
     p.add_argument("--ssh-authorized-keys-file", default="", help="authorized_keys path for --transport-install-authorized-key; defaults to ~/.ssh/authorized_keys")
+    p.add_argument(
+        "--ssh-authorized-key-command",
+        default=DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND,
+        help="Forced command for --transport-install-authorized-key",
+    )
+    p.add_argument(
+        "--ssh-authorized-key-unrestricted",
+        action="store_true",
+        default=False,
+        help="Install transport key without forced command or SSH option restrictions",
+    )
+    p.add_argument(
+        "--admin-capability",
+        default="no_admin_available",
+        choices=sorted(VALID_ADMIN_CAPABILITIES),
+        help="Target-host admin/root availability for SSH transport recommendations",
+    )
+    p.add_argument("--admin-setup-execute", action="store_true", default=False, help="Execute admin setup through platform-native elevation")
+    p.add_argument("--admin-setup-enable-ssh-service", action="store_true", default=True, help="Enable/start the platform SSH server service")
+    p.add_argument("--admin-setup-no-ssh-service", dest="admin_setup_enable_ssh_service", action="store_false", help="Do not enable/start the SSH server service")
+    p.add_argument("--admin-setup-enable-firewall", action="store_true", default=False, help="Add SSH firewall allowance where a supported firewall helper exists")
+    p.add_argument("--admin-setup-enable-user-linger", action="store_true", default=False, help="Enable systemd user linger where supported")
+    p.add_argument("--admin-setup-target-user", default="", help="User account for user-linger setup; defaults to invoking user")
     return p
 
 
@@ -3646,7 +4189,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             result = run_client_keys(args)
             _print_client_key_report(result)
         elif bool(
+            args.transport_admin_setup
+        ):
+            result = run_transport_admin_setup(args)
+            _print_admin_setup_report(result)
+        elif bool(
             args.transport_export_bootstrap
+            or args.transport_harden_ssh
             or args.transport_import_bootstrap
             or args.transport_validate_profile
             or args.transport_provision_ssh_artifacts

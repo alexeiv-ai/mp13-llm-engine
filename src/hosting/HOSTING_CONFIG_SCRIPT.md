@@ -228,11 +228,12 @@ Client-realm commands manage private-key custody for the hosting consumer side:
 4. list client-realm key metadata
 
 Transport bootstrap commands support out-of-band transfer of remote SSH transport material:
-1. export bootstrap bundle
-2. import bootstrap bundle into client realm
-3. provision realm-local SSH artifacts
-4. install the transport public key into a user-scoped server-side `authorized_keys`
-5. validate imported transport profile
+1. harden SSH transport end to end
+2. export bootstrap bundle
+3. import bootstrap bundle into client realm
+4. provision realm-local SSH artifacts
+5. install the transport public key into a user-scoped server-side `authorized_keys`
+6. validate imported transport profile
 
 Consumer-side provisioning writes user-scoped/client-realm artifacts, not global SSH files:
 1. materialized private key under the client realm `managed_keys/`
@@ -251,8 +252,31 @@ Server-side authorized-key installation writes only public key material:
 2. `--ssh-authorized-keys-file` can override the path
 3. a managed marker block is used so reruns update instead of duplicating
 4. private key material is never installed server-side
+5. the default entry is forced-command hardened to `python -m hosting.engine_host_cli --relay`
+6. the default entry disables PTY, agent forwarding, X11 forwarding, and port forwarding
+7. the same public key is registered in hosting auth state with role `transport`
 
 Remote-capable setup still requires pinned SSH host-key material. Opportunistic `accept-new` host-key trust is not a supported baseline.
+
+When the usage questionnaire selects an SSH relay or remote backend consumer, setup asks whether administrator/root changes are available on the target host:
+1. no admin/root access: recommend user-scoped forced-command SSH setup only
+2. admin/root available interactively: recommend explicit elevated setup steps without storing the password
+3. admin/root managed externally: recommend generated administrator instructions and post-change diagnostics
+
+`--transport-admin-setup` covers the explicit elevated follow-up path:
+1. default behavior is dry-run script generation
+2. `--admin-setup-execute` invokes platform-native elevation
+3. Windows uses UAC through elevated PowerShell
+4. macOS uses the system authorization dialog through `osascript`
+5. Linux/Unix uses `pkexec` when a GUI session is available, otherwise `sudo`
+6. the setup tool never prompts for or stores the administrator/root password itself
+
+Interactive setup offers the same admin setup path after the remote recommendation is accepted:
+1. generate admin setup script
+2. run elevated admin setup now
+3. skip admin setup
+
+The elevated option remains an explicit menu choice.
 
 ## 9. Diagnostics
 
@@ -268,6 +292,8 @@ Checks include:
 7. client-realm access readability.
 8. client transport profile integrity.
 9. generated admin private-key secret encryption posture when applicable.
+10. transport authorized-key presence/hardening when a transport key id or authorized_keys path is provided.
+11. hosting transport RBAC registration and public-key match when a transport key id is provided.
 
 Doctor output includes:
 1. all checks
@@ -291,7 +317,8 @@ Permission action:
 1. The setup wizard bootstraps the first admin identity; it does not create the full multi-user key matrix.
 2. Additional users/roles are added later through RBAC tooling or hosting consumer admin UI.
 3. Firewall, proxy, and machine-wide SSH server policy are outside this script today.
-4. Realm-local SSH client artifacts are supported through transport provisioning, but the script does not edit global `~/.ssh/config`.
-5. User-scoped `authorized_keys` installation is supported, but the script does not edit machine-wide `sshd_config` or restart SSH services.
-6. Hardware-backed key storage is not implemented.
-7. Local user-account compromise remains outside baseline prevention guarantees.
+4. Realm-local SSH client artifacts are supported through transport provisioning and `--transport-harden-ssh`, but the script does not edit global `~/.ssh/config`.
+5. User-scoped `authorized_keys` installation is supported with forced-command hardening.
+6. Machine-wide SSH service/firewall setup is available only through explicit `--transport-admin-setup`; it does not edit arbitrary `sshd_config` policy.
+7. Hardware-backed key storage is not implemented.
+8. Local user-account compromise remains outside baseline prevention guarantees.

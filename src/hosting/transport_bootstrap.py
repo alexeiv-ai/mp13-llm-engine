@@ -30,6 +30,7 @@ from .client_realm import (
 
 
 TRANSPORT_BOOTSTRAP_KIND = "hosting_transport_bootstrap"
+DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND = "python -m hosting.engine_host_cli --relay"
 
 
 def make_transport_bootstrap_bundle(
@@ -374,6 +375,8 @@ def install_transport_authorized_key(
     authorized_keys_file: Path,
     transport_key_id: str = "",
     marker: str = "mp13-hosting-transport",
+    forced_command: str = DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND,
+    restrict_options: bool = True,
 ) -> Dict[str, Any]:
     public_key = str(transport_public_key or "").strip()
     if not public_key:
@@ -386,9 +389,23 @@ def install_transport_authorized_key(
         marker_name = "mp13-hosting-transport"
     begin = f"# BEGIN {marker_name} {key_id}"
     end = f"# END {marker_name} {key_id}"
-    key_line = public_key
+    command = str(forced_command or "").strip()
+    options: list[str] = []
+    if command:
+        escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+        options.append(f'command="{escaped}"')
+    if bool(restrict_options):
+        options.extend(
+            [
+                "no-pty",
+                "no-agent-forwarding",
+                "no-X11-forwarding",
+                "no-port-forwarding",
+            ]
+        )
+    key_line = f"{','.join(options)} {public_key}" if options else public_key
     if len(public_key.split()) < 3:
-        key_line = f"{public_key} {key_id}"
+        key_line = f"{','.join(options)} {public_key} {key_id}" if options else f"{public_key} {key_id}"
     block = [begin, key_line, end]
     target = Path(authorized_keys_file).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -434,6 +451,8 @@ def install_transport_authorized_key(
         "transport_key_id": key_id,
         "marker": marker_name,
         "replaced": replaced,
+        "forced_command": command or None,
+        "restrict_options": bool(restrict_options),
     }
 
 

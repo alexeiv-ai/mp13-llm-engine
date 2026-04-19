@@ -332,6 +332,12 @@ The setup script should collect enough context before showing low-level options:
    - SSH keys: more secure baseline
    - local password/shared-secret convenience: easier but less secure, and session issuance is only valid in `local_only`
    - no auth local-only: only valid for local single-user exclusive safe profile
+5. For SSH relay or remote backend consumers, can setup perform administrator/root changes on the target host?
+   - no admin/root access: use user-scoped SSH setup only
+   - admin/root available interactively: offer explicit elevated steps without storing the password
+   - admin/root managed externally: emit instructions and diagnostics for an administrator or infrastructure tool
+   - elevated execution, when requested, uses platform-native prompts such as Windows UAC, macOS authorization, Linux/Unix `pkexec`, or terminal `sudo`; hosting config does not collect the password
+   - after the suggested remote configuration, interactive setup offers to generate the admin script, run elevated setup now, or skip it
 
 The setup script should then show a suggested auto-configuration and follow-up actions before asking whether to apply, customize, or leave hosting unconfigured.
 
@@ -390,11 +396,16 @@ Recommended projections:
    - bind daemon control to local IPC only on host
    - use SSH relay for daemon control
    - enforce auth and SSH-bound session usage
+   - use `hosting_config_cli --transport-harden-ssh` to compose client profile creation, forced-command authorized-key installation, hosting `transport` RBAC registration, and strict SSH validation
+   - use `hosting_config_cli --transport-admin-setup` only for explicit elevated SSH service/firewall/user-linger follow-up actions
    - hosting config tooling can provision realm-local SSH client artifacts from a transport bootstrap profile:
      - materialized private key
      - pinned known_hosts file
      - SSH config snippet using `StrictHostKeyChecking yes`
    - hosting config tooling can install the transport public key into a user-scoped server-side `authorized_keys` file
+     - the default installed entry must be forced-command hardened to the hosting relay entrypoint
+     - the default installed entry must disable interactive PTY and common forwarding features unless an operator explicitly chooses a broader SSH access mode
+     - the same public key must be registered in hosting auth state with role `transport` so SSH access and hosting transport enforcement cannot drift silently
    - private key material must remain on the hosting consumer side, never in server-side `authorized_keys`
 3. Truly remote
    - explicit non-loopback bind (or reverse proxy) by admin choice
