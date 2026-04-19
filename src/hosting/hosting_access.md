@@ -27,7 +27,7 @@ Client migration checklist and breaking payload/role changes are documented in:
 1. Engine package is installed from a terminal (local console or remote shell).
 2. SSH is a hard dependency (OS built-in or OpenSSH) for remote-capable deployments.
 3. SSH keys are long-lived identities; short-lived tokens are issued when access duration must be bounded.
-4. Non-local SSH-capable operation requires explicit SSH host-key pinning on the client side; opportunistic first-connect host trust is not a supported baseline mode.
+4. Non-local SSH-capable operation requires explicit SSH host-key pinning on the hosting consumer side; opportunistic first-connect host trust is not a supported baseline mode.
 5. Endpoint means the whole hosting daemon plus all hosted resources, not a single worker.
 6. Exclusive/shared is a daemon-level effective mode:
    - default persistent mode from config
@@ -35,7 +35,16 @@ Client migration checklist and breaking payload/role changes are documented in:
 7. Root/admin privileges may be unavailable; baseline flow must work in user context.
 8. If local terminal access is fully compromised, local files may be rewritten; design targets containment, auditability, and explicit ownership transitions.
 
-### 2.1 Residual risk boundary (explicit)
+### 2.1 Terminology: hosting consumer vs UI client
+
+This document uses "client" in older sections because that was the original implementation term. The more precise term is "hosting consumer".
+
+1. A hosting consumer is normally a long-running backend process that talks to the hosting daemon.
+2. A UI may configure or observe hosting through that backend, but the UI is not usually the direct hosting protocol peer.
+3. Consumer-side setup can therefore include backend-owned files, SSH profiles, private-key import, and reconnect behavior that would be inappropriate to treat as transient UI state.
+4. When this document says "client side" in key/transport sections, read it as "hosting consumer side" unless the text explicitly discusses UI.
+
+### 2.2 Residual risk boundary (explicit)
 
 1. Local host compromise is out of scope for full prevention in baseline architecture.
 2. Baseline controls primarily provide:
@@ -100,6 +109,8 @@ Implementation may internally use scope primitives, but this is not an external 
    - keep as local-only bootstrap fallback for early/simple local scenarios
    - do not use for non-local bootstrap or remote-capable connectivity modes
    - SSH-target helper auto-session issuance via shared-secret is disabled by policy
+   - if an admin shared-secret key already exists, it can issue/control a session in `local_only`
+   - the same shared-secret key cannot issue a session in `ssh_tunnel_only` or `truly_remote`; use public-key challenge instead
 3. Access duration: session/token TTL controls, not key expiration.
 4. SSH private-key passphrases are external user/agent controls; hosting does not store or verify those passphrases directly.
 
@@ -132,7 +143,8 @@ The short version:
 What this means in practice:
 1. If you import an existing key, hosting stores the public key only.
 2. If hosting generates a new keypair for convenience, the public key is registered with hosting and the private key must be accounted for clearly.
-3. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
+3. Hosting-generated private keys may be temporarily stored/exported in password-protected form for explicit import on the hosting consumer side.
+4. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
 
 Imported-key example:
 1. A user already has `C:\Users\me\.ssh\id_ed25519` and `C:\Users\me\.ssh\id_ed25519.pub`.
@@ -146,6 +158,7 @@ Generated-key example:
 2. Hosting registers the generated public key.
 3. The private key must then be either:
    - written to an explicit file path the user can keep, or
+   - exported/imported through a password-protected file-based secret flow for the hosting consumer, or
    - treated as temporary/bootstrap-only material that the user must move, replace, or rotate immediately
 4. If hosting-generated private key material is still embedded in local hosting metadata, that is not the preferred steady state and should be treated as follow-up work.
 
@@ -199,10 +212,14 @@ Migration rule:
 
 1. `exclusive`
    - one owner identity/session at a time for endpoint-sensitive actions
-   - exclusive owner disconnect triggers daemon/resource shutdown
+   - intended for local-only single-consumer operation
+   - when the consumer dies or disconnects, hosting terminates all child processes it created
 2. `shared`
-   - multiple clients by role permissions
-   - daemon remains alive until explicit shutdown/policy stop
+   - multiple hosting consumers by role permissions
+   - daemon runs detached/independently of any one consumer
+   - consumers can disconnect and reconnect without forcing daemon/child-process restart
+
+Hosting-created child processes include local LLM engine worker processes and sandboxed helper/tooling processes.
 
 Mode source precedence:
 1. runtime admin override (highest, temporary)
@@ -295,16 +312,68 @@ Rationale:
 
 ## 8. Minimal Configuration Flow (Daemon Not Started)
 
-Provide one user-facing setup script (for example `hosting_setup`) that asks intent and writes config before daemon starts.
+Provide one user-facing setup script (for example `hosting_setup`) that asks hosting-consumer context first, suggests an auto-configuration, and writes config only after the operator chooses to apply it.
 Detailed script contract: `src/hosting/hosting_config_script.md`.
 
-### 8.1 Script input intents
+### 8.1 Up-front context collection
 
-1. `local_only` (local-only clients)
-2. `ssh_tunnel_only` (SSH-mediated remote clients; current implementation uses SSH relay for daemon control)
-3. `truly_remote` (non-loopback direct or proxied remote access)
+The setup script should collect enough context before showing low-level options:
 
-### 8.2 Common script outputs
+1. Who consumes hosting?
+   - local experiment only: leave hosting unconfigured; any same-user local consumer is implicitly admin
+   - same-box backend consumer: local long-running backend under the same user account
+   - SSH relay/tunnel consumer: remote backend reaches local hosting through SSH
+   - remote backend consumer: direct/proxied remote access
+2. What lifecycle does the consumer need?
+   - single exclusive consumer: consumer death/disconnect stops the hosting daemon and all hosting-created children
+   - reconnectable/shared daemon: daemon remains detached so consumers can reconnect
+3. What access shape is expected?
+   - single user, same as admin: one operator/admin identity
+   - many roles: separate admin and user access keys
+   - multi-user: more users and granular roles, managed after bootstrap
+4. What credential style is preferred?
+   - SSH keys: more secure baseline
+   - local password/shared-secret convenience: easier but less secure, and session issuance is only valid in `local_only`
+   - no auth local-only: only valid for local single-user exclusive safe profile
+
+The setup script should then show a suggested auto-configuration and follow-up actions before asking whether to apply, customize, or leave hosting unconfigured.
+
+### 8.2 Script input intents
+
+1. `local_only` (local-only hosting consumers)
+2. `ssh_tunnel_only` (SSH-mediated remote hosting consumers; current implementation uses SSH relay for daemon control)
+3. `truly_remote` (non-loopback direct or proxied remote hosting consumer access)
+
+### 8.3 Auto-configuration projections
+
+Recommended projections:
+
+1. Local experiment only
+   - do not write hosting access files
+   - any same-user local consumer is treated as implicit admin because no hosting auth boundary has been configured
+   - leave hosting unconfigured until a real long-running hosting consumer needs stable access
+2. Single user, same as admin
+   - default to `local_only`
+   - default to `exclusive`
+   - allow `require_auth=false` only when the safe-only gate passes
+   - passwords/no-auth may be convenient, but SSH keys are the more secure option
+3. Many roles
+   - require auth
+   - provision/bootstrap admin first
+   - add separate user/operator keys later from hosting consumer admin UI or RBAC tooling
+4. Multi-user
+   - require auth
+   - default to `shared`
+   - expect more keys and more passwords/passphrases to manage
+   - add/edit users and granular roles later from hosting consumer admin UI or RBAC tooling
+5. SSH relay/remote access
+   - require auth
+   - require explicit SSH host-key pinning
+   - require SSH relay/transport setup
+   - at least one `transport` role SSH key must exist for the relay/transport trust layer
+   - shared-secret keys cannot issue remote sessions in these modes
+
+### 8.4 Common script outputs
 
 1. Create/verify `<default_engine_config_dir>/hosting/` structure.
 2. Initialize access control config and keyring metadata.
@@ -313,8 +382,9 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
 5. Choose lifecycle profile (`foreground_terminal_bound|detached_user_process|service_managed`).
 6. Set `require_auth` based on safe-only policy.
 7. Emit platform-specific start instructions.
+8. Emit hosting-consumer follow-up actions, such as importing a private key, configuring SSH relay/transport, or opening the consumer admin UI to add user keys.
 
-### 8.3 External steps by intent
+### 8.5 External steps by intent
 
 1. Local-only
    - bind daemon control to local IPC only
@@ -328,7 +398,7 @@ Detailed script contract: `src/hosting/hosting_config_script.md`.
    - enforce auth, role separation, short token TTL
    - require firewall/network policy setup outside daemon
 
-### 8.4 Taking Ownership Of An Unconfigured Daemon
+### 8.6 Taking Ownership Of An Unconfigured Daemon
 
 Preconditions:
 1. The daemon is local to the operator and the caller has local filesystem/process access as the same OS user or an equivalently privileged user.

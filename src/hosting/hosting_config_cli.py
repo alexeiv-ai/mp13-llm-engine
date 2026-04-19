@@ -63,6 +63,9 @@ else:
 VALID_CONNECTIVITY_MODES = {"local_only", "ssh_tunnel_only", "truly_remote"}
 VALID_ENDPOINT_MODES = {"exclusive", "shared"}
 VALID_USAGE_INTENTS = {"single_admin", "role_split", "multi_user"}
+VALID_CONTEXT_CONSUMERS = {"local_experiment", "local_backend", "ssh_relay", "remote_backend"}
+VALID_CONTEXT_LIFECYCLES = {"single_exclusive", "reconnect_shared"}
+VALID_CONTEXT_CREDENTIALS = {"ssh_keys", "password_local", "no_auth_local"}
 VALID_LIFECYCLE_PROFILES = {
     "foreground_terminal_bound",
     "detached_user_process",
@@ -126,6 +129,37 @@ OPTION_HINTS: Dict[str, str] = {
     "tighten": "best-effort private permissions on hosting files",
     "yes": "require key/session authentication",
     "no": "only allowed for local_only + exclusive",
+    "local_experiment": "unconfigured; any same-user local consumer is implicit admin",
+    "local_backend": "hosting consumer runs on same box/user account",
+    "ssh_relay": "consumer reaches hosting through SSH relay/tunnel; SSH keys required",
+    "remote_backend": "consumer reaches hosting over direct/proxied remote network; SSH keys required",
+    "single_exclusive": "consumer death/disconnect stops hosting daemon and all created children",
+    "reconnect_shared": "daemon should survive consumer reconnects",
+    "ssh_keys": "most secure baseline; private key can be passphrase-protected",
+    "password_local": "local_only shared-secret convenience; cannot issue remote sessions",
+    "no_auth_local": "only for local single-user exclusive access",
+    "shared_secret": "local_only session issuance only; remote modes require public-key challenge",
+    "public_key": "works for local and remote; required for SSH relay/truly remote",
+}
+
+OPTION_ORDER: Dict[str, int] = {
+    "local_experiment": 10,
+    "local_backend": 20,
+    "ssh_relay": 30,
+    "remote_backend": 40,
+    "single_exclusive": 10,
+    "reconnect_shared": 20,
+    "single_admin": 10,
+    "role_split": 20,
+    "multi_user": 30,
+    "ssh_keys": 10,
+    "password_local": 20,
+    "no_auth_local": 30,
+    "local_only": 10,
+    "ssh_tunnel_only": 20,
+    "truly_remote": 30,
+    "exclusive": 10,
+    "shared": 20,
 }
 
 
@@ -618,6 +652,178 @@ def _project_usage_intent(intent: str) -> Dict[str, Any]:
     }
 
 
+def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
+    _print_title("Hosting Usage Context")
+    print(_c("muted", "Answer these first so setup can suggest a safe default configuration."))
+    context: Dict[str, str] = {}
+    step = 0
+    while step < 4:
+        if step == 0:
+            value = _prompt_choice(
+                "Who consumes hosting?",
+                VALID_CONTEXT_CONSUMERS,
+                context.get("consumer", "local_experiment"),
+                allow_back=False,
+            )
+            context["consumer"] = value
+            if value == "local_experiment":
+                context["lifecycle"] = "single_exclusive"
+                context["access"] = "single_admin"
+                context["credentials"] = "no_auth_local"
+                return context
+            step += 1
+            continue
+        if step == 1:
+            default = context.get(
+                "lifecycle",
+                "single_exclusive" if context.get("consumer") == "local_backend" else "reconnect_shared",
+            )
+            value = _prompt_choice(
+                "What should happen when the consumer disconnects?",
+                VALID_CONTEXT_LIFECYCLES,
+                default,
+                allow_back=True,
+            )
+            if value == "back":
+                step -= 1
+                continue
+            context["lifecycle"] = value
+            step += 1
+            continue
+        if step == 2:
+            value = _prompt_choice(
+                "How many access roles/users are expected?",
+                VALID_USAGE_INTENTS,
+                context.get("access", default_usage_intent),
+                allow_back=True,
+            )
+            if value == "back":
+                step -= 1
+                continue
+            context["access"] = value
+            step += 1
+            continue
+        if step == 3:
+            consumer = context.get("consumer", "local_backend")
+            lifecycle = context.get("lifecycle", "single_exclusive")
+            access = context.get("access", "single_admin")
+            disabled_credentials: set[str] = set()
+            if not (consumer == "local_backend" and lifecycle == "single_exclusive" and access == "single_admin"):
+                disabled_credentials.add("no_auth_local")
+            if consumer in {"ssh_relay", "remote_backend"}:
+                disabled_credentials.add("password_local")
+            credential_default = (
+                "no_auth_local"
+                if "no_auth_local" not in disabled_credentials
+                else "ssh_keys"
+            )
+            value = _prompt_choice(
+                "Preferred credential style?",
+                VALID_CONTEXT_CREDENTIALS,
+                context.get("credentials", credential_default),
+                disabled=disabled_credentials,
+                allow_back=True,
+            )
+            if value == "back":
+                step -= 1
+                continue
+            context["credentials"] = value
+            step += 1
+    return {
+        "consumer": context.get("consumer", "local_backend"),
+        "lifecycle": context.get("lifecycle", "single_exclusive"),
+        "access": context.get("access", default_usage_intent),
+        "credentials": context.get("credentials", "ssh_keys"),
+    }
+
+
+def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
+    consumer = str(context.get("consumer") or "local_backend")
+    lifecycle = str(context.get("lifecycle") or "single_exclusive")
+    access = _normalize_usage_intent(context.get("access") or "single_admin")
+    credentials = str(context.get("credentials") or "ssh_keys")
+
+    if consumer == "local_experiment":
+        return {
+            "usage_intent": "single_admin",
+            "mode": "local_only",
+            "endpoint_mode": "exclusive",
+            "require_auth": False,
+            "key_source": "import",
+            "key_action": "keep_existing",
+            "permission_action": "none",
+            "lifecycle_profile": "foreground_terminal_bound",
+            "leave_unconfigured": True,
+            "followups": [
+                "Leave hosting unconfigured for now; use this only for local experimentation.",
+                "Run guided setup later when a long-running hosting consumer needs stable daemon access.",
+            ],
+        }
+
+    usage_intent = access
+    mode = "local_only"
+    if consumer == "ssh_relay":
+        mode = "ssh_tunnel_only"
+    elif consumer == "remote_backend":
+        mode = "truly_remote"
+    if mode != "local_only" and credentials in {"password_local", "no_auth_local"}:
+        credentials = "ssh_keys"
+
+    endpoint_mode = "shared" if lifecycle == "reconnect_shared" or access == "multi_user" or mode == "truly_remote" else "exclusive"
+    require_auth = not (mode == "local_only" and endpoint_mode == "exclusive" and access == "single_admin" and credentials == "no_auth_local")
+    key_source = "generate" if credentials in {"ssh_keys", "password_local"} else "import"
+    permission_action = "tighten" if require_auth or mode != "local_only" else "none"
+    lifecycle_profile = "detached_user_process" if endpoint_mode == "shared" else "foreground_terminal_bound"
+
+    followups: list[str] = []
+    if credentials == "password_local":
+        followups.append("Shared-secret/password session issuance is local_only; ssh_tunnel_only/truly_remote require public-key challenge.")
+    if key_source == "generate":
+        followups.append("Generated private keys should be exported/imported on the hosting consumer side, preferably encrypted with a password.")
+    if mode in {"ssh_tunnel_only", "truly_remote"}:
+        followups.append("Remote access requires SSH relay/transport setup and at least one transport-role SSH key.")
+    if access in {"role_split", "multi_user"}:
+        followups.append("After bootstrap, add/edit user and role keys from the hosting consumer admin UI or RBAC tooling.")
+    if endpoint_mode == "exclusive":
+        followups.append("Exclusive mode stops hosting-created child processes when the single consumer disconnects.")
+    else:
+        followups.append("Shared mode keeps the detached hosting daemon alive so consumers can reconnect.")
+
+    return {
+        "usage_intent": usage_intent,
+        "mode": mode,
+        "endpoint_mode": endpoint_mode,
+        "require_auth": require_auth,
+        "key_source": key_source,
+        "key_action": "replace",
+        "permission_action": permission_action,
+        "lifecycle_profile": lifecycle_profile,
+        "followups": followups,
+    }
+
+
+def _print_auto_configuration(context: Dict[str, str], suggestion: Dict[str, Any]) -> None:
+    _print_title("Suggested Auto Configuration")
+    _kv_rows(
+        [
+            ("consumer", _option_label(str(context.get("consumer") or ""))),
+            ("consumer_lifecycle", _option_label(str(context.get("lifecycle") or ""))),
+            ("access_model", _option_label(str(context.get("access") or ""))),
+            ("credentials", _option_label(str(context.get("credentials") or ""))),
+            ("usage_intent", _option_label(str(suggestion.get("usage_intent") or ""))),
+            ("clients_connectivity", suggestion.get("mode")),
+            ("endpoint_mode", suggestion.get("endpoint_mode")),
+            ("lifecycle_profile", suggestion.get("lifecycle_profile")),
+            ("require_auth", "yes" if bool(suggestion.get("require_auth")) else "no"),
+            ("key_source", suggestion.get("key_source")),
+            ("permission_action", suggestion.get("permission_action")),
+        ]
+    )
+    followups = [str(item) for item in list(suggestion.get("followups") or []) if str(item).strip()]
+    if followups:
+        _print_recommendations(followups)
+
+
 def _input_or_quit(prompt: str, *, lower: bool = False) -> str:
     try:
         raw = input(prompt).strip()
@@ -632,11 +838,32 @@ def _input_or_quit(prompt: str, *, lower: bool = False) -> str:
 def _option_label(value: str) -> str:
     if value in USAGE_INTENT_GUIDANCE:
         return str(USAGE_INTENT_GUIDANCE[value].get("label") or value)
+    labels = {
+        "local_experiment": "Local experiment only",
+        "local_backend": "Same box backend consumer",
+        "ssh_relay": "SSH relay/tunnel consumer",
+        "remote_backend": "Remote backend consumer",
+        "single_exclusive": "Single exclusive consumer",
+        "reconnect_shared": "Reconnectable/shared daemon",
+        "ssh_keys": "SSH keys",
+        "password_local": "Local password convenience",
+        "no_auth_local": "No auth, local only",
+    }
+    if value in labels:
+        return labels[value]
     return value
 
 
 def _option_hint(value: str, explicit: str = "") -> str:
-    return str(explicit or OPTION_HINTS.get(value) or "").strip()
+    if explicit:
+        return str(explicit).strip()
+    if value in USAGE_INTENT_GUIDANCE:
+        return str(USAGE_INTENT_GUIDANCE[value].get("hint") or "").strip()
+    return str(OPTION_HINTS.get(value) or "").strip()
+
+
+def _ordered_options(values: set[str]) -> list[str]:
+    return sorted(values, key=lambda value: (OPTION_ORDER.get(value, 1000), value))
 
 
 def _print_prompt_help(*, allow_back: bool = True, allow_changes: bool = True) -> None:
@@ -654,14 +881,25 @@ def _print_options(
     *,
     default: str,
     label_width: int = 34,
+    disabled: Optional[set[str]] = None,
 ) -> Dict[str, str]:
     index: Dict[str, str] = {}
+    disabled_values = {str(value) for value in (disabled or set())}
     for idx, (value, label, hint) in enumerate(options, start=1):
-        marker = "default" if value == default else ""
-        index[str(idx)] = value
-        index[value.lower()] = value
-        right = f"{hint} {marker}".strip()
-        print(f"  {_c('accent', str(idx) + '.')} {_c('value', label.ljust(label_width))} {_c('muted', right)}")
+        is_default = value == default
+        is_disabled = value in disabled_values
+        marker = f" {_c('rule', '(*)')}" if is_default else ""
+        marker_width = 4 if is_default else 0
+        label_text = f"{str(label).ljust(max(0, label_width - marker_width))}{marker}"
+        number = f"{idx}."
+        if not is_disabled:
+            index[str(idx)] = value
+            index[value.lower()] = value
+        right = hint
+        if is_disabled:
+            right = f"{right} disabled/incompatible".strip()
+        label_kind = "muted" if is_disabled else "value"
+        print(f"  {_c('accent', number.ljust(4))} {_c(label_kind, label_text)} {_c('muted', right)}")
     return index
 
 
@@ -686,18 +924,20 @@ def _prompt_choice(
     default: str,
     *,
     hints: Optional[Dict[str, str]] = None,
+    disabled: Optional[set[str]] = None,
     allow_back: bool = False,
     allow_changes: bool = True,
 ) -> str:
+    disabled_values = {str(value) for value in (disabled or set())}
     while True:
         _print_title(question)
         option_rows = [
             (value, _option_label(value), _option_hint(value, (hints or {}).get(value, "")))
-            for value in sorted(valid)
+            for value in _ordered_options(valid)
         ]
-        index = _print_options(option_rows, default=default)
+        index = _print_options(option_rows, default=default, disabled=disabled_values)
         _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
-        raw = _input_or_quit(f"Select [{default}]: ", lower=True)
+        raw = _input_or_quit(f"Select [{_option_label(default)}]: ", lower=True)
         if raw == "c" and allow_changes:
             _print_changes_or_empty()
             continue
@@ -705,7 +945,9 @@ def _prompt_choice(
             return "back"
         if not raw:
             return default
-        return index.get(raw, default)
+        if raw in index:
+            return index[raw]
+        print(f"  {_c('warn', 'invalid or disabled choice')} {_c('muted', raw)}")
 
 
 def _prompt_menu(
@@ -729,7 +971,7 @@ def _prompt_menu(
     index = _print_options(normalized, default=default, label_width=30)
     _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
     _print_rule(".", width=78)
-    raw = _input_or_quit(f"Select [{default}]: ", lower=True)
+    raw = _input_or_quit(f"Select [{_option_label(default)}]: ", lower=True)
     if raw == "c" and allow_changes:
         _print_changes_or_empty()
         return "changes"
@@ -749,10 +991,10 @@ def _wizard_choice_prompt(
 ) -> Tuple[str, str]:
     while True:
         print(_c("title", title))
-        option_rows = [(value, _option_label(value), _option_hint(value)) for value in sorted(valid)]
+        option_rows = [(value, _option_label(value), _option_hint(value)) for value in _ordered_options(valid)]
         index = _print_options(option_rows, default=current)
         _print_prompt_help(allow_back=True, allow_changes=True)
-        raw = _input_or_quit(f"  current={current}; select [{current}]: ", lower=True)
+        raw = _input_or_quit(f"  current={_option_label(current)}; select [{_option_label(current)}]: ", lower=True)
         if raw in {"p", "prev", "b", "back"}:
             return "prev", current
         if raw == "c":
@@ -777,7 +1019,7 @@ def _wizard_bool_prompt(*, title: str, current: bool, allow_skip: bool = True) -
             default=current_value,
         )
         _print_prompt_help(allow_back=True, allow_changes=True)
-        raw = _input_or_quit(f"  current={current_value}; select [{current_value}]: ", lower=True)
+        raw = _input_or_quit(f"  current={_option_label(current_value)}; select [{_option_label(current_value)}]: ", lower=True)
         if raw in {"p", "prev", "b", "back"}:
             return "prev", current
         if raw == "c":
@@ -2220,7 +2462,8 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
-    paths = _resolve_paths(args, create_dirs=True)
+    interactive = bool(args.interactive)
+    paths = _resolve_paths(args, create_dirs=not interactive)
     default_config_dir = paths["default_config_dir"]
     control_state_path = paths["control_state_path"]
     hosting_root = paths["hosting_root"]
@@ -2230,8 +2473,14 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     bootstrap_state_file = paths["bootstrap_state_file"]
     audit_file = paths["audit_file"]
     migrations_file = paths["migrations_file"]
+    dirs = {
+        "root": hosting_root,
+        "keyring": keys_file.parent,
+        "audit": audit_file.parent,
+        "state": hosting_root / "state",
+        "bootstrap": mappings_file.parent,
+    }
 
-    interactive = bool(args.interactive)
     mode = _normalize_mode(args.mode, "local_only")
     endpoint_mode = _normalize_endpoint_mode(args.endpoint_mode, "exclusive")
     lifecycle_profile = _normalize_lifecycle_profile(args.lifecycle_profile, "detached_user_process")
@@ -2319,7 +2568,66 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
 
         _run_main_menu()
 
+        auto_applied = False
+        current_projection_auth = require_auth_seed
         while True:
+            context = _collect_setup_context(usage_intent)
+            suggestion = _suggest_auto_configuration(context)
+            _print_auto_configuration(context, suggestion)
+            default_action = "leave_unconfigured" if bool(suggestion.get("leave_unconfigured")) else "apply"
+            suggestion_action = _prompt_menu(
+                "Suggested Action",
+                {
+                    "apply": ("Use suggested configuration", "stage these values and continue to review"),
+                    "customize": ("Customize configuration", "start from the suggested intent and edit choices"),
+                    "leave_unconfigured": ("Leave hosting unconfigured", "no access files are written"),
+                },
+                default_action,
+                allow_back=True,
+            )
+            if suggestion_action == "back":
+                _run_main_menu()
+                continue
+            if suggestion_action == "changes":
+                continue
+            if suggestion_action == "leave_unconfigured" or (
+                suggestion_action == "apply" and bool(suggestion.get("leave_unconfigured"))
+            ):
+                _clear_pending_staged_setup()
+                _print_title("No Changes Written")
+                _kv_rows(
+                    [
+                        ("result", "Hosting was left unconfigured."),
+                        ("reason", "Local experiment only."),
+                        ("hosting_root", str(hosting_root)),
+                    ]
+                )
+                return {
+                    "status": "skipped",
+                    "action": "leave_unconfigured",
+                    "reason": "local_experiment",
+                    "message": "Hosting was left unconfigured for local experimentation.",
+                    "hosting_root": str(hosting_root),
+                    "followups": list(suggestion.get("followups") or []),
+                }
+
+            usage_intent = _normalize_usage_intent(str(suggestion.get("usage_intent") or usage_intent), usage_intent)
+            setup_scope = usage_intent
+            mode = _normalize_mode(str(suggestion.get("mode") or mode), mode)
+            endpoint_mode = _normalize_endpoint_mode(str(suggestion.get("endpoint_mode") or endpoint_mode), endpoint_mode)
+            lifecycle_profile = _normalize_lifecycle_profile(
+                str(suggestion.get("lifecycle_profile") or lifecycle_profile),
+                lifecycle_profile,
+            )
+            current_projection_auth = bool(suggestion.get("require_auth"))
+            key_source = str(suggestion.get("key_source") or key_source)
+            key_action = str(suggestion.get("key_action") or key_action)
+            permission_action = str(suggestion.get("permission_action") or permission_action)
+            setup_notes.extend([str(item) for item in list(suggestion.get("followups") or []) if str(item).strip()])
+            if suggestion_action == "apply":
+                auto_applied = True
+                break
+
             while True:
                 usage_choice = _prompt_menu(
                     "Hosting Access",
@@ -2410,6 +2718,9 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             )
 
         _stage_current()
+        if auto_applied:
+            _print_title("Review Suggested Configuration")
+            _print_pending_staged_setup()
         print("\nConfiguration steps")
         print(_c("muted", "Use Enter to keep the current value, `b` for back, `c` for staged changes, `q` to quit."))
         while step_idx < len(grouped_steps):
@@ -2567,6 +2878,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         if not _bool_prompt("Apply this configuration now?", True):
             _clear_pending_staged_setup()
             raise UserCancelled("cancelled by user")
+        _ensure_dirs(hosting_root)
         _clear_pending_staged_setup()
     else:
         _clear_pending_staged_setup()
@@ -2651,6 +2963,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             admin_public_key = str(generated_public).strip()
             if interactive:
                 export_private = _bool_prompt("Export generated private key for client use?", export_private)
+                if export_private and export_private_path is None:
+                    default_export_path = hosting_root / "keyring" / f"{admin_key_id}.private"
+                    export_path_raw = _input_or_quit(f"Private key export path [{default_export_path}]: ")
+                    export_private_path = Path(export_path_raw).expanduser().resolve() if export_path_raw else default_export_path
             if export_private and export_private_path is not None:
                 export_private_path.parent.mkdir(parents=True, exist_ok=True)
                 export_private_path.write_text(str(generated_private), encoding="utf-8")
@@ -3170,11 +3486,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--auth-method",
         default="public_key",
         choices=["public_key", "shared_secret"],
-        help="Authentication method for --upsert-key",
+        help="Authentication method for --upsert-key. shared_secret can issue sessions only in local_only mode; remote modes require public_key challenge.",
     )
     p.add_argument("--public-key-file", default="", help="Public key file for --upsert-key")
     p.add_argument("--public-key-inline", default="", help="Inline public key for --upsert-key")
-    p.add_argument("--key-secret", default="", help="Shared secret for --upsert-key when auth-method=shared_secret")
+    p.add_argument("--key-secret", default="", help="Shared secret for local_only --upsert-key when auth-method=shared_secret")
     p.add_argument("--allowed-configs", default="", help="Comma-separated config selectors for config_editor keys")
     p.add_argument("--allowed-engines", default="", help="Comma-separated engine ids for traffic-capable keys")
     p.add_argument("--disable-key", action="store_true", default=False, help="Create/update the RBAC key as disabled")
