@@ -7,6 +7,7 @@ Modes:
   --daemon-http         Start HTTP ingress daemon (foreground)
   --daemon-http --background Start HTTP ingress daemon detached in background
   --relay               Bridge stdin/stdout to local daemon TCP socket (SSH channel)
+  --relay-wrapper       SSH forced-command wrapper: start detached daemon if allowed, then relay
   <subcommand>          Short-lived: send one command to running daemon (or direct fallback)
 
 Usage examples:
@@ -15,6 +16,7 @@ Usage examples:
   python -m hosting.engine_host_cli --daemon-http
   python -m hosting.engine_host_cli --daemon-http --background
   python -m hosting.engine_host_cli --relay
+  python -m hosting.engine_host_cli --relay-wrapper
   python -m hosting.engine_host_cli discover-running
   python -m hosting.engine_host_cli spawn --payload-stdin < payload.json
 """
@@ -251,6 +253,46 @@ def _print_error(message: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False))
 
 
+class RelayStartupError(RuntimeError):
+    """Structured error emitted by SSH relay auto-start before daemon relay exists."""
+
+    def __init__(self, message: str, *, code: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(str(message or code or "relay_startup_failed"))
+        self.code = str(code or "relay_startup_failed").strip()
+        self.details = dict(details or {})
+
+    def to_error_payload(self) -> Dict[str, Any]:
+        return {
+            "error": str(self),
+            "error_code": self.code,
+            "error_details": dict(self.details or {}),
+        }
+
+
+def _error_payload(exc: BaseException) -> Dict[str, Any]:
+    if hasattr(exc, "to_error_payload"):
+        payload = dict(getattr(exc, "to_error_payload")() or {})
+        return {
+            "error": str(payload.get("error") or exc or "unknown_error"),
+            "error_code": str(payload.get("error_code") or "").strip(),
+            "error_details": dict(payload.get("error_details") or {}),
+        }
+    return {
+        "error": str(exc or "unknown_error"),
+        "error_code": str(getattr(exc, "code", "") or "").strip(),
+        "error_details": dict(getattr(exc, "details", {}) or {}),
+    }
+
+
+def _request_seq(req: Any, default: int = -1) -> int:
+    if not isinstance(req, dict):
+        return int(default)
+    try:
+        return int(req.get("seq") or 0)
+    except Exception:
+        return int(default)
+
+
 # ---------------------------------------------------------------------------
 # Argument extraction helpers for pre-parse mode flags
 # ---------------------------------------------------------------------------
@@ -354,25 +396,189 @@ def _run_relay(pid_file: Optional[Path] = None, port: int = 0) -> None:
             stripped = line.strip()
             if not stripped:
                 continue
+            req: Dict[str, Any] = {}
             try:
                 req = json.loads(stripped.decode("utf-8", errors="replace"))
-                seq = int(req.get("seq") or 0)
+                seq = _request_seq(req, 0)
                 cmd = str(req.get("cmd") or "").strip()
                 payload = dict(req.get("payload") or {})
                 result = conn.invoke(cmd, payload)
                 resp = {"seq": seq, "ok": True, "result": result}
             except Exception as exc:
+                err = _error_payload(exc)
                 resp = {
-                    "seq": int(req.get("seq") or 0) if isinstance(locals().get("req"), dict) else -1,
+                    "seq": _request_seq(req, -1),
                     "ok": False,
-                    "error": str(exc),
+                    "error": err["error"],
                 }
+                if err["error_code"]:
+                    resp["error_code"] = err["error_code"]
+                if err["error_details"]:
+                    resp["error_details"] = err["error_details"]
             sys.stdout.buffer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
             sys.stdout.buffer.flush()
     except (BrokenPipeError, EOFError, OSError):
         pass
     finally:
         conn.close()
+
+
+def _run_relay_error_loop(exc: BaseException) -> None:
+    """Return one structured relay error for each client request until SSH stdin closes."""
+    err = _error_payload(exc)
+    try:
+        for line in sys.stdin.buffer:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            seq = -1
+            try:
+                req = json.loads(stripped.decode("utf-8", errors="replace"))
+                seq = _request_seq(req, -1)
+            except Exception:
+                pass
+            resp: Dict[str, Any] = {
+                "seq": seq,
+                "ok": False,
+                "error": err["error"],
+            }
+            if err["error_code"]:
+                resp["error_code"] = err["error_code"]
+            if err["error_details"]:
+                resp["error_details"] = err["error_details"]
+            sys.stdout.buffer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+            sys.stdout.buffer.flush()
+    except (BrokenPipeError, EOFError, OSError):
+        pass
+
+
+def _relay_port(pid_file: Optional[Path], port: int) -> int:
+    from .engine_host_daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
+
+    if port:
+        return int(port)
+    pid_info = DaemonPidFile(pid_file)
+    return int(pid_info.get_port() or DEFAULT_DAEMON_PORT)
+
+
+def _relay_daemon_reachable(*, pid_file: Optional[Path], port: int) -> bool:
+    from .engine_host_connection import LocalSocketConnection
+
+    conn = LocalSocketConnection(
+        port=int(port or 0),
+        pid_file=pid_file,
+        timeout=3.0,
+        max_reconnect_attempts=1,
+    )
+    try:
+        return bool(conn.is_alive())
+    finally:
+        conn.close()
+
+
+def _validate_relay_autostart_policy(control_state_file: Optional[Path]) -> Dict[str, Any]:
+    svc = EngineHostService(control_state_file=control_state_file)
+    cfg = dict(svc.get_control_config() or {})
+    access_profile = dict(cfg.get("access_profile") or {})
+    connectivity_mode = str(access_profile.get("connectivity_mode") or "local_only").strip().lower()
+    lifecycle_profile = str(cfg.get("lifecycle_profile") or "detached_user_process").strip().lower()
+    require_auth = bool(cfg.get("require_auth", False))
+    keys_count = int(cfg.get("keys_count") or 0)
+    details = {
+        "connectivity_mode": connectivity_mode,
+        "lifecycle_profile": lifecycle_profile,
+        "require_auth": require_auth,
+        "keys_count": keys_count,
+        "control_state_file": str(Path(control_state_file).expanduser()) if control_state_file else None,
+    }
+    if connectivity_mode not in {"ssh_tunnel_only", "truly_remote"}:
+        raise RelayStartupError(
+            "SSH relay auto-start is disabled because hosting connectivity is not remote-enabled",
+            code="relay_autostart_requires_remote_connectivity",
+            details=details,
+        )
+    if not require_auth:
+        raise RelayStartupError(
+            "SSH relay auto-start is disabled because hosting require_auth is false",
+            code="relay_autostart_requires_auth",
+            details=details,
+        )
+    if keys_count <= 0:
+        raise RelayStartupError(
+            "SSH relay auto-start is disabled because no hosting auth keys are registered",
+            code="relay_autostart_requires_registered_keys",
+            details=details,
+        )
+    if lifecycle_profile != "detached_user_process":
+        raise RelayStartupError(
+            "SSH relay auto-start is only supported for detached_user_process lifecycle",
+            code="relay_autostart_requires_detached_user_process",
+            details=details,
+        )
+    return details
+
+
+def _ensure_relay_daemon_ready(
+    *,
+    pid_file: Optional[Path],
+    port: int,
+    control_state_file: Optional[Path],
+    engines_state_file: Optional[Path] = None,
+    wait_ready_seconds: float = 8.0,
+    log_file: Optional[Path] = None,
+) -> Dict[str, Any]:
+    from .engine_host_daemon import start_daemon_background
+
+    resolved_port = _relay_port(pid_file, int(port or 0))
+    if _relay_daemon_reachable(pid_file=pid_file, port=resolved_port):
+        return {"status": "already_running", "port": resolved_port}
+    policy = _validate_relay_autostart_policy(control_state_file)
+    try:
+        started = dict(
+            start_daemon_background(
+                port=resolved_port,
+                pid_file=pid_file,
+                log_file=log_file,
+                engines_state_file=engines_state_file,
+                control_state_file=control_state_file,
+                wait_ready_seconds=float(wait_ready_seconds or 8.0),
+            )
+            or {}
+        )
+        started["status"] = "started"
+        started.setdefault("policy", policy)
+        return started
+    except Exception as exc:
+        raise RelayStartupError(
+            "SSH relay auto-start failed to start the detached hosting daemon",
+            code="relay_autostart_start_failed",
+            details={**policy, "cause": str(exc)},
+        ) from exc
+
+
+def _run_relay_wrapper(
+    *,
+    pid_file: Optional[Path],
+    port: int,
+    control_state_file: Optional[Path] = None,
+    engines_state_file: Optional[Path] = None,
+    wait_ready_seconds: float = 8.0,
+    log_file: Optional[Path] = None,
+) -> None:
+    try:
+        ready = _ensure_relay_daemon_ready(
+            pid_file=pid_file,
+            port=port,
+            control_state_file=control_state_file,
+            engines_state_file=engines_state_file,
+            wait_ready_seconds=wait_ready_seconds,
+            log_file=log_file,
+        )
+    except Exception as exc:
+        _run_relay_error_loop(exc)
+        return
+    ready_port = int(ready.get("port") or port or _relay_port(pid_file, 0))
+    _run_relay(pid_file=pid_file, port=ready_port)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +804,35 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
 
     # ------------------------------------------------------------------
-    # Mode 2: --relay  →  bridge stdin/stdout to local daemon control channel
+    # Mode 2: --relay-wrapper  →  SSH forced-command auto-start + relay
+    # ------------------------------------------------------------------
+    if "--relay-wrapper" in argv:
+        port = _extract_int_arg(argv, "--port", 0)
+        pid_file = _extract_path_arg(argv, "--pid-file", None)
+        engines_state = _extract_path_arg(argv, "--engines-state-file", None)
+        control_state = _extract_path_arg(argv, "--control-state-file", None)
+        log_file = _extract_path_arg(argv, "--log-file", None)
+        wait_raw = _extract_str_arg(argv, "--wait-ready-seconds", "8.0")
+        try:
+            wait_ready_seconds = float(wait_raw or "8.0")
+        except ValueError:
+            wait_ready_seconds = 8.0
+        try:
+            _run_relay_wrapper(
+                pid_file=pid_file,
+                port=port,
+                engines_state_file=engines_state,
+                control_state_file=control_state,
+                wait_ready_seconds=wait_ready_seconds,
+                log_file=log_file,
+            )
+            return 0
+        except Exception as exc:
+            _print_error(exc)
+            return 1
+
+    # ------------------------------------------------------------------
+    # Mode 2b: --relay  →  bridge stdin/stdout to local daemon control channel
     # ------------------------------------------------------------------
     if "--relay" in argv:
         from .engine_host_daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
@@ -616,7 +850,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 1
 
     # ------------------------------------------------------------------
-    # Mode 2b: --hosting-config  →  run setup/reconfiguration wizard/tool
+    # Mode 2c: --hosting-config  →  run setup/reconfiguration wizard/tool
     # ------------------------------------------------------------------
     if "--hosting-config" in argv:
         from .hosting_config_cli import main as hosting_config_main

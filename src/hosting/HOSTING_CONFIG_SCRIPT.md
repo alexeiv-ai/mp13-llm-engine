@@ -252,7 +252,7 @@ Server-side authorized-key installation writes only public key material:
 2. `--ssh-authorized-keys-file` can override the path
 3. a managed marker block is used so reruns update instead of duplicating
 4. private key material is never installed server-side
-5. the default entry is forced-command hardened to `python -m hosting.engine_host_cli --relay`
+5. the default entry is forced-command hardened to `python -m hosting.engine_host_cli --relay-wrapper`
 6. the default entry disables PTY, agent forwarding, X11 forwarding, and port forwarding
 7. the same public key is registered in hosting auth state with role `transport`
 

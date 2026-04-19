@@ -38,7 +38,7 @@ The hosting layer has strict boundaries regarding network transport:
 #### 1. Local IPC & SSH Relay (Primary Transport)
 The preferred local transport for the primary control daemon is cross-platform local IPC: Unix sockets on Linux/macOS and Windows named pipes on Windows. The primary daemon is the only daemon that accepts control commands such as `spawn`, `shutdown`, and `proxy-rpc-call`.
 
-*   **SSH Relay**: Remote hosting consumers can open an SSH session and run `python -m hosting.engine_host_cli --relay`. The relay process uses the daemon PID file to reach the local control channel, preferring local IPC and falling back to loopback TCP when needed, then bridges JSON-RPC traffic over SSH stdio.
+*   **SSH Relay**: Remote hosting consumers can open an SSH session and run `python -m hosting.engine_host_cli --relay-wrapper`. The wrapper connects to an existing daemon or starts the detached user daemon when the saved remote/auth policy allows it, then bridges JSON-RPC traffic over SSH stdio.
 *   **Pros**: 
     *   Inherently secure against external network probing.
     *   Fast, low-overhead communication between local processes.

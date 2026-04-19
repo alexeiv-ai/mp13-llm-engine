@@ -30,7 +30,7 @@ from .client_realm import (
 
 
 TRANSPORT_BOOTSTRAP_KIND = "hosting_transport_bootstrap"
-DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND = "python -m hosting.engine_host_cli --relay"
+DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND = "python -m hosting.engine_host_cli --relay-wrapper"
 
 
 def make_transport_bootstrap_bundle(

@@ -11,7 +11,7 @@ Key classes and functions available for import:
     run_daemon_foreground()   — start daemon blocking in foreground
     start_daemon_background() — spawn daemon as detached background process
     LocalSocketConnection     — persistent local daemon connection (IPC with legacy TCP fallback)
-    SSHRelayConnection        — persistent SSH subprocess running --relay
+    SSHRelayConnection        — persistent SSH subprocess running --relay-wrapper
     BaseConnection            — abstract base for connection strategies
     ConnectionError           — raised on unrecoverable connection failure
     EngineHostControlChannel  — command channel with daemon connection + subprocess fallback

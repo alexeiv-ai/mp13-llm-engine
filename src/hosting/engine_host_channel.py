@@ -3,7 +3,7 @@ Backend-side adapter to interact with engine host.
 
 Primary path: persistent connection to a running EngineHostDaemon.
   - Local mode (no SSH): LocalSocketConnection via local IPC discovered from PID file
-  - SSH mode:            SSHRelayConnection via SSH subprocess running --relay
+  - SSH mode:            SSHRelayConnection via SSH subprocess running --relay-wrapper
 
 Fallback: original per-command subprocess (engine_host_cli) when no daemon is
 reachable and auto-bootstrap is disabled or fails.
@@ -349,12 +349,12 @@ class EngineHostControlChannel:
                     ssh_target = str(target.get("target") or "")
                     if not ssh_target:
                         return None
-                    # Remote command defaults to --relay variant for SSH mode
+                    # Remote command defaults to the forced-command wrapper for SSH mode
                     raw_remote = str(
                         self.control_settings.get("engine_host_remote_cmd") or ""
                     ).strip()
                     if not raw_remote or "--relay" not in raw_remote:
-                        raw_remote = "python -m hosting.engine_host_cli --relay"
+                        raw_remote = "python -m hosting.engine_host_cli --relay-wrapper"
                     self._connection = SSHRelayConnection(
                         ssh_target=ssh_target,
                         ssh_key=str(self.control_settings.get("control_ssh_key") or "").strip() or None,

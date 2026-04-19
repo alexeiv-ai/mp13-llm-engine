@@ -646,7 +646,7 @@ This section is the authoritative integration contract for hosting consumers.
    - `shutdown_token`
 3. Remote control access uses the SSH relay pattern:
    - open SSH to the target host
-   - execute `python -m hosting.engine_host_cli --relay`
+   - execute `python -m hosting.engine_host_cli --relay-wrapper`
    - bridge JSON-RPC traffic over SSH stdio
 4. Remote hosting consumers must not rely on opportunistic first-connect SSH trust; pinned host-key material is required.
 5. Standard HTTP ingress, when needed, is handled by the separate `--daemon-http` process or by an external reverse proxy in front of loopback-only listeners.

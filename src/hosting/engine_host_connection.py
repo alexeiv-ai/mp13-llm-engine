@@ -4,7 +4,7 @@ Persistent connection strategies for EngineHostControlChannel.
 Two implementations sharing a common BaseConnection interface:
 
 - LocalSocketConnection: local IPC connection to daemon (with legacy TCP fallback)
-- SSHRelayConnection: persistent SSH subprocess running --relay on the remote host
+- SSHRelayConnection: persistent SSH subprocess running --relay-wrapper on the remote host
 
 Both implement:
     invoke(cmd, payload) -> Any   -- send command, return result or raise
@@ -228,7 +228,7 @@ class LocalSocketConnection(BaseConnection):
 
 class SSHRelayConnection(BaseConnection):
     """
-    Persistent SSH subprocess running `engine_host_cli --relay` on the remote host.
+    Persistent SSH subprocess running `engine_host_cli --relay-wrapper` on the remote host.
 
     The relay process on the remote end connects to the remote daemon's TCP socket
     and bridges stdin/stdout to it.  SSH provides the encrypted, authenticated channel.
@@ -248,14 +248,14 @@ class SSHRelayConnection(BaseConnection):
         *,
         ssh_target: str,
         ssh_key: Optional[str] = None,
-        remote_cmd: str = "python -m hosting.engine_host_cli --relay",
+        remote_cmd: str = "python -m hosting.engine_host_cli --relay-wrapper",
         timeout: float = 15.0,
         max_reconnect_attempts: int = 3,
         known_hosts_line: Optional[str] = None,
     ):
         self._ssh_target = str(ssh_target)
         self._ssh_key = str(ssh_key or "").strip() or None
-        self._remote_cmd = str(remote_cmd or "python -m hosting.engine_host_cli --relay")
+        self._remote_cmd = str(remote_cmd or "python -m hosting.engine_host_cli --relay-wrapper")
         self._timeout = float(timeout or 15.0)
         self._max_reconnect = max(1, int(max_reconnect_attempts or 3))
         self._known_hosts_line: Optional[str] = str(known_hosts_line or "").strip() or None
@@ -346,7 +346,12 @@ class SSHRelayConnection(BaseConnection):
                     raw = line.decode("utf-8", errors="replace").strip()
                     resp = json.loads(raw)
                     if not resp.get("ok"):
-                        raise RuntimeError(str(resp.get("error") or f"relay command '{cmd}' failed"))
+                        raise CommandError(
+                            str(resp.get("error") or f"relay command '{cmd}' failed"),
+                            code=str(resp.get("error_code") or "").strip(),
+                            details=dict(resp.get("error_details") or {}),
+                            result=resp.get("result"),
+                        )
                     return resp.get("result")
                 except (OSError, BrokenPipeError, ConnectionError, AssertionError) as exc:
                     last_exc = exc
