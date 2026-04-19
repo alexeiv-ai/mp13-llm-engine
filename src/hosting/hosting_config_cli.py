@@ -35,7 +35,9 @@ if __package__ in {None, ""}:
     )
     from hosting.transport_bootstrap import (
         import_transport_bootstrap_bundle,
+        install_transport_authorized_key,
         make_transport_bootstrap_bundle,
+        provision_client_ssh_artifacts,
         read_transport_bootstrap_bundle,
         validate_client_transport_profile,
         write_transport_bootstrap_bundle,
@@ -53,7 +55,9 @@ else:
     )
     from .transport_bootstrap import (
         import_transport_bootstrap_bundle,
+        install_transport_authorized_key,
         make_transport_bootstrap_bundle,
+        provision_client_ssh_artifacts,
         read_transport_bootstrap_bundle,
         validate_client_transport_profile,
         write_transport_bootstrap_bundle,
@@ -1602,6 +1606,12 @@ def _print_transport_bootstrap_report(result: Dict[str, Any]) -> None:
         "client_realm_root",
         "target",
         "transport_key_id",
+        "ssh_alias",
+        "ssh_config_file",
+        "identity_file",
+        "authorized_keys_file",
+        "ssh_command",
+        "marker",
     ):
         if result.get(key):
             rows.append((key, result.get(key)))
@@ -2227,10 +2237,12 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
     action_export = bool(getattr(args, "transport_export_bootstrap", False))
     action_import = bool(getattr(args, "transport_import_bootstrap", False))
     action_validate = bool(getattr(args, "transport_validate_profile", False))
-    selected_count = sum(1 for flag in (action_export, action_import, action_validate) if flag)
+    action_provision = bool(getattr(args, "transport_provision_ssh_artifacts", False))
+    action_install_authorized = bool(getattr(args, "transport_install_authorized_key", False))
+    selected_count = sum(1 for flag in (action_export, action_import, action_validate, action_provision, action_install_authorized) if flag)
     if selected_count > 1:
         raise ValueError(
-            "Choose only one of --transport-export-bootstrap, --transport-import-bootstrap, or --transport-validate-profile"
+            "Choose only one transport action"
         )
     if selected_count == 0:
         raise ValueError("No transport bootstrap action selected")
@@ -2280,6 +2292,24 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
             "target": target,
             "transport_key_id": transport_key_id,
         }
+    if action_install_authorized:
+        public_key = _read_text_or_file(
+            inline_value=str(args.transport_public_key_inline or ""),
+            file_value=str(args.transport_public_key_file or ""),
+            field_name="transport public key",
+        )
+        auth_file_raw = str(getattr(args, "ssh_authorized_keys_file", "") or "").strip()
+        auth_file = Path(auth_file_raw).expanduser().resolve() if auth_file_raw else (Path.home() / ".ssh" / "authorized_keys").resolve()
+        result = install_transport_authorized_key(
+            transport_public_key=public_key,
+            authorized_keys_file=auth_file,
+            transport_key_id=str(args.transport_key_id or "").strip(),
+        )
+        return {
+            "status": str(result.get("status") or "ok"),
+            "action": "transport_install_authorized_key",
+            **result,
+        }
     client_realm_root = _resolve_client_realm_root(args)
     realm = str(getattr(args, "client_realm", "") or "default").strip() or "default"
     if action_import:
@@ -2312,6 +2342,23 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
             "transport_key_id": dict(profile.get("profile") or {}).get("transport_key_id"),
         }
     profile_name = str(args.transport_profile_name or "").strip()
+    if action_provision:
+        if not profile_name:
+            raise ValueError("--transport-profile-name is required for --transport-provision-ssh-artifacts")
+        result = provision_client_ssh_artifacts(
+            client_realm_root=client_realm_root,
+            profile_name=profile_name,
+            realm=realm,
+            ssh_alias=str(getattr(args, "ssh_config_alias", "") or "").strip(),
+            secret_password=str(getattr(args, "client_secret_password", "") or ""),
+            overwrite=bool(getattr(args, "overwrite_ssh_config", False)),
+        )
+        return {
+            "status": str(result.get("status") or "ok"),
+            "action": "transport_provision_ssh_artifacts",
+            "client_realm_root": str(client_realm_root),
+            **result,
+        }
     if not profile_name:
         raise ValueError("--transport-profile-name is required for --transport-validate-profile")
     result = validate_client_transport_profile(
@@ -3533,6 +3580,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--transport-export-bootstrap", action="store_true", help="Export a transport bootstrap bundle and exit")
     p.add_argument("--transport-import-bootstrap", action="store_true", help="Import a transport bootstrap bundle into the client realm and exit")
     p.add_argument("--transport-validate-profile", action="store_true", help="Validate an imported transport client profile and exit")
+    p.add_argument("--transport-provision-ssh-artifacts", action="store_true", help="Materialize a transport profile key and write a realm-local SSH config snippet")
+    p.add_argument("--transport-install-authorized-key", action="store_true", help="Install a transport public key into a user-scoped authorized_keys file")
     p.add_argument("--bootstrap-bundle-file", default="", help="Transport bootstrap bundle file path for export/import")
     p.add_argument("--transport-target", default="", help="SSH target for transport bootstrap export")
     p.add_argument("--transport-key-id", default="", help="Transport key id for transport bootstrap export")
@@ -3551,6 +3600,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--validation-ssh-bin", default="ssh", help="SSH binary used for transport profile validation")
     p.add_argument("--validation-remote-command", default="exit 0", help="Remote command for transport profile SSH validation")
     p.add_argument("--validation-timeout-seconds", type=float, default=15.0, help="Timeout for transport profile SSH validation")
+    p.add_argument("--ssh-config-alias", default="", help="Host alias for --transport-provision-ssh-artifacts")
+    p.add_argument("--overwrite-ssh-config", action="store_true", default=False, help="Overwrite existing realm-local SSH config snippet")
+    p.add_argument("--ssh-authorized-keys-file", default="", help="authorized_keys path for --transport-install-authorized-key; defaults to ~/.ssh/authorized_keys")
     return p
 
 
@@ -3593,7 +3645,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         ):
             result = run_client_keys(args)
             _print_client_key_report(result)
-        elif bool(args.transport_export_bootstrap or args.transport_import_bootstrap):
+        elif bool(
+            args.transport_export_bootstrap
+            or args.transport_import_bootstrap
+            or args.transport_validate_profile
+            or args.transport_provision_ssh_artifacts
+            or args.transport_install_authorized_key
+        ):
             result = run_transport_bootstrap(args)
             _print_transport_bootstrap_report(result)
         else:

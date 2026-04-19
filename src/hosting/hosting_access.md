@@ -393,6 +393,12 @@ Recommended projections:
    - bind daemon control to local IPC only on host
    - use SSH relay for daemon control
    - enforce auth and SSH-bound session usage
+   - hosting config tooling can provision realm-local SSH client artifacts from a transport bootstrap profile:
+     - materialized private key
+     - pinned known_hosts file
+     - SSH config snippet using `StrictHostKeyChecking yes`
+   - hosting config tooling can install the transport public key into a user-scoped server-side `authorized_keys` file
+   - private key material must remain on the hosting consumer side, never in server-side `authorized_keys`
 3. Truly remote
    - explicit non-loopback bind (or reverse proxy) by admin choice
    - enforce auth, role separation, short token TTL

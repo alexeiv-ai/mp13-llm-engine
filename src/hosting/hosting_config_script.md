@@ -43,6 +43,8 @@ Supported top-level modes:
    - `--transport-export-bootstrap`
    - `--transport-import-bootstrap`
    - `--transport-validate-profile`
+   - `--transport-provision-ssh-artifacts`
+   - `--transport-install-authorized-key`
 
 Human-readable terminal output is the default. `--json-output` is available for automation.
 
@@ -228,7 +230,27 @@ Client-realm commands manage private-key custody for the hosting consumer side:
 Transport bootstrap commands support out-of-band transfer of remote SSH transport material:
 1. export bootstrap bundle
 2. import bootstrap bundle into client realm
-3. validate imported transport profile
+3. provision realm-local SSH artifacts
+4. install the transport public key into a user-scoped server-side `authorized_keys`
+5. validate imported transport profile
+
+Consumer-side provisioning writes user-scoped/client-realm artifacts, not global SSH files:
+1. materialized private key under the client realm `managed_keys/`
+2. pinned known_hosts file under the client realm `known_hosts/`
+3. SSH config snippet under the client realm `ssh_config/`
+4. ready command form: `ssh -F <realm ssh config> <alias>`
+
+The generated SSH config uses:
+1. `IdentityFile`
+2. `UserKnownHostsFile`
+3. `StrictHostKeyChecking yes`
+4. `IdentitiesOnly yes`
+
+Server-side authorized-key installation writes only public key material:
+1. default path is `~/.ssh/authorized_keys`
+2. `--ssh-authorized-keys-file` can override the path
+3. a managed marker block is used so reruns update instead of duplicating
+4. private key material is never installed server-side
 
 Remote-capable setup still requires pinned SSH host-key material. Opportunistic `accept-new` host-key trust is not a supported baseline.
 
@@ -268,6 +290,8 @@ Permission action:
 
 1. The setup wizard bootstraps the first admin identity; it does not create the full multi-user key matrix.
 2. Additional users/roles are added later through RBAC tooling or hosting consumer admin UI.
-3. Firewall/proxy/SSH server configuration is outside this script.
-4. Hardware-backed key storage is not implemented.
-5. Local host compromise remains outside baseline prevention guarantees.
+3. Firewall, proxy, and machine-wide SSH server policy are outside this script today.
+4. Realm-local SSH client artifacts are supported through transport provisioning, but the script does not edit global `~/.ssh/config`.
+5. User-scoped `authorized_keys` installation is supported, but the script does not edit machine-wide `sshd_config` or restart SSH services.
+6. Hardware-backed key storage is not implemented.
+7. Local user-account compromise remains outside baseline prevention guarantees.

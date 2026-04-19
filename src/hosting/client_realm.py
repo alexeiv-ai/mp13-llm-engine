@@ -136,6 +136,7 @@ def client_realm_layout(root: Path) -> Dict[str, Path]:
         "secrets": realm_root / "secrets",
         "managed_keys": realm_root / "managed_keys",
         "known_hosts": realm_root / "known_hosts",
+        "ssh_config": realm_root / "ssh_config",
         "audit": realm_root / "audit",
         "profiles": realm_root / "profiles",
     }
@@ -143,7 +144,7 @@ def client_realm_layout(root: Path) -> Dict[str, Path]:
 
 def ensure_client_realm_dirs(root: Path) -> Dict[str, Path]:
     layout = client_realm_layout(root)
-    for key in ("root", "keyring", "secrets", "managed_keys", "known_hosts", "audit", "profiles"):
+    for key in ("root", "keyring", "secrets", "managed_keys", "known_hosts", "ssh_config", "audit", "profiles"):
         layout[key].mkdir(parents=True, exist_ok=True)
     return layout
 

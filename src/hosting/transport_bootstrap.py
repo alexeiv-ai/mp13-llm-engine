@@ -18,6 +18,7 @@ from .client_realm import (
     _password_v1_encrypt,
     append_client_audit_event,
     ensure_client_realm_dirs,
+    materialize_secret_file,
     profile_path,
     read_client_access,
     read_client_profile,
@@ -254,6 +255,185 @@ def import_transport_bootstrap_bundle(
         "known_hosts_file": str(known_hosts_path),
         "profile_path": str(profile_path(client_realm_root, name)),
         "audit_path": str(audit_path),
+    }
+
+
+def _ssh_alias(value: str) -> str:
+    raw = str(value or "").strip()
+    safe = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "-" for ch in raw)
+    return safe.strip(".-") or "hosting"
+
+
+def _parse_ssh_target(target: str) -> Dict[str, str]:
+    raw = str(target or "").strip()
+    user = ""
+    host = raw
+    port = ""
+    if "@" in raw:
+        user, host = raw.rsplit("@", 1)
+    if ":" in host and not host.startswith("[") and host.count(":") == 1:
+        host, port = host.rsplit(":", 1)
+    return {"user": user.strip(), "host": host.strip(), "port": port.strip()}
+
+
+def provision_client_ssh_artifacts(
+    *,
+    client_realm_root: Path,
+    profile_name: str,
+    realm: str = "default",
+    ssh_alias: str = "",
+    secret_password: str = "",
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    realm_norm = str(realm or "default").strip() or "default"
+    name = str(profile_name or "").strip()
+    if not name:
+        raise ValueError("profile_name is required")
+    layout = ensure_client_realm_dirs(client_realm_root)
+    profile_payload = read_client_profile(client_realm_root, name)
+    profile = dict(profile_payload.get("profile") or {})
+    if not profile:
+        raise ValueError(f"transport profile {name!r} was not found")
+    secret_id = str(profile.get("control_ssh_key_secret_id") or "").strip()
+    if not secret_id:
+        raise ValueError(f"transport profile {name!r} has no control_ssh_key_secret_id")
+    alias = _ssh_alias(ssh_alias or name)
+    key_path = materialize_secret_file(
+        client_realm_root,
+        secret_id=secret_id,
+        realm=realm_norm,
+        name=f"{alias}-{secret_id}",
+        password=secret_password,
+    )
+    known_hosts_file = str(profile.get("ssh_known_hosts_file") or "").strip()
+    if not known_hosts_file:
+        known_hosts_line = str(profile.get("ssh_known_hosts_line") or "").strip()
+        if not known_hosts_line:
+            raise ValueError(f"transport profile {name!r} has no pinned SSH host-key material")
+        known_hosts_path = (layout["known_hosts"] / f"{name}.known_hosts").resolve()
+        known_hosts_path.write_text(known_hosts_line + "\n", encoding="utf-8")
+        try:
+            known_hosts_path.chmod(0o600)
+        except Exception:
+            pass
+    else:
+        known_hosts_path = Path(known_hosts_file).expanduser().resolve()
+    target = str(profile.get("engine_host_ssh_target") or "").strip()
+    parsed = _parse_ssh_target(target)
+    host = parsed.get("host") or target
+    if not host:
+        raise ValueError(f"transport profile {name!r} has no engine_host_ssh_target")
+    ssh_config_path = (layout["ssh_config"] / f"{alias}.config").resolve()
+    if ssh_config_path.exists() and not overwrite:
+        raise ValueError(f"ssh config already exists: {ssh_config_path}")
+    lines = [
+        f"Host {alias}",
+        f"  HostName {host}",
+        f"  IdentityFile {key_path}",
+        f"  UserKnownHostsFile {known_hosts_path}",
+        "  StrictHostKeyChecking yes",
+        "  IdentitiesOnly yes",
+    ]
+    if parsed.get("user"):
+        lines.insert(2, f"  User {parsed['user']}")
+    if parsed.get("port"):
+        lines.insert(3 if parsed.get("user") else 2, f"  Port {parsed['port']}")
+    ssh_config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        ssh_config_path.chmod(0o600)
+    except Exception:
+        pass
+    audit_path = append_client_audit_event(
+        client_realm_root,
+        event_type="transport_ssh_artifacts_provision",
+        realm=realm_norm,
+        payload={
+            "profile_name": name,
+            "ssh_alias": alias,
+            "ssh_config_file": str(ssh_config_path),
+            "identity_file": str(key_path),
+            "known_hosts_file": str(known_hosts_path),
+        },
+    )
+    return {
+        "status": "ok",
+        "realm": realm_norm,
+        "profile_name": name,
+        "ssh_alias": alias,
+        "ssh_config_file": str(ssh_config_path),
+        "identity_file": str(key_path),
+        "known_hosts_file": str(known_hosts_path),
+        "ssh_command": f"ssh -F {ssh_config_path} {alias}",
+        "audit_path": str(audit_path),
+    }
+
+
+def install_transport_authorized_key(
+    *,
+    transport_public_key: str,
+    authorized_keys_file: Path,
+    transport_key_id: str = "",
+    marker: str = "mp13-hosting-transport",
+) -> Dict[str, Any]:
+    public_key = str(transport_public_key or "").strip()
+    if not public_key:
+        raise ValueError("transport_public_key is required")
+    if not public_key.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")):
+        raise ValueError("transport_public_key must be an SSH public key")
+    key_id = str(transport_key_id or "").strip() or "transport"
+    marker_name = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "-" for ch in str(marker or "").strip())
+    if not marker_name:
+        marker_name = "mp13-hosting-transport"
+    begin = f"# BEGIN {marker_name} {key_id}"
+    end = f"# END {marker_name} {key_id}"
+    key_line = public_key
+    if len(public_key.split()) < 3:
+        key_line = f"{public_key} {key_id}"
+    block = [begin, key_line, end]
+    target = Path(authorized_keys_file).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing_lines = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
+    out_lines: list[str] = []
+    idx = 0
+    replaced = False
+    while idx < len(existing_lines):
+        line = existing_lines[idx]
+        if line.strip() == begin:
+            replaced = True
+            idx += 1
+            while idx < len(existing_lines) and existing_lines[idx].strip() != end:
+                idx += 1
+            if idx < len(existing_lines):
+                idx += 1
+            if out_lines and out_lines[-1].strip():
+                out_lines.append("")
+            out_lines.extend(block)
+            continue
+        if line.strip() == key_line.strip():
+            replaced = True
+            idx += 1
+            continue
+        out_lines.append(line)
+        idx += 1
+    if not replaced:
+        if out_lines and out_lines[-1].strip():
+            out_lines.append("")
+        out_lines.extend(block)
+    target.write_text("\n".join(out_lines).rstrip() + "\n", encoding="utf-8")
+    try:
+        target.parent.chmod(0o700)
+    except Exception:
+        pass
+    try:
+        target.chmod(0o600)
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "authorized_keys_file": str(target),
+        "transport_key_id": key_id,
+        "marker": marker_name,
+        "replaced": replaced,
     }
 
 
