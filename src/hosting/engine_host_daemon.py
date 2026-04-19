@@ -33,7 +33,6 @@ import secrets
 import signal
 import subprocess
 import sys
-from ._process_utils import pid_alive
 import tempfile
 import threading
 import time
@@ -216,7 +215,21 @@ class DaemonPidFile:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        return pid_alive(pid)
+        try:
+            p = int(pid or 0)
+        except Exception:
+            return False
+        if p <= 0:
+            return False
+        try:
+            os.kill(p, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, SystemError):
+            return True
+        except Exception:
+            return False
 
     def is_alive(self) -> bool:
         info = self.read()

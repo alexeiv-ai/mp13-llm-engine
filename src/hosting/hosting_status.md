@@ -53,15 +53,17 @@ src/hosting/service/
   __init__.py
   host_service.py
   constants.py
+  core.py
   errors.py
+  logs.py
   state.py
   metrics.py
   auth.py
   claims.py
+  control.py
   policy.py
   configs.py
   engines.py
-  ipc.py
   proxy.py
   sandbox_api.py
   toolbox_env.py
@@ -79,7 +81,6 @@ class EngineHostService(
     PolicyMixin,
     ConfigMixin,
     EngineMixin,
-    IpcMixin,
     ProxyMixin,
     SandboxApiMixin,
     ToolboxEnvironmentMixin,
@@ -174,7 +175,7 @@ stable.
 
 ### Phase 0 - Baseline And Safety
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -199,7 +200,7 @@ Tasks:
 
 ### Phase 1 - Create `hosting/service/` Skeleton
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -226,7 +227,7 @@ Verification:
 
 ### Phase 2 - Move Low-Risk Shared Service Internals
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -235,9 +236,9 @@ Goals:
 
 Candidate modules:
 
-- `metrics.py`
-- `state.py`
-- `configs.py`
+- `metrics.py` (completed)
+- `state.py` (basic JSON state, toolbox locks, and control-state read/write completed)
+- `configs.py` (completed)
 
 Tasks:
 
@@ -264,6 +265,12 @@ Tasks:
   - `create_engine_config`
   - `models_from_config`
 
+Progress notes:
+
+- `hosting/service/state.py` currently contains the basic JSON state helpers,
+  engine/toolbox state read/write helpers, toolbox lock helpers, and
+  control-state default/read/write helpers.
+
 Verification:
 
 - Run `tests/test_hosting_service_list_configs.py`.
@@ -273,7 +280,7 @@ Verification:
 
 ### Phase 3 - Move Auth, Claims, And Policy
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -282,9 +289,10 @@ Goals:
 
 Candidate modules:
 
-- `auth.py`
-- `claims.py`
-- `policy.py`
+- `auth.py` (completed)
+- `claims.py` (completed)
+- `policy.py` (completed)
+- `control.py` (completed)
 
 Tasks:
 
@@ -335,9 +343,20 @@ Verification:
 - Run `tests/test_hosting_daemon_acl.py`.
 - Run `tests/test_hosting_http_ingress.py`.
 
+Progress notes:
+
+- `hosting/service/auth.py` currently contains the low-level auth helpers:
+  `_hash_secret`, `_token_preview`, expiry pruning, SSH signature verification,
+  session token extraction, role-to-scope mapping, role command tables, session
+  validation, and public auth APIs.
+- `hosting/service/claims.py` currently contains private ownership, keepalive,
+  ownership-change notice, actor, audit, public claim, and token helpers.
+- `hosting/service/policy.py` currently contains command authorization and
+  daemon claim policy enforcement.
+
 ### Phase 4 - Move Engine, IPC, Proxy, Logs, And Sandbox APIs
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -346,9 +365,10 @@ Goals:
 Candidate modules:
 
 - `engines.py`
-- `ipc.py`
-- `proxy.py`
-- `sandbox_api.py`
+- `engines.py` (completed)
+- `proxy.py` (completed, including service-owned IPC address/call helpers)
+- `sandbox_api.py` (completed)
+- `logs.py` (completed)
 
 Tasks:
 
@@ -394,6 +414,16 @@ Tasks:
   - `sandbox_fs_stat`
   - `sandbox_http_fetch`
 
+Progress notes:
+
+- `hosting/service/sandbox_api.py` contains sandbox callback APIs via
+  `SandboxApiMixin`.
+- `hosting/service/logs.py` contains log tail/follow helpers via `LogsMixin`.
+- Worker IPC proxy helpers remain in `host_service.py` for now because tests and
+  callers monkeypatch `hosting.engine_host_service.MPClient`; `proxy.py` now
+  includes a compatibility bridge for that module-level binding as well as
+  `os` and `tempfile`.
+
 Compatibility note:
 
 - Tests currently monkeypatch `hosting.engine_host_service.MPClient`,
@@ -409,7 +439,7 @@ Verification:
 
 ### Phase 5 - Move Toolbox Service Runtime
 
-Status: Not started
+Status: Completed
 
 Goals:
 
@@ -441,6 +471,14 @@ Verification:
 
 - Run full `tests/test_hosting_toolbox_sandbox.py`.
 - Run `tests/test_toolbox_admin.py`.
+
+Result:
+
+- `toolbox_env.py` completed for environment descriptions, environment
+  resolution/install workflows, consistency, repair, reconcile, references, and
+  GC.
+- `toolbox_runtime.py` completed for toolbox metadata, routing, describe, gate,
+  execute, cancel, wait-for-ready, and register/unregister orchestration.
 - Run `tests/test_mp13chat_hosted_toolbox_api.py`.
 
 ### Phase 6 - Optional Daemon Package Split
@@ -497,7 +535,97 @@ Verification:
 
 ## Current Status
 
-- Service split: Planned, not started.
+- Service split: Phases 0 through 5 completed; Phase 6 daemon package split is
+  deferred.
+- `engine_host_service.py` has been moved to `hosting/service/host_service.py`;
+  the old import path remains as a module alias shim.
+- `hosting/service/constants.py` contains service constants and default paths.
+- `hosting/service/core.py` contains small generic service helpers via
+  `CoreMixin`.
+- `hosting/service/errors.py` contains `ToolboxRolloutError`.
+- `hosting/service/logs.py` contains log tail/follow helpers via `LogsMixin`.
+- `hosting/service/metrics.py` contains metrics helpers via `MetricsMixin`.
+- `hosting/service/state.py` contains basic JSON state helpers and control-state
+  default/read/write helpers via `StateMixin`.
+- `hosting/service/configs.py` contains engine config-store helpers via
+  `ConfigMixin`, including profile/path/config-selector helpers and traffic
+  policy normalization.
+- `hosting/service/auth.py` contains low-level auth helpers via `AuthMixin`.
+- `hosting/service/auth.py` also contains role command tables, session
+  validation, and public auth APIs via `AuthMixin`.
+- `hosting/service/claims.py` contains private ownership, keepalive, notice,
+  actor, audit, public claim, and token helpers via `ClaimsMixin`.
+- `hosting/service/policy.py` contains command authorization and daemon claim
+  policy enforcement via `PolicyMixin`.
+- `hosting/service/engines.py` contains engine lifecycle, registration,
+  discovery, spawn, shutdown, and sandbox adapter helpers via `EnginesMixin`.
+- `hosting/service/proxy.py` contains IPC allocation/calls, HTTP proxy, RPC,
+  stream proxy, and token revocation helpers via `ProxyMixin`.
+- `hosting/service/sandbox_api.py` contains sandbox callback APIs via
+  `SandboxApiMixin`.
+- `hosting/service/logs.py` contains log tail/follow helpers via `LogsMixin`.
+- `hosting/service/control.py` contains control config, lifecycle policy, actor
+  resolution, and runtime safety profile helpers via `ControlMixin`.
+- `hosting/service/toolbox_env.py` contains toolbox environment descriptions,
+  environment apply/realize/sync/install workflows, consistency, review,
+  repair, reconcile, references, and GC helpers via `ToolboxEnvironmentMixin`.
+- `hosting/service/toolbox_runtime.py` contains toolbox routing, describe, gate,
+  execute, cancel, ready checks, and register/unregister orchestration via
+  `ToolboxRuntimeMixin`.
+- `hosting/service/host_service.py` now contains the `EngineHostService`
+  constructor and mixin composition only.
+- Verified:
+  - legacy and new import paths both resolve
+  - `pytest tests/test_hosting_service_list_configs.py -q` passed
+  - `pytest tests/test_hosting_auth_roles.py -q` passed
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_list_configs.py -q` passed after metrics split
+  - `pytest tests/test_hosting_service_security.py -q` passed after metrics split
+  - `pytest tests/test_hosting_service_list_configs.py tests/test_hosting_service_security.py -q` passed after state split
+  - `pytest tests/test_hosting_worker_sandbox.py -q` passed after state split
+  - `pytest tests/test_hosting_service_list_configs.py -q` passed after config split
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_worker_sandbox.py -q` passed after config split
+  - `pytest tests/test_hosting_toolbox_sandbox.py -q` passed after Phase 2 partial split
+  - `pytest tests/test_toolbox_admin.py tests/test_hosting_http_ingress.py -q` passed after Phase 2 partial split
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py -q` passed after auth helper split
+  - `pytest tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after auth helper split
+  - `pytest tests/test_hosting_daemon_pidfile.py -q` passed after restoring daemon-local PID liveness monkeypatch behavior
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_engine_host_channel.py -q` passed after daemon PID helper fix
+  - `pytest tests -q` passed: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_service_list_configs.py tests/test_hosting_service_security.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after config/profile helper split
+  - `pytest tests/test_hosting_worker_sandbox.py tests/test_hosting_toolbox_sandbox.py -q` passed after sandbox API split
+  - `pytest tests/test_hosting_service_security.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after sandbox API split
+  - `pytest tests/test_engine_host_channel.py tests/test_hosting_service_security.py tests/test_hosting_worker_sandbox.py -q` passed after logs split
+  - `pytest tests -q` passed after logs split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after control-state split
+  - `pytest tests/test_hosting_daemon_acl.py tests/test_hosting_daemon_pidfile.py -q` passed after control-state split
+  - `pytest tests -q` passed after control-state split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_daemon_acl.py tests/test_hosting_http_ingress.py -q` passed after claim helper split
+  - `pytest tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py -q` passed after claim helper split
+  - `pytest tests -q` passed after claim helper split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after public auth API split
+  - `pytest tests -q` passed after public auth API split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_daemon_acl.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after policy split
+  - `pytest tests -q` passed after policy split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_worker_sandbox.py tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_toolbox_admin.py -q` passed after engine split
+  - `pytest tests/test_hosting_service_list_configs.py tests/test_hosting_service_security.py tests/test_hosting_http_ingress.py -q` passed after engine split
+  - `pytest tests -q` passed after engine split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_worker_sandbox.py tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_channel.py tests/test_hosting_http_ingress.py -q` passed after proxy split
+  - `pytest tests/test_hosting_service_security.py tests/test_hosting_auth_roles.py -q` passed after proxy split
+  - `pytest tests/test_hosting_toolbox_sandbox.py::test_engine_host_service_allocate_ipc_address_uses_unix_socket_on_posix tests/test_hosting_toolbox_sandbox.py::test_engine_host_service_allocate_ipc_address_uses_named_pipe_on_windows -q` passed after proxy split
+  - `pytest tests -q` passed after proxy split: 314 passed, 1 skipped
+  - `pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_daemon_acl.py tests/test_engine_host_channel.py -q` passed after public claim/token API split
+  - `pytest tests -q` passed after public claim/token API split: 314 passed, 1 skipped
+  - `poetry run pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_service_list_configs.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py -q` passed after control split: 71 passed
+  - `poetry run pytest tests/test_hosting_toolbox_sandbox.py tests/test_toolbox_admin.py -q` passed after toolbox environment split: 122 passed
+  - `poetry run pytest tests/test_hosting_toolbox_sandbox.py tests/test_toolbox_admin.py -q` passed after toolbox runtime split: 122 passed
+  - `poetry run pytest tests/test_hosting_auth_roles.py tests/test_hosting_service_security.py tests/test_hosting_service_list_configs.py tests/test_hosting_worker_sandbox.py tests/test_hosting_http_ingress.py tests/test_engine_host_channel.py tests/test_hosting_toolbox_sandbox.py tests/test_toolbox_admin.py -q` passed after toolbox runtime split: 202 passed
+  - `poetry run pytest tests -q` passed after service split completion: 314 passed, 1 skipped
+- Test collection note:
+  - Full unscoped `pytest -q` still collects non-test-tree paths in this
+    checkout and failed before running tests because `logs/pytest_tmp` is not
+    readable and `misc/test_DISK_perf.py` imports missing optional dependency
+    `aiofiles`. Use `pytest tests -q` for the normal repository suite until
+    collection is narrowed or those environment issues are fixed.
 - Daemon split: Deferred.
 - Compatibility shim strategy: Required.
 - Top-level `server/` package: Rejected in favor of `hosting/service/`.
