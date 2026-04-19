@@ -6,9 +6,8 @@ The `hosting` module provides the control-plane and guarded traffic bridge for m
 
 ## Important Documentation Links
 
-- **[Hosting Access Design](hosting_access.md)**: If you are building a GUI, client, or backend service that consumes the hosting APIs, start with Section 11, `Client Integration Contract`. The legacy `HOSTING_ACCESS_GUIDE.md` file now redirects there.
-- **[Client Breaking Changes](HOSTING_CLIENT_BREAKING_CHANGES.md)**: Details on intentional auth/authz breaking changes (e.g., legacy role removal).
-- **[Hosting Configuration Script](hosting_config_script.md)**: Specification for the user-facing setup and reconfiguration script (`hosting_config`).
+- **[Hosting Access Design](HOSTING_ACCESS.md)**: If you are building a GUI, hosting consumer backend, or integration that consumes the hosting APIs, start with Section 11, `Hosting Consumer Integration Contract`.
+- **[Hosting Configuration Script](HOSTING_CONFIG_SCRIPT.md)**: Specification for the user-facing setup and reconfiguration script (`hosting_config`).
 
 ---
 
@@ -39,7 +38,7 @@ The hosting layer has strict boundaries regarding network transport:
 #### 1. Local IPC & SSH Relay (Primary Transport)
 The preferred local transport for the primary control daemon is cross-platform local IPC: Unix sockets on Linux/macOS and Windows named pipes on Windows. The primary daemon is the only daemon that accepts control commands such as `spawn`, `shutdown`, and `proxy-rpc-call`.
 
-*   **SSH Relay**: Remote clients can open an SSH session and run `python -m hosting.engine_host_cli --relay`. The relay process uses the daemon PID file to reach the local control channel, preferring local IPC and falling back to loopback TCP when needed, then bridges JSON-RPC traffic over SSH stdio.
+*   **SSH Relay**: Remote hosting consumers can open an SSH session and run `python -m hosting.engine_host_cli --relay`. The relay process uses the daemon PID file to reach the local control channel, preferring local IPC and falling back to loopback TCP when needed, then bridges JSON-RPC traffic over SSH stdio.
 *   **Pros**: 
     *   Inherently secure against external network probing.
     *   Fast, low-overhead communication between local processes.
@@ -67,18 +66,19 @@ Because IPC cannot serve standard network requests, a separate HTTP ingress daem
     3.  At least one `transport` key is configured in the keyring.
 
 ##### Optional "Temp Admin Access" Lock-down Workflow
-If a remote client relies solely on the `--relay` subprocess via IPC, the host's `~/.ssh/authorized_keys` must allow that SSH identity to execute commands. However, leaving terminal/command execution open is a significant security hole: if the key is compromised, an attacker can spawn a shell and read the physical `.json` keyrings.
+If a remote hosting consumer relies solely on the `--relay` subprocess via IPC, the hosting account's `~/.ssh/authorized_keys` must allow that SSH identity to execute commands. However, leaving terminal/command execution open is a significant security hole: if the key is compromised, an attacker can spawn a shell and read local user-account files, including hosting state and keyring metadata.
 
 The conditional loopback TCP listener allows operators to avoid long-term SSH command execution for a transport key while still retaining daemon control through SSH port forwarding. The workflow relies on **temporary admin access**:
 1.  **Temp Admin Access:** The operator connects to the host using an unrestricted terminal session (e.g., via a standard SSH login). This makes life easier because you do not need complex system services (like systemd) to manage the daemon.
 2.  **Start the Daemon:** The operator manually starts the daemon in the background (`python -m hosting.engine_host_cli --daemon --background`).
-3.  **Lock Down the Session:** The operator edits their host's `~/.ssh/authorized_keys` to completely disable terminal and command execution for the `transport` key, restricting it *only* to port forwarding:
+3.  **Install the Transport Key:** The setup tool can install a managed public-key block into the user-scoped SSH `authorized_keys` file with `hosting_config_cli --transport-install-authorized-key`. This provisions the SSH identity for the local user account; it does not edit machine-wide `sshd_config`.
+4.  **Lock Down the Session:** If the steady-state design should allow only port forwarding, the operator restricts the transport key entry to disable terminal and command execution:
     ```text
     command="/bin/false",no-pty,permitopen="127.0.0.1:19876" ssh-ed25519 AAAA... transport_user@machine
     ```
-4.  **Steady State:** The transport SSH key can use standard SSH tunnels to control the daemon over TCP, while terminal and command execution for that key remain disabled.
-5.  **Recovery (When the Daemon Dies):** If the daemon crashes or the host reboots, the TCP port will no longer answer. Because the terminal is locked down with `command="/bin/false"`, standard remote restart scripts (like `EngineHostControlChannel.restart_remote_daemon` which uses SSH exec) will be denied by the SSH server. 
-6.  **Service-managed recovery:** To solve the locked-down recovery problem, operators can wrap the daemon in an OS-level service manager such as `systemd` or Windows Services. A service policy can restart the daemon after exit, allowing remote restart through daemon control commands without re-enabling SSH command execution for the transport key.
+5.  **Steady State:** The transport SSH key can use standard SSH tunnels to control the daemon over TCP, while terminal and command execution for that key remain disabled.
+6.  **Recovery (When the Daemon Dies):** If the daemon crashes or the host reboots, the TCP port will no longer answer. Because the terminal is locked down with `command="/bin/false"`, standard remote restart scripts (like `EngineHostControlChannel.restart_remote_daemon` which uses SSH exec) will be denied by the SSH server.
+7.  **Service-managed recovery:** To solve the locked-down recovery problem, operators can wrap the daemon in an OS-level service manager such as `systemd` or Windows Services. A service policy can restart the daemon after exit, allowing remote restart through daemon control commands without re-enabling SSH command execution for the transport key.
 
 ### Daemon Lifecycle Profiles: Foreground vs. Detached
 The daemon **does not** automatically detach by default. You must explicitly choose its lifecycle behavior depending on your current configuration phase:
@@ -99,7 +99,7 @@ As a developer, you will often interact with the hosting layer using the `engine
 
 ### 2.1 Setup and Reconfiguration
 
-Use the setup tool to initialize or reconfigure access. See the [Hosting Configuration Script](hosting_config_script.md) for more details.
+Use the setup tool to initialize or reconfigure access. See the [Hosting Configuration Script](HOSTING_CONFIG_SCRIPT.md) for more details.
 
 ```powershell
 $env:PYTHONPATH='src'
@@ -223,5 +223,4 @@ Hosting maintains an audit trail of key and session lifecycle events.
 - **IPC Transport Only**: Worker transport is local IPC only. There is no host-managed remote worker transport.
 - **HTTP Bridge**: `proxy-request` serves as a compatibility bridge for HTTP-like engine routes over IPC. New generic worker integrations should prefer `proxy-rpc-*` for sync/async RPC.
 - **Metrics Scope**: Metrics are per-process runtime and are not persisted across daemon restarts.
-- **Bootstrap Credentials**: Host channel credential bootstrap requires wiring `engine_host_key_id` + `engine_host_key_secret` (or a pre-issued `engine_host_session_token`) in control settings/profile construction.
-- **Legacy Components**: Legacy role payloads are no longer accepted by runtime auth surfaces. Legacy roles (`management`, `config`, `traffic`) are removed from clean-slate runtime auth paths.
+- **Bootstrap Credentials**: Local-only shared-secret bootstrap requires `engine_host_key_id` + `engine_host_key_secret` or a pre-issued `engine_host_session_token`. SSH relay and remote-capable profiles require public-key challenge/transport setup instead of shared-secret session issuance.

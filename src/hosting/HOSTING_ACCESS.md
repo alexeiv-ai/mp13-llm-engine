@@ -4,15 +4,12 @@ Date: 2026-03-16
 Status: Implementation-aligned architecture document
 Scope: `src/hosting` daemon/channel/auth/claim/lifecycle on Windows and Linux
 
-## 0. Design policy (breaking change)
+## 0. Design policy
 
-1. This is a clean-slate auth/authz redesign for hosting.
-2. Backward compatibility with legacy auth model is not a requirement.
-3. No mixed old/new compatibility layer is part of target architecture.
-4. Legacy auth/session/key paths are considered deprecated and removable.
-
-Client migration checklist and breaking payload/role changes are documented in:
-- `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`
+1. This document is the implementation-aligned architecture contract for hosting access.
+2. The supported runtime auth model is role-hierarchy-first with explicit command authorization.
+3. Local, SSH relay, and remote-capable scenarios must be configured through explicit access and transport policy.
+4. Security-sensitive defaults should favor pinned host keys, public-key identities, and least-privilege role assignment.
 
 ## 1. Goals
 
@@ -46,16 +43,16 @@ This document uses "client" in older sections because that was the original impl
 
 ### 2.2 Residual risk boundary (explicit)
 
-1. Local host compromise is out of scope for full prevention in baseline architecture.
+1. Local user-account compromise is out of scope for full prevention in baseline architecture.
 2. Baseline controls primarily provide:
    - role separation
    - bounded session/token validity
    - deterministic ownership transition behavior
    - auditability for key/session/claim lifecycle actions
 3. Baseline controls do not guarantee:
-   - protection against local credential/key theft after host compromise
+   - protection against local credential/key theft after local user-account compromise
    - protection against local audit/state tampering by a privileged attacker
-4. Phase 7 candidates must be evaluated against this boundary and must not claim full local-compromise prevention.
+4. Advanced hardening candidates must be evaluated against this boundary and must not claim full local-account-compromise prevention.
 
 ## 3. Roles, Hierarchy, and Capabilities
 
@@ -168,13 +165,13 @@ What the user who installed the hosting component should do:
 3. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata" or "expected exported key file is missing", fix that before treating the setup as complete.
 4. For `transport` keys, keep the private key outside hosting-managed files; hosting should only track the public key reference.
 
-What client code or client UX should assume:
-1. The client already has the private key or knows where to find it.
+What hosting consumer code or UX should assume:
+1. The hosting consumer already has the private key or knows where to find it.
 2. Hosting will report useful metadata about the key:
    - whether it was `imported` or `generated`
    - how the public key was supplied
    - whether the private key is externally managed, exported to a file, or still requires user follow-up
-3. The client should show that information plainly to the user instead of making them infer it.
+3. The consumer-facing UX should show that information plainly to the user instead of making them infer it.
 
 ### 4.2 Keyring paradigm
 
@@ -196,7 +193,7 @@ Key metadata expectations:
    - any operator warning that requires follow-up
 
 Migration rule:
-1. If legacy key file is detected, move it to `<name>.migrated` before importing into keyring metadata.
+1. If a previous-format key file is detected, move it to `<name>.migrated` before importing into keyring metadata.
 2. Record migration event in audit log.
 3. Never auto-delete `.migrated` files.
 
@@ -269,12 +266,12 @@ Current implementation note:
 ## 6. Auth/AuthZ Design Notes (Implementation-Aligned)
 
 The following points are intended as stable design notes rather than phased status updates:
-1. The clean-slate role model is the only supported runtime auth model for hosting.
+1. The role-hierarchy model is the supported runtime auth model for hosting.
 2. Endpoint default mode, runtime override, and deterministic displaced-owner denial/reclaim behavior are part of the baseline command contract.
 3. Setup, diagnostics, and migration helpers are expected operator surfaces:
    - `hosting_config`
    - `hosting_config --doctor`
-   - legacy key migration to `.migrated`
+   - previous key-file migration to `.migrated`
 4. Safe-only no-auth policy is enforced both at startup and on runtime control-config changes.
 5. Non-local auth bootstrap uses public-key challenge plus SSH session binding context.
 6. Shared-secret session issuance (`auth-issue-session`) is local-only and must be denied for non-local connectivity profiles.
@@ -313,7 +310,7 @@ Rationale:
 ## 8. Minimal Configuration Flow (Daemon Not Started)
 
 Provide one user-facing setup script (for example `hosting_setup`) that asks hosting-consumer context first, suggests an auto-configuration, and writes config only after the operator chooses to apply it.
-Detailed script contract: `src/hosting/hosting_config_script.md`.
+Detailed script contract: `src/hosting/HOSTING_CONFIG_SCRIPT.md`.
 
 ### 8.1 Up-front context collection
 
@@ -430,7 +427,7 @@ Supported ownership path:
      - `require_auth=false`
      - `endpoint_mode_default=exclusive`
    - daemon is then started under that temporary local-only no-auth exclusive profile
-   - clients must warn the operator to configure `hosting_access` as soon as possible after startup
+   - hosting consumers must warn the operator to configure hosting access as soon as possible after startup
 5. Current local backend/channel implementation also provides a local recovery helper:
    - `reset_hosting_access`
    - local-helper only; not available over daemon RPC
@@ -452,8 +449,8 @@ Current implementation note:
 
 Local operator caveat:
 1. If the caller can execute arbitrary local Python or otherwise read/write local state files as the daemon user, the caller is outside the daemon's client trust boundary and effectively has local-operator powers.
-2. In that case the caller may be able to inspect or manipulate daemon state through OS/file/process access, but that is a consequence of local host access, not a supported auth/authz bypass.
-3. This remains within the documented residual-risk boundary for local host compromise.
+2. In that case the caller may be able to inspect or manipulate daemon state through OS/file/process access, but that is a consequence of local user-account access, not a supported auth/authz bypass.
+3. This remains within the documented residual-risk boundary for local user-account compromise.
 
 Local shutdown/restart notes relevant to ownership recovery:
 1. The daemon stop path is `__shutdown__` guarded by `shutdown_token`.
@@ -531,7 +528,7 @@ Mitigated attack vectors:
 3. session/challenge abuse when auth is disabled
 
 Unmitigated or weakly mitigated vectors:
-1. local host compromise (key/state/audit file tampering)
+1. local user-account compromise (key/state/audit file tampering)
 2. misuse by any process with equivalent local user privileges
 
 Minimum controls to remain in this scenario:
@@ -540,7 +537,7 @@ Minimum controls to remain in this scenario:
 3. single-user admin-only key profile remains enforced
 4. no tunnel/relay/public ingress is enabled
 5. if shared-secret bootstrap is used, keep it local-only and avoid persistent plaintext secret storage
-6. if daemon was auto-started from an unconfigured local state using temporary `require_auth=false`, operator must complete `hosting_access` configuration as soon as possible and should not treat the temporary no-auth state as steady-state policy
+6. if daemon was auto-started from an unconfigured local state using temporary `require_auth=false`, operator must complete hosting access configuration as soon as possible and should not treat the temporary no-auth state as steady-state policy
 
 Escalate to next scenario when:
 1. a second user/process identity needs access
@@ -558,7 +555,7 @@ Mitigated attack vectors:
 3. unauthorized model override and generic-worker proxy/rpc usage
 
 Unmitigated or weakly mitigated vectors:
-1. local credential/key theft after host compromise
+1. local credential/key theft after local user-account compromise
 2. local denial-of-service by privileged local attacker
 
 Minimum controls to remain in this scenario:
@@ -585,7 +582,7 @@ Mitigated attack vectors:
 
 Unmitigated or weakly mitigated vectors:
 1. stolen SSH private keys
-2. host compromise on SSH relay endpoint
+2. local user-account compromise on SSH relay endpoint
 3. SSH relay endpoint operational misconfiguration
 
 Minimum controls to remain in this scenario:
@@ -620,14 +617,14 @@ Minimum controls to remain in this scenario:
 4. operational lifecycle policy review (`service_managed` vs detached profile)
 5. alerting/playbook ownership for auth/claim audit events
 
-Escalate beyond baseline (Phase 7 candidates) when:
+Escalate beyond baseline when:
 1. threat model includes key replay/rapid credential churn
 2. compliance or assurance requires hardware-backed keys
 3. attack volume requires adaptive lockout/anomaly controls
 
-## 11. Client Integration Contract
+## 11. Hosting Consumer Integration Contract
 
-This section replaces the former standalone client guide as the authoritative client-facing contract.
+This section is the authoritative integration contract for hosting consumers.
 
 ### 11.1 Transport choices
 
@@ -640,54 +637,56 @@ This section replaces the former standalone client guide as the authoritative cl
    - open SSH to the target host
    - execute `python -m hosting.engine_host_cli --relay`
    - bridge JSON-RPC traffic over SSH stdio
-4. Remote clients must not rely on opportunistic first-connect SSH trust; pinned host-key material is required.
+4. Remote hosting consumers must not rely on opportunistic first-connect SSH trust; pinned host-key material is required.
 5. Standard HTTP ingress, when needed, is handled by the separate `--daemon-http` process or by an external reverse proxy in front of loopback-only listeners.
 
-### 11.2 Client-local realm and key custody
+### 11.2 Consumer-local realm and key custody
 
-1. The client side may maintain its own hosting realm under `<default_engine_config_dir>/hosting_client/<realm>/`.
-2. The client realm may contain:
+1. The hosting consumer side may maintain its own hosting realm under `<default_engine_config_dir>/hosting_client/<realm>/`.
+2. The consumer realm may contain:
    - `client_access.json`
    - `keyring/keys.json`
    - `secrets/`
+   - `managed_keys/`
    - `known_hosts/`
+   - `ssh_config/`
    - `profiles/`
    - `audit/`
-3. Long-lived client private keys should live in client-local custody:
+3. Long-lived consumer private keys should live in consumer-local custody:
    - imported existing file
    - exported managed file
    - client-realm secret record
-4. Client secret records may be plaintext (`none`) or password-protected (`password_v1`).
-5. Hosting must not use normal runtime daemon RPC as the mechanism that returns private keys back to clients.
+4. Consumer secret records may be plaintext (`none`) or password-protected (`password_v1`).
+5. Hosting must not use normal runtime daemon RPC as the mechanism that returns private keys back to consumers.
 
-### 11.3 Auth flows clients must support
+### 11.3 Auth flows consumers must support
 
 1. Local-only bootstrap may use `auth-issue-session` with shared secret, but only for `local_only` connectivity.
-2. Remote-capable clients must support the public-key challenge flow:
+2. Remote-capable consumers must support the public-key challenge flow:
    - `auth-begin-challenge`
    - local signature generation
    - `auth-complete-challenge`
-3. Remote-capable clients must include `_ssh_session_binding` metadata so issued sessions remain tied to the expected SSH route.
-4. Clients must treat missing or rejected SSH binding as a hard security failure, not as a retry-without-binding hint.
+3. Remote-capable consumers must include `_ssh_session_binding` metadata so issued sessions remain tied to the expected SSH route.
+4. Consumers must treat missing or rejected SSH binding as a hard security failure, not as a retry-without-binding hint.
 
 ### 11.4 Transport bootstrap and profile handling
 
 1. MITM-resistant first remote connection requires both:
    - transport private key material
    - pinned SSH host key (`ssh_known_hosts_line`)
-2. Supported client bootstrap flow is:
+2. Supported consumer bootstrap flow is:
    - import out-of-band bootstrap bundle
-   - store transport private key in client-local custody
+   - store transport private key in consumer-local custody
    - persist pinned host-key material
-   - create/update a named client profile
+   - create/update a named consumer profile
    - validate the profile with strict SSH options before normal use
-3. Imported client profiles may be consumed directly by `EngineHostControlChannel` through client-realm profile resolution and managed-key materialization.
+3. Imported consumer profiles may be consumed directly by `EngineHostControlChannel` through consumer-realm profile resolution and managed-key materialization.
 
-### 11.5 Client behavior checklist
+### 11.5 Consumer behavior checklist
 
 1. Read local PID/control metadata for local IPC instead of guessing transport details.
 2. Use SSH relay or explicitly configured HTTP ingress according to deployment mode.
-3. Implement public-key challenge auth for remote-capable clients.
+3. Implement public-key challenge auth for remote-capable consumers.
 4. Inject `_ssh_session_binding` for SSH-mediated sessions.
 5. Parse structured denials (`error_code`, `error_details`) and preserve them in UX/logs.
 6. Distinguish auth-path failure from daemon-version incompatibility when `auth-status` metadata is unavailable.
@@ -697,16 +696,13 @@ This section replaces the former standalone client guide as the authoritative cl
    - plaintext vs `password_v1`
 8. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
-## 12. Advanced Hardening and Risk Assessment (Later Stages)
+## 12. Advanced Hardening and Risk Assessment
 
 These are intentionally secondary to functional/usability baseline:
 1. key rotation automation
 2. replay-protection deepening beyond current challenge/session controls
 3. hardware-backed key storage
 4. advanced anomaly detection and adaptive lockouts
-
-Phase 7 planning detail:
-1. `src/hosting/hosting_phase7_hardening.md`
 
 Each must be documented with:
 1. threat introduced/expanded
@@ -715,7 +711,7 @@ Each must be documented with:
 
 ## 13. Documentation Maintenance Requirements
 
-1. `hosting_access.md` is the implementation-aligned architecture reference for hosting access.
+1. `HOSTING_ACCESS.md` is the implementation-aligned architecture reference for hosting access.
 2. `hosting_access_plan.md` remains the forward-looking plan document and should not duplicate the architecture contract.
 3. Scenario-specific minimum controls and escalation triggers in Section 10 must stay current with the implemented command and policy behavior.
 4. Client-facing guidance should be maintained in Section 11 instead of being split across drifting duplicate documents.
