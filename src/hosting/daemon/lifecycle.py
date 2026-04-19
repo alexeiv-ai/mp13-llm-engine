@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import signal
-from typing import Dict
 
 from .local_ipc import EngineHostDaemon
 

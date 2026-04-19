@@ -6,57 +6,22 @@ process lifecycle and generic control-plane state (claims/tokens/resources).
 """
 from __future__ import annotations
 
-import json
+# Kept as module globals because ``hosting.engine_host_service`` aliases this
+# module and tests/callers import or monkeypatch these legacy names there.
 import os
-import re
-import secrets
-import signal
-import hashlib
-import posixpath
-import subprocess
-import sys
-import time
-import hmac
-import base64
 import tempfile
-import shutil
 from multiprocessing.connection import Client as MPClient
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
-from mp13_engine.mp13_toolbox import ToolsView
-
-from ..sandbox import (
-    BrokeredFilesystem,
-    HostBrokeredHttpClient,
-    WorkerLaunchRequest,
-    WorkerSandboxPolicy,
-    launch_worker_process,
-)
+from ..sandbox import launch_worker_process
 from .auth import AuthMixin
 from .claims import ClaimsMixin
 from .constants import (
-    DAEMON_VERSION,
     DEFAULT_CONTROL_STATE_FILE,
     DEFAULT_ENGINES_STATE_FILE,
-    DEFAULT_HOSTING_ROOT,
-    DEFAULT_STATE_DIR,
-    DEFAULT_TOOLBOXES_STATE_FILE,
-    EMERGENCY_FORCE_OVERRIDE_REASONS,
-    LIFECYCLE_PROFILE_DETACHED,
-    LIFECYCLE_PROFILE_FOREGROUND,
-    LIFECYCLE_PROFILE_SERVICE,
-    ROLE_ADMIN,
-    ROLE_CONFIG_EDITOR,
-    ROLE_DIAGNOSTIC_USER,
-    ROLE_MODEL_USER,
-    ROLE_MODEL_USER_WITH_MODEL_CONTROL,
-    ROLE_TRANSPORT,
-    ROLE_WORKER_USER,
     VALID_AUTH_ROLES,
-    VALID_FORCE_OVERRIDE_REASONS,
-    VALID_LIFECYCLE_PROFILES,
 )
 from .configs import ConfigMixin
 from .control import ControlMixin

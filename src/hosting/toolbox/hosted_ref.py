@@ -10,7 +10,6 @@ from mp13_engine.mp13_toolbox import ToolBoxRef, ToolsView
 
 from .bundle_models import SandboxProfileSpec, ToolboxBundleFile
 from .callbacks import _HostedToolCallbackRelay, _request_hosted_tool_approval_with_timeout
-from .execution import ToolboxExecutionHarness
 from .tools_view import (
     _apply_tool_constraints_in_view,
     _approval_timeout_seconds,

@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from mp13_engine.mp13_toolbox import ToolsView
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..sandbox import (
     BrokeredFilesystem,
@@ -36,7 +35,7 @@ class EnginesMixin:
             idx += 1
         return f"{base_name}_{idx}"
 
-    def _check_module_available(python: str, module_name: str) -> Tuple[bool, str]:
+    def _check_module_available(self, python: str, module_name: str) -> Tuple[bool, str]:
         """
         Check whether engine runtime symbols are importable by *python*.
 
@@ -62,7 +61,7 @@ class EnginesMixin:
         except Exception as exc:
             return False, str(exc)
 
-    def _check_module_discoverable(python: str, module_name: str) -> Tuple[bool, str]:
+    def _check_module_discoverable(self, python: str, module_name: str) -> Tuple[bool, str]:
         """
         Lightweight module check for UX surfaces (e.g., list-configs).
 
@@ -90,7 +89,7 @@ class EnginesMixin:
         except Exception as exc:
             return False, str(exc)
 
-    def _engine_python_executable() -> str:
+    def _engine_python_executable(self) -> str:
         python = os.environ.get("MP13_ENGINE_PYTHON", "").strip()
         return python or sys.executable
 
