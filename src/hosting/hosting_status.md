@@ -151,4 +151,11 @@ Consumer-facing break:
 6. Replace `password_v1` private-key protection with OpenSSH private-key encryption.
 7. Deferred shared-secret verifier storage; it remains a separate release decision.
 8. Renamed `toolbox_executor_v1` because versioned executor contracts are not needed for the first release.
-9. Re-run the hosting test suite and update `HOSTING_CLIENT_BREAKING_CHANGES.md` with implementation-specific details.
+9. Made generated private-key custody explicit in setup, doctor, RBAC key management, and client-realm helpers:
+   - exported generated private-key files can be discovered from keyring metadata
+   - exported files can be handed off into a local consumer client realm
+   - client realm private-key secrets can be migrated between realms through API helpers
+   - hand-off can delete the loose exported file and mark the source keyring with purge/hand-off metadata
+   - exported files can be purged without hand-off only as an explicit warning-bearing action
+   - inline private-key import accepts sanitized pasted OpenSSH key text and clears the sensitive argument after reading
+10. Re-run the hosting test suite and update `HOSTING_CLIENT_BREAKING_CHANGES.md` with implementation-specific details.

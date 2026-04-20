@@ -12,18 +12,29 @@ from pathlib import Path
 
 import pytest
 
+from hosting.client_realm import (
+    discover_exported_private_keys,
+    migrate_private_key_between_realms,
+    normalize_pasted_private_key,
+)
 from hosting.hosting_config_cli import (
     UserCancelled,
     _bool_prompt,
     _infer_setup_context_defaults,
+    _interactive_rbac_menu,
     _option_label,
     _print_auto_configuration,
+    _print_intent_guidance,
     _print_wizard_home,
+    _recommended_action,
+    _rbac_action_args,
     _prompt_menu,
     _reset_access_configuration,
     _suggest_auto_configuration,
+    _secret_input_or_quit,
     run_client_keys,
     run_doctor,
+    run_rbac,
     run_setup,
     run_status,
     run_transport_admin_setup,
@@ -66,15 +77,22 @@ def _args(
         client_realm="default",
         client_realm_root="",
         client_list_keys=False,
+        client_list_exported_keys=False,
         client_generate_key=False,
         client_import_key=False,
+        client_handoff_exported_key=False,
+        client_adopt_exported_key=False,
+        client_purge_exported_key=False,
         client_export_key=False,
         client_key_id="",
         client_key_tag="rbac_private_key",
         client_private_key_file="",
+        client_private_key="",
         client_public_key_file="",
         client_public_key_inline="",
         client_export_key_path="",
+        client_exported_keys_file="",
+        client_delete_exported_key_file=False,
         transport_harden_ssh=False,
         transport_export_bootstrap=False,
         transport_import_bootstrap=False,
@@ -95,6 +113,36 @@ def _args(
         overwrite_profile=False,
         bootstrap_password="",
         client_secret_password="",
+        list_keys=False,
+        list_sessions=False,
+        list_issued_tokens=False,
+        list_auth_audit=False,
+        upsert_key=False,
+        revoke_key_id="",
+        revoke_session="",
+        key_id="",
+        key_role="",
+        auth_method="public_key",
+        public_key_file="",
+        public_key_inline="",
+        key_secret="",
+        allowed_configs="",
+        allowed_engines="",
+        disable_key=False,
+        session_key_id="",
+        session_scope="",
+        session_role="",
+        token_preview_contains="",
+        engine_id="",
+        resource_kind="",
+        resource_id="",
+        backend_id="",
+        audit_event_type="",
+        audit_actor_key_id="",
+        audit_target_key_id="",
+        audit_result="",
+        limit=100,
+        offset=0,
         validation_no_ssh_run=False,
         validation_ssh_bin="ssh",
         validation_remote_command="exit 0",
@@ -257,12 +305,26 @@ def test_setup_generate_consolidates_importable_key_material(monkeypatch: pytest
         secret_payload = json.loads(secret_file.read_text(encoding="utf-8"))
         assert str(secret_payload.get("tag") or "") == "rbac_private_key"
         assert "BEGIN OPENSSH PRIVATE KEY" in str(secret_payload.get("payload") or "")
+        client_keys = json.loads((root / "hosting_client" / "default" / "keyring" / "keys.json").read_text(encoding="utf-8"))
+        client_admin = dict(dict(client_keys.get("keys") or {}).get("admin-main") or {})
+        assert str(client_admin.get("private_key_secret_id") or "") == "rbac-admin-main-private"
+
+        export_args = _args(default_config_dir=root, control_state_file=control)
+        export_args.client_export_key = True
+        export_args.client_key_id = "admin-main"
+        export_args.client_export_key_path = str(root / "exported" / "admin-main")
+        exported = run_client_keys(export_args)
+        assert exported["status"] == "ok"
+        assert "BEGIN OPENSSH PRIVATE KEY" in Path(exported["export_path"]).read_text(encoding="utf-8")
 
         status = run_status(args)
         meta = dict(status.get("admin_key_metadata") or {})
         assert str(meta.get("key_origin") or "") == "generated"
         assert str(meta.get("private_key_storage") or "") == "client_realm_secret"
         assert str(meta.get("private_key_secret_path") or "") == str(secret_file)
+        assert "client-export-key" in str(out.get("admin_private_key_export_command") or "")
+        assert "client-realm-root" in str(out.get("admin_private_key_export_command") or "")
+        assert "client-import-key" in str(out.get("admin_private_key_handoff") or "")
 
         audit_rows = [
             json.loads(line)
@@ -274,6 +336,19 @@ def test_setup_generate_consolidates_importable_key_material(monkeypatch: pytest
         assert str(applied[-1].get("admin_key_origin") or "") == "generated"
         assert str(applied[-1].get("admin_private_key_storage") or "") == "client_realm_secret"
         assert str(applied[-1].get("admin_private_key_secret_path") or "") == str(secret_file)
+
+
+def test_secret_input_uses_getpass(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def fake_getpass(prompt: str) -> str:
+        calls.append(prompt)
+        return "hidden-value"
+
+    monkeypatch.setattr("hosting.hosting_config_cli.getpass.getpass", fake_getpass)
+
+    assert _secret_input_or_quit("Passphrase: ") == "hidden-value"
+    assert calls == ["Passphrase: "]
 
 
 def test_setup_generate_can_store_encrypted_client_realm_secret(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,7 +473,7 @@ def test_doctor_warns_for_clean_unconfigured_access_state() -> None:
         assert int(out.get("issues_count") or 0) == 0
         details = dict(control_checks[0].get("details") or {})
         assert bool(details.get("access_artifacts_present")) is False
-        assert "leave hosting unchanged" in str(details.get("recommendation") or "")
+        assert "Configure hosting now" in str(details.get("recommendation") or "")
 
 
 def test_doctor_blocks_for_partial_access_state_missing_control_file() -> None:
@@ -484,6 +559,22 @@ def test_wizard_home_reports_detected_admin_key_in_partial_state(capsys: pytest.
     out = capsys.readouterr().out
     assert "detected: admin-main" in out
     assert "not configured" not in out
+
+
+def test_clean_state_recommendation_matches_main_menu_action() -> None:
+    action = _recommended_action(
+        {},
+        {
+            "code": "clean",
+            "label": "Not configured yet",
+            "configured": False,
+            "details": "No hosting access files or admin keys were detected.",
+        },
+    )
+
+    assert "Press Enter" in action
+    assert "leave this machine unconfigured" in action
+    assert "concrete consumer" not in action
 
 
 def test_usage_context_defaults_follow_existing_local_config() -> None:
@@ -586,6 +677,15 @@ def test_skip_access_setup_prints_no_fake_configuration(capsys: pytest.CaptureFi
     assert "key_source" not in out
 
 
+def test_intent_guidance_uses_script_checks_not_precautions(capsys: pytest.CaptureFixture[str]) -> None:
+    _print_intent_guidance("local_only", require_auth=True, endpoint_mode="shared")
+    out = capsys.readouterr().out
+    assert "script_checks" in out
+    assert "precautions" not in out
+    assert "loopback" not in out.lower()
+    assert "shared endpoints require auth" in out
+
+
 def test_setup_persists_resolved_usage_context() -> None:
     with _workspace_tmpdir() as root:
         control = root / "hosting" / "access_control.json"
@@ -638,6 +738,95 @@ def test_reset_access_configuration_archives_active_access_files_only() -> None:
         assert (archive_dir / "keyring" / "keys.json").exists()
 
 
+def test_rbac_action_args_isolates_one_action() -> None:
+    with _workspace_tmpdir() as root:
+        args = _args(default_config_dir=root, control_state_file=root / "hosting" / "access_control.json")
+        args.list_keys = True
+        args.list_sessions = True
+        args.revoke_key_id = "old"
+
+        out = _rbac_action_args(args, revoke_key_id="admin-main")
+
+        assert out.list_keys is False
+        assert out.list_sessions is False
+        assert out.revoke_key_id == "admin-main"
+
+
+def test_run_rbac_lists_and_revokes_admin_key() -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        args = _args(default_config_dir=root, control_state_file=control)
+        run_setup(args)
+
+        listed = run_rbac(_rbac_action_args(args, list_keys=True))
+        key_ids = {str(row.get("key_id") or "") for row in list(listed.get("keys") or [])}
+        assert "admin-main" in key_ids
+
+        revoked = run_rbac(_rbac_action_args(args, revoke_key_id="admin-main"))
+        assert revoked["action"] == "revoke_key"
+        assert revoked["key_id"] == "admin-main"
+        assert bool(revoked["revoked"]) is True
+
+        listed_after = run_rbac(_rbac_action_args(args, list_keys=True))
+        key_ids_after = {str(row.get("key_id") or "") for row in list(listed_after.get("keys") or [])}
+        assert "admin-main" not in key_ids_after
+
+
+def test_interactive_rbac_menu_lists_keys_and_returns(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        args = _args(default_config_dir=root, control_state_file=control)
+        run_setup(args)
+        choices = iter(["list_keys", "back"])
+        monkeypatch.setattr("hosting.hosting_config_cli._prompt_menu", lambda *a, **k: next(choices))
+
+        _interactive_rbac_menu(args)
+
+        out = capsys.readouterr().out
+        assert "RBAC keys" in out
+        assert "admin-main" in out
+
+
+def test_interactive_apply_suggested_skips_field_review(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with _workspace_tmpdir() as root:
+        args = _args(default_config_dir=root, control_state_file=root / "hosting" / "access_control.json")
+        args.interactive = True
+        menu_choices = iter(["1", "apply"])
+        monkeypatch.setattr("hosting.hosting_config_cli._prompt_menu", lambda *a, **k: next(menu_choices))
+        monkeypatch.setattr(
+            "hosting.hosting_config_cli._collect_setup_context",
+            lambda *_args, **_kwargs: {
+                "consumer": "local_backend",
+                "lifecycle": "reconnect_shared",
+                "access": "single_admin",
+                "credentials": "ssh_keys",
+                "admin_capability": "no_admin_available",
+            },
+        )
+
+        def _unexpected_field_review(**_kwargs: object) -> tuple[str, str]:
+            raise AssertionError("field-by-field review should be skipped")
+
+        monkeypatch.setattr("hosting.hosting_config_cli._wizard_choice_prompt", _unexpected_field_review)
+        monkeypatch.setattr("hosting.hosting_config_cli._wizard_bool_prompt", _unexpected_field_review)
+        monkeypatch.setattr("hosting.hosting_config_cli._wizard_text_prompt", _unexpected_field_review)
+        monkeypatch.setattr("hosting.hosting_config_cli._bool_prompt", lambda *_args, **_kwargs: False)
+
+        with pytest.raises(UserCancelled):
+            run_setup(args)
+
+        out = capsys.readouterr().out
+        assert "Review Suggested Configuration" in out
+        assert "Configuration steps" not in out
+        assert "Step 1: Endpoint mode" not in out
+
+
 def test_run_client_keys_generate_list_and_export(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
         args = _args(default_config_dir=root, control_state_file=root / "hosting" / "access_control.json")
@@ -668,6 +857,121 @@ def test_run_client_keys_generate_list_and_export(monkeypatch: pytest.MonkeyPatc
         assert exported["status"] == "ok"
         assert Path(exported["export_path"]).exists()
         assert "FAKECLIENT" in Path(exported["export_path"]).read_text(encoding="utf-8")
+
+
+def test_client_realm_discovers_and_hands_off_exported_private_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        export_path = root / "exported" / "admin-main.key"
+        monkeypatch.setattr(
+            "hosting.hosting_config_cli._generate_keypair",
+            lambda **_kwargs: (
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEEXPORTED\n-----END OPENSSH PRIVATE KEY-----",
+                "ssh-ed25519 AAAAEXPORTED admin-main",
+            ),
+        )
+        setup_args = _args(default_config_dir=root, control_state_file=control, key_source="generate")
+        setup_args.export_private_key = True
+        setup_args.export_private_key_path = str(export_path)
+        run_setup(setup_args)
+
+        source_keys = root / "hosting" / "keyring" / "keys.json"
+        discovered = discover_exported_private_keys(keys_file=source_keys)
+        assert discovered
+        assert discovered[0]["key_id"] == "admin-main"
+        assert discovered[0]["private_key_export_exists"] is True
+
+        handoff_args = _args(default_config_dir=root, control_state_file=control)
+        handoff_args.client_handoff_exported_key = True
+        handoff_args.client_key_id = "admin-main"
+        handoff_args.client_exported_keys_file = str(source_keys)
+        handoff_args.client_delete_exported_key_file = True
+        handed_off = run_client_keys(handoff_args)
+        assert handed_off["status"] == "ok"
+        assert handed_off["deleted_source_file"] is True
+        assert not export_path.exists()
+        assert Path(str(handed_off["secret_path"])).exists()
+
+        doctor = run_doctor(_args(default_config_dir=root, control_state_file=control, doctor=True))
+        checks = list(doctor.get("checks") or [])
+        custody = [c for c in checks if str(c.get("check") or "") == "admin_exported_private_key_custody"]
+        assert custody
+        assert bool(custody[0].get("ok")) is True
+
+
+def test_client_realm_migrates_secret_between_realms(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _workspace_tmpdir() as root:
+        source_args = _args(default_config_dir=root, control_state_file=root / "hosting" / "access_control.json")
+        source_args.client_generate_key = True
+        source_args.client_key_id = "realm-key"
+        monkeypatch.setattr(
+            "hosting.hosting_config_cli._generate_keypair",
+            lambda **_kwargs: (
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nREALMMIGRATE\n-----END OPENSSH PRIVATE KEY-----",
+                "ssh-ed25519 AAAAREALM realm-key",
+            ),
+        )
+        generated = run_client_keys(source_args)
+        migrated = migrate_private_key_between_realms(
+            source_root=root / "hosting_client" / "default",
+            target_root=root / "hosting_client" / "consumer",
+            key_id="realm-key",
+            target_realm="consumer",
+            delete_source_secret=True,
+        )
+        assert migrated["key_id"] == "realm-key"
+        assert migrated["deleted_source_secret"] is True
+        assert Path(str(migrated["secret_path"])).exists()
+        assert not Path(str(generated["secret_path"])).exists()
+
+
+def test_client_purge_exported_private_key_warns_without_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        export_path = root / "exported" / "admin-main.key"
+        monkeypatch.setattr(
+            "hosting.hosting_config_cli._generate_keypair",
+            lambda **_kwargs: (
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEPURGE\n-----END OPENSSH PRIVATE KEY-----",
+                "ssh-ed25519 AAAAPURGE admin-main",
+            ),
+        )
+        setup_args = _args(default_config_dir=root, control_state_file=control, key_source="generate")
+        setup_args.export_private_key = True
+        setup_args.export_private_key_path = str(export_path)
+        run_setup(setup_args)
+
+        purge_args = _args(default_config_dir=root, control_state_file=control)
+        purge_args.client_purge_exported_key = True
+        purge_args.client_key_id = "admin-main"
+        purge_args.client_exported_keys_file = str(root / "hosting" / "keyring" / "keys.json")
+        purged = run_client_keys(purge_args)
+        assert purged["status"] == "ok"
+        assert "without recording client-realm hand-off" in str(purged["warning"])
+        assert not export_path.exists()
+
+        doctor = run_doctor(_args(default_config_dir=root, control_state_file=control, doctor=True))
+        checks = list(doctor.get("checks") or [])
+        custody = [c for c in checks if str(c.get("check") or "") == "admin_exported_private_key_custody"]
+        assert custody
+        assert bool(custody[0].get("ok")) is False
+        assert bool(custody[0].get("blocking")) is False
+
+
+def test_client_import_key_accepts_sanitized_inline_private_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _workspace_tmpdir() as root:
+        args = _args(default_config_dir=root, control_state_file=root / "hosting" / "access_control.json")
+        args.client_import_key = True
+        args.client_key_id = "inline-client"
+        args.client_private_key = '"-----BEGIN OPENSSH PRIVATE KEY-----\\nINLINE\\n-----END OPENSSH PRIVATE KEY-----"'
+        monkeypatch.setattr(
+            "hosting.hosting_config_cli._derive_public_key_from_private",
+            lambda text: "ssh-ed25519 AAAAINLINE inline-client" if "INLINE" in text else "",
+        )
+        imported = run_client_keys(args)
+        assert imported["status"] == "ok"
+        assert args.client_private_key == ""
+        assert normalize_pasted_private_key('"A\\nB"') == "A\nB"
 
 
 def test_run_client_keys_import_can_derive_public_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1064,7 +1368,7 @@ def test_doctor_reports_ok_after_valid_setup() -> None:
         assert keygen_probe
 
 
-def test_doctor_flags_plaintext_admin_client_secret_non_blocking(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_doctor_records_plaintext_admin_client_secret_without_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
         control = root / "hosting" / "access_control.json"
         monkeypatch.setattr(
@@ -1080,13 +1384,14 @@ def test_doctor_flags_plaintext_admin_client_secret_non_blocking(monkeypatch: py
         doctor_args = _args(default_config_dir=root, control_state_file=control, doctor=True)
         out = run_doctor(doctor_args)
         checks = list(out.get("checks") or [])
-        protected = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_protected"]
-        assert protected
-        assert bool(protected[0].get("ok")) is False
-        assert str(protected[0].get("details", {}).get("private_key_protection") or "") == "none"
+        recorded = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_storage_recorded"]
+        assert recorded
+        assert bool(recorded[0].get("ok")) is True
+        assert str(recorded[0].get("details", {}).get("private_key_protection") or "") == "none"
+        assert str(out.get("status") or "") == "ok"
 
 
-def test_doctor_accepts_encrypted_admin_client_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_doctor_records_passphrase_protected_admin_client_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
         control = root / "hosting" / "access_control.json"
         monkeypatch.setattr(
@@ -1103,10 +1408,10 @@ def test_doctor_accepts_encrypted_admin_client_secret(monkeypatch: pytest.Monkey
         doctor_args = _args(default_config_dir=root, control_state_file=control, doctor=True)
         out = run_doctor(doctor_args)
         checks = list(out.get("checks") or [])
-        protected = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_protected"]
-        assert protected
-        assert bool(protected[0].get("ok")) is True
-        assert str(protected[0].get("details", {}).get("private_key_protection") or "") == "openssh_passphrase"
+        recorded = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_storage_recorded"]
+        assert recorded
+        assert bool(recorded[0].get("ok")) is True
+        assert str(recorded[0].get("details", {}).get("private_key_protection") or "") == "openssh_passphrase"
 
 
 def test_doctor_flags_broken_client_transport_profile_integrity() -> None:

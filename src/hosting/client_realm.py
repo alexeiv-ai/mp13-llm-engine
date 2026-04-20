@@ -71,6 +71,253 @@ def managed_key_path(root: Path, name: str) -> Path:
     return (client_realm_layout(root)["managed_keys"] / f"{stem}.key").resolve()
 
 
+def normalize_pasted_private_key(value: str) -> str:
+    """
+    Normalize private-key text accepted through a CLI argument or paste field.
+
+    This accepts common copy/paste forms such as quoted text and literal ``\n``
+    escapes without trying to validate the key format.
+    """
+
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1].strip()
+    if "\\n" in text and "\n" not in text:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def read_client_key_metadata(root: Path) -> Dict[str, Any]:
+    path = client_realm_layout(root)["keys"]
+    if not path.exists():
+        return {"version": 1, "keys": {}}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return dict(payload) if isinstance(payload, dict) else {"version": 1, "keys": {}}
+
+
+def discover_exported_private_keys(*, keys_file: Path) -> list[Dict[str, Any]]:
+    """
+    Discover key metadata rows that point at exported private-key files.
+
+    ``keys_file`` can be either a hosting keyring file or a client-realm
+    keyring file; both use the same key metadata shape for exported files.
+    """
+
+    path = Path(keys_file).expanduser().resolve()
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    keys = dict(payload.get("keys") or {}) if isinstance(payload, dict) else {}
+    rows: list[Dict[str, Any]] = []
+    for key_id, raw in sorted(keys.items()):
+        row = dict(raw or {})
+        export_path_raw = str(row.get("private_key_export_path") or "").strip()
+        if not export_path_raw:
+            continue
+        export_path = Path(export_path_raw).expanduser().resolve()
+        rows.append(
+            {
+                "key_id": str(key_id),
+                "role": str(row.get("role") or ""),
+                "auth_method": str(row.get("auth_method") or ""),
+                "public_key": str(row.get("public_key") or ""),
+                "key_origin": str(row.get("key_origin") or row.get("key_source") or ""),
+                "private_key_storage": str(row.get("private_key_storage") or ""),
+                "private_key_export_path": str(export_path),
+                "private_key_export_exists": export_path.exists(),
+                "private_key_protection": str(row.get("private_key_protection") or ""),
+            }
+        )
+    return rows
+
+
+def store_private_key_in_realm(
+    root: Path,
+    *,
+    realm: str = "default",
+    key_id: str,
+    tag: str,
+    private_key_text: str,
+    public_key: str,
+    role: str = "admin",
+    auth_method: str = "public_key",
+    key_origin: str = "imported",
+    source: str = "client_import",
+    private_key_protection: str = "none",
+) -> Dict[str, Any]:
+    key_id_norm = str(key_id or "").strip()
+    if not key_id_norm:
+        raise ValueError("key_id is required")
+    tag_norm = str(tag or "").strip() or "rbac_private_key"
+    payload = normalize_pasted_private_key(private_key_text)
+    if not payload:
+        raise ValueError("private key is required")
+    realm_norm = str(realm or "default").strip() or "default"
+    layout = ensure_client_realm_dirs(root)
+    store = FileSecretStore(root, realm=realm_norm)
+    secret_record = store.put_secret(
+        tag=tag_norm,
+        payload=payload,
+        secret_id=f"{tag_norm.replace('_private_key', '')}-{key_id_norm}-private",
+        metadata={
+            "key_id": key_id_norm,
+            "tag": tag_norm,
+            "source": source,
+            "private_key_format": "openssh",
+            "private_key_protection": str(private_key_protection or "none").strip() or "none",
+        },
+        encryption="none",
+    )
+    keys_path = layout["keys"]
+    keys_payload = read_client_key_metadata(root)
+    keys = dict(keys_payload.get("keys") or {})
+    now = time.time()
+    keys[key_id_norm] = {
+        **dict(keys.get(key_id_norm) or {}),
+        "key_id": key_id_norm,
+        "role": str(role or "admin").strip() or "admin",
+        "auth_method": str(auth_method or "public_key").strip() or "public_key",
+        "public_key": str(public_key or "").strip(),
+        "key_origin": str(key_origin or "imported").strip() or "imported",
+        "key_source": "import",
+        "public_key_source": "metadata_or_derived",
+        "private_key_storage": "client_realm_secret",
+        "private_key_secret_id": secret_record.secret_id,
+        "private_key_secret_realm": realm_norm,
+        "private_key_protection": str(private_key_protection or "none").strip() or "none",
+        "updated_at": now,
+    }
+    keys_payload["version"] = max(1, int(keys_payload.get("version") or 1))
+    keys_payload["updated_at"] = now
+    keys_payload["keys"] = keys
+    keys_path.write_text(json.dumps(keys_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        keys_path.chmod(0o600)
+    except Exception:
+        pass
+    return {
+        "key_id": key_id_norm,
+        "secret_id": secret_record.secret_id,
+        "secret_path": str(secret_record_path(root, secret_record.secret_id)),
+        "keys_file": str(keys_path),
+    }
+
+
+def handoff_exported_private_key_file(
+    root: Path,
+    *,
+    keys_file: Path,
+    key_id: str,
+    realm: str = "default",
+    tag: str = "rbac_private_key",
+    delete_source_file: bool = False,
+) -> Dict[str, Any]:
+    key_id_norm = str(key_id or "").strip()
+    if not key_id_norm:
+        raise ValueError("key_id is required")
+    matches = [row for row in discover_exported_private_keys(keys_file=keys_file) if str(row.get("key_id") or "") == key_id_norm]
+    if not matches:
+        raise ValueError(f"exported private key metadata for {key_id_norm!r} was not found")
+    source_row = dict(matches[0])
+    export_path = Path(str(source_row.get("private_key_export_path") or "")).expanduser().resolve()
+    if not export_path.exists():
+        raise ValueError(f"exported private key file is missing: {export_path}")
+    stored = store_private_key_in_realm(
+        root,
+        realm=realm,
+        key_id=key_id_norm,
+        tag=tag,
+        private_key_text=export_path.read_text(encoding="utf-8"),
+        public_key=str(source_row.get("public_key") or ""),
+        role=str(source_row.get("role") or ("transport" if tag == "transport_private_key" else "admin")),
+        auth_method=str(source_row.get("auth_method") or "public_key"),
+        key_origin=str(source_row.get("key_origin") or "imported"),
+        source="client_handoff_exported",
+        private_key_protection=str(source_row.get("private_key_protection") or "unknown").strip() or "unknown",
+    )
+    if delete_source_file:
+        export_path.unlink()
+    return {
+        **stored,
+        "source_keys_file": str(Path(keys_file).expanduser().resolve()),
+        "source_export_path": str(export_path),
+        "deleted_source_file": bool(delete_source_file),
+    }
+
+
+def adopt_exported_private_key_file(root: Path, **kwargs: Any) -> Dict[str, Any]:
+    return handoff_exported_private_key_file(root, **kwargs)
+
+
+def purge_exported_private_key_file(*, keys_file: Path, key_id: str) -> Dict[str, Any]:
+    key_id_norm = str(key_id or "").strip()
+    if not key_id_norm:
+        raise ValueError("key_id is required")
+    matches = [row for row in discover_exported_private_keys(keys_file=keys_file) if str(row.get("key_id") or "") == key_id_norm]
+    if not matches:
+        raise ValueError(f"exported private key metadata for {key_id_norm!r} was not found")
+    export_path = Path(str(dict(matches[0]).get("private_key_export_path") or "")).expanduser().resolve()
+    existed = export_path.exists()
+    if existed:
+        export_path.unlink()
+    return {
+        "key_id": key_id_norm,
+        "source_keys_file": str(Path(keys_file).expanduser().resolve()),
+        "source_export_path": str(export_path),
+        "deleted_source_file": existed,
+        "warning": "Purged exported private-key file without recording client-realm hand-off; key material may be lost if no other copy exists.",
+    }
+
+
+def migrate_private_key_between_realms(
+    *,
+    source_root: Path,
+    target_root: Path,
+    key_id: str,
+    source_realm: str = "default",
+    target_realm: str = "default",
+    target_tag: str = "rbac_private_key",
+    delete_source_secret: bool = False,
+) -> Dict[str, Any]:
+    key_id_norm = str(key_id or "").strip()
+    if not key_id_norm:
+        raise ValueError("key_id is required")
+    source_payload = read_client_key_metadata(source_root)
+    source_row = dict(dict(source_payload.get("keys") or {}).get(key_id_norm) or {})
+    secret_id = str(source_row.get("private_key_secret_id") or "").strip()
+    if not secret_id:
+        raise ValueError(f"client key {key_id_norm!r} does not reference a client-realm secret")
+    source_store = FileSecretStore(source_root, realm=source_realm)
+    private_key_text = str(source_store.get_secret_payload(secret_id) or "")
+    if not private_key_text:
+        raise ValueError(f"client key {key_id_norm!r} has an empty private-key secret")
+    stored = store_private_key_in_realm(
+        target_root,
+        realm=target_realm,
+        key_id=key_id_norm,
+        tag=target_tag,
+        private_key_text=private_key_text,
+        public_key=str(source_row.get("public_key") or ""),
+        role=str(source_row.get("role") or ("transport" if target_tag == "transport_private_key" else "admin")),
+        auth_method=str(source_row.get("auth_method") or "public_key"),
+        key_origin=str(source_row.get("key_origin") or source_row.get("key_source") or "imported"),
+        source="client_realm_migration",
+        private_key_protection=str(source_row.get("private_key_protection") or "unknown").strip() or "unknown",
+    )
+    deleted = False
+    if delete_source_secret:
+        deleted = source_store.delete_secret(secret_id)
+    return {
+        **stored,
+        "source_root": str(Path(source_root).expanduser().resolve()),
+        "source_realm": str(source_realm or "default").strip() or "default",
+        "target_root": str(Path(target_root).expanduser().resolve()),
+        "target_realm": str(target_realm or "default").strip() or "default",
+        "source_secret_id": secret_id,
+        "deleted_source_secret": deleted,
+    }
+
+
 @dataclass(frozen=True)
 class SecretRecord:
     version: int

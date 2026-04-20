@@ -57,6 +57,28 @@ Private keys must be stored and exchanged as OpenSSH private keys. If password p
 
 Regenerate or re-import any client realm secrets and transport bootstrap bundles that used `password_v1`.
 
+## Hosting-generated private key custody is explicit
+
+Generated admin private keys are no longer an implicit setup-side artifact.
+
+Current setup behavior:
+
+- If the operator exports the generated key, setup records `private_key_storage: "exported_file"` and `private_key_export_path`.
+- If the operator does not export immediately, setup stores the private key in the setup machine's default client realm and prints a `--client-export-key` handoff command.
+- Doctor reports a loose exported generated private-key file as a non-blocking custody warning with a recommendation to hand it off into a local consumer realm or export it for remote transfer, then purge the loose file.
+- After hand-off with source-file deletion, key metadata records `private_key_export_purged_at` and `private_key_adopted_client_realm_root`; doctor no longer treats the missing exported file as an error.
+- If the operator purges an exported file without recorded hand-off, metadata records `private_key_export_purged_without_adoption_at`; doctor keeps a warning because the private key may be lost unless another copy exists.
+
+Consumer-facing adjustment:
+
+- Do not depend on the setup machine's exported private-key file as durable storage.
+- Discover exported key references with `--client-list-exported-keys`.
+- For a local consumer on the same filesystem, move a generated exported key into the consumer realm with `--client-handoff-exported-key --client-key-id <id> --client-delete-exported-key-file`.
+- For a remote consumer, export or transfer the private-key file out-of-band, then import it into the remote consumer's vault/client realm there.
+- Purge a tracked exported file without importing it only with `--client-purge-exported-key`; this can lose the only private-key copy.
+- The interactive `Manage RBAC keys` menu exposes list/export/hand-off/purge flows for generated private-key custody alongside key revocation and auth audit views.
+- `--client-import-key` remains available as an operator/manual bridge, but consumer projects should prefer the client-realm API helpers for import and realm migration. The CLI normalizes quoted/literal-newline paste input and clears the inline private-key argument after reading it.
+
 ## Shared-secret verifier format is unchanged for now
 
 Local-only shared-secret verifier hardening is deferred and is not part of this cleanup.

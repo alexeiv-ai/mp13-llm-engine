@@ -37,8 +37,11 @@ Supported top-level modes:
 6. Client-realm private-key operations:
    - `--client-list-keys`
    - `--client-generate-key`
-   - `--client-import-key`
+   - `--client-import-key` (operator/manual bridge; consumers should prefer client-realm API helpers)
    - `--client-export-key`
+   - `--client-list-exported-keys`
+   - `--client-handoff-exported-key`
+   - `--client-purge-exported-key`
 7. Transport bootstrap operations:
    - `--transport-export-bootstrap`
    - `--transport-import-bootstrap`
@@ -189,10 +192,13 @@ Key source options:
 
 Generated private-key behavior:
 1. The public key is registered with hosting.
-2. The private key can be exported to a file.
+2. The private key can be exported to a file for remote handoff.
 3. If export is requested interactively and no path is provided, the wizard prompts with a default under `hosting/keyring/<key-id>.private`.
-4. If not exported, generated private key material is stored in the client realm secret store.
+4. If not exported, generated private key material is stored in the setup machine's default client realm secret store and can be exported later.
 5. Client realm secret records store OpenSSH private-key text. When `--client-secret-password` is supplied, the private key is protected with OpenSSH private-key passphrase protection.
+6. Local consumers can hand off an exported private-key file into their own client realm and optionally delete the loose file.
+7. Remote consumers should receive exported private-key files through an out-of-band transfer and import/migrate them into their own vault or client realm.
+8. Purging a tracked exported private-key file without handoff is explicit and warns that key material may be lost if no other copy exists.
 
 Imported-key behavior:
 1. Hosting stores the public key and metadata.

@@ -140,7 +140,9 @@ The short version:
 What this means in practice:
 1. If you import an existing key, hosting stores the public key only.
 2. If hosting generates a new keypair for convenience, the public key is registered with hosting and the private key must be accounted for clearly.
-3. Hosting-generated private keys may be temporarily stored/exported in password-protected form for explicit import on the hosting consumer side.
+3. Hosting-generated private keys can be handled in either of two explicit ways:
+   - export to a private-key file immediately
+   - store in the setup machine's default client realm and print a later export/import handoff command
 4. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
 
 Imported-key example:
@@ -154,24 +156,27 @@ Generated-key example:
 1. A user asks the setup flow to generate a new admin keypair.
 2. Hosting registers the generated public key.
 3. The private key must then be either:
-   - written to an explicit file path the user can keep, or
-   - exported/imported through a password-protected file-based secret flow for the hosting consumer, or
-   - treated as temporary/bootstrap-only material that the user must move, replace, or rotate immediately
-4. If hosting-generated private key material is still embedded in local hosting metadata, that is not the preferred steady state and should be treated as follow-up work.
+   - written to an explicit exported file path for immediate import into a hosting consumer realm, or
+   - stored in the setup machine's client realm secret store and later exported with `--client-export-key`
+4. A loose exported private-key file is not the preferred final state. Consumers should hand it off into their own client realm secret store, then purge the loose exported file.
+5. If hosting-generated private key material is still embedded in local hosting metadata, that is a legacy/repair state and should be treated as follow-up work.
 
 What the user who installed the hosting component should do:
 1. If the setup output says `imported`, use the private key you already had before running setup.
 2. If the setup output says `generated` and shows a file path, that file is the private key location clients should use.
-3. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata" or "expected exported key file is missing", fix that before treating the setup as complete.
-4. For `transport` keys, keep the private key outside hosting-managed files; hosting should only track the public key reference.
+3. If the setup output says `generated` and shows a client-realm secret plus an export command, run that command on the setup machine, transfer the exported private-key file if needed, then import or hand it off into the hosting consumer realm.
+4. After a consumer receives an exported generated key, delete the loose exported private-key file. The setup/keyring metadata records that the export was purged after hand-off when that happened locally.
+5. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata" or "expected exported key file is missing", fix that before treating the setup as complete.
+6. For `transport` keys, keep the private key on the hosting consumer side; hosting should only track the public key reference.
 
 What hosting consumer code or UX should assume:
 1. The hosting consumer already has the private key or knows where to find it.
 2. Hosting will report useful metadata about the key:
    - whether it was `imported` or `generated`
    - how the public key was supplied
-   - whether the private key is externally managed, exported to a file, or still requires user follow-up
-3. The consumer-facing UX should show that information plainly to the user instead of making them infer it.
+   - whether the private key is externally managed, exported to a file, stored as a client-realm secret, handed off into a consumer realm, or still requires user follow-up
+3. Consumer tooling can discover exported private-key file references from keyring metadata, migrate private keys between client realms, and hand off a local exported file into the consumer client realm.
+4. The consumer-facing UX should show that information plainly to the user instead of making them infer it.
 
 ### 4.2 Keyring paradigm
 
@@ -189,7 +194,8 @@ Key metadata expectations:
 1. Persisted key metadata should record whether a public key was `imported` or `generated`.
 2. When known, persisted metadata should also record:
    - how the public key was supplied (`file`, `inline`, generated, existing keyring)
-   - whether private key material is not managed, exported to a file, or still embedded locally
+   - whether private key material is not managed, exported to a file, stored in a client-realm secret, handed off into a consumer realm, or still embedded locally
+   - whether an exported private-key file still exists, was purged after hand-off, or was purged without recorded hand-off
    - any operator warning that requires follow-up
 
 Migration rule:
@@ -675,6 +681,22 @@ This section is the authoritative integration contract for hosting consumers.
    - client-realm secret record
 4. Consumer secret records store OpenSSH private-key text. Password protection, when used, is OpenSSH private-key passphrase protection and is reported with `private_key_protection: "openssh_passphrase"`.
 5. Hosting must not use normal runtime daemon RPC as the mechanism that returns private keys back to consumers.
+6. Client-realm helpers support generated-key handoff:
+   - discover exported private-key file references from a hosting or client keyring
+   - import a private key from a file or sanitized inline paste argument
+   - hand off a previously exported private-key file into the local consumer realm
+   - migrate private-key secret records between client realms
+   - optionally delete the exported source file after hand-off
+   - explicitly purge a tracked exported file when the operator accepts possible key-material loss
+7. `--client-import-key` remains an operator/script bridge for manual import and tests; consumer projects should prefer the client-realm API helpers directly.
+8. The interactive RBAC/key-management menu exposes custody operations for operators: list exported private-key files, export stored client-realm keys for remote handoff, hand off local exported files, purge exported files with warning, and revoke RBAC keys.
+9. A consumer project should not treat the setup machine's exported file path as its durable vault. It should copy/import/hand off the private key into its own realm or vault, then mark/purge the loose exported file.
+10. Setup and doctor output use these custody states:
+   - `exported_file`: a loose private-key file was created and is still tracked
+   - `client_realm_secret`: private key is stored in a client-realm secret record
+   - `private_key_export_purged_at`: exported file was intentionally deleted after client-realm hand-off
+   - `private_key_export_purged_without_adoption_at`: exported file was deleted without recorded hand-off and may require rotation/recovery
+   - `private_key_adopted_client_realm_root`: realm root that received the exported file
 
 ### 11.3 Auth flows consumers must support
 
