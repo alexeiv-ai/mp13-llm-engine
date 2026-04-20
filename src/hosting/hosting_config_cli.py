@@ -137,7 +137,7 @@ OPTION_HINTS: Dict[str, str] = {
     "tighten": "best-effort private permissions on hosting files",
     "yes": "require key/session authentication",
     "no": "only allowed for local_only + exclusive",
-    "local_experiment": "unconfigured; any same-user local consumer is implicit admin",
+    "local_experiment": "skip setup; no access files are written, reset, or deleted",
     "local_backend": "hosting consumer runs on same box/user account",
     "ssh_relay": "consumer reaches hosting through SSH relay/tunnel; SSH keys required",
     "remote_backend": "consumer reaches hosting over direct/proxied remote network; SSH keys required",
@@ -277,7 +277,9 @@ def _print_block(title: str, *, kind: str = "accent", width: int = 78) -> None:
 def _recommended_action(summary: Dict[str, Any], state: Dict[str, Any]) -> str:
     code = str(state.get("code") or "").strip()
     if code == "clean":
-        return "Start guided setup to create access files and register the first admin key."
+        return "Choose a concrete consumer in guided setup if you need persistent hosted access; otherwise leave hosting unchanged."
+    if code == "missing_control_state":
+        return "Run guided setup to repair access, or reset to unconfigured to archive partial access files."
     if code == "partial":
         return "Run guided setup to finish provisioning the missing admin key."
     if code == "blocked_remote_bootstrap":
@@ -480,15 +482,22 @@ def _doctor_guidance(name: str, ok: bool, details: Dict[str, Any]) -> Dict[str, 
         }
     if name == "control_state_exists":
         path = str(details.get("path") or "").strip()
+        access_artifacts_present = bool(details.get("access_artifacts_present"))
         if ok:
             return {
                 "impact": "Hosting access control state exists.",
                 "recommendation": "No action needed.",
             }
+        if not access_artifacts_present:
+            return {
+                "root_cause": f"Hosting access is not configured; expected control state file is missing: {path}",
+                "impact": "This is acceptable only when you intentionally do not need persistent hosted access.",
+                "recommendation": "Choose a concrete consumer in guided setup to configure hosting access, or leave hosting unchanged for local experiments.",
+            }
         return {
-            "root_cause": f"Hosting has not been configured yet; expected control state file is missing: {path}",
-            "impact": "Daemon startup may use bootstrap/recovery defaults and authenticated access is not ready.",
-            "recommendation": "Run guided setup from this menu, or run `python -m hosting.hosting_config_cli --interactive`.",
+            "root_cause": f"Hosting access is partially configured; expected control state file is missing: {path}",
+            "impact": "Existing key/bootstrap/audit artifacts may be ignored, and authenticated access is not reliable.",
+            "recommendation": "Run guided setup and choose a concrete consumer to repair access, or choose `Reset to unconfigured` to archive partial access files.",
         }
     if name == "hosting_root_exists":
         if ok:
@@ -666,9 +675,123 @@ def _project_usage_intent(intent: str) -> Dict[str, Any]:
     }
 
 
-def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
+def _normalize_context_value(value: Any, valid: set[str], default: str) -> str:
+    raw = str(value or "").strip()
+    return raw if raw in valid else default
+
+
+def _infer_setup_context_defaults(
+    *,
+    summary: Dict[str, Any],
+    probe: Dict[str, Any],
+    default_usage_intent: str,
+) -> Dict[str, str]:
+    setup_context = dict(probe.get("setup_context") or {})
+    connectivity_mode = _normalize_mode(str(summary.get("connectivity_mode") or "local_only"), "local_only")
+    endpoint_mode = _normalize_endpoint_mode(str(summary.get("endpoint_mode_default") or "exclusive"), "exclusive")
+    lifecycle_profile = _normalize_lifecycle_profile(
+        str(summary.get("lifecycle_profile") or "detached_user_process"),
+        "detached_user_process",
+    )
+    require_auth = bool(summary.get("require_auth"))
+    setup_scope = str(probe.get("setup_scope") or "").strip()
+    usage_default = setup_scope if setup_scope in VALID_USAGE_INTENTS else default_usage_intent
+    usage_default = _normalize_usage_intent(
+        str(setup_context.get("access") or setup_context.get("usage_intent") or usage_default),
+        default_usage_intent,
+    )
+
+    consumer_default = {
+        "local_only": "local_backend",
+        "ssh_tunnel_only": "ssh_relay",
+        "truly_remote": "remote_backend",
+    }.get(connectivity_mode, "local_backend")
+    access_artifacts_present = any(
+        bool(probe.get(name))
+        for name in ("access_exists", "keys_exists", "mapping_exists", "bootstrap_exists", "audit_exists")
+    ) or int(summary.get("admin_key_count") or 0) > 0
+    if not access_artifacts_present:
+        consumer_default = "local_experiment"
+    lifecycle_default = (
+        "reconnect_shared"
+        if endpoint_mode == "shared" or lifecycle_profile in {"detached_user_process", "service_managed"}
+        else "single_exclusive"
+    )
+    credentials_default = "ssh_keys" if require_auth else "no_auth_local"
+    return {
+        "consumer": _normalize_context_value(
+            setup_context.get("consumer"),
+            VALID_CONTEXT_CONSUMERS,
+            consumer_default,
+        ),
+        "lifecycle": _normalize_context_value(
+            setup_context.get("lifecycle"),
+            VALID_CONTEXT_LIFECYCLES,
+            lifecycle_default,
+        ),
+        "access": _normalize_usage_intent(str(setup_context.get("access") or usage_default), usage_default),
+        "credentials": _normalize_context_value(
+            setup_context.get("credentials"),
+            VALID_CONTEXT_CREDENTIALS,
+            credentials_default,
+        ),
+        "admin_capability": _normalize_context_value(
+            setup_context.get("admin_capability"),
+            VALID_ADMIN_CAPABILITIES,
+            "no_admin_available",
+        ),
+    }
+
+
+def _setup_context_from_config(
+    *,
+    base: Dict[str, str],
+    usage_intent: str,
+    connectivity_mode: str,
+    endpoint_mode: str,
+    lifecycle_profile: str,
+    require_auth: bool,
+    key_source: str,
+) -> Dict[str, str]:
+    mode = _normalize_mode(connectivity_mode, "local_only")
+    endpoint = _normalize_endpoint_mode(endpoint_mode, "exclusive")
+    lifecycle = _normalize_lifecycle_profile(lifecycle_profile, "detached_user_process")
+    context = dict(base or {})
+    context["consumer"] = {
+        "local_only": "local_backend",
+        "ssh_tunnel_only": "ssh_relay",
+        "truly_remote": "remote_backend",
+    }.get(mode, "local_backend")
+    context["lifecycle"] = (
+        "reconnect_shared"
+        if endpoint == "shared" or lifecycle in {"detached_user_process", "service_managed"}
+        else "single_exclusive"
+    )
+    context["access"] = _normalize_usage_intent(usage_intent, "single_admin")
+    if not bool(require_auth):
+        context["credentials"] = "no_auth_local"
+    elif str(key_source or "").strip().lower() == "generate":
+        context["credentials"] = "ssh_keys"
+    else:
+        context["credentials"] = _normalize_context_value(
+            context.get("credentials"),
+            VALID_CONTEXT_CREDENTIALS,
+            "ssh_keys",
+        )
+        if mode != "local_only" and context["credentials"] != "ssh_keys":
+            context["credentials"] = "ssh_keys"
+    context["admin_capability"] = _normalize_context_value(
+        context.get("admin_capability"),
+        VALID_ADMIN_CAPABILITIES,
+        "no_admin_available",
+    )
+    return context
+
+
+def _collect_setup_context(default_usage_intent: str, defaults: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     _print_title("Hosting Usage Context")
     print(_c("muted", "Answer these first so setup can suggest a safe default configuration."))
+    defaults = dict(defaults or {})
     context: Dict[str, str] = {}
     step = 0
     while step < 5:
@@ -676,9 +799,11 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
             value = _prompt_choice(
                 "Who consumes hosting?",
                 VALID_CONTEXT_CONSUMERS,
-                context.get("consumer", "local_experiment"),
-                allow_back=False,
+                context.get("consumer", defaults.get("consumer", "local_experiment")),
+                allow_back=True,
             )
+            if value == "back":
+                return {"action": "back"}
             context["consumer"] = value
             if value == "local_experiment":
                 context["lifecycle"] = "single_exclusive"
@@ -691,7 +816,10 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
         if step == 1:
             default = context.get(
                 "lifecycle",
-                "single_exclusive" if context.get("consumer") == "local_backend" else "reconnect_shared",
+                defaults.get(
+                    "lifecycle",
+                    "single_exclusive" if context.get("consumer") == "local_backend" else "reconnect_shared",
+                ),
             )
             value = _prompt_choice(
                 "What should happen when the consumer disconnects?",
@@ -709,7 +837,7 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
             value = _prompt_choice(
                 "How many access roles/users are expected?",
                 VALID_USAGE_INTENTS,
-                context.get("access", default_usage_intent),
+                context.get("access", defaults.get("access", default_usage_intent)),
                 allow_back=True,
             )
             if value == "back":
@@ -732,6 +860,9 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
                 if "no_auth_local" not in disabled_credentials
                 else "ssh_keys"
             )
+            credential_default = defaults.get("credentials", credential_default)
+            if credential_default in disabled_credentials:
+                credential_default = "ssh_keys"
             value = _prompt_choice(
                 "Preferred credential style?",
                 VALID_CONTEXT_CREDENTIALS,
@@ -752,7 +883,7 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
             value = _prompt_choice(
                 "Can setup perform administrator/root changes on the target host?",
                 VALID_ADMIN_CAPABILITIES,
-                context.get("admin_capability", "no_admin_available"),
+                context.get("admin_capability", defaults.get("admin_capability", "no_admin_available")),
                 allow_back=True,
             )
             if value == "back":
@@ -762,10 +893,10 @@ def _collect_setup_context(default_usage_intent: str) -> Dict[str, str]:
             step += 1
     return {
         "consumer": context.get("consumer", "local_backend"),
-        "lifecycle": context.get("lifecycle", "single_exclusive"),
-        "access": context.get("access", default_usage_intent),
-        "credentials": context.get("credentials", "ssh_keys"),
-        "admin_capability": context.get("admin_capability", "no_admin_available"),
+        "lifecycle": context.get("lifecycle", defaults.get("lifecycle", "single_exclusive")),
+        "access": context.get("access", defaults.get("access", default_usage_intent)),
+        "credentials": context.get("credentials", defaults.get("credentials", "ssh_keys")),
+        "admin_capability": context.get("admin_capability", defaults.get("admin_capability", "no_admin_available")),
     }
 
 
@@ -790,7 +921,7 @@ def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
             "lifecycle_profile": "foreground_terminal_bound",
             "leave_unconfigured": True,
             "followups": [
-                "Leave hosting unconfigured for now; use this only for local experimentation.",
+                "No access files are written, reset, or deleted; existing hosting configuration is left unchanged.",
                 "Run guided setup later when a long-running hosting consumer needs stable daemon access.",
             ],
         }
@@ -845,6 +976,19 @@ def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
 
 
 def _print_auto_configuration(context: Dict[str, str], suggestion: Dict[str, Any]) -> None:
+    if bool(suggestion.get("leave_unconfigured")):
+        _print_title("No Access Setup Selected")
+        _kv_rows(
+            [
+                ("consumer", _option_label(str(context.get("consumer") or ""))),
+                ("action", "leave hosting access configuration unchanged"),
+                ("files", "no access files are written, reset, or deleted"),
+            ]
+        )
+        followups = [str(item) for item in list(suggestion.get("followups") or []) if str(item).strip()]
+        if followups:
+            _print_recommendations(followups)
+        return
     _print_title("Suggested Auto Configuration")
     _kv_rows(
         [
@@ -882,7 +1026,7 @@ def _option_label(value: str) -> str:
     if value in USAGE_INTENT_GUIDANCE:
         return str(USAGE_INTENT_GUIDANCE[value].get("label") or value)
     labels = {
-        "local_experiment": "Local experiment only",
+        "local_experiment": "Skip access setup for now",
         "local_backend": "Same box backend consumer",
         "ssh_relay": "SSH relay/tunnel consumer",
         "remote_backend": "Remote backend consumer",
@@ -894,6 +1038,10 @@ def _option_label(value: str) -> str:
         "no_admin_available": "No admin/root access",
         "admin_available_interactive": "Admin/root available",
         "admin_managed_externally": "Admin managed externally",
+        "apply": "Use suggested configuration",
+        "customize": "Customize configuration",
+        "leave_unconfigured": "Leave hosting unchanged",
+        "reset_unconfigured": "Reset to unconfigured",
     }
     if value in labels:
         return labels[value]
@@ -1004,28 +1152,31 @@ def _prompt_menu(
     allow_back: bool = False,
     allow_changes: bool = True,
 ) -> str:
-    _print_block(question.strip(": \n") or "Menu", kind="accent")
-    normalized: list[Tuple[str, str, str]] = []
-    for key, item in options.items():
-        if isinstance(item, tuple):
-            label = str(item[0])
-            hint = str(item[1]) if len(item) > 1 else ""
-        else:
-            label = str(item)
-            hint = ""
-        normalized.append((str(key), label, hint))
-    index = _print_options(normalized, default=default, label_width=30)
-    _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
-    _print_rule(".", width=78)
-    raw = _input_or_quit(f"Select [{_option_label(default)}]: ", lower=True)
-    if raw == "c" and allow_changes:
-        _print_changes_or_empty()
-        return "changes"
-    if raw == "b" and allow_back:
-        return "back"
-    if not raw:
-        return default
-    return index.get(raw, default)
+    while True:
+        _print_block(question.strip(": \n") or "Menu", kind="accent")
+        normalized: list[Tuple[str, str, str]] = []
+        for key, item in options.items():
+            if isinstance(item, tuple):
+                label = str(item[0])
+                hint = str(item[1]) if len(item) > 1 else ""
+            else:
+                label = str(item)
+                hint = ""
+            normalized.append((str(key), label, hint))
+        index = _print_options(normalized, default=default, label_width=30)
+        _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
+        _print_rule(".", width=78)
+        raw = _input_or_quit(f"Select [{_option_label(default)}]: ", lower=True)
+        if raw == "c" and allow_changes:
+            _print_changes_or_empty()
+            return "changes"
+        if raw == "b" and allow_back:
+            return "back"
+        if not raw:
+            return default
+        if raw in index:
+            return index[raw]
+        print(f"  {_c('warn', 'invalid choice')} {_c('muted', raw)}")
 
 
 def _wizard_choice_prompt(
@@ -1217,6 +1368,7 @@ def _probe_current_files(
     )
     clients = list(mapping_payload.get("clients") or [])
     bootstrap_setup = dict(bootstrap_payload.get("setup") or {})
+    bootstrap_context = dict(bootstrap_setup.get("setup_context") or {})
     return {
         "control_state_path": str(control_state_path),
         "hosting_root_path": str(access_file.parent),
@@ -1231,6 +1383,7 @@ def _probe_current_files(
         "setup_scope": str(bootstrap_setup.get("setup_scope") or ""),
         "setup_key_action": str(bootstrap_setup.get("key_action") or ""),
         "setup_permission_action": str(bootstrap_setup.get("permission_action") or ""),
+        "setup_context": bootstrap_context,
     }
 
 
@@ -1260,6 +1413,13 @@ def _classify_config_state(summary: Dict[str, Any], probe: Dict[str, Any]) -> Di
             "label": "Blocked setup state",
             "configured": False,
             "details": "Remote-capable auth is enabled, but no admin key is provisioned yet. Pre-provision a key locally before remote use.",
+        }
+    if not bool(probe.get("access_exists")):
+        return {
+            "code": "missing_control_state",
+            "label": "Partially configured",
+            "configured": False,
+            "details": "Admin keys or setup files were detected, but the access control state file is missing.",
         }
     if admin_key_count == 0:
         return {
@@ -1333,7 +1493,12 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
     }
 
 
-def _print_current_probe(summary: Dict[str, Any], probe: Dict[str, Any], state: Dict[str, Any]) -> None:
+def _print_current_probe(
+    summary: Dict[str, Any],
+    probe: Dict[str, Any],
+    state: Dict[str, Any],
+    key_meta: Optional[Dict[str, Any]] = None,
+) -> None:
     _print_block("Current Configuration", kind="accent")
     state_kind = "ok" if bool(state.get("configured")) else "warn"
     print(f"  {_badge(state_kind, str(state.get('label') or 'unknown'))} {_c('value', _format_state_banner(summary, state))}")
@@ -1370,6 +1535,37 @@ def _print_current_probe(summary: Dict[str, Any], probe: Dict[str, Any], state: 
         _kv_rows([("previous_key_action", probe.get("setup_key_action"))])
     if str(probe.get("setup_permission_action") or "").strip():
         _kv_rows([("previous_permission_action", probe.get("setup_permission_action"))])
+    key_meta = dict(key_meta or {})
+    if key_meta:
+        _print_rule("-")
+        _print_title("Admin Key Provenance")
+        rows: list[Tuple[str, Any]] = [
+            ("admin_key_id", summary.get("admin_key_id")),
+            ("admin_key_origin", key_meta.get("key_origin") or "unknown"),
+            ("admin_public_key_source", key_meta.get("public_key_source") or "unknown"),
+            ("admin_private_key_storage", key_meta.get("private_key_storage") or "unknown"),
+        ]
+        if key_meta.get("private_key_export_path"):
+            rows.extend(
+                [
+                    ("admin_private_key_path", key_meta.get("private_key_export_path")),
+                    ("admin_private_key_path_exists", _status_text(bool(key_meta.get("private_key_export_exists")))),
+                ]
+            )
+        if key_meta.get("private_key_secret_id"):
+            rows.append(("admin_private_key_secret_id", key_meta.get("private_key_secret_id")))
+        if key_meta.get("private_key_secret_path"):
+            rows.extend(
+                [
+                    ("admin_private_key_secret_path", key_meta.get("private_key_secret_path")),
+                    ("admin_private_key_secret_exists", _status_text(bool(key_meta.get("private_key_secret_exists")))),
+                ]
+            )
+        if key_meta.get("private_key_secret_encryption"):
+            rows.append(("admin_private_key_secret_encryption", key_meta.get("private_key_secret_encryption")))
+        if key_meta.get("private_key_warning"):
+            rows.append(("admin_key_warning", key_meta.get("private_key_warning")))
+        _kv_rows(rows)
     _print_recommendations([_recommended_action(summary, state)])
     _print_rule("=")
 
@@ -1391,6 +1587,14 @@ def _print_wizard_home(summary: Dict[str, Any], probe: Dict[str, Any], state: Di
         _kv_rows(
             [
                 ("admin_key", summary.get("admin_key_id")),
+                ("require_auth", _status_text(bool(summary.get("require_auth")))),
+            ]
+        )
+    elif int(summary.get("admin_key_count") or 0) > 0:
+        _kv_rows(
+            [
+                ("admin_key", f"detected: {summary.get('admin_key_id')}"),
+                ("admin_key_entries", summary.get("admin_key_count")),
                 ("require_auth", _status_text(bool(summary.get("require_auth")))),
             ]
         )
@@ -1437,7 +1641,13 @@ def _print_doctor_report(result: Dict[str, Any]) -> None:
         print(f"  {status} {check_name} {_c('muted', suffix)}")
     _print_rule("-")
     _print_title("Doctor summary")
-    _kv_rows([("status", result.get("status")), ("issues_count", result.get("issues_count"))])
+    _kv_rows(
+        [
+            ("status", result.get("status")),
+            ("issues_count", result.get("issues_count")),
+            ("warnings_count", len(warnings)),
+        ]
+    )
     for group_title, group_rows, group_kind in (
         ("Must Fix", issues, "issue"),
         ("Warnings To Review", warnings, "warn"),
@@ -2108,6 +2318,61 @@ def _write_audit_event(audit_file: Path, event: Dict[str, Any]) -> None:
     line = json.dumps(dict(event or {}), ensure_ascii=False)
     with audit_file.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def _reset_access_configuration(paths: Dict[str, Path]) -> Dict[str, Any]:
+    hosting_root = paths["hosting_root"]
+    archive_root = hosting_root / "archive" / ("access_reset_" + time.strftime("%Y%m%d_%H%M%S"))
+    if archive_root.exists():
+        suffix = 1
+        while (hosting_root / "archive" / f"{archive_root.name}_{suffix}").exists():
+            suffix += 1
+        archive_root = hosting_root / "archive" / f"{archive_root.name}_{suffix}"
+    candidates = [
+        paths["access_file"],
+        paths["keys_file"],
+        paths["mappings_file"],
+        paths["bootstrap_state_file"],
+        paths["audit_file"],
+        paths["migrations_file"],
+        hosting_root / "state" / "sessions.json",
+        hosting_root / "state" / "challenges.json",
+        hosting_root / "audit" / "auth_audit.json",
+    ]
+    archived: list[Dict[str, str]] = []
+    for source in candidates:
+        source = source.expanduser().resolve()
+        if not source.exists() or not source.is_file():
+            continue
+        relative = source.relative_to(hosting_root) if source.is_relative_to(hosting_root) else Path(source.name)
+        target = (archive_root / relative).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(target)
+        archived.append({"source": str(source), "archive": str(target)})
+    manifest = {
+        "version": 1,
+        "timestamp": time.time(),
+        "event": "hosting_access_reset_to_unconfigured",
+        "hosting_root": str(hosting_root),
+        "archived": archived,
+        "notes": [
+            "Active hosting access files were archived, not deleted.",
+            "Exported private key files and client-realm private-key secrets are not removed by this reset.",
+        ],
+    }
+    if archived:
+        archive_root.mkdir(parents=True, exist_ok=True)
+        _write_json(archive_root / "reset_manifest.json", manifest)
+    return {
+        "status": "ok",
+        "action": "reset_unconfigured",
+        "hosting_root": str(hosting_root),
+        "archive_dir": str(archive_root) if archived else None,
+        "archived_count": len(archived),
+        "archived": archived,
+        "message": "Hosting access configuration was reset to unconfigured by archiving active access files.",
+        "private_key_note": "Exported private key files and client-realm private-key secrets were not removed.",
+    }
 
 
 def _migrate_legacy_key_files(
@@ -2990,6 +3255,13 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     )
     config_state = _classify_config_state(existing_summary, current_probe)
     existing_summary["exists"] = bool(config_state.get("configured"))
+    existing_key_meta = _admin_key_metadata(keys_file, str(existing_summary.get("admin_key_id") or ""))
+    setup_context_defaults = _infer_setup_context_defaults(
+        summary=existing_summary,
+        probe=current_probe,
+        default_usage_intent=usage_intent,
+    )
+    setup_context: Dict[str, str] = dict(setup_context_defaults)
 
     if interactive:
         _clear_pending_staged_setup()
@@ -3028,7 +3300,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 if operator_choice == "1":
                     return
                 if operator_choice == "2":
-                    _print_current_probe(existing_summary, current_probe, config_state)
+                    _print_current_probe(existing_summary, current_probe, config_state, existing_key_meta)
                     continue
                 if operator_choice == "3":
                     doctor_result = run_doctor(args)
@@ -3044,17 +3316,35 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         auto_applied = False
         current_projection_auth = require_auth_seed
         while True:
-            context = _collect_setup_context(usage_intent)
+            context = _collect_setup_context(usage_intent, setup_context_defaults)
+            if str(context.get("action") or "") == "back":
+                _run_main_menu()
+                continue
+            setup_context = dict(context)
             suggestion = _suggest_auto_configuration(context)
             _print_auto_configuration(context, suggestion)
             default_action = "leave_unconfigured" if bool(suggestion.get("leave_unconfigured")) else "apply"
-            suggestion_action = _prompt_menu(
-                "Suggested Action",
-                {
+            if bool(suggestion.get("leave_unconfigured")):
+                suggested_options = {
+                    "leave_unconfigured": ("Leave hosting unchanged", "no access files are written, reset, or deleted"),
+                }
+            else:
+                suggested_options = {
                     "apply": ("Use suggested configuration", "stage these values and continue to review"),
                     "customize": ("Customize configuration", "start from the suggested intent and edit choices"),
-                    "leave_unconfigured": ("Leave hosting unconfigured", "no access files are written"),
-                },
+                }
+            reset_available = any(
+                bool(current_probe.get(name))
+                for name in ("access_exists", "keys_exists", "mapping_exists", "bootstrap_exists", "audit_exists")
+            ) or int(existing_summary.get("admin_key_count") or 0) > 0
+            if bool(suggestion.get("leave_unconfigured")) and reset_available:
+                suggested_options["reset_unconfigured"] = (
+                    "Reset to unconfigured",
+                    "archive active access files; exported private keys and client secrets are not removed",
+                )
+            suggestion_action = _prompt_menu(
+                "Suggested Action",
+                suggested_options,
                 default_action,
                 allow_back=True,
             )
@@ -3070,8 +3360,8 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 _print_title("No Changes Written")
                 _kv_rows(
                     [
-                        ("result", "Hosting was left unconfigured."),
-                        ("reason", "Local experiment only."),
+                        ("result", "Hosting access configuration was left unchanged."),
+                        ("reason", "Skip access setup for now."),
                         ("hosting_root", str(hosting_root)),
                     ]
                 )
@@ -3079,10 +3369,27 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                     "status": "skipped",
                     "action": "leave_unconfigured",
                     "reason": "local_experiment",
-                    "message": "Hosting was left unconfigured for local experimentation.",
+                    "message": "Hosting access configuration was left unchanged for local experimentation.",
                     "hosting_root": str(hosting_root),
                     "followups": list(suggestion.get("followups") or []),
                 }
+            if suggestion_action == "reset_unconfigured":
+                if not _plain_yes_no(
+                    "Archive active hosting access files and reset this setup to unconfigured?",
+                    False,
+                ):
+                    continue
+                reset_result = _reset_access_configuration(paths)
+                _print_title("Reset Complete")
+                _kv_rows(
+                    [
+                        ("result", reset_result.get("message")),
+                        ("archived_files", reset_result.get("archived_count")),
+                        ("archive_dir", reset_result.get("archive_dir") or "n/a"),
+                        ("private_key_note", reset_result.get("private_key_note")),
+                    ]
+                )
+                return reset_result
 
             usage_intent = _normalize_usage_intent(str(suggestion.get("usage_intent") or usage_intent), usage_intent)
             setup_scope = usage_intent
@@ -3562,6 +3869,15 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             ],
         },
     )
+    final_setup_context = _setup_context_from_config(
+        base=setup_context,
+        usage_intent=usage_intent,
+        connectivity_mode=mode,
+        endpoint_mode=endpoint_mode,
+        lifecycle_profile=lifecycle_profile,
+        require_auth=require_auth,
+        key_source=key_source,
+    )
     _write_json(
         bootstrap_state_file,
         {
@@ -3569,6 +3885,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "updated_at": time.time(),
             "setup": {
                 "setup_scope": setup_scope,
+                "setup_context": final_setup_context,
                 "setup_notes": setup_notes,
                 "connectivity_mode": mode,
                 "endpoint_mode_default": endpoint_mode,
@@ -3611,6 +3928,15 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "require_auth": require_auth,
             "admin_key_id": admin_key_id,
             "key_source": key_source,
+            "key_action": key_action,
+            "admin_key_origin": key_origin,
+            "admin_public_key_source": public_key_source,
+            "admin_private_key_storage": private_key_storage,
+            "admin_private_key_export_path": str(export_private_path) if export_private_path else None,
+            "admin_private_key_secret_id": admin_private_key_secret_id,
+            "admin_private_key_secret_realm": admin_private_key_secret_realm,
+            "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
+            "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
         },
     )
     after_summary = _summarize_existing_config(
@@ -3659,6 +3985,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "private_key_exported": bool(export_private),
         "private_key_export_path": str(export_private_path) if export_private_path else None,
         "setup_scope": setup_scope,
+        "setup_context": final_setup_context,
         "key_action": key_action,
         "permission_action": permission_action,
         "permission_result": permission_result,
@@ -3718,7 +4045,33 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
 
     _record("default_config_dir_exists", default_config_dir.exists(), {"path": str(default_config_dir)})
     _record("hosting_root_exists", hosting_root.exists(), {"path": str(hosting_root)})
-    _record("control_state_exists", control_state_path.exists(), {"path": str(control_state_path)})
+    keys_payload = _read_json(paths["keys_file"], {"keys": {}})
+    admin_key_count = len(
+        [
+            k
+            for _, k in dict(keys_payload.get("keys") or {}).items()
+            if str((k or {}).get("role") or "").strip().lower() == "admin"
+        ]
+    )
+    access_artifacts_present = any(
+        p.exists()
+        for p in (
+            paths["keys_file"],
+            paths["mappings_file"],
+            paths["bootstrap_state_file"],
+            paths["audit_file"],
+        )
+    ) or admin_key_count > 0
+    _record(
+        "control_state_exists",
+        control_state_path.exists(),
+        {
+            "path": str(control_state_path),
+            "access_artifacts_present": access_artifacts_present,
+            "admin_key_count": admin_key_count,
+        },
+        blocking=access_artifacts_present,
+    )
 
     # Write-check in hosting root if present.
     if hosting_root.exists():
@@ -3781,7 +4134,14 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     try:
         svc = EngineHostService(control_state_file=control_state_path)
         cfg = svc.get_control_config()
-        _record("control_config_readable", True, {"require_auth": bool(cfg.get("require_auth", False))})
+        _record(
+            "control_config_readable",
+            True,
+            {
+                "require_auth": bool(cfg.get("require_auth", False)),
+                "source": "access_control_file" if control_state_path.exists() else "service_defaults_no_control_state_file",
+            },
+        )
         connectivity_mode = _normalize_mode(
             str(dict(cfg.get("access_profile") or {}).get("connectivity_mode") or "local_only"),
             "local_only",
@@ -3974,11 +4334,14 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
                     },
                 )
 
+    warnings = [dict(row or {}) for row in checks if not bool((row or {}).get("ok")) and not bool((row or {}).get("blocking", True))]
     return {
-        "status": "ok" if not issues else "issues_found",
+        "status": "issues_found" if issues else "warnings_found" if warnings else "ok",
         "issues_count": len(issues),
+        "warnings_count": len(warnings),
         "checks": checks,
         "issues": issues,
+        "warnings": warnings,
         "default_config_dir": str(default_config_dir),
         "hosting_root": str(hosting_root),
         "control_state_file": str(control_state_path),

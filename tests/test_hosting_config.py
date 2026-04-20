@@ -15,10 +15,17 @@ import pytest
 from hosting.hosting_config_cli import (
     UserCancelled,
     _bool_prompt,
+    _infer_setup_context_defaults,
+    _option_label,
+    _print_auto_configuration,
+    _print_wizard_home,
+    _prompt_menu,
+    _reset_access_configuration,
     _suggest_auto_configuration,
     run_client_keys,
     run_doctor,
     run_setup,
+    run_status,
     run_transport_admin_setup,
     run_transport_bootstrap,
 )
@@ -251,6 +258,23 @@ def test_setup_generate_consolidates_importable_key_material(monkeypatch: pytest
         assert str(secret_payload.get("tag") or "") == "rbac_private_key"
         assert "BEGIN OPENSSH PRIVATE KEY" in str(secret_payload.get("payload") or "")
 
+        status = run_status(args)
+        meta = dict(status.get("admin_key_metadata") or {})
+        assert str(meta.get("key_origin") or "") == "generated"
+        assert str(meta.get("private_key_storage") or "") == "client_realm_secret"
+        assert str(meta.get("private_key_secret_path") or "") == str(secret_file)
+
+        audit_rows = [
+            json.loads(line)
+            for line in (root / "hosting" / "audit" / "setup_audit.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        applied = [row for row in audit_rows if str(row.get("event") or "") == "hosting_config_applied"]
+        assert applied
+        assert str(applied[-1].get("admin_key_origin") or "") == "generated"
+        assert str(applied[-1].get("admin_private_key_storage") or "") == "client_realm_secret"
+        assert str(applied[-1].get("admin_private_key_secret_path") or "") == str(secret_file)
+
 
 def test_setup_generate_can_store_encrypted_client_realm_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
@@ -311,6 +335,305 @@ def test_setup_generate_with_export_keeps_private_key_out_of_keyring_and_client_
         assert not str(admin.get("private_key_secret_id") or "").strip()
         assert export_path.exists()
         assert not (root / "hosting_client" / "default" / "secrets" / "rbac-admin-main-private.json").exists()
+
+        status = run_status(args)
+        meta = dict(status.get("admin_key_metadata") or {})
+        assert str(meta.get("key_origin") or "") == "generated"
+        assert str(meta.get("private_key_storage") or "") == "exported_file"
+        assert str(meta.get("private_key_export_path") or "") == str(export_path)
+        assert bool(meta.get("private_key_export_exists")) is True
+
+
+def test_status_not_configured_when_control_state_missing_but_admin_key_exists() -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        keys_file = root / "hosting" / "keyring" / "keys.json"
+        keys_file.parent.mkdir(parents=True, exist_ok=True)
+        keys_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "keys": {
+                        "admin-main": {
+                            "role": "admin",
+                            "auth_method": "public_key",
+                            "public_key": TEST_PUBLIC_KEY,
+                            "key_origin": "imported",
+                            "public_key_source": "inline",
+                        }
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        args = _args(default_config_dir=root, control_state_file=control)
+        status = run_status(args)
+        state = dict(status.get("state") or {})
+        probe = dict(status.get("probe") or {})
+        assert str(state.get("code") or "") == "missing_control_state"
+        assert bool(state.get("configured")) is False
+        assert bool(dict(status.get("summary") or {}).get("exists")) is False
+        assert bool(probe.get("access_exists")) is False
+
+
+def test_doctor_warns_for_clean_unconfigured_access_state() -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        control.parent.mkdir(parents=True, exist_ok=True)
+        args = _args(default_config_dir=root, control_state_file=control, doctor=True)
+
+        out = run_doctor(args)
+
+        checks = list(out.get("checks") or [])
+        control_checks = [c for c in checks if str(c.get("check") or "") == "control_state_exists"]
+        assert control_checks
+        assert bool(control_checks[0].get("ok")) is False
+        assert bool(control_checks[0].get("blocking")) is False
+        assert str(out.get("status") or "") == "warnings_found"
+        assert int(out.get("issues_count") or 0) == 0
+        details = dict(control_checks[0].get("details") or {})
+        assert bool(details.get("access_artifacts_present")) is False
+        assert "leave hosting unchanged" in str(details.get("recommendation") or "")
+
+
+def test_doctor_blocks_for_partial_access_state_missing_control_file() -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        keys_file = root / "hosting" / "keyring" / "keys.json"
+        keys_file.parent.mkdir(parents=True, exist_ok=True)
+        keys_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "keys": {
+                        "admin-main": {
+                            "role": "admin",
+                            "auth_method": "public_key",
+                            "public_key": TEST_PUBLIC_KEY,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        args = _args(default_config_dir=root, control_state_file=control, doctor=True)
+
+        out = run_doctor(args)
+
+        checks = list(out.get("checks") or [])
+        control_checks = [c for c in checks if str(c.get("check") or "") == "control_state_exists"]
+        assert control_checks
+        assert bool(control_checks[0].get("ok")) is False
+        assert bool(control_checks[0].get("blocking")) is True
+        assert str(out.get("status") or "") == "issues_found"
+        details = dict(control_checks[0].get("details") or {})
+        assert bool(details.get("access_artifacts_present")) is True
+        assert "Reset to unconfigured" in str(details.get("recommendation") or "")
+
+
+def test_suggested_action_labels_are_user_facing() -> None:
+    assert _option_label("leave_unconfigured") == "Leave hosting unchanged"
+    assert _option_label("reset_unconfigured") == "Reset to unconfigured"
+
+
+def test_prompt_menu_reprompts_on_invalid_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    answers = iter(["bogus", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    selected = _prompt_menu(
+        "Demo Menu",
+        {"apply": ("Apply", "use this"), "leave_unconfigured": ("Leave hosting unchanged", "no-op")},
+        "leave_unconfigured",
+    )
+
+    out = capsys.readouterr().out
+    assert selected == "leave_unconfigured"
+    assert "invalid choice" in out
+    assert out.count("Demo Menu") == 2
+
+
+def test_wizard_home_reports_detected_admin_key_in_partial_state(capsys: pytest.CaptureFixture[str]) -> None:
+    _print_wizard_home(
+        {
+            "connectivity_mode": "local_only",
+            "endpoint_mode_default": "exclusive",
+            "lifecycle_profile": "detached_user_process",
+            "require_auth": False,
+            "admin_key_id": "admin-main",
+            "admin_key_count": 1,
+        },
+        {"hosting_root_path": "C:/tmp/hosting"},
+        {
+            "code": "missing_control_state",
+            "label": "Partially configured",
+            "configured": False,
+            "details": "Admin key exists but control state is missing.",
+        },
+    )
+
+    out = capsys.readouterr().out
+    assert "detected: admin-main" in out
+    assert "not configured" not in out
+
+
+def test_usage_context_defaults_follow_existing_local_config() -> None:
+    summary = {
+        "exists": True,
+        "connectivity_mode": "local_only",
+        "endpoint_mode_default": "exclusive",
+        "lifecycle_profile": "foreground_terminal_bound",
+        "require_auth": False,
+    }
+    probe = {"access_exists": True}
+
+    defaults = _infer_setup_context_defaults(
+        summary=summary,
+        probe=probe,
+        default_usage_intent="single_admin",
+    )
+
+    assert defaults["consumer"] == "local_backend"
+    assert defaults["lifecycle"] == "single_exclusive"
+    assert defaults["access"] == "single_admin"
+    assert defaults["credentials"] == "no_auth_local"
+
+
+def test_usage_context_defaults_repair_partial_config_instead_of_skip() -> None:
+    summary = {
+        "exists": False,
+        "connectivity_mode": "local_only",
+        "endpoint_mode_default": "exclusive",
+        "lifecycle_profile": "detached_user_process",
+        "require_auth": False,
+        "admin_key_count": 1,
+    }
+    probe = {
+        "access_exists": False,
+        "keys_exists": True,
+        "mapping_exists": True,
+        "bootstrap_exists": True,
+        "audit_exists": True,
+    }
+
+    defaults = _infer_setup_context_defaults(
+        summary=summary,
+        probe=probe,
+        default_usage_intent="single_admin",
+    )
+
+    assert defaults["consumer"] == "local_backend"
+    assert defaults["consumer"] != "local_experiment"
+
+
+def test_usage_context_defaults_follow_existing_remote_config_and_persisted_context() -> None:
+    summary = {
+        "exists": True,
+        "connectivity_mode": "truly_remote",
+        "endpoint_mode_default": "shared",
+        "lifecycle_profile": "service_managed",
+        "require_auth": True,
+    }
+    probe = {
+        "access_exists": True,
+        "setup_context": {
+            "consumer": "ssh_relay",
+            "access": "role_split",
+            "credentials": "ssh_keys",
+            "admin_capability": "admin_managed_externally",
+        },
+    }
+
+    defaults = _infer_setup_context_defaults(
+        summary=summary,
+        probe=probe,
+        default_usage_intent="single_admin",
+    )
+
+    assert defaults["consumer"] == "ssh_relay"
+    assert defaults["lifecycle"] == "reconnect_shared"
+    assert defaults["access"] == "role_split"
+    assert defaults["credentials"] == "ssh_keys"
+    assert defaults["admin_capability"] == "admin_managed_externally"
+
+
+def test_skip_access_setup_prints_no_fake_configuration(capsys: pytest.CaptureFixture[str]) -> None:
+    _print_auto_configuration(
+        {"consumer": "local_experiment"},
+        {
+            "leave_unconfigured": True,
+            "mode": "local_only",
+            "endpoint_mode": "exclusive",
+            "require_auth": False,
+            "key_source": "import",
+            "followups": ["No access files are written, reset, or deleted."],
+        },
+    )
+
+    out = capsys.readouterr().out
+    assert "No Access Setup Selected" in out
+    assert "Suggested Auto Configuration" not in out
+    assert "clients_connectivity" not in out
+    assert "key_source" not in out
+
+
+def test_setup_persists_resolved_usage_context() -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        args = _args(
+            default_config_dir=root,
+            control_state_file=control,
+            mode="ssh_tunnel_only",
+            endpoint_mode="shared",
+            lifecycle_profile="detached_user_process",
+            require_auth=True,
+            key_source="import",
+        )
+        out = run_setup(args)
+        context = dict(out.get("setup_context") or {})
+        assert context["consumer"] == "ssh_relay"
+        assert context["lifecycle"] == "reconnect_shared"
+        assert context["access"] == "single_admin"
+        assert context["credentials"] == "ssh_keys"
+
+        bootstrap = json.loads((root / "hosting" / "bootstrap" / "bootstrap_state.json").read_text(encoding="utf-8"))
+        persisted = dict(dict(bootstrap.get("setup") or {}).get("setup_context") or {})
+        assert persisted == context
+
+
+def test_reset_access_configuration_archives_active_access_files_only() -> None:
+    with _workspace_tmpdir() as root:
+        control = root / "hosting" / "access_control.json"
+        args = _args(default_config_dir=root, control_state_file=control)
+        run_setup(args)
+        exported_private_key = root / "exported" / "admin.key"
+        exported_private_key.parent.mkdir(parents=True, exist_ok=True)
+        exported_private_key.write_text("PRIVATE", encoding="utf-8")
+
+        from hosting.hosting_config_cli import _resolve_paths
+
+        paths = _resolve_paths(args, create_dirs=False)
+        result = _reset_access_configuration(paths)
+
+        assert result["action"] == "reset_unconfigured"
+        assert int(result["archived_count"]) >= 4
+        assert not (root / "hosting" / "access_control.json").exists()
+        assert not (root / "hosting" / "keyring" / "keys.json").exists()
+        assert not (root / "hosting" / "bootstrap" / "client_key_map.json").exists()
+        assert not (root / "hosting" / "bootstrap" / "bootstrap_state.json").exists()
+        assert not (root / "hosting" / "audit" / "setup_audit.jsonl").exists()
+        assert exported_private_key.exists()
+        archive_dir = Path(str(result["archive_dir"]))
+        assert (archive_dir / "reset_manifest.json").exists()
+        assert (archive_dir / "access_control.json").exists()
+        assert (archive_dir / "keyring" / "keys.json").exists()
 
 
 def test_run_client_keys_generate_list_and_export(monkeypatch: pytest.MonkeyPatch) -> None:
