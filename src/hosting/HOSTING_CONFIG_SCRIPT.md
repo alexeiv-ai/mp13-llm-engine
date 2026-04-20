@@ -256,6 +256,17 @@ Server-side authorized-key installation writes only public key material:
 6. the default entry disables PTY, agent forwarding, X11 forwarding, and port forwarding
 7. the same public key is registered in hosting auth state with role `transport`
 
+Straight SSH port forwarding to daemon TCP control is TBD and blocked server-side today. The supported transport-key installation path is the forced-command relay wrapper; port-forward-only SSH keys are not a full control-plane transport in this release.
+
+Relay wrapper runtime behavior:
+1. SSH must be able to execute the wrapper; a running daemon alone is not remotely controllable because daemon control is local IPC only
+2. if the daemon is already running, the wrapper attaches through PID-file local IPC metadata
+3. if the daemon is not running, wrapper auto-start is only attempted when saved hosting config is remote-enabled, `require_auth=true`, has registered keys, and uses `detached_user_process` lifecycle
+4. wrapper execution itself does not prompt for or store an administrator/root password
+5. control operations sent through the relay still require the normal hosting auth/session required by that command
+
+Transport keys must not be granted PTY or shell access in the supported relay posture. If an operator intentionally grants broader SSH rights to the same key, that deployment takes on additional local-account compromise risks outside the hosting transport contract.
+
 Remote-capable setup still requires pinned SSH host-key material. Opportunistic `accept-new` host-key trust is not a supported baseline.
 
 When the usage questionnaire selects an SSH relay or remote backend consumer, setup asks whether administrator/root changes are available on the target host:

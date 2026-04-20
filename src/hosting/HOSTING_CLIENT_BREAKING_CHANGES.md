@@ -31,9 +31,17 @@ Run the current setup flow and use the current access-control, keyring, client m
 
 ## Removed daemon TCP fallback
 
-Local daemon control uses PID-file local IPC metadata. Port-only local TCP fallback on `127.0.0.1` is not supported.
+Local daemon control uses PID-file local IPC metadata. Port-only local TCP fallback on `127.0.0.1` is not supported. The daemon also blocks the loopback TCP control listener server-side for now.
 
-Consumers should use the current control channel/bootstrap configuration instead of assuming `DEFAULT_DAEMON_PORT` is connectable.
+This does not remove SSH relay remote control. Remote consumers should use a forced-command transport key that runs `python -m hosting.engine_host_cli --relay-wrapper`. That key must not be granted PTY or shell access; configure it with `no-pty` and the other generated SSH restrictions. The relay runs on the target host and connects to the daemon through local IPC metadata.
+
+Remote control always requires SSH to execute the relay wrapper. A daemon that is already running is not remotely controllable by itself, because daemon control is local IPC only.
+
+If the daemon is already running, the wrapper attaches through PID-file local IPC metadata. If the daemon is not running, wrapper auto-start is only attempted when saved hosting config is remote-enabled, `require_auth=true`, at least one auth key is registered, and lifecycle is `detached_user_process`; otherwise remote control operations require the daemon to be started by some other approved path first.
+
+Supported today: SSH relay via the forced-command wrapper, local IPC on the daemon host, and HTTP worker ingress through `--daemon-http`.
+
+TBD: straight SSH port forwarding to a daemon TCP control listener. Consumers must not assume `DEFAULT_DAEMON_PORT` is connectable. Consumers that cannot execute any remote SSH command do not currently have a full remote control-plane transport. The `--daemon-http` process is HTTP worker ingress, not a replacement for the daemon control API.
 
 ## Removed custom `password_v1` encryption
 

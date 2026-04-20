@@ -6,7 +6,7 @@ Modes:
   --daemon --background Start daemon detached in background
   --daemon-http         Start HTTP ingress daemon (foreground)
   --daemon-http --background Start HTTP ingress daemon detached in background
-  --relay               Bridge stdin/stdout to local daemon TCP socket (SSH channel)
+  --relay               Bridge stdin/stdout to local daemon IPC (SSH channel)
   --relay-wrapper       SSH forced-command wrapper: start detached daemon if allowed, then relay
   <subcommand>          Short-lived: send one command to running daemon (or direct fallback)
 

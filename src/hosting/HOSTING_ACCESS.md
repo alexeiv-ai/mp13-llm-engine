@@ -646,10 +646,16 @@ This section is the authoritative integration contract for hosting consumers.
    - `shutdown_token`
 3. Remote control access uses the SSH relay pattern:
    - open SSH to the target host
-   - execute `python -m hosting.engine_host_cli --relay-wrapper`
+   - execute `python -m hosting.engine_host_cli --relay-wrapper` as a forced command
+   - deny PTY allocation for the transport key; this key must not provide an interactive shell
    - bridge JSON-RPC traffic over SSH stdio
-4. Remote hosting consumers must not rely on opportunistic first-connect SSH trust; pinned host-key material is required.
-5. Standard HTTP ingress, when needed, is handled by the separate `--daemon-http` process or by an external reverse proxy in front of loopback-only listeners.
+4. Remote control always requires SSH to execute the relay wrapper. A running daemon alone is not remotely controllable because daemon control is local IPC only.
+5. When the daemon is already running, the relay wrapper attaches to it through PID-file local IPC metadata.
+6. When the daemon is not running, relay wrapper auto-start is only attempted if saved hosting config is remote-enabled, `require_auth=true`, at least one auth key is registered, and lifecycle is `detached_user_process`.
+7. Remote hosting consumers must not rely on opportunistic first-connect SSH trust; pinned host-key material is required.
+8. Consumers that cannot execute any remote SSH command do not currently have a full remote control-plane transport.
+9. Straight SSH port forwarding to daemon TCP control is TBD and is blocked server-side today.
+10. Standard HTTP ingress, when needed, is handled by the separate `--daemon-http` process or by an external reverse proxy in front of loopback-only listeners. This ingress is for worker HTTP traffic and health, not full daemon control-plane commands.
 
 ### 11.2 Consumer-local realm and key custody
 

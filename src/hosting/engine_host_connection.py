@@ -182,8 +182,9 @@ class SSHRelayConnection(BaseConnection):
     """
     Persistent SSH subprocess running `engine_host_cli --relay-wrapper` on the remote host.
 
-    The relay process on the remote end connects to the remote daemon's TCP socket
-    and bridges stdin/stdout to it.  SSH provides the encrypted, authenticated channel.
+    The relay process on the remote end connects to the remote daemon's local IPC
+    endpoint and bridges stdin/stdout to it. SSH provides the encrypted,
+    authenticated channel.
 
     Usage::
 

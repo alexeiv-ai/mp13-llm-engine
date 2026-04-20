@@ -50,16 +50,23 @@ Consumer-facing break:
 
 - These old files are not auto-migrated. Consumers must run the current setup flow and use the current access-control, keyring, client mapping, and bootstrap artifacts.
 
-### Daemon TCP fallback
+### Daemon TCP control listener and fallback
 
-Removed the local TCP fallback from `LocalSocketConnection`:
+Removed the local TCP fallback from `LocalSocketConnection` and blocked the daemon loopback TCP control listener server-side:
 
 - `src/hosting/engine_host_connection.py`: removed `_connect_legacy_tcp`.
 - Make missing PID-file local IPC metadata a hard connection error.
+- `src/hosting/daemon/local_ipc.py`: `_should_enable_tcp()` returns `False`; straight SSH port forwarding to daemon control is TBD.
 
 Consumer-facing break:
 
 - Port-only local daemon connections are not supported. Local daemon control must use PID-file local IPC metadata.
+- SSH relay remote control remains supported through a forced-command transport key that executes `python -m hosting.engine_host_cli --relay-wrapper`.
+- A running daemon alone is not remotely controllable; SSH must be able to execute the wrapper because daemon control is local IPC only.
+- Transport keys must not grant PTY or shell access; use `no-pty` and the generated forced-command hardening.
+- Supported today: local IPC, SSH relay-wrapper remote control, and `--daemon-http` worker ingress.
+- TBD: straight SSH port forwarding to a daemon TCP control listener.
+- Consumers that cannot execute any remote SSH command do not currently have a full remote control-plane transport. The `--daemon-http` process is worker HTTP ingress, not daemon control-plane HTTP.
 
 ### Custom `password_v1` encryption scheme
 
@@ -140,7 +147,7 @@ Consumer-facing break:
 2. Remove dynamic legacy monkeypatch helpers.
 3. Delete `engine_host_service.py` and `engine_host_daemon.py`.
 4. Remove legacy key-file migration logic and docs.
-5. Remove daemon TCP fallback.
+5. Block daemon TCP control and remove TCP fallback.
 6. Replace `password_v1` private-key protection with OpenSSH private-key encryption.
 7. Deferred shared-secret verifier storage; it remains a separate release decision.
 8. Renamed `toolbox_executor_v1` because versioned executor contracts are not needed for the first release.

@@ -222,11 +222,11 @@ class EngineHostDaemon:
         self._local_listener_thread = None
 
     def _should_enable_tcp(self) -> bool:
-        status = self.svc.auth_status()
-        if not status.get("require_auth"):
-            return False
-        roles = set(status.get("roles") or [])
-        return "admin" in roles and "transport" in roles
+        # Full control over loopback TCP / SSH port forwarding is not a
+        # supported transport yet. Keep the daemon server-side blocked even
+        # when remote-capable auth roles exist; see hosting docs for the TBD
+        # straight SSH port-forwarding feature.
+        return False
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
@@ -575,7 +575,7 @@ class EngineHostDaemon:
             self._replace_operation(op)
 
     async def run(self) -> None:
-        """Start local IPC control listener and optionally TCP, then write PID file and run until stop event."""
+        """Start local IPC control listener, then write PID file and run until stop event."""
         self._stop_event = asyncio.Event()
         self._loop = asyncio.get_running_loop()
         enable_tcp = self._should_enable_tcp()
