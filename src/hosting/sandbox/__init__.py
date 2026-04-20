@@ -2,7 +2,8 @@
 Worker sandbox policy and launcher helpers.
 
 This package intentionally keeps the policy model and process-launch mechanics
-out of `engine_host_service.py` so worker sandboxing can evolve independently.
+out of the host service implementation so worker sandboxing can evolve
+independently.
 """
 from __future__ import annotations
 

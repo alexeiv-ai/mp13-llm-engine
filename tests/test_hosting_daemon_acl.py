@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from hosting.engine_host_daemon import EngineHostDaemon
+from hosting.daemon import EngineHostDaemon
 
 
 def _make_daemon(tmp_path: Path) -> EngineHostDaemon:

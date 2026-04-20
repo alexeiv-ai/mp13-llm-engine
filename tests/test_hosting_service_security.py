@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from hosting.engine_host_service import EngineHostService
+from hosting.service.host_service import EngineHostService
 
 
 def _make_service(tmp_path: Path) -> EngineHostService:
@@ -224,7 +224,7 @@ def test_proxy_rpc_reports_clear_error_when_worker_ipc_missing(
         def __init__(self, *args, **kwargs) -> None:
             raise FileNotFoundError(2, "The system cannot find the file specified")
 
-    monkeypatch.setattr("hosting.engine_host_service.MPClient", _MissingPipeClient)
+    monkeypatch.setattr("hosting.service.proxy.MPClient", _MissingPipeClient)
 
     with pytest.raises(RuntimeError, match="worker IPC endpoint is unavailable for engine 'worker_missing_ipc'"):
         svc.proxy_rpc_call(engine_id="worker_missing_ipc", method="run-inference", params={})

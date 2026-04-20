@@ -211,7 +211,7 @@ Verified from this session about WSL:
    - import check passed for:
      - `pydantic`
      - `pytest`
-     - `hosting.engine_host_service`
+     - `hosting.service.host_service`
 5. `PYTHONPATH=src poetry run pytest tests/test_hosting_daemon_pidfile.py -q`
    - `19 passed`
 6. `PYTHONPATH=src poetry run pytest tests/test_hosting_toolbox_sandbox.py -q -k 'startup_spec or spec_path or spec_hosting or toolbox_executor_ipc_end_to_end'`

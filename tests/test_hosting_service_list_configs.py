@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from hosting.engine_host_service import EngineHostService
+from hosting.service.host_service import EngineHostService
 
 
 def test_list_configs_uses_lightweight_module_discovery(monkeypatch) -> None:

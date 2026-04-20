@@ -1200,7 +1200,7 @@ class ToolboxEnvironmentMixin:
         referenced_bundle_root_reasons: Dict[str, List[Dict[str, Any]]] = {}
         for reg in self._read_engines():
             row = dict(reg or {})
-            if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+            if str(row.get("executor_kind") or "").strip() != "toolbox_executor":
                 continue
             engine_id = str(row.get("engine_id") or "").strip()
             bundle = dict(row.get("bundle") or {})
@@ -1992,7 +1992,7 @@ class ToolboxEnvironmentMixin:
         removed_details: List[Dict[str, Any]] = []
         for reg in self._read_engines():
             row = dict(reg or {})
-            if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+            if str(row.get("executor_kind") or "").strip() != "toolbox_executor":
                 continue
             engine_id = str(row.get("engine_id") or "").strip()
             if not engine_id or engine_id in referenced_engine_ids:
@@ -2034,7 +2034,7 @@ class ToolboxEnvironmentMixin:
         referenced_roots: set[str] = set()
         for reg in self._read_engines():
             row = dict(reg or {})
-            if str(row.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+            if str(row.get("executor_kind") or "").strip() != "toolbox_executor":
                 continue
             bundle = dict(row.get("bundle") or {})
             raw = str(bundle.get("bundle_root") or "").strip()

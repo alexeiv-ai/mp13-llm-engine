@@ -13,7 +13,7 @@ from multiprocessing.connection import Listener as MPListener
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..engine_host_service import EngineHostService
+from ..service.host_service import EngineHostService
 from .constants import DEFAULT_DAEMON_PORT
 from .paths import _daemon_local_ipc_endpoint
 from .pidfile import DaemonPidFile

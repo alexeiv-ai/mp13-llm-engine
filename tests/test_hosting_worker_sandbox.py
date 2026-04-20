@@ -2,7 +2,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from hosting.engine_host_service import EngineHostService
+from hosting.service.host_service import EngineHostService
 from hosting.sandbox import (
     BrokeredFilesystem,
     BrokeredFilesystemClient,
@@ -293,7 +293,7 @@ def test_spawn_persists_sandbox_policy_and_runtime(monkeypatch, tmp_path: Path) 
             runtime={"platform": "windows", "mode": "mock_sandbox"},
         )
 
-    monkeypatch.setattr("hosting.engine_host_service.launch_worker_process", _fake_launch)
+    monkeypatch.setattr("hosting.service.engines.launch_worker_process", _fake_launch)
 
     reg = svc.spawn(
         engine_id="worker1",

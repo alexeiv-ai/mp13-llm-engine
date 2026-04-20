@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from hosting.engine_host_service import EngineHostService
-from hosting.engine_host_daemon import EngineHostDaemon
+from hosting.service.host_service import EngineHostService
+from hosting.daemon import EngineHostDaemon
 
 
 def _svc(tmpdir: str) -> EngineHostService:

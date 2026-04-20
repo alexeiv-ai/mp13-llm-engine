@@ -29,7 +29,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .engine_host_service import EngineHostService
+from .service.host_service import EngineHostService
 
 
 EXAMPLES_BY_COMMAND = {
@@ -453,7 +453,7 @@ def _run_relay_error_loop(exc: BaseException) -> None:
 
 
 def _relay_port(pid_file: Optional[Path], port: int) -> int:
-    from .engine_host_daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
+    from .daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
 
     if port:
         return int(port)
@@ -527,7 +527,7 @@ def _ensure_relay_daemon_ready(
     wait_ready_seconds: float = 8.0,
     log_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    from .engine_host_daemon import start_daemon_background
+    from .daemon import start_daemon_background
 
     resolved_port = _relay_port(pid_file, int(port or 0))
     if _relay_daemon_reachable(pid_file=pid_file, port=resolved_port):
@@ -596,7 +596,7 @@ def _try_daemon_invoke(
     Prints JSON response and returns True on success.
     Returns False if daemon not found or not reachable.
     """
-    from .engine_host_daemon import DaemonPidFile
+    from .daemon import DaemonPidFile
     from .engine_host_connection import LocalSocketConnection
 
     pid_info = DaemonPidFile(pid_file)
@@ -721,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     # Mode 1: --daemon  →  start long-lived daemon server
     # ------------------------------------------------------------------
     if "--daemon" in argv:
-        from .engine_host_daemon import (
+        from .daemon import (
             DEFAULT_DAEMON_PORT,
             run_daemon_foreground,
             start_daemon_background,
@@ -765,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     # Mode 1b: --daemon-http  →  start HTTP ingress daemon
     # ------------------------------------------------------------------
     if "--daemon-http" in argv:
-        from .engine_host_daemon import (
+        from .daemon import (
             DEFAULT_HTTP_INGRESS_PORT,
             run_http_ingress_foreground,
             start_http_ingress_background,
@@ -835,7 +835,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     # Mode 2b: --relay  →  bridge stdin/stdout to local daemon control channel
     # ------------------------------------------------------------------
     if "--relay" in argv:
-        from .engine_host_daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
+        from .daemon import DEFAULT_DAEMON_PORT, DaemonPidFile
 
         port = _extract_int_arg(argv, "--port", 0)
         pid_file = _extract_path_arg(argv, "--pid-file", None)

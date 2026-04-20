@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from hosting.engine_host_daemon import (
+from hosting.daemon import (
     _secure_path,
     _secure_state_parent_dir,
     _apply_foreground_terminal_disconnect_policy,
@@ -20,7 +20,7 @@ def test_pid_alive_returns_true_on_system_error(monkeypatch) -> None:
     def _raise_system_error(_pid: int, _sig: int) -> None:
         raise SystemError("simulated_windows_detached_kill_behavior")
 
-    monkeypatch.setattr("hosting.engine_host_daemon.os.kill", _raise_system_error)
+    monkeypatch.setattr("hosting.daemon.pidfile.os.kill", _raise_system_error)
     assert DaemonPidFile._pid_alive(12345) is True
 
 
@@ -28,7 +28,7 @@ def test_pid_alive_returns_false_on_process_lookup_error(monkeypatch) -> None:
     def _raise_lookup_error(_pid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
-    monkeypatch.setattr("hosting.engine_host_daemon.os.kill", _raise_lookup_error)
+    monkeypatch.setattr("hosting.daemon.pidfile.os.kill", _raise_lookup_error)
     assert DaemonPidFile._pid_alive(12345) is False
 
 
@@ -36,7 +36,7 @@ def test_pid_alive_returns_true_on_permission_error(monkeypatch) -> None:
     def _raise_permission_error(_pid: int, _sig: int) -> None:
         raise PermissionError()
 
-    monkeypatch.setattr("hosting.engine_host_daemon.os.kill", _raise_permission_error)
+    monkeypatch.setattr("hosting.daemon.pidfile.os.kill", _raise_permission_error)
     assert DaemonPidFile._pid_alive(12345) is True
 
 
@@ -78,11 +78,11 @@ def test_start_daemon_background_uses_protocol_ping_for_readiness(monkeypatch) -
             captured["closed"] = True
 
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.subprocess.Popen",
+        "hosting.daemon.background.subprocess.Popen",
         lambda *args, **kwargs: _FakeProc(),
     )
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
-    monkeypatch.setattr("hosting.engine_host_daemon.time.sleep", lambda _sec: None)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
 
     result = start_daemon_background(port=19876, wait_ready_seconds=1.0)
@@ -130,7 +130,7 @@ def test_pidfile_write_persists_payload(tmp_path: Path) -> None:
 
 
 def test_daemon_local_ipc_endpoint_uses_unix_socket_on_posix(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("hosting.engine_host_daemon.os.name", "posix")
+    monkeypatch.setattr("hosting.daemon.paths.os.name", "posix")
 
     endpoint = _daemon_local_ipc_endpoint(tmp_path / "daemon.pid")
 
@@ -141,7 +141,7 @@ def test_daemon_local_ipc_endpoint_uses_unix_socket_on_posix(monkeypatch, tmp_pa
 
 
 def test_daemon_local_ipc_endpoint_uses_named_pipe_on_windows(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("hosting.engine_host_daemon.os.name", "nt")
+    monkeypatch.setattr("hosting.daemon.paths.os.name", "nt")
 
     endpoint = _daemon_local_ipc_endpoint(tmp_path / "daemon.pid")
 
@@ -153,9 +153,9 @@ def test_daemon_local_ipc_endpoint_uses_named_pipe_on_windows(monkeypatch, tmp_p
 def test_secure_state_parent_dir_posix_applies_0700(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, int]] = []
 
-    monkeypatch.setattr("hosting.engine_host_daemon.os.name", "posix")
+    monkeypatch.setattr("hosting.daemon.security.os.name", "posix")
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.os.chmod",
+        "hosting.daemon.security.os.chmod",
         lambda path, mode: calls.append((str(path), int(mode))),
     )
 
@@ -178,9 +178,9 @@ def test_secure_path_windows_uses_icacls(monkeypatch, tmp_path: Path) -> None:
         captured["argv"] = list(argv)
         return _Proc()
 
-    monkeypatch.setattr("hosting.engine_host_daemon.os.name", "nt")
-    monkeypatch.setattr("hosting.engine_host_daemon._current_windows_account_name", lambda: "DOMAIN\\user")
-    monkeypatch.setattr("hosting.engine_host_daemon.subprocess.run", _fake_run)
+    monkeypatch.setattr("hosting.daemon.security.os.name", "nt")
+    monkeypatch.setattr("hosting.daemon.security._current_windows_account_name", lambda: "DOMAIN\\user")
+    monkeypatch.setattr("hosting.daemon.security.subprocess.run", _fake_run)
 
     target = tmp_path / "daemon.pid"
     target.write_text("x", encoding="utf-8")
@@ -230,11 +230,11 @@ def test_start_daemon_background_retries_after_pidfile_system_error(monkeypatch)
             return
 
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.subprocess.Popen",
+        "hosting.daemon.background.subprocess.Popen",
         lambda *args, **kwargs: _FakeProc(),
     )
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
-    monkeypatch.setattr("hosting.engine_host_daemon.time.sleep", lambda _sec: None)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
 
     result = start_daemon_background(port=19876, wait_ready_seconds=1.0)
@@ -290,12 +290,12 @@ def test_start_http_ingress_background_checks_returncode(monkeypatch) -> None:
             return
 
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.subprocess.Popen",
+        "hosting.daemon.background.subprocess.Popen",
         lambda *args, **kwargs: _FakeProc(),
     )
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
-    monkeypatch.setattr("hosting.engine_host_daemon.time.sleep", lambda _sec: None)
-    monkeypatch.setattr("hosting.engine_host_daemon.http.client.HTTPConnection", _FakeHTTPConn)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
+    monkeypatch.setattr("hosting.daemon.background.http.client.HTTPConnection", _FakeHTTPConn)
 
     result = start_http_ingress_background(port=19877, wait_ready_seconds=1.0)
 
@@ -340,9 +340,9 @@ def test_start_daemon_background_omits_log_flag_by_default(monkeypatch) -> None:
         captured["argv"] = list(argv)
         return _FakeProc()
 
-    monkeypatch.setattr("hosting.engine_host_daemon.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
-    monkeypatch.setattr("hosting.engine_host_daemon.time.sleep", lambda _sec: None)
+    monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
 
     result = start_daemon_background(port=19876, wait_ready_seconds=1.0)
@@ -391,9 +391,9 @@ def test_start_daemon_background_includes_explicit_log_flag(monkeypatch) -> None
         captured["argv"] = list(argv)
         return _FakeProc()
 
-    monkeypatch.setattr("hosting.engine_host_daemon.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
-    monkeypatch.setattr("hosting.engine_host_daemon.time.sleep", lambda _sec: None)
+    monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
 
     result = start_daemon_background(
@@ -432,7 +432,7 @@ def test_apply_foreground_terminal_disconnect_policy_ignores_sighup_when_configu
         captured["sig"] = sig
         captured["handler"] = handler
 
-    monkeypatch.setattr("hosting.engine_host_daemon.signal.signal", _fake_signal)
+    monkeypatch.setattr("hosting.daemon.lifecycle.signal.signal", _fake_signal)
     out = _apply_foreground_terminal_disconnect_policy(daemon)
     assert out in {"keep_daemon_running_ignore_sighup", "keep_daemon_running_no_sighup"}
     if "sig" in captured:
@@ -453,7 +453,7 @@ def test_apply_foreground_terminal_disconnect_policy_noop_for_detached(monkeypat
         called["sig"] = sig
         called["handler"] = handler
 
-    monkeypatch.setattr("hosting.engine_host_daemon.signal.signal", _fake_signal)
+    monkeypatch.setattr("hosting.daemon.lifecycle.signal.signal", _fake_signal)
     out = _apply_foreground_terminal_disconnect_policy(daemon)
     assert out == "not_foreground"
     assert called == {}

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from hosting.engine_host_service import EngineHostService, ToolboxRolloutError
+from hosting.service.host_service import EngineHostService, ToolboxRolloutError
 from hosting import toolbox_executor_ipc
 from hosting.toolbox_harness import (
     HostedToolBoxRef,
@@ -87,7 +87,7 @@ def test_toolbox_bundle_stager_writes_manifest_and_files() -> None:
         assert manifest["bundle_id"] == "bundle-alpha"
         assert manifest["toolbox_id"] == "bundle-alpha"
         assert manifest["sandbox_profile"]["profile_id"] == "default"
-        assert manifest["executor_kind"] == "toolbox_executor_v1"
+        assert manifest["executor_kind"] == "toolbox_executor"
         assert staged.registration_bundle()["manifest_hash"] == manifest["manifest_hash"]
         assert staged.registration_environment()["venv_mutable"] is False
         assert staged.registration_tool_access()["allowed_tool_names"] == ["hello_tool"]
@@ -1747,8 +1747,8 @@ def test_toolbox_worker_startup_spec_defaults_platform_ipc_family() -> None:
 
 
 def test_engine_host_service_allocate_ipc_address_uses_unix_socket_on_posix(monkeypatch) -> None:
-    monkeypatch.setattr("hosting.engine_host_service.os.name", "posix")
-    monkeypatch.setattr("hosting.engine_host_service.tempfile.gettempdir", lambda: "/tmp")
+    monkeypatch.setattr("hosting.service.proxy.os.name", "posix")
+    monkeypatch.setattr("hosting.service.proxy.tempfile.gettempdir", lambda: "/tmp")
 
     family, address = EngineHostService._allocate_ipc_address("toolbox/linux demo")
 
@@ -1759,8 +1759,8 @@ def test_engine_host_service_allocate_ipc_address_uses_unix_socket_on_posix(monk
 
 
 def test_engine_host_service_allocate_ipc_address_bounds_unix_socket_length(monkeypatch) -> None:
-    monkeypatch.setattr("hosting.engine_host_service.os.name", "posix")
-    monkeypatch.setattr("hosting.engine_host_service.tempfile.gettempdir", lambda: "/tmp")
+    monkeypatch.setattr("hosting.service.proxy.os.name", "posix")
+    monkeypatch.setattr("hosting.service.proxy.tempfile.gettempdir", lambda: "/tmp")
 
     family, address = EngineHostService._allocate_ipc_address("toolbox-" + ("very-long-name-" * 12))
 
@@ -1770,7 +1770,7 @@ def test_engine_host_service_allocate_ipc_address_bounds_unix_socket_length(monk
 
 
 def test_engine_host_service_allocate_ipc_address_uses_named_pipe_on_windows(monkeypatch) -> None:
-    monkeypatch.setattr("hosting.engine_host_service.os.name", "nt")
+    monkeypatch.setattr("hosting.service.proxy.os.name", "nt")
 
     family, address = EngineHostService._allocate_ipc_address("toolbox/win demo")
 
@@ -1791,7 +1791,7 @@ def test_toolbox_execute_denies_unknown_tool_before_worker_call(monkeypatch) -> 
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             tool_access={"allowed_tool_names": ["hello_tool"]},
         )
 
@@ -1826,7 +1826,7 @@ def test_toolbox_execute_denies_blocked_in_scope_before_worker_call(monkeypatch)
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             tool_access={"allowed_tool_names": ["hello_tool"]},
         )
 
@@ -1870,7 +1870,7 @@ def test_toolbox_execute_denies_gated_requires_confirmation_before_worker_call(m
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             tool_access={"allowed_tool_names": ["hello_tool"]},
         )
 
@@ -1914,7 +1914,7 @@ def test_toolbox_cancel_routes_targeted_profile_and_repairs_toolbox(monkeypatch)
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "alpha.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-cancel-alpha",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={"toolbox_id": "toolbox-cancel", "sandbox_profile_id": "alpha"},
             tool_access={"allowed_tool_names": ["alpha_tool"]},
         )
@@ -1924,7 +1924,7 @@ def test_toolbox_cancel_routes_targeted_profile_and_repairs_toolbox(monkeypatch)
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "beta.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-cancel-beta",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={"toolbox_id": "toolbox-cancel", "sandbox_profile_id": "beta"},
             tool_access={"allowed_tool_names": ["beta_tool"]},
         )
@@ -2063,7 +2063,7 @@ def test_toolbox_gate_reports_denied_and_allowed_outcomes() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={"toolbox_id": "demo-box"},
             tool_access={"allowed_tool_names": ["hello_tool"]},
         )
@@ -2094,7 +2094,7 @@ def test_toolbox_gate_respects_request_scoped_tools_view() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={"toolbox_id": "demo-box"},
             tool_access={
                 "allowed_tool_names": ["hello_tool", "hidden_tool"],
@@ -2137,7 +2137,7 @@ def test_toolbox_gate_reports_gated_requires_confirmation_from_request_view() ->
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={"toolbox_id": "demo-box"},
             tool_access={"allowed_tool_names": ["hello_tool"]},
         )
@@ -2177,7 +2177,7 @@ def test_toolbox_describe_separates_allowed_and_advertised_visibility() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-missing-toolbox",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={"toolbox_id": "demo-box", "sandbox_profile_id": "default"},
             tool_access={
                 "allowed_tool_names": ["hello_tool", "hidden_tool"],
@@ -3095,7 +3095,7 @@ def test_wait_for_toolbox_executor_ready_requires_inventory_match(monkeypatch) -
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-ready-mismatch",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             tool_access={"allowed_tool_names": ["alpha_tool"]},
         )
         monkeypatch.setattr(
@@ -3186,7 +3186,7 @@ def test_toolbox_executor_host_service_prefers_startup_spec_metadata(monkeypatch
                 captured["engines_state_file"] = engines_state_file
                 captured["control_state_file"] = control_state_file
 
-        monkeypatch.setattr("hosting.engine_host_service.EngineHostService", _FakeService)
+        monkeypatch.setattr("hosting.service.host_service.EngineHostService", _FakeService)
         _ = toolbox_executor_ipc._host_service()
 
         assert captured["engines_state_file"] == engines_state
@@ -3223,13 +3223,13 @@ def test_toolbox_executor_ipc_end_to_end() -> None:
         command=staged.worker_command(python_executable=sys.executable),
         env=staged.worker_env(),
         worker_profile_class="generic",
-        executor_kind="toolbox_executor_v1",
+        executor_kind="toolbox_executor",
         bundle=staged.registration_bundle(),
         environment=staged.registration_environment(),
         tool_access=staged.registration_tool_access(),
         capabilities={"brokered_filesystem": False, "brokered_http": False, "dynamic_reload": False},
     )
-    assert reg["executor_kind"] == "toolbox_executor_v1"
+    assert reg["executor_kind"] == "toolbox_executor"
     try:
         deadline = time.time() + 8.0
         last_error: Exception | None = None
@@ -3309,7 +3309,7 @@ def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
                 "brokered_io": {"filesystem": True, "http": False, "subprocess": False},
             }
         },
-        executor_kind="toolbox_executor_v1",
+        executor_kind="toolbox_executor",
         bundle=staged.registration_bundle(),
         environment=staged.registration_environment(),
         tool_access=staged.registration_tool_access(),
@@ -3621,7 +3621,7 @@ def test_toolbox_executor_ipc_end_to_end_with_intrinsic_tools_only() -> None:
         command=staged.worker_command(python_executable=sys.executable),
         env=staged.worker_env(),
         worker_profile_class="generic",
-        executor_kind="toolbox_executor_v1",
+        executor_kind="toolbox_executor",
         bundle=staged.registration_bundle(),
         environment=staged.registration_environment(),
         tool_access=staged.registration_tool_access(),
@@ -3696,7 +3696,7 @@ def test_toolbox_executor_ipc_end_to_end_with_auto_callable_discovery() -> None:
         command=staged.worker_command(python_executable=sys.executable),
         env=staged.worker_env(),
         worker_profile_class="generic",
-        executor_kind="toolbox_executor_v1",
+        executor_kind="toolbox_executor",
         bundle=staged.registration_bundle(),
         environment=staged.registration_environment(),
         tool_access=staged.registration_tool_access(),
@@ -3790,7 +3790,7 @@ def test_toolbox_service_routes_calls_across_multiple_sandbox_profiles() -> None
         command=alpha.worker_command(python_executable=sys.executable),
         env=alpha.worker_env(),
         worker_profile_class="generic",
-        executor_kind="toolbox_executor_v1",
+        executor_kind="toolbox_executor",
         bundle=alpha.registration_bundle(),
         environment=alpha.registration_environment(),
         tool_access=alpha.registration_tool_access(),
@@ -3801,7 +3801,7 @@ def test_toolbox_service_routes_calls_across_multiple_sandbox_profiles() -> None
         command=beta.worker_command(python_executable=sys.executable),
         env=beta.worker_env(),
         worker_profile_class="generic",
-        executor_kind="toolbox_executor_v1",
+        executor_kind="toolbox_executor",
         bundle=beta.registration_bundle(),
         environment=beta.registration_environment(),
         tool_access=beta.registration_tool_access(),
@@ -6018,7 +6018,7 @@ def test_toolbox_gc_reconciles_stale_registrations_and_artifacts() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "keep.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-keep",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-gc",
                 "bundle_root": str(keep_bundle),
@@ -6032,7 +6032,7 @@ def test_toolbox_gc_reconciles_stale_registrations_and_artifacts() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "stale.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-stale",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-gc",
                 "bundle_root": str(stale_bundle),
@@ -6115,7 +6115,7 @@ def test_toolbox_references_reports_referenced_and_stale_artifacts() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "keep.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-keep2",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-refs",
                 "bundle_root": str(keep_bundle),
@@ -6130,7 +6130,7 @@ def test_toolbox_references_reports_referenced_and_stale_artifacts() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "stale.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-stale2",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-refs",
                 "bundle_root": str(stale_bundle),
@@ -6225,7 +6225,7 @@ def test_toolbox_consistency_reports_profile_registration_and_environment_mismat
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "live.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-consistency",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-other",
                 "bundle_root": str(bundle_root),
@@ -6317,7 +6317,7 @@ def test_toolbox_review_snapshot_filters_and_recommends_reconcile(monkeypatch) -
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "live.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-review-snapshot",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-other",
                 "bundle_root": str(bundle_root),
@@ -6412,7 +6412,7 @@ def test_toolbox_consistency_and_review_snapshot_report_unreachable_live_registr
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "live.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-liveness",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-demo",
                 "bundle_root": str(bundle_root),
@@ -6504,7 +6504,7 @@ def test_toolbox_references_do_not_mark_live_parent_bundle_dirs_stale() -> None:
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "live.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-review-nested",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-demo",
                 "bundle_root": str(bundle_root),
@@ -6564,7 +6564,7 @@ def test_toolbox_references_and_gc_preserve_referenced_environment_by_path() -> 
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "live.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-env-path",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-demo",
                 "bundle_root": str(bundle_root),
@@ -6653,7 +6653,7 @@ def test_toolbox_repair_rebuilds_inconsistent_toolbox_from_persisted_state(monke
             command=["python", "-m", "hosting.toolbox_executor_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "old.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-toolbox-old",
-            executor_kind="toolbox_executor_v1",
+            executor_kind="toolbox_executor",
             bundle={
                 "toolbox_id": "toolbox-demo",
                 "bundle_root": str(old_bundle),

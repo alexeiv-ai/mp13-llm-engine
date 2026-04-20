@@ -6,9 +6,6 @@ swap in OS-specific secret storage without changing higher-level workflows.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import re
 import secrets
@@ -21,103 +18,7 @@ from mp13_engine.mp13_config_paths import get_default_config_dir
 
 
 CLIENT_REALM_ROOT_SUBDIR = "hosting_client"
-VALID_SECRET_RECORD_ENCRYPTION = {"none", "password_v1"}
-_PASSWORD_V1_SCRYPT_N = 1 << 14
-_PASSWORD_V1_SCRYPT_R = 8
-_PASSWORD_V1_SCRYPT_P = 1
-_PASSWORD_V1_KEY_LEN = 64
-_PASSWORD_V1_NONCE_LEN = 16
-
-
-def _b64e(raw: bytes) -> str:
-    return base64.b64encode(raw).decode("ascii")
-
-
-def _b64d(raw: str) -> bytes:
-    return base64.b64decode(str(raw or "").encode("ascii"))
-
-
-def _xor_bytes(left: bytes, right: bytes) -> bytes:
-    return bytes(a ^ b for a, b in zip(left, right))
-
-
-def _password_v1_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
-    out = bytearray()
-    counter = 0
-    while len(out) < length:
-        block = hmac.new(key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest()
-        out.extend(block)
-        counter += 1
-    return bytes(out[:length])
-
-
-def _password_v1_encrypt(plaintext: str, password: str) -> str:
-    pwd = str(password or "")
-    if not pwd:
-        raise ValueError("password is required for password_v1 encryption")
-    plaintext_bytes = str(plaintext or "").encode("utf-8")
-    salt = secrets.token_bytes(16)
-    nonce = secrets.token_bytes(_PASSWORD_V1_NONCE_LEN)
-    key_material = hashlib.scrypt(
-        pwd.encode("utf-8"),
-        salt=salt,
-        n=_PASSWORD_V1_SCRYPT_N,
-        r=_PASSWORD_V1_SCRYPT_R,
-        p=_PASSWORD_V1_SCRYPT_P,
-        dklen=_PASSWORD_V1_KEY_LEN,
-    )
-    enc_key = key_material[:32]
-    mac_key = key_material[32:]
-    ciphertext = _xor_bytes(plaintext_bytes, _password_v1_keystream(enc_key, nonce, len(plaintext_bytes)))
-    tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
-    envelope = {
-        "scheme": "password_v1",
-        "kdf": {
-            "name": "scrypt",
-            "salt_b64": _b64e(salt),
-            "n": _PASSWORD_V1_SCRYPT_N,
-            "r": _PASSWORD_V1_SCRYPT_R,
-            "p": _PASSWORD_V1_SCRYPT_P,
-            "dklen": _PASSWORD_V1_KEY_LEN,
-        },
-        "cipher": {
-            "name": "hmac_sha256_xor_stream",
-            "nonce_b64": _b64e(nonce),
-            "ciphertext_b64": _b64e(ciphertext),
-            "tag_b64": _b64e(tag),
-        },
-    }
-    return json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-
-
-def _password_v1_decrypt(payload: str, password: str) -> str:
-    pwd = str(password or "")
-    if not pwd:
-        raise ValueError("password is required for password_v1 decryption")
-    envelope = dict(json.loads(str(payload or "")))
-    if str(envelope.get("scheme") or "") != "password_v1":
-        raise ValueError("password_v1 payload is missing scheme marker")
-    kdf = dict(envelope.get("kdf") or {})
-    cipher = dict(envelope.get("cipher") or {})
-    salt = _b64d(str(kdf.get("salt_b64") or ""))
-    nonce = _b64d(str(cipher.get("nonce_b64") or ""))
-    ciphertext = _b64d(str(cipher.get("ciphertext_b64") or ""))
-    tag = _b64d(str(cipher.get("tag_b64") or ""))
-    key_material = hashlib.scrypt(
-        pwd.encode("utf-8"),
-        salt=salt,
-        n=max(2, int(kdf.get("n") or _PASSWORD_V1_SCRYPT_N)),
-        r=max(1, int(kdf.get("r") or _PASSWORD_V1_SCRYPT_R)),
-        p=max(1, int(kdf.get("p") or _PASSWORD_V1_SCRYPT_P)),
-        dklen=max(32, int(kdf.get("dklen") or _PASSWORD_V1_KEY_LEN)),
-    )
-    enc_key = key_material[:32]
-    mac_key = key_material[32:64]
-    expected_tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
-    if not hmac.compare_digest(tag, expected_tag):
-        raise ValueError("password_v1 authentication failed")
-    plaintext = _xor_bytes(ciphertext, _password_v1_keystream(enc_key, nonce, len(ciphertext)))
-    return plaintext.decode("utf-8")
+VALID_SECRET_RECORD_ENCRYPTION = {"none"}
 
 
 def get_default_client_realm_root(*, default_config_dir: Optional[Path] = None, realm: str = "default") -> Path:
@@ -216,8 +117,8 @@ class FileSecretStore:
     """
     File-backed tagged secret records for the client realm.
 
-    The first implementation supports plaintext record persistence and reserves
-    the record shape needed for future password-encrypted backends.
+    Private-key passphrase protection is handled by OpenSSH key formatting, not
+    by an app-specific encryption envelope.
     """
 
     def __init__(self, root: Path, *, realm: str = "default") -> None:
@@ -248,8 +149,6 @@ class FileSecretStore:
                 + ", ".join(sorted(VALID_SECRET_RECORD_ENCRYPTION))
             )
         payload_text = str(payload or "")
-        if enc == "password_v1":
-            payload_text = _password_v1_encrypt(payload_text, str(password or ""))
         sid = str(secret_id or "").strip() or secrets.token_urlsafe(12)
         now = time.time()
         existing = self.get_secret_record(sid)
@@ -291,8 +190,6 @@ class FileSecretStore:
             return None
         if record.encryption == "none":
             return str(record.payload)
-        if record.encryption == "password_v1":
-            return _password_v1_decrypt(str(record.payload), str(password or ""))
         raise ValueError(f"Unsupported secret-record encryption: {record.encryption}")
 
     def delete_secret(self, secret_id: str) -> bool:

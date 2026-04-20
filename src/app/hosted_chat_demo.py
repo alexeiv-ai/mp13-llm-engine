@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from hosting import HostedToolBoxRef
-from hosting.engine_host_service import EngineHostService
+from hosting.service.host_service import EngineHostService
 from mp13_engine.mp13_toolbox import Toolbox
 
 

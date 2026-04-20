@@ -89,7 +89,7 @@ def test_daemon_status_includes_auth_snapshot(monkeypatch) -> None:
         def close(self) -> None:
             return
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeSocket)
     monkeypatch.setattr(
         EngineHostControlChannel,
@@ -687,9 +687,9 @@ def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
         captured["wait_ready_seconds"] = wait_ready_seconds
         return {"pid": 12345, "port": 19876}
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.start_daemon_background",
+        "hosting.daemon.start_daemon_background",
         _fake_start_daemon_background,
     )
     monkeypatch.setattr(
@@ -759,9 +759,9 @@ def test_get_connection_auto_bootstrap_forwards_custom_pid_file(monkeypatch) -> 
         captured["wait_ready_seconds"] = wait_ready_seconds
         return {"pid": 12345, "port": 24444}
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.start_daemon_background",
+        "hosting.daemon.start_daemon_background",
         _fake_start_daemon_background,
     )
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeSocket)
@@ -827,9 +827,9 @@ def test_auto_bootstrap_forwards_daemon_log_file(monkeypatch) -> None:
         captured["wait_ready_seconds"] = wait_ready_seconds
         return {"pid": 12345, "port": 24444, "log_file": str(log_file) if log_file else None}
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr(
-        "hosting.engine_host_daemon.start_daemon_background",
+        "hosting.daemon.start_daemon_background",
         _fake_start_daemon_background,
     )
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeSocket)
@@ -879,7 +879,7 @@ def test_daemon_status_marks_unreachable_when_ping_fails(monkeypatch) -> None:
         def close(self) -> None:
             return
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeSocket)
     monkeypatch.setattr(
         EngineHostControlChannel,
@@ -927,7 +927,7 @@ def test_prepare_local_unconfigured_bootstrap_forces_no_auth_exclusive(monkeypat
                 "access_profile": {"connectivity_mode": "local_only"},
             }
 
-    monkeypatch.setattr("hosting.engine_host_service.EngineHostService", _FakeSvc)
+    monkeypatch.setattr("hosting.service.host_service.EngineHostService", _FakeSvc)
 
     ch = EngineHostControlChannel(
         {
@@ -980,7 +980,7 @@ def test_daemon_status_emits_event_when_pid_file_disappears(monkeypatch) -> None
         def close(self) -> None:
             return
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeSocket)
     monkeypatch.setattr(
         EngineHostControlChannel,
@@ -1028,8 +1028,8 @@ def test_reset_hosting_access_is_local_helper_only(monkeypatch, tmp_path: Path) 
         def get_control_config(self) -> Dict[str, Any]:
             return {"require_auth": True, "keys_count": 0, "endpoint_mode_default": "shared"}
 
-    monkeypatch.setattr("hosting.engine_host_daemon.DaemonPidFile", _FakePidFile)
-    monkeypatch.setattr("hosting.engine_host_service.EngineHostService", _FakeSvc)
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.service.host_service.EngineHostService", _FakeSvc)
 
     ch = EngineHostControlChannel(
         {

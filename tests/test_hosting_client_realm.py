@@ -92,27 +92,17 @@ def test_file_secret_store_round_trip_and_listing() -> None:
         assert store.delete_secret(second.secret_id) is False
 
 
-def test_file_secret_store_password_encryption_round_trip_and_reencrypt() -> None:
+def test_file_secret_store_rejects_custom_password_encryption() -> None:
     with _workspace_tmpdir() as root:
         store = FileSecretStore(root / "realm")
-        record = store.put_secret(
-            tag="transport_private_key",
-            payload="secret",
-            secret_id="transport-secure",
-            encryption="password_v1",
-            password="pw1",
-        )
-        assert record.encryption == "password_v1"
-        assert store.get_secret_payload("transport-secure", password="pw1") == "secret"
-        with pytest.raises(ValueError, match="authentication failed"):
-            store.get_secret_payload("transport-secure", password="wrong")
-        updated = store.reencrypt_secret(
-            "transport-secure",
-            encryption="none",
-            current_password="pw1",
-        )
-        assert updated.encryption == "none"
-        assert store.get_secret_payload("transport-secure") == "secret"
+        with pytest.raises(ValueError, match="encryption must be one of"):
+            store.put_secret(
+                tag="transport_private_key",
+                payload="secret",
+                secret_id="transport-secure",
+                encryption="password_v1",
+                password="pw1",
+            )
 
 
 def test_write_and_read_client_access_round_trip() -> None:
@@ -298,8 +288,12 @@ def test_install_transport_authorized_key_updates_managed_block() -> None:
         assert "# END mp13-hosting-transport transport-key" in text
 
 
-def test_transport_bootstrap_bundle_password_encryption_and_import_to_encrypted_secret() -> None:
+def test_transport_bootstrap_bundle_password_protects_openssh_private_key_and_imports_secret(monkeypatch) -> None:
     with _workspace_tmpdir() as root:
+        monkeypatch.setattr(
+            "hosting.transport_bootstrap._protect_openssh_private_key",
+            lambda private_key_text, **_kwargs: str(private_key_text) + "\nPROTECTED",
+        )
         bundle = make_transport_bootstrap_bundle(
             target="user@example",
             ssh_known_hosts_line="example ssh-ed25519 AAAATESTHOSTKEY",
@@ -309,7 +303,9 @@ def test_transport_bootstrap_bundle_password_encryption_and_import_to_encrypted_
             bundle_password="bundle-pw",
             profile_name="demo",
         )
-        assert bundle["transport_private_key_encryption"] == "password_v1"
+        assert bundle["transport_private_key_format"] == "openssh"
+        assert bundle["transport_private_key_protection"] == "openssh_passphrase"
+        assert "PROTECTED" in bundle["transport_private_key_openssh"]
         result = import_transport_bootstrap_bundle(
             bundle=bundle,
             client_realm_root=root / "client-realm",
@@ -317,7 +313,8 @@ def test_transport_bootstrap_bundle_password_encryption_and_import_to_encrypted_
             bundle_password="bundle-pw",
             secret_password="secret-pw",
         )
-        assert result["secret_encryption"] == "password_v1"
+        assert result["secret_encryption"] == "none"
+        assert result["private_key_protection"] == "openssh_passphrase"
         store = FileSecretStore(root / "client-realm", realm="client-a")
         payload = store.get_secret_payload("transport-transport-key-private", password="secret-pw")
         assert "BEGIN OPENSSH PRIVATE KEY" in str(payload or "")
@@ -390,7 +387,7 @@ def test_materialize_secret_file_and_resolve_client_profile_control_settings() -
         assert "FAKE" in Path(out["control_ssh_key"]).read_text(encoding="utf-8")
 
 
-def test_resolve_client_profile_control_settings_with_encrypted_secret_requires_password() -> None:
+def test_resolve_client_profile_control_settings_materializes_openssh_secret() -> None:
     with _workspace_tmpdir() as root:
         realm_root = root / "client-realm"
         store = FileSecretStore(realm_root, realm="client-a")
@@ -398,8 +395,7 @@ def test_resolve_client_profile_control_settings_with_encrypted_secret_requires_
             tag="transport_private_key",
             payload="-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE\n-----END OPENSSH PRIVATE KEY-----\n",
             secret_id="transport-key",
-            encryption="password_v1",
-            password="secret-pw",
+            metadata={"private_key_format": "openssh", "private_key_protection": "none"},
         )
         write_client_profile(
             realm_root,
@@ -411,20 +407,11 @@ def test_resolve_client_profile_control_settings_with_encrypted_secret_requires_
             },
             realm="client-a",
         )
-        with pytest.raises(ValueError, match="password is required"):
-            resolve_client_profile_control_settings(
-                {
-                    "engine_host_client_realm_root": str(realm_root),
-                    "engine_host_client_realm": "client-a",
-                    "engine_host_client_profile": "demo",
-                }
-            )
         out = resolve_client_profile_control_settings(
             {
                 "engine_host_client_realm_root": str(realm_root),
                 "engine_host_client_realm": "client-a",
                 "engine_host_client_profile": "demo",
-                "engine_host_client_secret_password": "secret-pw",
             }
         )
         assert Path(out["control_ssh_key"]).exists()

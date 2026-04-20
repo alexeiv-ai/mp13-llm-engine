@@ -667,7 +667,7 @@ This section is the authoritative integration contract for hosting consumers.
    - imported existing file
    - exported managed file
    - client-realm secret record
-4. Consumer secret records may be plaintext (`none`) or password-protected (`password_v1`).
+4. Consumer secret records store OpenSSH private-key text. Password protection, when used, is OpenSSH private-key passphrase protection and is reported with `private_key_protection: "openssh_passphrase"`.
 5. Hosting must not use normal runtime daemon RPC as the mechanism that returns private keys back to consumers.
 
 ### 11.3 Auth flows consumers must support
@@ -704,7 +704,7 @@ This section is the authoritative integration contract for hosting consumers.
 7. Surface key provenance and custody state clearly:
    - `imported` vs `generated`
    - exported file vs client-realm secret
-   - plaintext vs `password_v1`
+   - OpenSSH passphrase-protected vs unprotected private key
 8. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
 ## 12. Advanced Hardening and Risk Assessment

@@ -12,7 +12,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..engine_host_service import EngineHostService
+from ..service.host_service import EngineHostService
 from .constants import DEFAULT_HTTP_INGRESS_PORT
 from .paths import _default_http_pid_file
 from .pidfile import DaemonPidFile

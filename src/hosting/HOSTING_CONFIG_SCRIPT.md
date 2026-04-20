@@ -192,7 +192,7 @@ Generated private-key behavior:
 2. The private key can be exported to a file.
 3. If export is requested interactively and no path is provided, the wizard prompts with a default under `hosting/keyring/<key-id>.private`.
 4. If not exported, generated private key material is stored in the client realm secret store.
-5. Client realm secret records may be plaintext (`none`) or password-protected (`password_v1`) when `--client-secret-password` is supplied.
+5. Client realm secret records store OpenSSH private-key text. When `--client-secret-password` is supplied, the private key is protected with OpenSSH private-key passphrase protection.
 
 Imported-key behavior:
 1. Hosting stores the public key and metadata.

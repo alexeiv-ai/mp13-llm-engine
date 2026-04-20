@@ -24,7 +24,7 @@ if __package__ in {None, ""}:
     _SRC_ROOT = Path(__file__).resolve().parents[1]
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
-    from hosting.engine_host_service import EngineHostService, VALID_AUTH_ROLES
+    from hosting.service.host_service import EngineHostService, VALID_AUTH_ROLES
     from hosting.client_realm import (
         FileSecretStore,
         append_client_audit_event,
@@ -36,6 +36,7 @@ if __package__ in {None, ""}:
     )
     from hosting.transport_bootstrap import (
         DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND,
+        _protect_openssh_private_key,
         import_transport_bootstrap_bundle,
         install_transport_authorized_key,
         make_transport_bootstrap_bundle,
@@ -45,7 +46,7 @@ if __package__ in {None, ""}:
         write_transport_bootstrap_bundle,
     )
 else:
-    from .engine_host_service import EngineHostService, VALID_AUTH_ROLES
+    from .service.host_service import EngineHostService, VALID_AUTH_ROLES
     from .client_realm import (
         FileSecretStore,
         append_client_audit_event,
@@ -57,6 +58,7 @@ else:
     )
     from .transport_bootstrap import (
         DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND,
+        _protect_openssh_private_key,
         import_transport_bootstrap_bundle,
         install_transport_authorized_key,
         make_transport_bootstrap_bundle,
@@ -1448,6 +1450,7 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
     secret_path = None
     secret_exists = None
     secret_encryption = None
+    secret_protection = str(row.get("private_key_protection") or "").strip() or None
     if secret_id:
         secret_path = secret_record_path(_client_realm_root(default_config_dir, secret_realm), secret_id)
         secret_exists = secret_path.exists()
@@ -1455,6 +1458,8 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
             try:
                 secret_payload = json.loads(secret_path.read_text(encoding="utf-8"))
                 secret_encryption = str(secret_payload.get("encryption") or "").strip() or None
+                metadata = dict(secret_payload.get("metadata") or {})
+                secret_protection = str(metadata.get("private_key_protection") or secret_protection or "").strip() or None
             except Exception:
                 secret_encryption = None
     key_origin = str(row.get("key_origin") or row.get("key_source") or "imported").strip().lower()
@@ -1489,6 +1494,7 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
         "private_key_secret_path": str(secret_path) if secret_path else None,
         "private_key_secret_exists": secret_exists if secret_id else None,
         "private_key_secret_encryption": secret_encryption if secret_id else None,
+        "private_key_protection": secret_protection,
         "private_key_warning": warning or None,
     }
 
@@ -1563,6 +1569,8 @@ def _print_current_probe(
             )
         if key_meta.get("private_key_secret_encryption"):
             rows.append(("admin_private_key_secret_encryption", key_meta.get("private_key_secret_encryption")))
+        if key_meta.get("private_key_protection"):
+            rows.append(("admin_private_key_protection", key_meta.get("private_key_protection")))
         if key_meta.get("private_key_warning"):
             rows.append(("admin_key_warning", key_meta.get("private_key_warning")))
         _kv_rows(rows)
@@ -1828,6 +1836,8 @@ def _print_setup_result_report(result: Dict[str, Any]) -> None:
         _kv_rows([("admin_private_key_secret_path", result.get("admin_private_key_secret_path"))])
     if result.get("admin_private_key_secret_encryption"):
         _kv_rows([("admin_private_key_secret_encryption", result.get("admin_private_key_secret_encryption"))])
+    if result.get("admin_private_key_protection"):
+        _kv_rows([("admin_private_key_protection", result.get("admin_private_key_protection"))])
     if result.get("admin_private_key_warning"):
         _kv_rows([("admin_key_warning", result.get("admin_private_key_warning"))])
     _print_rule("-")
@@ -2240,6 +2250,7 @@ def _store_importable_key_record(
     private_key_export_path: Optional[str] = None,
     private_key_secret_id: Optional[str] = None,
     private_key_secret_realm: Optional[str] = None,
+    private_key_protection: Optional[str] = None,
     private_key_warning: Optional[str] = None,
 ) -> None:
     payload = _read_json(keys_file, {"version": 1, "keys": {}})
@@ -2266,6 +2277,8 @@ def _store_importable_key_record(
         row["private_key_secret_id"] = str(private_key_secret_id).strip()
     if private_key_secret_realm:
         row["private_key_secret_realm"] = str(private_key_secret_realm).strip()
+    if private_key_protection:
+        row["private_key_protection"] = str(private_key_protection).strip()
     if private_key_warning:
         row["private_key_warning"] = str(private_key_warning).strip()
     preserved = {
@@ -2284,6 +2297,7 @@ def _store_importable_key_record(
             "private_key_export_path",
             "private_key_secret_id",
             "private_key_secret_realm",
+            "private_key_protection",
             "private_key_warning",
         }
     }
@@ -2373,51 +2387,6 @@ def _reset_access_configuration(paths: Dict[str, Path]) -> Dict[str, Any]:
         "message": "Hosting access configuration was reset to unconfigured by archiving active access files.",
         "private_key_note": "Exported private key files and client-realm private-key secrets were not removed.",
     }
-
-
-def _migrate_legacy_key_files(
-    *,
-    default_config_dir: Path,
-    hosting_root: Path,
-    audit_file: Path,
-    migrations_file: Path,
-) -> Dict[str, Any]:
-    candidates = [
-        (default_config_dir / "backend" / "host_auth_keys.json").resolve(),
-        (default_config_dir / "backend" / "engine_host_auth_keys.json").resolve(),
-        (hosting_root / "keys.json").resolve(),
-    ]
-    migrated: list[Dict[str, Any]] = []
-    for source in candidates:
-        if not source.exists() or not source.is_file():
-            continue
-        target = Path(str(source) + ".migrated")
-        if target.exists():
-            idx = 1
-            while True:
-                alt = Path(str(source) + f".migrated.{idx}")
-                if not alt.exists():
-                    target = alt
-                    break
-                idx += 1
-        source.rename(target)
-        evt = {
-            "timestamp": time.time(),
-            "event": "legacy_key_file_renamed",
-            "source": str(source),
-            "target": str(target),
-        }
-        migrated.append(evt)
-        _write_audit_event(audit_file, evt)
-    if migrated:
-        payload = _read_json(migrations_file, {"version": 1, "migrations": []})
-        rows = list(payload.get("migrations") or [])
-        rows.extend(migrated)
-        payload["version"] = 1
-        payload["updated_at"] = time.time()
-        payload["migrations"] = rows
-        _write_json(migrations_file, payload)
-    return {"migrated_count": len(migrated), "migrated": migrated}
 
 
 def _resolve_paths(args: argparse.Namespace, *, create_dirs: bool = False) -> Dict[str, Path]:
@@ -2827,6 +2796,7 @@ def run_transport_bootstrap(args: argparse.Namespace) -> Dict[str, Any]:
             "secret_id": result.get("secret_id"),
             "secret_path": result.get("secret_path"),
             "secret_encryption": result.get("secret_encryption"),
+            "private_key_protection": result.get("private_key_protection"),
             "target": dict(profile.get("profile") or {}).get("engine_host_ssh_target"),
             "transport_key_id": dict(profile.get("profile") or {}).get("transport_key_id"),
         }
@@ -3135,10 +3105,12 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
             "audit_path": str(audit_path),
         }
 
+    client_secret_password = str(getattr(args, "client_secret_password", "") or "")
     if action_generate:
+        protection_passphrase = str(getattr(args, "generated_key_passphrase", "") or "") or client_secret_password
         private_key_text, public_key_text = _generate_keypair(
             key_id=key_id,
-            passphrase=str(getattr(args, "generated_key_passphrase", "") or "") or None,
+            passphrase=protection_passphrase or None,
         )
         source = "client_generate"
     else:
@@ -3152,16 +3124,27 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
             file_value=str(getattr(args, "client_public_key_file", "") or ""),
             field_name="client public key",
         ) if (str(getattr(args, "client_public_key_inline", "") or "").strip() or str(getattr(args, "client_public_key_file", "") or "").strip()) else _derive_public_key_from_private(private_key_text)
+        if client_secret_password:
+            private_key_text = _protect_openssh_private_key(
+                private_key_text,
+                new_passphrase=client_secret_password,
+            )
         source = "client_import"
 
     secret_store = FileSecretStore(client_realm_root, realm=realm)
+    private_key_protection = "openssh_passphrase" if client_secret_password or (action_generate and protection_passphrase) else "none"
     secret_record = secret_store.put_secret(
         tag=tag,
         payload=private_key_text,
         secret_id=f"{tag.replace('_private_key', '')}-{key_id}-private",
-        metadata={"key_id": key_id, "tag": tag, "source": source},
-        encryption="password_v1" if str(getattr(args, "client_secret_password", "") or "") else "none",
-        password=str(getattr(args, "client_secret_password", "") or ""),
+        metadata={
+            "key_id": key_id,
+            "tag": tag,
+            "source": source,
+            "private_key_format": "openssh",
+            "private_key_protection": private_key_protection,
+        },
+        encryption="none",
     )
     role = "transport" if tag == "transport_private_key" else "admin"
     _store_importable_key_record(
@@ -3176,12 +3159,19 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
         private_key_storage="client_realm_secret",
         private_key_secret_id=secret_record.secret_id,
         private_key_secret_realm=realm,
+        private_key_protection=private_key_protection,
     )
     audit_path = append_client_audit_event(
         client_realm_root,
         event_type="client_key_generate" if action_generate else "client_key_import",
         realm=realm,
-        payload={"key_id": key_id, "tag": tag, "secret_id": secret_record.secret_id, "encryption": secret_record.encryption},
+        payload={
+            "key_id": key_id,
+            "tag": tag,
+            "secret_id": secret_record.secret_id,
+            "encryption": secret_record.encryption,
+            "private_key_protection": private_key_protection,
+        },
     )
     return {
         "status": "ok",
@@ -3194,6 +3184,7 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
         "secret_id": secret_record.secret_id,
         "secret_path": str(secret_record_path(client_realm_root, secret_record.secret_id)),
         "secret_encryption": secret_record.encryption,
+        "private_key_protection": private_key_protection,
         "keys_file": str(keys_file),
         "audit_path": str(audit_path),
     }
@@ -3674,13 +3665,6 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             requested=args.require_auth,
         )
 
-    migration_result = _migrate_legacy_key_files(
-        default_config_dir=default_config_dir,
-        hosting_root=hosting_root,
-        audit_file=audit_file,
-        migrations_file=migrations_file,
-    )
-
     admin_public_key = ""
     admin_private_key_text: Optional[str] = None
     admin_public_key_path: Optional[Path] = None
@@ -3698,6 +3682,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     public_key_source = "existing_keyring" if key_action == "keep_existing" else "inline"
     private_key_storage = "not_managed"
     private_key_warning: Optional[str] = None
+    admin_private_key_protection = "none"
 
     if key_action == "keep_existing":
         keyring_existing = _read_json(keys_file, {"keys": {}})
@@ -3715,6 +3700,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "embedded_keyring" if str(row.get("private_key_openssh") or "").strip() else "not_managed"
         )
         private_key_warning = str(row.get("private_key_warning") or "").strip() or None
+        admin_private_key_protection = str(row.get("private_key_protection") or "").strip() or "none"
         admin_private_key_secret_id = str(row.get("private_key_secret_id") or "").strip() or None
         admin_private_key_secret_realm = str(row.get("private_key_secret_realm") or "default").strip() or None
         if admin_private_key_secret_id:
@@ -3726,6 +3712,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 try:
                     secret_payload = json.loads(admin_private_key_secret_path.read_text(encoding="utf-8"))
                     admin_private_key_secret_encryption = str(secret_payload.get("encryption") or "").strip() or None
+                    secret_meta = dict(secret_payload.get("metadata") or {})
+                    admin_private_key_protection = str(
+                        secret_meta.get("private_key_protection") or admin_private_key_protection or "none"
+                    ).strip() or "none"
                 except Exception:
                     admin_private_key_secret_encryption = None
         export_private_path = (
@@ -3737,10 +3727,12 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         if key_source == "generate":
             key_origin = "generated"
             public_key_source = "generated"
-            passphrase = str(args.generated_key_passphrase or "")
+            client_secret_password = str(getattr(args, "client_secret_password", "") or "")
+            passphrase = str(args.generated_key_passphrase or "") or client_secret_password
             if interactive and not args.generated_key_passphrase:
                 if _bool_prompt("Protect generated private key with passphrase?", False):
                     passphrase = _input_or_quit("Passphrase: ")
+            admin_private_key_protection = "openssh_passphrase" if passphrase else "none"
             generated_private, generated_public = _generate_keypair(
                 key_id=admin_key_id,
                 passphrase=passphrase or None,
@@ -3770,9 +3762,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                         "role": "admin",
                         "auth_method": "public_key",
                         "source": "hosting_config_generate",
+                        "private_key_format": "openssh",
+                        "private_key_protection": admin_private_key_protection,
                     },
-                    encryption="password_v1" if str(getattr(args, "client_secret_password", "") or "") else "none",
-                    password=str(getattr(args, "client_secret_password", "") or ""),
+                    encryption="none",
                 )
                 admin_private_key_secret_id = secret_record.secret_id
                 admin_private_key_secret_path = secret_record_path(client_realm_root, secret_record.secret_id)
@@ -3819,6 +3812,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         private_key_export_path=str(export_private_path) if export_private_path else None,
         private_key_secret_id=admin_private_key_secret_id,
         private_key_secret_realm=admin_private_key_secret_realm,
+        private_key_protection=admin_private_key_protection if private_key_storage == "client_realm_secret" else None,
         private_key_warning=private_key_warning,
     )
 
@@ -3900,6 +3894,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 "admin_private_key_secret_id": admin_private_key_secret_id,
                 "admin_private_key_secret_realm": admin_private_key_secret_realm,
                 "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
+                "admin_private_key_protection": admin_private_key_protection,
             },
             "files": {
                 "control_state_file": str(control_state_path),
@@ -3914,7 +3909,6 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 ),
                 "client_realm_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
             },
-            "legacy_migration": migration_result,
         },
     )
     _write_audit_event(
@@ -3937,6 +3931,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "admin_private_key_secret_realm": admin_private_key_secret_realm,
             "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
             "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
+            "admin_private_key_protection": admin_private_key_protection,
         },
     )
     after_summary = _summarize_existing_config(
@@ -3958,8 +3953,6 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         after = after_summary.get(key)
         if before != after:
             changes.append(f"{label}: {before!r} -> {after!r}")
-    if bool(migration_result.get("migrated_count")):
-        changes.append(f"legacy key files migrated: {migration_result.get('migrated_count')}")
     if bool(export_private and export_private_path):
         changes.append(f"generated private key exported to {export_private_path}")
     if bool(admin_private_key_secret_id and admin_private_key_secret_path):
@@ -3979,7 +3972,6 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "lifecycle_profile": lifecycle_profile,
         "require_auth": require_auth,
         "admin_key_id": admin_key_id,
-        "legacy_migration": migration_result,
         "admin_public_key_path": str(admin_public_key_path) if admin_public_key_path else None,
         "admin_private_key_path": None,
         "private_key_exported": bool(export_private),
@@ -3997,6 +3989,7 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "admin_private_key_secret_id": admin_private_key_secret_id,
         "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
         "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
+        "admin_private_key_protection": admin_private_key_protection,
         "admin_private_key_warning": private_key_warning,
     }
 
@@ -4185,14 +4178,14 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
                     "secret_path": key_meta.get("private_key_secret_path"),
                 },
             )
-            encryption = str(key_meta.get("private_key_secret_encryption") or "").strip() or "unknown"
+            protection = str(key_meta.get("private_key_protection") or "").strip() or "none"
             _record(
-                "admin_client_secret_encrypted",
-                encryption == "password_v1",
+                "admin_client_secret_protected",
+                protection == "openssh_passphrase",
                 {
                     "key_id": admin_key_id,
                     "secret_id": key_meta.get("private_key_secret_id"),
-                    "encryption": encryption,
+                    "private_key_protection": protection,
                 },
                 blocking=False,
             )

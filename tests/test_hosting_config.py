@@ -296,11 +296,13 @@ def test_setup_generate_can_store_encrypted_client_realm_secret(monkeypatch: pyt
         args.client_secret_password = "secret-pw"
         out = run_setup(args)
         assert str(out.get("status") or "") == "ok"
-        assert str(out.get("admin_private_key_secret_encryption") or "") == "password_v1"
+        assert str(out.get("admin_private_key_secret_encryption") or "") == "none"
+        assert str(out.get("admin_private_key_protection") or "") == "openssh_passphrase"
 
         secret_file = root / "hosting_client" / "default" / "secrets" / "rbac-admin-main-private.json"
         secret_payload = json.loads(secret_file.read_text(encoding="utf-8"))
-        assert str(secret_payload.get("encryption") or "") == "password_v1"
+        assert str(secret_payload.get("encryption") or "") == "none"
+        assert str(dict(secret_payload.get("metadata") or {}).get("private_key_protection") or "") == "openssh_passphrase"
 
 
 def test_setup_generate_with_export_keeps_private_key_out_of_keyring_and_client_realm(
@@ -651,7 +653,8 @@ def test_run_client_keys_generate_list_and_export(monkeypatch: pytest.MonkeyPatc
         args.client_secret_password = "secret-pw"
         generated = run_client_keys(args)
         assert generated["status"] == "ok"
-        assert generated["secret_encryption"] == "password_v1"
+        assert generated["secret_encryption"] == "none"
+        assert generated["private_key_protection"] == "openssh_passphrase"
 
         args.client_generate_key = False
         args.client_list_keys = True
@@ -977,8 +980,12 @@ def test_run_transport_bootstrap_validate_profile_runs_strict_ssh_probe(
         assert "user@example" in cmd
 
 
-def test_run_transport_bootstrap_import_encrypted_bundle_to_encrypted_client_secret() -> None:
+def test_run_transport_bootstrap_import_protected_bundle_to_protected_client_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
+        monkeypatch.setattr(
+            "hosting.transport_bootstrap._protect_openssh_private_key",
+            lambda private_key_text, **_kwargs: str(private_key_text) + "\nPROTECTED",
+        )
         args = _args(
             default_config_dir=root,
             control_state_file=root / "hosting" / "access_control.json",
@@ -1001,7 +1008,8 @@ def test_run_transport_bootstrap_import_encrypted_bundle_to_encrypted_client_sec
         args.client_secret_password = "secret-pw"
         imported = run_transport_bootstrap(args)
         assert imported["status"] == "ok"
-        assert imported["secret_encryption"] == "password_v1"
+        assert imported["secret_encryption"] == "none"
+        assert imported["private_key_protection"] == "openssh_passphrase"
 
         args.transport_import_bootstrap = False
         args.transport_validate_profile = True
@@ -1027,7 +1035,7 @@ def test_setup_rejects_unsafe_no_require_auth_profile() -> None:
             run_setup(args)
 
 
-def test_setup_migrates_legacy_key_file_to_migrated_suffix() -> None:
+def test_setup_does_not_migrate_legacy_key_file() -> None:
     with _workspace_tmpdir() as root:
         legacy = root / "backend" / "host_auth_keys.json"
         legacy.parent.mkdir(parents=True, exist_ok=True)
@@ -1037,17 +1045,8 @@ def test_setup_migrates_legacy_key_file_to_migrated_suffix() -> None:
         args = _args(default_config_dir=root, control_state_file=control)
         out = run_setup(args)
         assert str(out.get("status") or "") == "ok"
-        migration = dict(out.get("legacy_migration") or {})
-        assert int(migration.get("migrated_count") or 0) >= 1
-
-        moved = Path(str(legacy) + ".migrated")
-        assert moved.exists()
-        assert not legacy.exists()
-
-        migrations_file = root / "hosting" / "keyring" / "migrations.json"
-        payload = json.loads(migrations_file.read_text(encoding="utf-8"))
-        rows = list(payload.get("migrations") or [])
-        assert any(str(row.get("source") or "") == str(legacy.resolve()) for row in rows)
+        assert "legacy_migration" not in out
+        assert legacy.exists()
 
 
 def test_doctor_reports_ok_after_valid_setup() -> None:
@@ -1081,10 +1080,10 @@ def test_doctor_flags_plaintext_admin_client_secret_non_blocking(monkeypatch: py
         doctor_args = _args(default_config_dir=root, control_state_file=control, doctor=True)
         out = run_doctor(doctor_args)
         checks = list(out.get("checks") or [])
-        encrypted = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_encrypted"]
-        assert encrypted
-        assert bool(encrypted[0].get("ok")) is False
-        assert str(encrypted[0].get("details", {}).get("encryption") or "") == "none"
+        protected = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_protected"]
+        assert protected
+        assert bool(protected[0].get("ok")) is False
+        assert str(protected[0].get("details", {}).get("private_key_protection") or "") == "none"
 
 
 def test_doctor_accepts_encrypted_admin_client_secret(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1104,10 +1103,10 @@ def test_doctor_accepts_encrypted_admin_client_secret(monkeypatch: pytest.Monkey
         doctor_args = _args(default_config_dir=root, control_state_file=control, doctor=True)
         out = run_doctor(doctor_args)
         checks = list(out.get("checks") or [])
-        encrypted = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_encrypted"]
-        assert encrypted
-        assert bool(encrypted[0].get("ok")) is True
-        assert str(encrypted[0].get("details", {}).get("encryption") or "") == "password_v1"
+        protected = [c for c in checks if str(c.get("check") or "") == "admin_client_secret_protected"]
+        assert protected
+        assert bool(protected[0].get("ok")) is True
+        assert str(protected[0].get("details", {}).get("private_key_protection") or "") == "openssh_passphrase"
 
 
 def test_doctor_flags_broken_client_transport_profile_integrity() -> None:

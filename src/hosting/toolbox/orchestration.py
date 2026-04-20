@@ -210,7 +210,7 @@ class ToolboxSandboxOrchestrator:
                 ),
                 worker_profile_class=worker_profile_class,
                 sandbox_policy=dict(item.sandbox_profile.sandbox_policy or {}),
-                executor_kind="toolbox_executor_v1",
+                executor_kind="toolbox_executor",
                 bundle=staged.registration_bundle(),
                 environment=staged.registration_environment(environment_spec),
                 tool_access=staged.registration_tool_access(),

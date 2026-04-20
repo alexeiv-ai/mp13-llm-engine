@@ -7,16 +7,10 @@ import logging
 import os
 import subprocess
 import tempfile
-import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Dict
 
 logger = logging.getLogger(__name__)
-
-
-def _legacy_daemon_attr(name: str, fallback: Any) -> Any:
-    module = sys.modules.get("hosting.engine_host_daemon")
-    return getattr(module, name, fallback) if module is not None else fallback
 
 
 def _current_windows_account_name() -> str:
@@ -41,7 +35,7 @@ def _current_windows_account_name() -> str:
 
 
 def _tighten_windows_acl(path: Path, *, is_dir: bool) -> None:
-    principal = _legacy_daemon_attr("_current_windows_account_name", _current_windows_account_name)()
+    principal = _current_windows_account_name()
     if not principal:
         logger.warning("unable to determine current Windows account for ACL hardening")
         return

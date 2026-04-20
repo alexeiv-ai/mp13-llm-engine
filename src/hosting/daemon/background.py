@@ -7,16 +7,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from .constants import DEFAULT_DAEMON_PORT, DEFAULT_HTTP_INGRESS_PORT
 from .paths import _default_http_pid_file
 from .pidfile import DaemonPidFile
-
-
-def _legacy_daemon_attr(name: str, fallback: Any) -> Any:
-    module = sys.modules.get("hosting.engine_host_daemon")
-    return getattr(module, name, fallback) if module is not None else fallback
 
 
 def start_daemon_background(
@@ -91,8 +86,7 @@ def start_daemon_background(
         pass
 
     # Poll until PID file appears and daemon responds to a protocol ping.
-    pid_cls = _legacy_daemon_attr("DaemonPidFile", DaemonPidFile)
-    pid_info = pid_cls(pid_file)
+    pid_info = DaemonPidFile(pid_file)
     deadline = time.time() + max(1.0, float(wait_ready_seconds))
     while time.time() < deadline:
         time.sleep(0.15)
@@ -195,8 +189,7 @@ def start_http_ingress_background(
     except Exception:
         pass
 
-    pid_cls = _legacy_daemon_attr("DaemonPidFile", DaemonPidFile)
-    pid_info = pid_cls(pid_file or _default_http_pid_file())
+    pid_info = DaemonPidFile(pid_file or _default_http_pid_file())
     deadline = time.time() + max(1.0, float(wait_ready_seconds))
     while time.time() < deadline:
         time.sleep(0.15)

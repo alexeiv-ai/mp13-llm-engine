@@ -111,13 +111,13 @@ Primary implementation entry points:
 2. [toolbox_executor_ipc.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_executor_ipc.py)
    - sandbox worker process
    - toolbox RPC handling
-3. [engine_host_service.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_service.py)
+3. [host_service.py](/o:/repos/mp13-llm-engine/src/hosting/service/host_service.py)
    - authoritative host-side lifecycle and policy
 4. [engine_host_channel.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_channel.py)
    - Python client wrapper over the host command surface
 5. [engine_host_cli.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_cli.py)
    - operator-facing CLI
-6. [engine_host_daemon.py](/o:/repos/mp13-llm-engine/src/hosting/engine_host_daemon.py)
+6. [daemon package](/o:/repos/mp13-llm-engine/src/hosting/daemon/__init__.py)
    - daemon command transport
 7. [toolbox_admin.py](/o:/repos/mp13-llm-engine/src/hosting/toolbox_admin.py)
    - long-lived server/operator convenience wrapper

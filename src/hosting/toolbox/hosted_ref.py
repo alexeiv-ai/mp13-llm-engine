@@ -89,7 +89,7 @@ class HostedToolBoxRef:
 
                 resolved_host = EngineHostControlChannel(dict(host_row.get("control_settings") or {}))
             elif kind == "service":
-                from ..engine_host_service import EngineHostService
+                from ..service.host_service import EngineHostService
 
                 engines_state_raw = str(host_row.get("engines_state_file") or "").strip()
                 control_state_raw = str(host_row.get("control_state_file") or "").strip()

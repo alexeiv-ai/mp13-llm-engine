@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.hosted_chat_demo import setup_hosted_chat_demo, shutdown_hosted_chat_demo
-from hosting.engine_host_service import EngineHostService
+from hosting.service.host_service import EngineHostService
 from hosting.toolbox_admin import HostedToolboxAdmin
 from mp13_engine.mp13_toolbox import Toolbox
 

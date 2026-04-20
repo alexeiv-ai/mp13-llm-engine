@@ -81,7 +81,7 @@ def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
     if not host_action:
         return None
 
-    from hosting.engine_host_service import EngineHostService
+    from hosting.service.host_service import EngineHostService
 
     control_state = Path(args.host_control_state_file).expanduser().resolve() if args.host_control_state_file else get_hosting_control_state_path().expanduser().resolve()
     svc = EngineHostService(control_state_file=control_state)

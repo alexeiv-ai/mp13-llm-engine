@@ -51,7 +51,7 @@ def _startup_spec_or_none() -> Optional[ToolboxWorkerStartupSpec]:
 
 
 def _host_service():
-    from .engine_host_service import EngineHostService
+    from .service.host_service import EngineHostService
 
     spec = _startup_spec_or_none()
     engines_state_file = (
@@ -414,7 +414,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
         "cancellation": False,
         "all_registered_tool_names": tool_names,
         "tool_metadata": tool_metadata,
-        "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
+        "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor"),
     }
 
 
@@ -446,7 +446,7 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         }
         return {
             "status": "ok",
-            "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor_v1"),
+            "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor"),
             "bundle": {
                 "bundle_id": manifest.get("bundle_id"),
                 "bundle_revision": manifest.get("bundle_revision"),

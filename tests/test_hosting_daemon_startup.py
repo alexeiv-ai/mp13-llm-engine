@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from hosting.engine_host_daemon import EngineHostDaemon
+from hosting.daemon import EngineHostDaemon
 
 
 class _FakePidFile:

@@ -7,16 +7,10 @@ import os
 import posixpath
 import re
 import secrets
-import sys
 import tempfile
 import time
 from multiprocessing.connection import Client as MPClient
 from typing import Any, Dict, Optional, Tuple
-
-
-def _legacy_attr(name: str, fallback: Any) -> Any:
-    legacy_module = sys.modules.get("hosting.engine_host_service")
-    return getattr(legacy_module, name, fallback)
 
 
 class ProxyMixin:
@@ -25,11 +19,9 @@ class ProxyMixin:
         raw_engine = str(engine_id or "engine")
         safe_engine = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_engine).strip("_") or "engine"
         nonce = secrets.token_hex(6)
-        legacy_os = _legacy_attr("os", os)
-        if legacy_os.name == "nt":
+        if os.name == "nt":
             return "AF_PIPE", f"\\\\.\\pipe\\mp13-host-{safe_engine}-{nonce}"
-        legacy_tempfile = _legacy_attr("tempfile", tempfile)
-        base = posixpath.abspath(posixpath.expanduser(str(legacy_tempfile.gettempdir() or "/tmp")))
+        base = posixpath.abspath(posixpath.expanduser(str(tempfile.gettempdir() or "/tmp")))
         engine_hash = hashlib.sha256(raw_engine.encode("utf-8", errors="ignore")).hexdigest()[:12]
         short_engine = safe_engine[:24].rstrip("_-") or "engine"
         filename = f"mp13-host-{short_engine}-{engine_hash}-{nonce}.sock"
@@ -72,8 +64,7 @@ class ProxyMixin:
         }
         conn = None
         try:
-            mp_client = _legacy_attr("MPClient", MPClient)
-            conn = mp_client(address=address, family=family, authkey=authkey)
+            conn = MPClient(address=address, family=family, authkey=authkey)
             conn.send(payload)
             if not conn.poll(max(0.1, float(timeout_seconds or 30.0))):
                 raise TimeoutError("ipc worker timeout")
@@ -112,8 +103,7 @@ class ProxyMixin:
         authkey = self._parse_worker_authkey_token(auth_token)
         conn = None
         try:
-            mp_client = _legacy_attr("MPClient", MPClient)
-            conn = mp_client(address=address, family=family, authkey=authkey)
+            conn = MPClient(address=address, family=family, authkey=authkey)
             conn.send(dict(payload or {}))
             if not conn.poll(max(0.1, float(timeout_seconds or 30.0))):
                 raise TimeoutError("ipc worker timeout")

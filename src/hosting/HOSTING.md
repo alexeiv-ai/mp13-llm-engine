@@ -30,7 +30,7 @@ Workers run as separate processes. The host does not expose worker private keys 
 ### The Daemons
 The architecture relies on separate daemons to isolate concerns:
 1. **Primary Control Daemon (`--daemon`)**: Hosts the control JSON-RPC protocol for lifecycle, auth, claims, config, and proxy commands. It starts a local IPC listener and may also start a loopback TCP listener when the configured auth policy allows it.
-2. **HTTP Ingress Daemon (`--daemon-http`)**: A separate HTTP ingress mode implemented in `engine_host_daemon.py`, handling standard HTTP ingress such as `GET /health` and worker API proxy routes.
+2. **HTTP Ingress Daemon (`--daemon-http`)**: A separate HTTP ingress mode implemented in the `hosting.daemon` package, handling standard HTTP ingress such as `GET /health` and worker API proxy routes.
 
 ### Network Support Boundaries & Trade-offs
 The hosting layer has strict boundaries regarding network transport:

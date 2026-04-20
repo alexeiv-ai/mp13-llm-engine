@@ -22,9 +22,7 @@ from ..sandbox import (
 class EnginesMixin:
     @staticmethod
     def _launch_worker_process(request: WorkerLaunchRequest):
-        legacy_module = sys.modules.get("hosting.engine_host_service")
-        launcher = getattr(legacy_module, "launch_worker_process", launch_worker_process)
-        return launcher(request)
+        return launch_worker_process(request)
 
     def _next_engine_id(self, base_name: str) -> str:
         existing = {str(x.get("engine_id") or "") for x in self._read_engines()}
@@ -558,7 +556,7 @@ class EnginesMixin:
         merged_env["MP13_ENGINE_TRANSPORT"] = "ipc"
         merged_env["MP13_WORKER_IPC_FAMILY"] = ipc_family
         merged_env["MP13_WORKER_IPC_ADDRESS"] = ipc_address
-        if str(executor_kind or "").strip() == "toolbox_executor_v1":
+        if str(executor_kind or "").strip() == "toolbox_executor":
             merged_env["MP13_TOOLBOX_EXECUTOR_ENGINE_ID"] = eid
             merged_env["MP13_HOSTING_ENGINES_STATE_FILE"] = str(self.engines_state_file)
             merged_env["MP13_HOSTING_CONTROL_STATE_FILE"] = str(self.control_state_file)
@@ -583,7 +581,7 @@ class EnginesMixin:
             "MP13_WORKER_IPC_ADDRESS",
         ]:
             persisted_env[key] = str(launched.persisted_env.get(key) or merged_env.get(key) or "")
-        if str(executor_kind or "").strip() == "toolbox_executor_v1":
+        if str(executor_kind or "").strip() == "toolbox_executor":
             for key in [
                 "MP13_TOOLBOX_EXECUTOR_ENGINE_ID",
                 "MP13_HOSTING_ENGINES_STATE_FILE",

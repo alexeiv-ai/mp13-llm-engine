@@ -380,7 +380,7 @@ class ToolboxBundleSpec:
         manifest_hash = _sha256_text(_stable_json(manifest_input))
         bundle_revision = manifest_hash[:16]
         return {
-            "executor_kind": "toolbox_executor_v1",
+            "executor_kind": "toolbox_executor",
             "bundle_id": bundle_id,
             "toolbox_id": toolbox_id,
             "sandbox_profile": sandbox_profile,

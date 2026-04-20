@@ -6,16 +6,10 @@ process lifecycle and generic control-plane state (claims/tokens/resources).
 """
 from __future__ import annotations
 
-# Kept as module globals because ``hosting.engine_host_service`` aliases this
-# module and tests/callers import or monkeypatch these legacy names there.
-import os
-import tempfile
-from multiprocessing.connection import Client as MPClient
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..sandbox import launch_worker_process
 from .auth import AuthMixin
 from .claims import ClaimsMixin
 from .constants import (

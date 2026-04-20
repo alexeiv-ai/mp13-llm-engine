@@ -7,15 +7,15 @@ and pinned SSH host-key material to a client realm.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .client_realm import (
     FileSecretStore,
-    _password_v1_decrypt,
-    _password_v1_encrypt,
     append_client_audit_event,
     ensure_client_realm_dirs,
     materialize_secret_file,
@@ -31,6 +31,46 @@ from .client_realm import (
 
 TRANSPORT_BOOTSTRAP_KIND = "hosting_transport_bootstrap"
 DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND = "python -m hosting.engine_host_cli --relay-wrapper"
+
+
+def _protect_openssh_private_key(
+    private_key_text: str,
+    *,
+    new_passphrase: str,
+    old_passphrase: str = "",
+) -> str:
+    """Return an OpenSSH private key re-written with a new passphrase."""
+    if not str(new_passphrase or ""):
+        return str(private_key_text or "").strip()
+    tmpdir = Path(tempfile.mkdtemp(prefix="hosting_keyprotect_")).resolve()
+    try:
+        tmp_private = (tmpdir / "private_key").resolve()
+        tmp_private.write_text(str(private_key_text or "").strip() + "\n", encoding="utf-8")
+        try:
+            tmp_private.chmod(0o600)
+        except Exception:
+            pass
+        proc = subprocess.run(  # noqa: S603
+            [
+                "ssh-keygen",
+                "-p",
+                "-f",
+                str(tmp_private),
+                "-P",
+                str(old_passphrase or ""),
+                "-N",
+                str(new_passphrase or ""),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        if int(proc.returncode) != 0:
+            raise RuntimeError(str(proc.stderr or "").strip() or "ssh-keygen -p failed")
+        return str(tmp_private.read_text(encoding="utf-8")).strip()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def make_transport_bootstrap_bundle(
@@ -61,6 +101,13 @@ def make_transport_bootstrap_bundle(
     if not private_key_norm:
         raise ValueError("transport_private_key_openssh is required")
     bundle_password_norm = str(bundle_password or "")
+    protection = "none"
+    if bundle_password_norm:
+        private_key_norm = _protect_openssh_private_key(
+            private_key_norm,
+            new_passphrase=bundle_password_norm,
+        )
+        protection = "openssh_passphrase"
     bundle: Dict[str, Any] = {
         "bundle_version": 1,
         "kind": TRANSPORT_BOOTSTRAP_KIND,
@@ -69,15 +116,10 @@ def make_transport_bootstrap_bundle(
         "ssh_known_hosts_line": known_hosts_norm,
         "transport_key_id": key_id_norm,
         "transport_public_key": public_key_norm,
-        "transport_private_key_encryption": "none",
+        "transport_private_key_openssh": private_key_norm,
+        "transport_private_key_format": "openssh",
+        "transport_private_key_protection": protection,
     }
-    if bundle_password_norm:
-        bundle["transport_private_key_encryption"] = "password_v1"
-        bundle["transport_private_key_password_v1"] = json.loads(
-            _password_v1_encrypt(private_key_norm, bundle_password_norm)
-        )
-    else:
-        bundle["transport_private_key_openssh"] = private_key_norm
     fingerprint_norm = str(control_ssh_fingerprint or "").strip()
     if fingerprint_norm:
         bundle["control_ssh_fingerprint"] = fingerprint_norm
@@ -100,9 +142,9 @@ def validate_transport_bootstrap_bundle(bundle: Dict[str, Any]) -> Dict[str, Any
     known_hosts_line = str(payload.get("ssh_known_hosts_line") or "").strip()
     key_id = str(payload.get("transport_key_id") or "").strip()
     public_key = str(payload.get("transport_public_key") or "").strip()
-    private_key_encryption = str(payload.get("transport_private_key_encryption") or "none").strip() or "none"
     private_key = str(payload.get("transport_private_key_openssh") or "").strip()
-    encrypted_private_key = payload.get("transport_private_key_password_v1")
+    private_key_format = str(payload.get("transport_private_key_format") or "openssh").strip() or "openssh"
+    private_key_protection = str(payload.get("transport_private_key_protection") or "none").strip() or "none"
     if not target:
         raise ValueError("bundle target is required")
     if not known_hosts_line:
@@ -111,14 +153,12 @@ def validate_transport_bootstrap_bundle(bundle: Dict[str, Any]) -> Dict[str, Any
         raise ValueError("bundle transport_key_id is required")
     if not public_key:
         raise ValueError("bundle transport_public_key is required")
-    if private_key_encryption == "none":
-        if not private_key:
-            raise ValueError("bundle transport_private_key_openssh is required")
-    elif private_key_encryption == "password_v1":
-        if not isinstance(encrypted_private_key, dict):
-            raise ValueError("bundle transport_private_key_password_v1 is required")
-    else:
-        raise ValueError("bundle transport_private_key_encryption is invalid")
+    if not private_key:
+        raise ValueError("bundle transport_private_key_openssh is required")
+    if private_key_format != "openssh":
+        raise ValueError("bundle transport_private_key_format is invalid")
+    if private_key_protection not in {"none", "openssh_passphrase"}:
+        raise ValueError("bundle transport_private_key_protection is invalid")
     out = {
         "bundle_version": version,
         "kind": TRANSPORT_BOOTSTRAP_KIND,
@@ -127,9 +167,9 @@ def validate_transport_bootstrap_bundle(bundle: Dict[str, Any]) -> Dict[str, Any
         "ssh_known_hosts_line": known_hosts_line,
         "transport_key_id": key_id,
         "transport_public_key": public_key,
-        "transport_private_key_encryption": private_key_encryption,
-        "transport_private_key_openssh": private_key if private_key_encryption == "none" else None,
-        "transport_private_key_password_v1": encrypted_private_key if private_key_encryption == "password_v1" else None,
+        "transport_private_key_openssh": private_key,
+        "transport_private_key_format": private_key_format,
+        "transport_private_key_protection": private_key_protection,
         "control_ssh_fingerprint": str(payload.get("control_ssh_fingerprint") or "").strip() or None,
         "profile_name": str(payload.get("profile_name") or "").strip() or None,
         "notes": [str(item).strip() for item in list(payload.get("notes") or []) if str(item).strip()],
@@ -178,11 +218,15 @@ def import_transport_bootstrap_bundle(
     secret_store = FileSecretStore(client_realm_root, realm=realm_norm)
     secret_id = f"transport-{validated['transport_key_id']}-private"
     private_key_text = str(validated.get("transport_private_key_openssh") or "")
-    if str(validated.get("transport_private_key_encryption") or "") == "password_v1":
-        private_key_text = _password_v1_decrypt(
-            json.dumps(dict(validated.get("transport_private_key_password_v1") or {}), ensure_ascii=False, sort_keys=True),
-            str(bundle_password or ""),
+    private_key_protection = str(validated.get("transport_private_key_protection") or "none").strip() or "none"
+    secret_protection = private_key_protection
+    if str(secret_password or ""):
+        private_key_text = _protect_openssh_private_key(
+            private_key_text,
+            old_passphrase=str(bundle_password or "") if private_key_protection == "openssh_passphrase" else "",
+            new_passphrase=str(secret_password or ""),
         )
+        secret_protection = "openssh_passphrase"
     secret = secret_store.put_secret(
         tag="transport_private_key",
         payload=private_key_text,
@@ -191,9 +235,10 @@ def import_transport_bootstrap_bundle(
             "target": str(validated["target"]),
             "transport_key_id": str(validated["transport_key_id"]),
             "source": "transport_bootstrap_import",
+            "private_key_format": "openssh",
+            "private_key_protection": secret_protection,
         },
-        encryption="password_v1" if str(secret_password or "") else "none",
-        password=str(secret_password or ""),
+        encryption="none",
     )
     known_hosts_path = (layout["known_hosts"] / f"{name}.known_hosts").resolve()
     known_hosts_path.write_text(str(validated["ssh_known_hosts_line"]) + "\n", encoding="utf-8")
@@ -243,6 +288,7 @@ def import_transport_bootstrap_bundle(
             "transport_key_id": str(validated["transport_key_id"]),
             "secret_id": secret.secret_id,
             "secret_encryption": str(secret.encryption),
+            "private_key_protection": secret_protection,
             "known_hosts_file": str(known_hosts_path),
         },
     )
@@ -253,6 +299,7 @@ def import_transport_bootstrap_bundle(
         "secret_id": secret.secret_id,
         "secret_path": str(secret_record_path(client_realm_root, secret.secret_id)),
         "secret_encryption": str(secret.encryption),
+        "private_key_protection": secret_protection,
         "known_hosts_file": str(known_hosts_path),
         "profile_path": str(profile_path(client_realm_root, name)),
         "audit_path": str(audit_path),

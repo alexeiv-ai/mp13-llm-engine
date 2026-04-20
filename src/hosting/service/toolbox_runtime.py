@@ -89,7 +89,7 @@ class ToolboxRuntimeMixin:
         rows: List[Dict[str, Any]] = []
         for row in self._read_engines():
             reg = dict(row or {})
-            if str(reg.get("executor_kind") or "").strip() != "toolbox_executor_v1":
+            if str(reg.get("executor_kind") or "").strip() != "toolbox_executor":
                 continue
             if self._registration_toolbox_id(reg) != tid:
                 continue
@@ -232,7 +232,7 @@ class ToolboxRuntimeMixin:
     def _require_toolbox_executor_registration(self, engine_id: str, *, command_label: str) -> Dict[str, Any]:
         reg = self._require_ipc_registration(engine_id, command_label=command_label)
         executor_kind = str(reg.get("executor_kind") or "").strip()
-        if executor_kind and executor_kind != "toolbox_executor_v1":
+        if executor_kind and executor_kind != "toolbox_executor":
             raise ValueError(f"{command_label} is only supported for toolbox executors")
         return reg
 
@@ -277,7 +277,7 @@ class ToolboxRuntimeMixin:
                 "hidden_allowed_tool_names": sorted(hidden_allowed_tool_names),
                 "tool_metadata": self._toolbox_tool_metadata(toolbox_row),
                 "sandbox_profile_ids": sorted([pid for pid in sandbox_profile_ids if pid]),
-                "executor_kind": "toolbox_executor_v1",
+                "executor_kind": "toolbox_executor",
                 "mode": "sandbox",
                 "parallel_execution": {
                     "async_within_executor": True,
@@ -294,7 +294,7 @@ class ToolboxRuntimeMixin:
             raise RuntimeError(str(out.get("message") or "toolbox_describe_failed"))
         result = dict(out or {})
         result.setdefault("engine_id", eid)
-        result.setdefault("executor_kind", str(reg.get("executor_kind") or "toolbox_executor_v1"))
+        result.setdefault("executor_kind", str(reg.get("executor_kind") or "toolbox_executor"))
         result.setdefault("bundle", dict(reg.get("bundle") or {}))
         result.setdefault("tool_access", dict(reg.get("tool_access") or {}))
         result.setdefault("all_registered_tool_names", sorted(list(self._registration_allowed_tool_names(reg) or set())))

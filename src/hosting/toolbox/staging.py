@@ -127,7 +127,7 @@ class StagedToolboxBundle:
         )
 
     def worker_env(self, *, extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        src_root = str(Path(__file__).resolve().parents[1])
+        src_root = str(Path(__file__).resolve().parents[2])
         env = {str(k): str(v) for k, v in dict(extra_env or {}).items()}
         env["MP13_TOOLBOX_MANIFEST_PATH"] = str(self.manifest_path)
         current_py = str(env.get("PYTHONPATH") or "")

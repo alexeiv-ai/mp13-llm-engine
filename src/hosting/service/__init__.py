@@ -1,9 +1,8 @@
 """
 Engine host service internals.
 
-Public callers should keep using ``hosting.engine_host_service`` or
-``hosting.EngineHostService`` unless they intentionally need the internal
-service package.
+Public callers should keep using ``hosting.EngineHostService`` unless they
+intentionally need the internal service package.
 """
 from __future__ import annotations
 

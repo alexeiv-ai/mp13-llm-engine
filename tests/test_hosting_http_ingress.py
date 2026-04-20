@@ -11,8 +11,8 @@ import threading
 import time
 from pathlib import Path
 
-from hosting.engine_host_daemon import EngineHostDaemon, EngineHostHttpIngressDaemon
-from hosting.engine_host_service import EngineHostService
+from hosting.daemon import EngineHostDaemon, EngineHostHttpIngressDaemon
+from hosting.service.host_service import EngineHostService
 
 
 def _free_port() -> int:

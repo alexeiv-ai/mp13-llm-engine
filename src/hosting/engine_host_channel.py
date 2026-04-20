@@ -221,7 +221,7 @@ class EngineHostControlChannel:
         if str(self.get_target().get("mode") or "local") != "local":
             return None
         try:
-            from .engine_host_service import EngineHostService
+            from .service.host_service import EngineHostService
 
             svc = EngineHostService(control_state_file=self._local_control_state_path())
             return dict(svc.get_control_config() or {})
@@ -310,7 +310,7 @@ class EngineHostControlChannel:
         if int(snapshot.get("keys_count") or 0) != 0:
             return snapshot
         try:
-            from .engine_host_service import EngineHostService
+            from .service.host_service import EngineHostService
 
             svc = EngineHostService(control_state_file=self._local_control_state_path())
             updated = svc.set_control_config(
@@ -365,7 +365,7 @@ class EngineHostControlChannel:
                 return self._connection
 
             if mode == "local":
-                from .engine_host_daemon import DaemonPidFile, start_daemon_background, DEFAULT_DAEMON_PORT
+                from .daemon import DaemonPidFile, start_daemon_background, DEFAULT_DAEMON_PORT
 
                 pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
                 pid_info = DaemonPidFile(pid_file_path)
@@ -571,7 +571,7 @@ class EngineHostControlChannel:
 
     def get_daemon_status(self) -> Dict[str, Any]:
         """Return local daemon PID status plus auth-status snapshot when reachable."""
-        from .engine_host_daemon import DaemonPidFile
+        from .daemon import DaemonPidFile
         from .engine_host_connection import LocalSocketConnection
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
@@ -624,7 +624,7 @@ class EngineHostControlChannel:
 
     def bootstrap_daemon(self, *, wait_ready_seconds: float = 8.0) -> Dict[str, Any]:
         """Start local daemon if not already running. Returns daemon status dict."""
-        from .engine_host_daemon import DaemonPidFile, start_daemon_background, DEFAULT_DAEMON_PORT
+        from .daemon import DaemonPidFile, start_daemon_background, DEFAULT_DAEMON_PORT
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
         if pid_info.is_alive():
@@ -647,7 +647,7 @@ class EngineHostControlChannel:
 
     def stop_daemon(self) -> Dict[str, Any]:
         """Send graceful shutdown signal to local daemon."""
-        from .engine_host_daemon import DaemonPidFile
+        from .daemon import DaemonPidFile
         from .engine_host_connection import LocalSocketConnection
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
@@ -681,8 +681,8 @@ class EngineHostControlChannel:
         """
         if str(self.get_target().get("mode") or "local") != "local":
             raise ValueError("reset_hosting_access is only valid in local mode")
-        from .engine_host_daemon import DaemonPidFile
-        from .engine_host_service import EngineHostService
+        from .daemon import DaemonPidFile
+        from .service.host_service import EngineHostService
 
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)

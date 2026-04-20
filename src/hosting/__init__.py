@@ -7,10 +7,10 @@ Key classes and functions available for import:
     EngineHostService         — file-backed process lifecycle and control-plane state
     EngineHostDaemon          — local IPC daemon server for control commands
     DaemonPidFile             — read/write/probe the daemon PID file
-    DEFAULT_DAEMON_PORT       — legacy compatibility port metadata (19876)
+    DEFAULT_DAEMON_PORT       — daemon default port metadata (19876)
     run_daemon_foreground()   — start daemon blocking in foreground
     start_daemon_background() — spawn daemon as detached background process
-    LocalSocketConnection     — persistent local daemon connection (IPC with legacy TCP fallback)
+    LocalSocketConnection     — persistent local daemon connection over IPC metadata
     SSHRelayConnection        — persistent SSH subprocess running --relay-wrapper
     BaseConnection            — abstract base for connection strategies
     ConnectionError           — raised on unrecoverable connection failure
@@ -20,8 +20,8 @@ Key classes and functions available for import:
 """
 from __future__ import annotations
 
-from .engine_host_service import EngineHostService
-from .engine_host_daemon import (
+from .service.host_service import EngineHostService
+from .daemon import (
     EngineHostDaemon,
     DaemonPidFile,
     DEFAULT_DAEMON_PORT,
