@@ -11,14 +11,21 @@ def pid_alive(pid: int) -> bool:
         return False
     if p <= 0:
         return False
+    if p == os.getpid():
+        return True
     if sys.platform == "win32":
-        return _pid_alive_windows(p)
+        try:
+            return _pid_alive_windows(p)
+        except SystemError:
+            return True
+        except Exception:
+            return False
     try:
         os.kill(p, 0)
         return True
     except ProcessLookupError:
         return False
-    except PermissionError:
+    except (PermissionError, SystemError):
         return True
     except Exception:
         return False

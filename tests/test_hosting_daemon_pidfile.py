@@ -20,7 +20,8 @@ def test_pid_alive_returns_true_on_system_error(monkeypatch) -> None:
     def _raise_system_error(_pid: int, _sig: int) -> None:
         raise SystemError("simulated_windows_detached_kill_behavior")
 
-    monkeypatch.setattr("hosting.daemon.pidfile.os.kill", _raise_system_error)
+    monkeypatch.setattr("hosting._process_utils.sys.platform", "linux")
+    monkeypatch.setattr("hosting._process_utils.os.kill", _raise_system_error)
     assert DaemonPidFile._pid_alive(12345) is True
 
 
@@ -28,7 +29,8 @@ def test_pid_alive_returns_false_on_process_lookup_error(monkeypatch) -> None:
     def _raise_lookup_error(_pid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
-    monkeypatch.setattr("hosting.daemon.pidfile.os.kill", _raise_lookup_error)
+    monkeypatch.setattr("hosting._process_utils.sys.platform", "linux")
+    monkeypatch.setattr("hosting._process_utils.os.kill", _raise_lookup_error)
     assert DaemonPidFile._pid_alive(12345) is False
 
 
@@ -36,7 +38,18 @@ def test_pid_alive_returns_true_on_permission_error(monkeypatch) -> None:
     def _raise_permission_error(_pid: int, _sig: int) -> None:
         raise PermissionError()
 
-    monkeypatch.setattr("hosting.daemon.pidfile.os.kill", _raise_permission_error)
+    monkeypatch.setattr("hosting._process_utils.sys.platform", "linux")
+    monkeypatch.setattr("hosting._process_utils.os.kill", _raise_permission_error)
+    assert DaemonPidFile._pid_alive(12345) is True
+
+
+def test_pid_alive_windows_returns_true_on_system_error(monkeypatch) -> None:
+    def _raise_system_error(_pid: int) -> bool:
+        raise SystemError("simulated_windows_detached_probe_behavior")
+
+    monkeypatch.setattr("hosting._process_utils.sys.platform", "win32")
+    monkeypatch.setattr("hosting._process_utils._pid_alive_windows", _raise_system_error)
+
     assert DaemonPidFile._pid_alive(12345) is True
 
 

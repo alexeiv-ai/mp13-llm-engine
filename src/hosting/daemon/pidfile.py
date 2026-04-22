@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .._process_utils import pid_alive
 from .paths import _default_pid_file
 from .security import _atomic_write_secure_json
 
@@ -60,21 +60,7 @@ class DaemonPidFile:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        try:
-            p = int(pid or 0)
-        except Exception:
-            return False
-        if p <= 0:
-            return False
-        try:
-            os.kill(p, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except (PermissionError, SystemError):
-            return True
-        except Exception:
-            return False
+        return pid_alive(pid)
 
     def is_alive(self) -> bool:
         info = self.read()
