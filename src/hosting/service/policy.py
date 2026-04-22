@@ -85,6 +85,7 @@ class PolicyMixin:
             "host-metrics",
             "op-start",
             "op-status",
+            "op-cancel",
             "set-endpoint-mode-override",
             "get-endpoint-mode-effective",
             "get-lifecycle-policy-effective",

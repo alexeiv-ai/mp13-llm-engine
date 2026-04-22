@@ -1001,6 +1001,16 @@ class EngineHostControlChannel:
         )
         return dict(res or {}) if isinstance(res, dict) else {}
 
+    def cancel_host_operation(self, *, operation_id: str, reason: str = "") -> Dict[str, Any]:
+        res = self._invoke(
+            "op-cancel",
+            {
+                "operation_id": str(operation_id or "").strip(),
+                "reason": str(reason or "").strip() or None,
+            },
+        )
+        return dict(res or {}) if isinstance(res, dict) else {}
+
     def start_connect_from_config(
         self,
         *,

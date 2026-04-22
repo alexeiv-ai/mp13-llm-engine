@@ -22,6 +22,11 @@ def _dispatch(daemon: EngineHostDaemon, *, seq: int, cmd: str, payload: dict, pe
     return asyncio.run(daemon._dispatch(raw, peer_host=peer_host))
 
 
+async def _dispatch_async(daemon: EngineHostDaemon, *, seq: int, cmd: str, payload: dict, peer_host: str = "127.0.0.1") -> dict:
+    raw = json.dumps({"seq": int(seq), "cmd": str(cmd), "payload": dict(payload)})
+    return await daemon._dispatch(raw, peer_host=peer_host)
+
+
 def _issue_mgmt_session(daemon: EngineHostDaemon, key_id: str, key_secret: str) -> str:
     daemon.svc.auth_upsert_key(key_id=key_id, key_secret=key_secret, role="admin")
     issued = daemon.svc.auth_issue_session(
@@ -471,6 +476,177 @@ def test_daemon_operation_start_and_status(tmp_path: Path) -> None:
     )
     assert denied["ok"] is False
     assert denied["error_code"] == "missing_or_invalid_session_token"
+
+
+def test_daemon_operation_cancel_marks_running_task_canceled(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+
+    def _slow_call_service(cmd: str, payload: dict) -> dict:
+        time.sleep(0.2)
+        return {"status": "ok", "command": cmd, "payload": payload}
+
+    daemon._call_service = _slow_call_service  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        started = await _dispatch_async(
+            daemon,
+            seq=1,
+            cmd="op-start",
+            payload={"command": "discover-running", "payload": {}},
+        )
+        assert started["ok"] is True
+        op_id = str((started.get("result") or {}).get("operation_id") or "")
+        assert op_id
+
+        canceled = await _dispatch_async(
+            daemon,
+            seq=2,
+            cmd="op-cancel",
+            payload={"operation_id": op_id, "reason": "test_cancel"},
+        )
+        assert canceled["ok"] is True
+        cancel_result = dict(canceled.get("result") or {})
+        assert cancel_result.get("cancel_requested") is True
+        assert str(cancel_result.get("cancel_status") or "") in {"cancel_requested", "canceled"}
+
+        status = await _dispatch_async(
+            daemon,
+            seq=3,
+            cmd="op-status",
+            payload={"operation_id": op_id},
+        )
+        assert status["ok"] is True
+        status_result = dict(status.get("result") or {})
+        assert status_result.get("done") is True
+        assert status_result.get("status") == "canceled"
+        assert status_result.get("cancel_requested") is True
+
+    asyncio.run(_run())
+
+
+def test_daemon_operation_cancel_requires_operation_session_token(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-cancel", "secret-cancel")
+
+    def _slow_call_service(cmd: str, payload: dict) -> dict:
+        time.sleep(0.2)
+        return {"status": "ok", "command": cmd}
+
+    daemon._call_service = _slow_call_service  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        started = await _dispatch_async(
+            daemon,
+            seq=1,
+            cmd="op-start",
+            payload={
+                "command": "discover-running",
+                "payload": {"session_token": token},
+            },
+        )
+        assert started["ok"] is True
+        op_id = str((started.get("result") or {}).get("operation_id") or "")
+        assert op_id
+
+        denied = await _dispatch_async(
+            daemon,
+            seq=2,
+            cmd="op-cancel",
+            payload={"operation_id": op_id},
+        )
+        assert denied["ok"] is False
+        assert denied["error_code"] == "missing_or_invalid_session_token"
+
+        allowed = await _dispatch_async(
+            daemon,
+            seq=3,
+            cmd="op-cancel",
+            payload={"operation_id": op_id, "session_token": token},
+        )
+        assert allowed["ok"] is True
+
+    asyncio.run(_run())
+
+
+def test_daemon_operation_cancel_tears_down_known_connect_engine(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": "default", "engine_id": "worker-cancel"},
+    )
+    op_id = str(op.get("operation_id") or "")
+    calls: list[str] = []
+
+    def _shutdown(engine_id: str, timeout_seconds: float = 8.0) -> dict:
+        calls.append(engine_id)
+        return {"status": "stopped", "engine_id": engine_id, "timeout_seconds": timeout_seconds}
+
+    daemon.svc.shutdown = _shutdown  # type: ignore[method-assign]
+
+    canceled = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-cancel",
+        payload={"operation_id": op_id},
+    )
+    assert canceled["ok"] is True
+    assert calls == ["worker-cancel"]
+    result = dict(canceled.get("result") or {})
+    assert result.get("status") == "canceled"
+    assert result.get("cancel_teardown_attempted") is True
+    assert result.get("cancel_teardown_status") == "stopped"
+
+
+def test_daemon_operation_cancel_tears_down_late_connect_engine_id(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    calls: list[str] = []
+
+    def _connect_call_service(cmd: str, payload: dict) -> dict:
+        time.sleep(0.05)
+        assert cmd == "connect-from-config"
+        return {"status": "ok", "engine_id": "late-worker-cancel"}
+
+    def _shutdown(engine_id: str, timeout_seconds: float = 8.0) -> dict:
+        calls.append(engine_id)
+        return {"status": "stopped", "engine_id": engine_id, "timeout_seconds": timeout_seconds}
+
+    daemon._call_service = _connect_call_service  # type: ignore[method-assign]
+    daemon.svc.shutdown = _shutdown  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        started = await _dispatch_async(
+            daemon,
+            seq=1,
+            cmd="op-start",
+            payload={"command": "connect-from-config", "payload": {"config_path": "default"}},
+        )
+        assert started["ok"] is True
+        op_id = str((started.get("result") or {}).get("operation_id") or "")
+        assert op_id
+
+        canceled = await _dispatch_async(
+            daemon,
+            seq=2,
+            cmd="op-cancel",
+            payload={"operation_id": op_id},
+        )
+        assert canceled["ok"] is True
+
+        await asyncio.sleep(0.1)
+        status = await _dispatch_async(
+            daemon,
+            seq=3,
+            cmd="op-status",
+            payload={"operation_id": op_id},
+        )
+        result = dict(status.get("result") or {})
+        assert result.get("status") == "canceled"
+        assert result.get("target_engine_id") == "late-worker-cancel"
+        assert result.get("cancel_teardown_status") == "stopped"
+        assert calls == ["late-worker-cancel"]
+
+    asyncio.run(_run())
 
 
 def test_owner_disconnect_shutdown_policy_sets_stop_event_for_exclusive_owner(tmp_path: Path) -> None:

@@ -61,6 +61,7 @@ class EngineHostDaemon:
         self._operations_lock = threading.Lock()
         self._operations_max_entries = 200
         self._operation_tasks: set[asyncio.Task] = set()
+        self._operation_tasks_by_id: Dict[str, asyncio.Task] = {}
         self._operation_tasks_lock = threading.Lock()
         self._endpoint_mode_runtime_override: Optional[str] = None
         self._runtime_profile = str(runtime_profile or "foreground_terminal_bound").strip().lower()
@@ -305,6 +306,14 @@ class EngineHostDaemon:
         return out
 
     @staticmethod
+    def _operation_target_engine_id(command: str, payload: Dict[str, Any]) -> Optional[str]:
+        cmd = str(command or "").strip()
+        if cmd not in {"connect-from-config", "spawn"}:
+            return None
+        engine_id = str((payload or {}).get("engine_id") or "").strip()
+        return engine_id or None
+
+    @staticmethod
     def _is_claim_command(cmd: str) -> bool:
         c = str(cmd or "").strip()
         return c in {"claim-engine", "claim-endpoint", "claim-resource"}
@@ -377,6 +386,11 @@ class EngineHostDaemon:
         )
         with self._operation_tasks_lock:
             self._operation_tasks = {t for t in self._operation_tasks if t is not None and not t.done()}
+            self._operation_tasks_by_id = {
+                op_id: t
+                for op_id, t in self._operation_tasks_by_id.items()
+                if t is not None and not t.done()
+            }
             pending_after = len(self._operation_tasks)
         return {
             "pending_before": len(pending),
@@ -506,6 +520,13 @@ class EngineHostDaemon:
             "result": None,
             "error": None,
             "error_code": None,
+            "cancel_requested": False,
+            "cancel_requested_at": None,
+            "cancel_completed_at": None,
+            "cancel_reason": None,
+            "cancel_teardown_attempted": False,
+            "cancel_teardown_status": None,
+            "target_engine_id": self._operation_target_engine_id(command, payload),
             "progress_events": [
                 self._operation_event("queued", "queued", "Operation queued", command=str(command or ""))
             ],
@@ -531,6 +552,118 @@ class EngineHostDaemon:
             self._operations[op_id] = dict(op)
             self._prune_operations_locked()
 
+    def _finalize_operation_canceled(self, operation_id: str, message: str = "Operation canceled") -> None:
+        op = self._get_operation(operation_id) or {}
+        if not op or bool(op.get("done", False)):
+            return
+        now = time.time()
+        op["done"] = True
+        op["status"] = "canceled"
+        op["stage"] = "canceled"
+        op["updated_at"] = now
+        op["completed_at"] = now
+        op["cancel_completed_at"] = now
+        events = list(op.get("progress_events") or [])
+        events.append(self._operation_event("canceled", "canceled", message))
+        op["progress_events"] = events
+        self._replace_operation(op)
+
+    def _operation_cancel_teardown(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        engine_id = str((op or {}).get("target_engine_id") or "").strip()
+        command = str((op or {}).get("command") or "").strip()
+        if command not in {"connect-from-config", "spawn"}:
+            return {"attempted": False, "status": "not_applicable", "engine_id": engine_id or None}
+        if not engine_id:
+            return {"attempted": False, "status": "target_engine_id_unknown", "engine_id": None}
+        try:
+            result = self.svc.shutdown(engine_id, timeout_seconds=2.0)
+            status = str((result or {}).get("status") or "").strip() or "unknown"
+            ok = status in {"stopped", "already_stopped", "not_found", "invalid_pid"}
+            return {
+                "attempted": True,
+                "status": status,
+                "ok": ok,
+                "engine_id": engine_id,
+                "result": dict(result or {}),
+            }
+        except Exception as exc:
+            return {
+                "attempted": True,
+                "status": "failed",
+                "ok": False,
+                "engine_id": engine_id,
+                "error": str(exc),
+            }
+
+    def _apply_operation_cancel_teardown(self, op: Dict[str, Any], teardown: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(op or {})
+        out["cancel_teardown_attempted"] = bool(teardown.get("attempted", False))
+        out["cancel_teardown_status"] = str(teardown.get("status") or "").strip() or None
+        out["cancel_teardown"] = dict(teardown)
+        out["updated_at"] = time.time()
+        if bool(teardown.get("attempted", False)) and not bool(teardown.get("ok", True)):
+            out["done"] = True
+            out["status"] = "cancel_failed"
+            out["stage"] = "cancel_failed"
+            out["error"] = str(teardown.get("error") or teardown.get("status") or "cancel_failed")
+            out["error_code"] = "cancel_failed"
+            out["completed_at"] = out["updated_at"]
+            events = list(out.get("progress_events") or [])
+            events.append(self._operation_event("cancel_failed", "failed", "Operation cancel failed"))
+            out["progress_events"] = events
+        return out
+
+    async def _request_operation_cancel(self, operation_id: str, *, reason: str = "") -> Dict[str, Any]:
+        op_id = str(operation_id or "").strip()
+        op = self._get_operation(op_id) or {}
+        if not op:
+            return {}
+        if bool(op.get("done", False)):
+            snapshot = self._operation_public_snapshot(op)
+            snapshot["cancel_status"] = "already_done"
+            return snapshot
+
+        now = time.time()
+        events = list(op.get("progress_events") or [])
+        events.append(
+            self._operation_event(
+                "cancel_requested",
+                "cancel_requested",
+                "Operation cancel requested",
+                reason=str(reason or "").strip() or None,
+            )
+        )
+        op["cancel_requested"] = True
+        op["cancel_requested_at"] = now
+        op["cancel_reason"] = str(reason or "").strip() or None
+        op["status"] = "cancel_requested"
+        op["stage"] = "cancel_requested"
+        op["updated_at"] = now
+        op["progress_events"] = events
+        self._replace_operation(op)
+
+        with self._operation_tasks_lock:
+            task = self._operation_tasks_by_id.get(op_id)
+        command = str(op.get("command") or "").strip()
+        active_task = bool(task is not None and not task.done())
+        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn"})
+        task_cancel_requested = bool(active_task and not wait_for_service_result)
+        if task_cancel_requested:
+            task.cancel()
+
+        teardown = await asyncio.to_thread(self._operation_cancel_teardown, op)
+        op = self._get_operation(op_id) or op
+        if not bool(op.get("done", False)):
+            op = self._apply_operation_cancel_teardown(op, teardown)
+            self._replace_operation(op)
+
+        if not task_cancel_requested and not wait_for_service_result:
+            self._finalize_operation_canceled(op_id)
+
+        snapshot = self._operation_public_snapshot(self._get_operation(op_id) or op)
+        snapshot["cancel_status"] = "cancel_requested" if task_cancel_requested else str(snapshot.get("status") or "canceled")
+        return snapshot
+
     async def _run_operation(self, operation_id: str, command: str, payload: Dict[str, Any]) -> None:
         op = self._get_operation(operation_id) or {}
         if not op:
@@ -547,6 +680,21 @@ class EngineHostDaemon:
             result = await asyncio.to_thread(self._call_service, command, payload)
             now = time.time()
             op = self._get_operation(operation_id) or op
+            if bool(op.get("cancel_requested", False)) and not bool(op.get("done", False)):
+                if isinstance(result, dict) and not str(op.get("target_engine_id") or "").strip():
+                    result_engine_id = str(result.get("engine_id") or "").strip()
+                    if result_engine_id:
+                        op["target_engine_id"] = result_engine_id
+                        self._replace_operation(op)
+                teardown = await asyncio.to_thread(self._operation_cancel_teardown, op)
+                op = self._get_operation(operation_id) or op
+                if not bool(op.get("done", False)):
+                    op = self._apply_operation_cancel_teardown(op, teardown)
+                    self._replace_operation(op)
+                if bool((self._get_operation(operation_id) or {}).get("done", False)):
+                    return
+                self._finalize_operation_canceled(operation_id)
+                return
             op["done"] = True
             op["status"] = "completed"
             op["stage"] = "completed"
@@ -559,6 +707,9 @@ class EngineHostDaemon:
             events.append(self._operation_event("completed", "completed", "Operation completed"))
             op["progress_events"] = events
             self._replace_operation(op)
+        except asyncio.CancelledError:
+            self._finalize_operation_canceled(operation_id)
+            raise
         except Exception as exc:
             now = time.time()
             op = self._get_operation(operation_id) or op
@@ -806,7 +957,7 @@ class EngineHostDaemon:
                     "error_code": "command_required",
                     "error_details": {},
                 }
-            if target_cmd in {"__ping__", "__shutdown__", "op-start", "op-status"}:
+            if target_cmd in {"__ping__", "__shutdown__", "op-start", "op-status", "op-cancel"}:
                 return {
                     "seq": seq,
                     "ok": False,
@@ -837,9 +988,15 @@ class EngineHostDaemon:
                 task = asyncio.create_task(self._run_operation(operation_id, target_cmd, target_payload))
                 with self._operation_tasks_lock:
                     self._operation_tasks.add(task)
+                    if operation_id:
+                        self._operation_tasks_by_id[operation_id] = task
                 def _on_done(done_task: asyncio.Task) -> None:
+                    if done_task.cancelled():
+                        self._finalize_operation_canceled(operation_id)
                     with self._operation_tasks_lock:
                         self._operation_tasks.discard(done_task)
+                        if operation_id and self._operation_tasks_by_id.get(operation_id) is done_task:
+                            self._operation_tasks_by_id.pop(operation_id, None)
                 task.add_done_callback(_on_done)
                 return {"seq": seq, "ok": True, "result": op_snapshot}
             except PermissionError as exc:
@@ -899,6 +1056,41 @@ class EngineHostDaemon:
                     "error_details": {"operation_id": op_id},
                 }
             return {"seq": seq, "ok": True, "result": self._operation_public_snapshot(op)}
+
+        if cmd == "op-cancel":
+            op_id = str(payload.get("operation_id") or "").strip()
+            if not op_id:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "operation_id_required",
+                    "error_code": "operation_id_required",
+                    "error_details": {},
+                }
+            op = self._get_operation(op_id)
+            if not op:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "operation_not_found",
+                    "error_code": "operation_not_found",
+                    "error_details": {"operation_id": op_id},
+                }
+            required_token = str(op.get("session_token") or "").strip()
+            provided_token = str(payload.get("session_token") or "").strip()
+            if required_token and required_token != provided_token:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "auth_failed",
+                    "error_code": "missing_or_invalid_session_token",
+                    "error_details": {"operation_id": op_id},
+                }
+            result = await self._request_operation_cancel(
+                op_id,
+                reason=str(payload.get("reason") or "").strip(),
+            )
+            return {"seq": seq, "ok": True, "result": result}
 
         try:
             payload = self._inject_runtime_endpoint_mode(cmd, payload)

@@ -189,6 +189,9 @@ EXAMPLES_BY_COMMAND = {
     "op-status": [
         "@'{\"operation_id\":\"<operation_id>\"}'@ | python -m hosting.engine_host_cli --payload-stdin op-status",
     ],
+    "op-cancel": [
+        "@'{\"operation_id\":\"<operation_id>\",\"reason\":\"user_requested\"}'@ | python -m hosting.engine_host_cli --payload-stdin op-cancel",
+    ],
 }
 
 
@@ -706,6 +709,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "reset-hosting-access",
         "op-start",
         "op-status",
+        "op-cancel",
     ]:
         cp = sp.add_parser(name)
         cp.add_argument("--engine-id", type=str, default="")

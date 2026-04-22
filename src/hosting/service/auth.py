@@ -200,6 +200,7 @@ class AuthMixin:
             "connect-from-config",
             "op-start",
             "op-status",
+            "op-cancel",
             "set-endpoint-mode-override",
             "get-endpoint-mode-effective",
             "get-lifecycle-policy-effective",
