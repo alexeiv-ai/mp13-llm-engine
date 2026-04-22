@@ -38,9 +38,11 @@ from .engine_host_channel import EngineHostControlChannel
 from .engine_process_supervisor import EngineProcessSupervisor
 from .client_realm import (
     CLIENT_REALM_ROOT_SUBDIR,
+    HANDOFF_PAYLOAD_KIND,
     VALID_SECRET_RECORD_ENCRYPTION,
     SecretRecord,
     FileSecretStore,
+    create_private_key_handoff_text,
     get_default_client_realm_root,
     client_realm_layout,
     ensure_client_realm_dirs,
@@ -56,6 +58,7 @@ from .client_realm import (
     list_client_audit_events,
     materialize_secret_file,
     resolve_client_profile_control_settings,
+    store_private_key_handoff_in_realm,
 )
 from .transport_bootstrap import (
     TRANSPORT_BOOTSTRAP_KIND,
@@ -102,9 +105,11 @@ __all__ = [
     "EngineHostControlChannel",
     "EngineProcessSupervisor",
     "CLIENT_REALM_ROOT_SUBDIR",
+    "HANDOFF_PAYLOAD_KIND",
     "VALID_SECRET_RECORD_ENCRYPTION",
     "SecretRecord",
     "FileSecretStore",
+    "create_private_key_handoff_text",
     "get_default_client_realm_root",
     "client_realm_layout",
     "ensure_client_realm_dirs",
@@ -120,6 +125,7 @@ __all__ = [
     "list_client_audit_events",
     "materialize_secret_file",
     "resolve_client_profile_control_settings",
+    "store_private_key_handoff_in_realm",
     "TRANSPORT_BOOTSTRAP_KIND",
     "make_transport_bootstrap_bundle",
     "validate_transport_bootstrap_bundle",

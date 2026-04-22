@@ -155,19 +155,16 @@ Imported-key example:
 Generated-key example:
 1. A user asks the setup flow to generate a new admin keypair.
 2. Hosting registers the generated public key.
-3. The private key must then be either:
-   - written to an explicit exported file path for immediate import into a hosting consumer realm, or
-   - stored in the setup machine's client realm secret store and later exported with `--client-export-key`
-4. A loose exported private-key file is not the preferred final state. Consumers should hand it off into their own client realm secret store, then purge the loose exported file.
+3. The private key is stored in the setup machine's client realm secret store.
+4. The key can be copied to the real hosting consumer by printing structured handoff text with `--client-show-key-handoff` or `Manage RBAC keys` -> `Show local admin handoff text`, then importing it with the client-realm API.
 5. If hosting-generated private key material is still embedded in local hosting metadata, that is a legacy/repair state and should be treated as follow-up work.
 
 What the user who installed the hosting component should do:
 1. If the setup output says `imported`, use the private key you already had before running setup.
-2. If the setup output says `generated` and shows a file path, that file is the private key location clients should use.
-3. If the setup output says `generated` and shows a client-realm secret plus an export command, run that command on the setup machine, transfer the exported private-key file if needed, then import or hand it off into the hosting consumer realm.
-4. After a consumer receives an exported generated key, delete the loose exported private-key file. The setup/keyring metadata records that the export was purged after hand-off when that happened locally.
-5. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata" or "expected exported key file is missing", fix that before treating the setup as complete.
-6. For `transport` keys, keep the private key on the hosting consumer side; hosting should only track the public key reference.
+2. If the setup output says `generated`, migrate the client-realm secret into the hosting consumer's own client-realm storage during consumer configuration.
+3. If the consumer is configured separately, print the handoff text and paste it into the consumer's client-realm import path. Treat that text as private-key material.
+4. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata", fix that before treating the setup as complete.
+5. For `transport` keys, keep the private key on the hosting consumer side; hosting should only track the public key reference.
 
 What hosting consumer code or UX should assume:
 1. The hosting consumer already has the private key or knows where to find it.

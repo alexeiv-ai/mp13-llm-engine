@@ -57,27 +57,44 @@ Private keys must be stored and exchanged as OpenSSH private keys. If password p
 
 Regenerate or re-import any client realm secrets and transport bootstrap bundles that used `password_v1`.
 
-## Hosting-generated private key custody is explicit
+## Hosting-generated private key custody uses handoff text
 
-Generated admin private keys are no longer an implicit setup-side artifact.
+Generated admin private keys are no longer exported through loose private-key files.
 
 Current setup behavior:
 
-- If the operator exports the generated key, setup records `private_key_storage: "exported_file"` and `private_key_export_path`.
-- If the operator does not export immediately, setup stores the private key in the setup machine's default client realm and prints a `--client-export-key` handoff command.
-- Doctor reports a loose exported generated private-key file as a non-blocking custody warning with a recommendation to hand it off into a local consumer realm or export it for remote transfer, then purge the loose file.
-- After hand-off with source-file deletion, key metadata records `private_key_export_purged_at` and `private_key_adopted_client_realm_root`; doctor no longer treats the missing exported file as an error.
-- If the operator purges an exported file without recorded hand-off, metadata records `private_key_export_purged_without_adoption_at`; doctor keeps a warning because the private key may be lost unless another copy exists.
+- Setup stores generated admin private-key material in the setup machine's default client realm.
+- Interactive setup can print structured private-key handoff text immediately, or the operator can print it later from `Manage RBAC keys` -> `Show local admin handoff text`.
+- Non-interactive setup uses `--print-private-key-handoff` when it should print the generated admin key handoff text.
+- `--client-show-key-handoff` prints structured handoff text. The previous file-export flags are removed.
+- Creating handoff text writes a client-realm audit event without storing private-key material in the audit payload.
 
 Consumer-facing adjustment:
 
-- Do not depend on the setup machine's exported private-key file as durable storage.
-- Discover exported key references with `--client-list-exported-keys`.
-- For a local consumer on the same filesystem, move a generated exported key into the consumer realm with `--client-handoff-exported-key --client-key-id <id> --client-delete-exported-key-file`.
-- For a remote consumer, export or transfer the private-key file out-of-band, then import it into the remote consumer's vault/client realm there.
-- Purge a tracked exported file without importing it only with `--client-purge-exported-key`; this can lose the only private-key copy.
-- The interactive `Manage RBAC keys` menu exposes list/export/hand-off/purge flows for generated private-key custody alongside key revocation and auth audit views.
+- Do not depend on setup-machine `hosting/keyring/<key-id>.private` files; new setup does not create them.
+- Import handoff text with `store_private_key_handoff_in_realm(...)`.
+- Producer-side code can generate handoff text with `create_private_key_handoff_text(...)`.
+- Handoff text contains private-key material and must be handled as a secret.
+- `--export-private-key`, `--client-export-key`, `--client-export-key-path`, `--client-list-exported-keys`, `--client-handoff-exported-key`, and `--client-purge-exported-key` are removed from the supported workflow.
 - `--client-import-key` remains available as an operator/manual bridge, but consumer projects should prefer the client-realm API helpers for import and realm migration. The CLI normalizes quoted/literal-newline paste input and clears the inline private-key argument after reading it.
+
+## Stable setup/client API modules replace direct CLI runner coupling
+
+Backends should stop importing `hosting_config_cli` runners or constructing argparse-like objects. The stable integration contract is now:
+
+- `hosting.hosting_setup_api`: `plan_local_hosting_setup`, `apply_local_hosting_setup`, `inspect_local_hosting_setup`, `reset_local_hosting_setup`.
+- `hosting.client_realm_api`: `list_client_realm_keys`, `generate_client_realm_key`, `import_client_realm_key`, `create_client_realm_key_handoff`, `import_client_realm_key_handoff`.
+- `hosting.transport_bootstrap_api`: `export_transport_bootstrap`, `import_transport_bootstrap`, `provision_transport_profile`, `validate_transport_profile`, `install_authorized_transport_key`.
+- `hosting.transport_admin_setup_api`: `plan_transport_admin_setup`, `execute_transport_admin_setup`.
+
+Gates:
+
+- Local setup apply/reset are host-local only.
+- Reset requires `confirm_reset=True`.
+- Elevated transport admin setup is dry-run by default and requires `execute=True` for execution.
+- Human CLI output remains unstable and must not be parsed by dependent projects.
+
+`install_authorized_transport_key` preserves the old CLI install action's required behavior: it writes/updates the `authorized_keys` block and registers the transport public key in local hosting RBAC. File-only install is explicit via `register_rbac=False`.
 
 ## Shared-secret verifier format is unchanged for now
 

@@ -14,6 +14,14 @@ Entrypoints:
 
 The script is designed for both first-time setup before daemon startup and reconfiguration/inspection of an existing hosting installation.
 
+Stable integration APIs:
+1. `hosting.hosting_setup_api` exposes host-local setup planning, apply, inspect, and reset. It is the backend integration contract for local bootstrap/materialization.
+2. `hosting.client_realm_api` exposes client-realm key list/generate/import and copy/paste handoff helpers.
+3. `hosting.transport_bootstrap_api` exposes local transport bundle/profile artifact operations. `install_authorized_transport_key` also registers the transport public key in local hosting RBAC by default; pass `register_rbac=False` only for file-only maintenance.
+4. `hosting.transport_admin_setup_api` exposes explicit dry-run/elevated SSH service/firewall setup planning and execution.
+
+Backends must not parse human CLI output. `hosting_config_cli` is an operator adapter; programmatic integrations should call the API modules above.
+
 Terminology:
 1. "Hosting consumer" means the long-running backend process that talks to the hosting daemon.
 2. A UI may guide or display these actions, but is usually not the direct hosting protocol peer.
@@ -38,10 +46,7 @@ Supported top-level modes:
    - `--client-list-keys`
    - `--client-generate-key`
    - `--client-import-key` (operator/manual bridge; consumers should prefer client-realm API helpers)
-   - `--client-export-key`
-   - `--client-list-exported-keys`
-   - `--client-handoff-exported-key`
-   - `--client-purge-exported-key`
+   - `--client-show-key-handoff` (prints structured handoff text; it does not write a private-key file)
 7. Transport bootstrap operations:
    - `--transport-export-bootstrap`
    - `--transport-import-bootstrap`
@@ -59,6 +64,8 @@ Before mutation, the wizard shows:
 1. configure hosting now
 2. review status details
 3. run doctor diagnostics
+4. manage RBAC keys
+5. reset to unconfigured, only when active hosting access files or keys exist
 
 Controls:
 1. Enter accepts the default/current value.
@@ -74,7 +81,6 @@ On `q`, if setup changes are staged, the script prints them and asks whether to 
 The wizard collects hosting-consumer context before exposing low-level fields:
 
 1. Who consumes hosting?
-   - local experiment only
    - same-box backend consumer
    - SSH relay/tunnel consumer
    - remote backend consumer
@@ -92,14 +98,28 @@ The wizard collects hosting-consumer context before exposing low-level fields:
 
 The script then prints a suggested auto-configuration and follow-up actions. The operator can apply it, customize from it, go back, or leave hosting unconfigured.
 
-### 3.3 Local experiment/no-write path
+### 3.3 No-write and reset paths
 
-If the operator chooses local experiment only, the suggested action is to leave hosting unconfigured.
+If the operator does not want to configure access, they can quit from the main menu. The consumer questionnaire does not include a skip option because it does not produce a connected setup workflow.
 
-Semantics:
+No-write semantics:
 1. No hosting access files are written.
 2. Any same-user local consumer is effectively an implicit admin because no daemon auth boundary has been configured yet.
 3. The operator should rerun setup when a real long-running hosting consumer needs stable daemon access.
+
+API gating:
+1. `apply_local_hosting_setup` and `reset_local_hosting_setup` are host-local only and require access to the target host filesystem/control-state files.
+2. `reset_local_hosting_setup` requires `confirm_reset=True`.
+3. Transport admin setup is dry-run by default; execution requires `execute=True` and uses platform elevation.
+4. Remote backend workflows may generate/import local artifacts and instructions, but they do not apply setup to a remote daemon through a daemon API.
+
+Reset semantics:
+1. `Reset to unconfigured` is available from the main menu when active hosting access files or keys exist.
+2. Reset shows a warning and requires confirmation.
+3. Reset deletes active hosting access files, keyring metadata, bootstrap state, client-key mapping, sessions, challenges, runtime state, and issued-token state.
+4. Reset purges tracked generated private-key custody: client-realm private-key secret records and matching client-realm key metadata rows.
+5. Reset keeps audit logs and appends a reset event.
+6. After reset, hosting access is unconfigured until setup is run again. The unconfigured host policy only allows a same-user local hosting consumer and treats that user as implicit admin.
 
 Interactive setup delays directory creation until the operator confirms final apply.
 
@@ -192,13 +212,15 @@ Key source options:
 
 Generated private-key behavior:
 1. The public key is registered with hosting.
-2. The private key can be exported to a file for remote handoff.
-3. If export is requested interactively and no path is provided, the wizard prompts with a default under `hosting/keyring/<key-id>.private`.
-4. If not exported, generated private key material is stored in the setup machine's default client realm secret store and can be exported later.
-5. Client realm secret records store OpenSSH private-key text. When `--client-secret-password` is supplied, the private key is protected with OpenSSH private-key passphrase protection.
-6. Local consumers can hand off an exported private-key file into their own client realm and optionally delete the loose file.
-7. Remote consumers should receive exported private-key files through an out-of-band transfer and import/migrate them into their own vault or client realm.
-8. Purging a tracked exported private-key file without handoff is explicit and warns that key material may be lost if no other copy exists.
+2. Generated private key material is stored in the setup machine's default client realm secret store; setup does not create loose private-key files.
+3. Interactive setup uses a numbered custody choice for the generated private key before generating it: print structured handoff text now, or keep it local and print handoff text later.
+4. When the generated private key is stored locally, passphrase protection defaults to yes. If the operator declines, setup warns about local file disclosure risk and asks for explicit confirmation before writing an unprotected local private key.
+5. Interactive hidden passphrase prompts ask for the passphrase twice and retry on mismatch.
+6. Client realm secret records store OpenSSH private-key text. When `--client-secret-password` is supplied, the private key is protected with OpenSSH private-key passphrase protection.
+7. Handoff uses structured copy/paste text generated by `create_private_key_handoff_text` and imported by consumer code with `store_private_key_handoff_in_realm`.
+8. Creating handoff text and importing handoff text both write client-realm audit records. Audit payloads identify the key and secret ids without storing private-key material.
+9. Non-interactive setup can use `--print-private-key-handoff` to print the generated admin key handoff text after local client-realm storage.
+10. After setup, the wizard prints where the generated private key was stored and the next handoff action. Consumers should migrate the key into their own client-side key storage using the client-realm API, or use `Manage RBAC keys` -> `Show local admin handoff text`.
 
 Imported-key behavior:
 1. Hosting stores the public key and metadata.
@@ -311,6 +333,7 @@ Checks include:
 9. generated admin private-key secret encryption posture when applicable.
 10. transport authorized-key presence/hardening when a transport key id or authorized_keys path is provided.
 11. hosting transport RBAC registration and public-key match when a transport key id is provided.
+12. generated admin private-key custody when it remains in the setup machine's client realm and may need migration during hosting consumer reconfiguration or handoff through `Manage RBAC keys`.
 
 Doctor output includes:
 1. all checks
