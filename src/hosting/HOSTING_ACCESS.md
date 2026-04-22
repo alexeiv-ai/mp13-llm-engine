@@ -140,10 +140,12 @@ The short version:
 What this means in practice:
 1. If you import an existing key, hosting stores the public key only.
 2. If hosting generates a new keypair for convenience, the public key is registered with hosting and the private key must be accounted for clearly.
-3. Hosting-generated private keys can be handled in either of two explicit ways:
-   - export to a private-key file immediately
-   - store in the setup machine's default client realm and print a later export/import handoff command
-4. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
+3. Hosting-generated private keys are stored in the setup machine's default client realm, not written as loose private-key files.
+4. Generated-key handoff is structured copy/paste text:
+   - print it during setup with `--print-private-key-handoff`
+   - print it later with `--client-show-key-handoff` or `Manage RBAC keys` -> `Show local admin handoff text`
+   - import it into the real hosting consumer with `hosting.client_realm_api.import_client_realm_key_handoff`
+5. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
 
 Imported-key example:
 1. A user already has `C:\Users\me\.ssh\id_ed25519` and `C:\Users\me\.ssh\id_ed25519.pub`.
@@ -157,22 +159,23 @@ Generated-key example:
 2. Hosting registers the generated public key.
 3. The private key is stored in the setup machine's client realm secret store.
 4. The key can be copied to the real hosting consumer by printing structured handoff text with `--client-show-key-handoff` or `Manage RBAC keys` -> `Show local admin handoff text`, then importing it with the client-realm API.
-5. If hosting-generated private key material is still embedded in local hosting metadata, that is a legacy/repair state and should be treated as follow-up work.
+5. Handoff creation and import are audited without recording the private-key text in audit data.
 
 What the user who installed the hosting component should do:
 1. If the setup output says `imported`, use the private key you already had before running setup.
-2. If the setup output says `generated`, migrate the client-realm secret into the hosting consumer's own client-realm storage during consumer configuration.
+2. If the setup output says `generated`, import the handoff text into the hosting consumer's own client-realm storage during consumer configuration.
 3. If the consumer is configured separately, print the handoff text and paste it into the consumer's client-realm import path. Treat that text as private-key material.
-4. If the setup output says `generated` but also shows a warning such as "private key still embedded in hosting metadata", fix that before treating the setup as complete.
+4. If setup, status, or doctor output reports a private-key custody warning, fix that before treating the setup as complete.
 5. For `transport` keys, keep the private key on the hosting consumer side; hosting should only track the public key reference.
 
 What hosting consumer code or UX should assume:
-1. The hosting consumer already has the private key or knows where to find it.
+1. The hosting consumer already has the private key, or receives a generated key through structured client-realm handoff text.
 2. Hosting will report useful metadata about the key:
    - whether it was `imported` or `generated`
    - how the public key was supplied
-   - whether the private key is externally managed, exported to a file, stored as a client-realm secret, handed off into a consumer realm, or still requires user follow-up
-3. Consumer tooling can discover exported private-key file references from keyring metadata, migrate private keys between client realms, and hand off a local exported file into the consumer client realm.
+   - whether the private key is externally managed or stored as a client-realm secret
+   - which client realm and secret id hold generated private-key material, when hosting setup created it
+3. Consumer tooling should use `hosting.client_realm_api` to list client-realm keys, create handoff text, and import handoff text into the consumer realm.
 4. The consumer-facing UX should show that information plainly to the user instead of making them infer it.
 
 ### 4.2 Keyring paradigm
@@ -191,19 +194,15 @@ Key metadata expectations:
 1. Persisted key metadata should record whether a public key was `imported` or `generated`.
 2. When known, persisted metadata should also record:
    - how the public key was supplied (`file`, `inline`, generated, existing keyring)
-   - whether private key material is not managed, exported to a file, stored in a client-realm secret, handed off into a consumer realm, or still embedded locally
-   - whether an exported private-key file still exists, was purged after hand-off, or was purged without recorded hand-off
+   - whether private key material is not managed by hosting or stored in a client-realm secret
+   - the client realm root, secret id, and protection state for generated private-key material held in the local client realm
+   - whether the expected client-realm secret is missing or requires operator follow-up
    - any operator warning that requires follow-up
-
-Migration rule:
-1. If a previous-format key file is detected, move it to `<name>.migrated` before importing into keyring metadata.
-2. Record migration event in audit log.
-3. Never auto-delete `.migrated` files.
 
 ### 4.3 Baseline integrity posture
 
 1. File permissions restricted to daemon user account.
-2. Audit every key create/update/revoke/migrate event.
+2. Audit every key create/update/revoke/handoff event.
 3. Optional tamper-warning checksum chain (best effort, not a local-compromise prevention guarantee).
 
 ## 5. Endpoint Access Modes and Ownership
@@ -271,10 +270,12 @@ Current implementation note:
 The following points are intended as stable design notes rather than phased status updates:
 1. The role-hierarchy model is the supported runtime auth model for hosting.
 2. Endpoint default mode, runtime override, and deterministic displaced-owner denial/reclaim behavior are part of the baseline command contract.
-3. Setup, diagnostics, and migration helpers are expected operator surfaces:
+3. Setup, diagnostics, reset, and host-local setup APIs are expected operator/integration surfaces:
    - `hosting_config`
    - `hosting_config --doctor`
-   - previous key-file migration to `.migrated`
+   - `hosting.hosting_setup_api`
+   - `hosting.client_realm_api`
+   - `hosting.transport_bootstrap_api`
 4. Safe-only no-auth policy is enforced both at startup and on runtime control-config changes.
 5. Non-local auth bootstrap uses public-key challenge plus SSH session binding context.
 6. Shared-secret session issuance (`auth-issue-session`) is local-only and must be denied for non-local connectivity profiles.
@@ -674,26 +675,23 @@ This section is the authoritative integration contract for hosting consumers.
    - `audit/`
 3. Long-lived consumer private keys should live in consumer-local custody:
    - imported existing file
-   - exported managed file
    - client-realm secret record
+   - imported client-realm handoff text
 4. Consumer secret records store OpenSSH private-key text. Password protection, when used, is OpenSSH private-key passphrase protection and is reported with `private_key_protection: "openssh_passphrase"`.
 5. Hosting must not use normal runtime daemon RPC as the mechanism that returns private keys back to consumers.
 6. Client-realm helpers support generated-key handoff:
-   - discover exported private-key file references from a hosting or client keyring
-   - import a private key from a file or sanitized inline paste argument
-   - hand off a previously exported private-key file into the local consumer realm
-   - migrate private-key secret records between client realms
-   - optionally delete the exported source file after hand-off
-   - explicitly purge a tracked exported file when the operator accepts possible key-material loss
+   - list client-realm keys and secret custody metadata
+   - generate or import private keys into a client-realm secret record
+   - create structured private-key handoff text from a client-realm secret
+   - import structured handoff text into the real consumer realm
+   - audit handoff creation and import without recording private-key material
 7. `--client-import-key` remains an operator/script bridge for manual import and tests; consumer projects should prefer the client-realm API helpers directly.
-8. The interactive RBAC/key-management menu exposes custody operations for operators: list exported private-key files, export stored client-realm keys for remote handoff, hand off local exported files, purge exported files with warning, and revoke RBAC keys.
-9. A consumer project should not treat the setup machine's exported file path as its durable vault. It should copy/import/hand off the private key into its own realm or vault, then mark/purge the loose exported file.
+8. The interactive RBAC/key-management menu exposes custody operations for operators: show local admin handoff text when a local admin private key is available, list/revoke RBAC keys, list auth sessions, and list RBAC/session audit events.
+9. A consumer project should not treat the setup machine's default client realm as the durable vault for a remote or separate consumer. It should import the handoff text into its own realm during consumer configuration.
 10. Setup and doctor output use these custody states:
-   - `exported_file`: a loose private-key file was created and is still tracked
    - `client_realm_secret`: private key is stored in a client-realm secret record
-   - `private_key_export_purged_at`: exported file was intentionally deleted after client-realm hand-off
-   - `private_key_export_purged_without_adoption_at`: exported file was deleted without recorded hand-off and may require rotation/recovery
-   - `private_key_adopted_client_realm_root`: realm root that received the exported file
+   - externally managed or not managed by hosting: imported public key, private key remains with the operator or consumer
+   - warning/follow-up fields when an expected client-realm secret is missing or unprotected for the selected workflow
 
 ### 11.3 Auth flows consumers must support
 
@@ -728,7 +726,7 @@ This section is the authoritative integration contract for hosting consumers.
 6. Distinguish auth-path failure from daemon-version incompatibility when `auth-status` metadata is unavailable.
 7. Surface key provenance and custody state clearly:
    - `imported` vs `generated`
-   - exported file vs client-realm secret
+   - externally managed key vs client-realm secret or handoff text
    - OpenSSH passphrase-protected vs unprotected private key
 8. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
