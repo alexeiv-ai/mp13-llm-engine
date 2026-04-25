@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from hosting.client_realm_api import delete_client_realm_key, export_client_realm_key, import_client_realm_key
 from hosting.client_realm import (
     CLIENT_REALM_ROOT_SUBDIR,
     FileSecretStore,
@@ -20,6 +21,7 @@ from hosting.client_realm import (
     list_client_audit_events,
     managed_key_path,
     materialize_secret_file,
+    read_client_key_metadata,
     read_client_profile,
     read_client_access,
     resolve_client_profile_control_settings,
@@ -90,6 +92,64 @@ def test_file_secret_store_round_trip_and_listing() -> None:
         assert raw["metadata"]["target"] == "user@example"
         assert store.delete_secret(second.secret_id) is True
         assert store.delete_secret(second.secret_id) is False
+
+
+def test_client_realm_api_exports_to_result_or_known_realm_folder() -> None:
+    with _workspace_tmpdir() as root:
+        realm_root = root / "client-realm"
+        imported = import_client_realm_key(
+            {
+                "client_realm_root": realm_root,
+                "key_id": "client-admin",
+                "private_key_text": "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKECLIENT\n-----END OPENSSH PRIVATE KEY-----",
+                "public_key_text": "ssh-ed25519 AAAACLIENT client-admin",
+            }
+        )
+        assert imported["key_id"] == "client-admin"
+
+        result_export = export_client_realm_key({"client_realm_root": realm_root, "key_id": "client-admin"})
+        assert result_export["returned_in_result"] is True
+        assert "FAKECLIENT" in str(result_export["private_key"])
+
+        file_export = export_client_realm_key(
+            {
+                "client_realm_root": realm_root,
+                "key_id": "client-admin",
+                "export_path": realm_root / "managed_keys" / "client-admin.key",
+            }
+        )
+        assert Path(str(file_export["export_path"])).exists()
+
+        with pytest.raises(ValueError, match="client realm"):
+            export_client_realm_key(
+                {
+                    "client_realm_root": realm_root,
+                    "key_id": "client-admin",
+                    "export_path": root / "exported" / "client-admin.key",
+                }
+            )
+
+
+def test_client_realm_api_delete_key_removes_secret_and_metadata() -> None:
+    with _workspace_tmpdir() as root:
+        realm_root = root / "client-realm"
+        imported = import_client_realm_key(
+            {
+                "client_realm_root": realm_root,
+                "key_id": "delete-me",
+                "private_key_text": "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEDELETE\n-----END OPENSSH PRIVATE KEY-----",
+                "public_key_text": "ssh-ed25519 AAAADELETE delete-me",
+            }
+        )
+        secret_path = Path(str(imported["secret_path"]))
+        assert secret_path.exists()
+
+        deleted = delete_client_realm_key({"client_realm_root": realm_root, "key_id": "delete-me"})
+        assert deleted["status"] == "ok"
+        assert deleted["deleted_secret"] is True
+        assert not secret_path.exists()
+        assert "delete-me" not in dict(read_client_key_metadata(realm_root).get("keys") or {})
+        assert Path(str(deleted["audit_path"])).exists()
 
 
 def test_file_secret_store_rejects_custom_password_encryption() -> None:

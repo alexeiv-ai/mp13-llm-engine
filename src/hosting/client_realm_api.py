@@ -13,14 +13,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .client_realm import (
+    FileSecretStore,
     append_client_audit_event,
     create_private_key_handoff_text,
+    delete_client_key_from_realm,
     normalize_pasted_private_key,
     read_client_key_metadata,
+    require_client_realm_private_key_path,
     store_private_key_handoff_in_realm,
     store_private_key_in_realm,
 )
-from .transport_bootstrap import _protect_openssh_private_key
+from .transport_bootstrap import _protect_openssh_private_key, _protect_windows_private_key_path
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,7 @@ class ClientRealmKeyRequest:
     public_key_file: Optional[Path] = None
     passphrase: str = ""
     role: str = ""
+    export_path: Optional[Path] = None
 
 
 def _generate_keypair(*, key_id: str, passphrase: str = "") -> tuple[str, str]:
@@ -69,12 +73,10 @@ def _generate_keypair(*, key_id: str, passphrase: str = "") -> tuple[str, str]:
 def _derive_public_key(private_key_text: str) -> str:
     tmpdir = Path(tempfile.mkdtemp(prefix="hosting_pubderive_")).resolve()
     try:
+        _protect_windows_private_key_path(tmpdir)
         private_path = (tmpdir / "private_key").resolve()
         private_path.write_text(str(private_key_text or "").strip() + "\n", encoding="utf-8")
-        try:
-            private_path.chmod(0o600)
-        except Exception:
-            pass
+        _protect_windows_private_key_path(private_path)
         proc = subprocess.run(  # noqa: S603
             ["ssh-keygen", "-y", "-f", str(private_path)],
             capture_output=True,
@@ -183,6 +185,61 @@ def import_client_realm_key(request: ClientRealmKeyRequest | Dict[str, Any]) -> 
     return {**stored, "audit_path": str(audit_path)}
 
 
+def export_client_realm_key(request: ClientRealmKeyRequest | Dict[str, Any]) -> Dict[str, Any]:
+    data = _request_dict(request)
+    root = Path(data.get("client_realm_root") or "").expanduser().resolve()
+    key_id = str(data.get("key_id") or "").strip()
+    if not key_id:
+        raise ValueError("key_id is required")
+    realm = str(data.get("realm") or "default").strip() or "default"
+    payload = read_client_key_metadata(root)
+    row = dict(dict(payload.get("keys") or {}).get(key_id) or {})
+    secret_id = str(row.get("private_key_secret_id") or "").strip()
+    if not secret_id:
+        raise ValueError(f"client key {key_id!r} does not reference a client-realm secret")
+    store = FileSecretStore(root, realm=realm)
+    private_key_text = str(store.get_secret_payload(secret_id, password=str(data.get("passphrase") or "") or None) or "")
+    if not private_key_text:
+        raise ValueError(f"client key {key_id!r} has an empty private-key secret")
+    export_path_raw = str(data.get("export_path") or "").strip()
+    if export_path_raw:
+        export_path = require_client_realm_private_key_path(root, Path(export_path_raw))
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        export_path.write_text(private_key_text, encoding="utf-8")
+        try:
+            export_path.chmod(0o600)
+        except Exception:
+            pass
+        private_key_output = None
+    else:
+        export_path = None
+        private_key_output = private_key_text
+    audit_path = append_client_audit_event(
+        root,
+        event_type="client_key_export",
+        realm=realm,
+        payload={
+            "key_id": key_id,
+            "secret_id": secret_id,
+            "export_path": str(export_path) if export_path else None,
+            "returned_in_result": export_path is None,
+        },
+    )
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "client_realm_root": str(root),
+        "realm": realm,
+        "key_id": key_id,
+        "secret_id": secret_id,
+        "export_path": str(export_path) if export_path else None,
+        "returned_in_result": export_path is None,
+        "audit_path": str(audit_path),
+    }
+    if private_key_output is not None:
+        result["private_key"] = private_key_output
+    return result
+
+
 def create_client_realm_key_handoff(request: ClientRealmKeyRequest | Dict[str, Any]) -> Dict[str, Any]:
     data = _request_dict(request)
     return create_private_key_handoff_text(
@@ -203,11 +260,36 @@ def import_client_realm_key_handoff(request: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def delete_client_realm_key(request: ClientRealmKeyRequest | Dict[str, Any]) -> Dict[str, Any]:
+    data = _request_dict(request)
+    root = Path(data.get("client_realm_root") or "").expanduser().resolve()
+    key_id = str(data.get("key_id") or "").strip()
+    if not key_id:
+        raise ValueError("key_id is required")
+    realm = str(data.get("realm") or "default").strip() or "default"
+    deleted = delete_client_key_from_realm(root, key_id=key_id, realm=realm)
+    audit_path = append_client_audit_event(
+        root,
+        event_type="client_key_deleted",
+        realm=realm,
+        payload={
+            "key_id": key_id,
+            "secret_id": deleted.get("secret_id"),
+            "deleted_secret": bool(deleted.get("deleted_secret")),
+            "deleted_export_file": bool(deleted.get("deleted_export_file")),
+            "deleted_export_path": deleted.get("deleted_export_path"),
+        },
+    )
+    return {**deleted, "audit_path": str(audit_path)}
+
+
 __all__ = [
     "ClientRealmKeyRequest",
     "list_client_realm_keys",
     "generate_client_realm_key",
     "import_client_realm_key",
+    "export_client_realm_key",
     "create_client_realm_key_handoff",
     "import_client_realm_key_handoff",
+    "delete_client_realm_key",
 ]

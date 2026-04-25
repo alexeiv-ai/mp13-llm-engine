@@ -312,7 +312,7 @@ def test_setup_generate_consolidates_importable_key_material(monkeypatch: pytest
         export_args = _args(default_config_dir=root, control_state_file=control)
         export_args.client_export_key = True
         export_args.client_key_id = "admin-main"
-        export_args.client_export_key_path = str(root / "exported" / "admin-main")
+        export_args.client_export_key_path = str(root / "hosting_client" / "default" / "managed_keys" / "admin-main.key")
         exported = run_client_keys(export_args)
         assert exported["status"] == "ok"
         assert "BEGIN OPENSSH PRIVATE KEY" in Path(exported["export_path"]).read_text(encoding="utf-8")
@@ -385,7 +385,7 @@ def test_setup_generate_with_export_keeps_private_key_out_of_keyring_and_client_
 ) -> None:
     with _workspace_tmpdir() as root:
         control = root / "hosting" / "access_control.json"
-        export_path = root / "exported" / "admin-main"
+        export_path = root / "hosting_client" / "default" / "managed_keys" / "admin-main.key"
 
         monkeypatch.setattr(
             "hosting.hosting_config_cli._generate_keypair",
@@ -852,7 +852,7 @@ def test_run_client_keys_generate_list_and_export(monkeypatch: pytest.MonkeyPatc
 
         args.client_list_keys = False
         args.client_export_key = True
-        args.client_export_key_path = str(root / "exported" / "client-admin")
+        args.client_export_key_path = str(root / "hosting_client" / "default" / "managed_keys" / "client-admin.key")
         exported = run_client_keys(args)
         assert exported["status"] == "ok"
         assert Path(exported["export_path"]).exists()
@@ -862,7 +862,7 @@ def test_run_client_keys_generate_list_and_export(monkeypatch: pytest.MonkeyPatc
 def test_client_realm_discovers_and_hands_off_exported_private_key(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
         control = root / "hosting" / "access_control.json"
-        export_path = root / "exported" / "admin-main.key"
+        export_path = root / "hosting_client" / "default" / "managed_keys" / "admin-main.key"
         monkeypatch.setattr(
             "hosting.hosting_config_cli._generate_keypair",
             lambda **_kwargs: (
@@ -928,7 +928,7 @@ def test_client_realm_migrates_secret_between_realms(monkeypatch: pytest.MonkeyP
 def test_client_purge_exported_private_key_warns_without_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
     with _workspace_tmpdir() as root:
         control = root / "hosting" / "access_control.json"
-        export_path = root / "exported" / "admin-main.key"
+        export_path = root / "hosting_client" / "default" / "managed_keys" / "admin-main.key"
         monkeypatch.setattr(
             "hosting.hosting_config_cli._generate_keypair",
             lambda **_kwargs: (

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..client_realm import secret_record_path
 from .constants import (
     DAEMON_VERSION,
     ROLE_ADMIN,
@@ -113,6 +114,85 @@ class AuthMixin:
         p = dict(payload or {})
         token = str(p.get("session_token") or p.get("auth_token") or "").strip()
         return token
+
+    def _local_private_key_custody_metadata(self) -> List[Dict[str, Any]]:
+        keys_file = (self.hosting_root / "keyring" / "keys.json").resolve()
+        if not keys_file.exists():
+            return []
+        try:
+            payload = json.loads(keys_file.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        rows: List[Dict[str, Any]] = []
+        default_config_dir = self.hosting_root.parent.resolve()
+        for key_id, row_value in sorted(dict(payload.get("keys") or {}).items()):
+            row = dict(row_value or {})
+            secret_id = str(row.get("private_key_secret_id") or "").strip()
+            secret_realm = str(row.get("private_key_secret_realm") or "default").strip() or "default"
+            secret_path = None
+            secret_exists = None
+            secret_encryption = None
+            secret_protection = str(row.get("private_key_protection") or "").strip() or None
+            export_path_raw = str(row.get("private_key_export_path") or "").strip()
+            export_path = Path(export_path_raw).expanduser().resolve() if export_path_raw else None
+            if secret_id:
+                secret_path = secret_record_path(
+                    (default_config_dir / "hosting_client" / secret_realm).resolve(),
+                    secret_id,
+                )
+                secret_exists = secret_path.exists()
+                if secret_exists:
+                    try:
+                        secret_payload = json.loads(secret_path.read_text(encoding="utf-8"))
+                        secret_encryption = str(secret_payload.get("encryption") or "").strip() or None
+                        metadata = dict(secret_payload.get("metadata") or {})
+                        secret_protection = str(metadata.get("private_key_protection") or secret_protection or "").strip() or None
+                    except Exception:
+                        secret_encryption = None
+            key_origin = str(row.get("key_origin") or row.get("key_source") or "imported").strip().lower()
+            public_key_source = str(row.get("public_key_source") or key_origin or "unknown").strip()
+            private_key_storage = str(row.get("private_key_storage") or "").strip()
+            warning = str(row.get("private_key_warning") or "").strip()
+            if not private_key_storage:
+                if str(row.get("private_key_openssh") or "").strip():
+                    private_key_storage = "embedded_keyring"
+                elif secret_id:
+                    private_key_storage = "client_realm_secret"
+                elif key_origin == "generated":
+                    private_key_storage = "unknown_generated_location"
+                else:
+                    private_key_storage = "not_managed"
+            if private_key_storage == "embedded_keyring" and not warning:
+                warning = "Generated private key is still embedded in keys.json; export/move it or rotate it."
+            if private_key_storage == "client_realm_secret" and secret_id and not bool(secret_exists):
+                warning = f"Expected client realm secret record is missing: {secret_path}"
+            if private_key_storage == "exported_file" and export_path and export_path.exists() and not warning:
+                warning = "Generated private key remains in exported-file custody; hand it off to a client realm or purge it."
+            if private_key_storage == "terminal_output" and not warning:
+                warning = "Generated private key was emitted to terminal output and is not stored by hosting."
+            if private_key_storage == "not_managed":
+                continue
+            rows.append(
+                {
+                    "key_id": str(key_id),
+                    "role": str(row.get("role") or "").strip() or None,
+                    "key_origin": key_origin,
+                    "public_key_source": public_key_source,
+                    "private_key_storage": private_key_storage,
+                    "private_key_secret_id": secret_id or None,
+                    "private_key_secret_realm": secret_realm if secret_id else None,
+                    "private_key_secret_path": str(secret_path) if secret_path else None,
+                    "private_key_secret_exists": secret_exists if secret_id else None,
+                    "private_key_secret_encryption": secret_encryption if secret_id else None,
+                    "private_key_export_path": str(export_path) if export_path else None,
+                    "private_key_export_exists": bool(export_path and export_path.exists()) if export_path else None,
+                    "private_key_handoff_recorded": bool(row.get("private_key_handoff_recorded")),
+                    "private_key_terminal_output": bool(row.get("private_key_terminal_output")),
+                    "private_key_protection": secret_protection,
+                    "private_key_warning": warning or None,
+                }
+            )
+        return rows
 
     @staticmethod
     def _role_allowed_scopes(role: str) -> set[str]:
@@ -493,6 +573,7 @@ class AuthMixin:
         keys = dict(auth.get("keys") or {})
         sessions = dict(auth.get("sessions") or {})
         challenges = dict(auth.get("challenges") or {})
+        private_key_custody = self._local_private_key_custody_metadata()
         return {
             "daemon_version": DAEMON_VERSION,
             "capabilities": self.daemon_capabilities(),
@@ -502,6 +583,7 @@ class AuthMixin:
             "sessions_count": len(sessions),
             "challenges_count": len(challenges),
             "roles": sorted(list({str((v or {}).get("role") or "") for v in keys.values() if isinstance(v, dict)})),
+            "local_private_key_custody": private_key_custody,
         }
 
     def auth_list_keys(self) -> List[Dict[str, Any]]:

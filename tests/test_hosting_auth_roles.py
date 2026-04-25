@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from hosting.client_realm import FileSecretStore
 from hosting.service.host_service import EngineHostService
 from hosting.daemon import EngineHostDaemon
 
@@ -97,6 +98,69 @@ def test_require_auth_false_rejected_when_profile_drifts_without_require_auth_fi
             svc.set_control_config(
                 access_profile={"connectivity_mode": "ssh_tunnel_only"},
             )
+
+
+def test_auth_status_reports_local_private_key_custody_metadata_only() -> None:
+    with _workspace_tmpdir() as td:
+        root = Path(td)
+        svc = EngineHostService(
+            engines_state_file=root / "engines.json",
+            control_state_file=root / "hosting" / "access_control.json",
+        )
+        svc.auth_upsert_key(
+            key_id="admin-main",
+            key_secret="admin-secret",
+            role="admin",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "ssh_tunnel_only"},
+        )
+        store = FileSecretStore(root / "hosting_client" / "default", realm="default")
+        store.put_secret(
+            tag="rbac_private_key",
+            payload="-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE\n-----END OPENSSH PRIVATE KEY-----\n",
+            secret_id="rbac-admin-main-private",
+            metadata={"private_key_protection": "openssh_passphrase"},
+        )
+        keys_file = root / "hosting" / "keyring" / "keys.json"
+        keys_file.parent.mkdir(parents=True, exist_ok=True)
+        keys_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "keys": {
+                        "admin-main": {
+                            "key_id": "admin-main",
+                            "role": "admin",
+                            "auth_method": "public_key",
+                            "public_key": "ssh-ed25519 AAAATEST admin-main",
+                            "key_origin": "generated",
+                            "public_key_source": "generated",
+                            "private_key_storage": "client_realm_secret",
+                            "private_key_secret_id": "rbac-admin-main-private",
+                            "private_key_secret_realm": "default",
+                            "private_key_protection": "openssh_passphrase",
+                        }
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        status = svc.auth_status()
+        custody = list(status.get("local_private_key_custody") or [])
+        assert len(custody) == 1
+        row = dict(custody[0] or {})
+        assert row["key_id"] == "admin-main"
+        assert row["private_key_storage"] == "client_realm_secret"
+        assert row["private_key_secret_id"] == "rbac-admin-main-private"
+        assert row["private_key_secret_exists"] is True
+        assert row["private_key_protection"] == "openssh_passphrase"
+        assert "private_key" not in row
 
 
 def test_authorize_command_rejects_unsafe_no_auth_runtime_config() -> None:

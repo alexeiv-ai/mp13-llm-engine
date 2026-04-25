@@ -31,11 +31,16 @@ if __package__ in {None, ""}:
         append_client_audit_event,
         client_realm_layout,
         create_private_key_handoff_text,
+        delete_client_key_from_realm,
+        discover_exported_private_keys,
+        handoff_exported_private_key_to_realm,
+        purge_exported_private_key,
         ensure_client_realm_dirs,
         get_default_client_realm_root,
         normalize_pasted_private_key,
         read_client_access,
         read_client_profile,
+        require_client_realm_private_key_path,
         secret_record_path,
     )
     from hosting.transport_bootstrap import (
@@ -56,11 +61,16 @@ else:
         append_client_audit_event,
         client_realm_layout,
         create_private_key_handoff_text,
+        delete_client_key_from_realm,
+        discover_exported_private_keys,
+        handoff_exported_private_key_to_realm,
+        purge_exported_private_key,
         ensure_client_realm_dirs,
         get_default_client_realm_root,
         normalize_pasted_private_key,
         read_client_access,
         read_client_profile,
+        require_client_realm_private_key_path,
         secret_record_path,
     )
     from .transport_bootstrap import (
@@ -1011,6 +1021,12 @@ def _suggest_auto_configuration(context: Dict[str, str]) -> Dict[str, Any]:
 
 
 def _print_auto_configuration(context: Dict[str, str], suggestion: Dict[str, Any]) -> None:
+    if bool(suggestion.get("leave_unconfigured")):
+        _print_title("No Access Setup Selected")
+        followups = [str(item) for item in list(suggestion.get("followups") or []) if str(item).strip()]
+        if followups:
+            _print_recommendations(followups)
+        return
     _print_title("Suggested Auto Configuration")
     _kv_rows(
         [
@@ -1122,6 +1138,7 @@ def _option_label(value: str) -> str:
         "admin_managed_externally": "Admin managed externally",
         "apply": "Apply suggested configuration",
         "customize": "Customize configuration",
+        "leave_unconfigured": "Leave hosting unchanged",
         "reset_unconfigured": "Reset to unconfigured",
         "print_handoff_now": "Print handoff text",
         "store_for_later": "Keep on this machine",
@@ -1532,6 +1549,8 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
     secret_exists = None
     secret_encryption = None
     secret_protection = str(row.get("private_key_protection") or "").strip() or None
+    export_path_raw = str(row.get("private_key_export_path") or "").strip()
+    export_path = Path(export_path_raw).expanduser().resolve() if export_path_raw else None
     if secret_id:
         secret_path = secret_record_path(_client_realm_root(default_config_dir, secret_realm), secret_id)
         secret_exists = secret_path.exists()
@@ -1560,6 +1579,10 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
         warning = "Generated private key is still embedded in keys.json; export/move it or rotate it."
     if private_key_storage == "client_realm_secret" and secret_id and not bool(secret_exists):
         warning = f"Expected client realm secret record is missing: {secret_path}"
+    if private_key_storage == "exported_file" and export_path and export_path.exists() and not warning:
+        warning = "Generated private key remains in exported-file custody; hand it off to a client realm or purge it."
+    if private_key_storage == "terminal_output" and not warning:
+        warning = "Generated private key was emitted to terminal output and is not stored by hosting."
     return {
         "key_origin": key_origin,
         "public_key_source": public_key_source,
@@ -1569,6 +1592,10 @@ def _admin_key_metadata(keys_file: Path, admin_key_id: str) -> Dict[str, Any]:
         "private_key_secret_path": str(secret_path) if secret_path else None,
         "private_key_secret_exists": secret_exists if secret_id else None,
         "private_key_secret_encryption": secret_encryption if secret_id else None,
+        "private_key_export_path": str(export_path) if export_path else None,
+        "private_key_export_exists": bool(export_path and export_path.exists()) if export_path else None,
+        "private_key_handoff_recorded": bool(row.get("private_key_handoff_recorded")),
+        "private_key_terminal_output": bool(row.get("private_key_terminal_output")),
         "private_key_protection": secret_protection,
         "private_key_warning": warning or None,
     }
@@ -1905,9 +1932,9 @@ def _print_intent_guidance(mode: str, *, require_auth: bool, endpoint_mode: str)
     g = dict(CONNECTIVITY_INTENT_GUIDANCE.get(mode) or {})
     validation = str(g.get("validation") or "n/a")
     if mode == "local_only" and require_auth:
-        validation = "Authentication is enabled for this local profile; shared endpoints always require authentication."
+        validation = "script_checks: Authentication is enabled for this local profile; shared endpoints require auth."
     elif mode == "local_only" and endpoint_mode == "exclusive":
-        validation = "No-auth is allowed because this profile is local_only + exclusive."
+        validation = "script_checks: No-auth is allowed because this profile is local_only + exclusive."
     _print_title(f"Hosting Access Plan `{mode}`")
     _kv_rows(
         [
@@ -2259,6 +2286,22 @@ def _print_client_key_report(result: Dict[str, Any]) -> None:
                 "This text includes private-key material. Paste it directly into the consumer's client-realm setup and clear terminal scrollback if needed."
             ]
         )
+    elif action == "client_export_key" and bool(result.get("terminal_output")):
+        _kv_rows(
+            [
+                ("status", result.get("status")),
+                ("action", "export private key to terminal"),
+                ("key_id", result.get("key_id")),
+                ("audit_path", result.get("audit_path") or "n/a"),
+            ]
+        )
+        _print_block("Private Key Export", kind="warn")
+        print(str(result.get("export_text") or "").strip())
+        _print_recommendations(
+            [
+                "This output includes private-key material. Paste it directly into the destination key store and clear terminal scrollback if needed."
+            ]
+        )
     else:
         _kv_rows(
             [
@@ -2447,6 +2490,9 @@ def _store_importable_key_record(
     private_key_storage: Optional[str] = None,
     private_key_secret_id: Optional[str] = None,
     private_key_secret_realm: Optional[str] = None,
+    private_key_export_path: Optional[str] = None,
+    private_key_handoff_recorded: Optional[bool] = None,
+    private_key_terminal_output: Optional[bool] = None,
     private_key_protection: Optional[str] = None,
     private_key_warning: Optional[str] = None,
 ) -> None:
@@ -2472,6 +2518,12 @@ def _store_importable_key_record(
         row["private_key_secret_id"] = str(private_key_secret_id).strip()
     if private_key_secret_realm:
         row["private_key_secret_realm"] = str(private_key_secret_realm).strip()
+    if private_key_export_path:
+        row["private_key_export_path"] = str(private_key_export_path).strip()
+    if private_key_handoff_recorded is not None:
+        row["private_key_handoff_recorded"] = bool(private_key_handoff_recorded)
+    if private_key_terminal_output is not None:
+        row["private_key_terminal_output"] = bool(private_key_terminal_output)
     if private_key_protection:
         row["private_key_protection"] = str(private_key_protection).strip()
     if private_key_warning:
@@ -2491,6 +2543,10 @@ def _store_importable_key_record(
             "private_key_storage",
             "private_key_secret_id",
             "private_key_secret_realm",
+            "private_key_export_path",
+            "private_key_export_exists",
+            "private_key_handoff_recorded",
+            "private_key_terminal_output",
             "private_key_protection",
             "private_key_warning",
         }
@@ -2593,9 +2649,27 @@ def _reset_access_configuration(paths: Dict[str, Path]) -> Dict[str, Any]:
         hosting_root / "state" / "challenges.json",
         hosting_root / "state" / "issued_tokens.json",
         hosting_root / "state" / "runtime_state.json",
+        audit_file,
     ]
     removed: list[str] = []
+    archived: list[str] = []
     purged_private_keys: list[str] = []
+    archive_dir = (hosting_root / "archive" / f"reset-{int(time.time() * 1000)}").resolve()
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    def _archive_file(path: Path) -> None:
+        source = path.expanduser().resolve()
+        if not source.exists() or not source.is_file():
+            return
+        try:
+            rel = source.relative_to(hosting_root)
+        except ValueError:
+            rel = Path(source.name)
+        target = archive_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        archived.append(str(target))
+        removed.append(str(source))
 
     def _remove_file(path: Path, *, bucket: list[str]) -> None:
         source = path.expanduser().resolve()
@@ -2605,32 +2679,38 @@ def _reset_access_configuration(paths: Dict[str, Path]) -> Dict[str, Any]:
         bucket.append(str(source))
 
     for source in candidates:
-        _remove_file(source, bucket=removed)
+        _archive_file(source)
     for source in private_key_targets:
         _remove_file(source, bucket=purged_private_keys)
 
-    audit_event = {
+    reset_manifest = {
         "version": 1,
         "timestamp": time.time(),
         "event": "hosting_access_reset_to_unconfigured",
         "hosting_root": str(hosting_root),
         "removed": removed,
+        "archived": archived,
         "purged_private_keys": purged_private_keys,
         "removed_client_key_metadata": removed_client_key_metadata,
         "policy_after_reset": "unconfigured; only same-user local hosting consumer is allowed, with implicit admin access",
         "audit_retained": True,
     }
-    _write_audit_event(audit_file, audit_event)
+    manifest_path = archive_dir / "reset_manifest.json"
+    manifest_path.write_text(json.dumps(reset_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "status": "ok",
         "action": "reset_unconfigured",
         "hosting_root": str(hosting_root),
         "removed_count": len(removed),
         "removed": removed,
+        "archived_count": len(archived),
+        "archived": archived,
+        "archive_dir": str(archive_dir),
+        "reset_manifest": str(manifest_path),
         "purged_private_key_count": len(purged_private_keys),
         "purged_private_keys": purged_private_keys,
         "removed_client_key_metadata": removed_client_key_metadata,
-        "audit_file": str(audit_file),
+        "audit_file": str(manifest_path),
         "message": "Hosting access configuration was reset to unconfigured by deleting active access state.",
         "policy_note": "Only same-user local hosting consumers are allowed until setup is run again.",
     }
@@ -3289,16 +3369,26 @@ def _interactive_admin_setup_followup(args: argparse.Namespace, suggestion: Dict
 
 def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
     action_list = bool(getattr(args, "client_list_keys", False))
+    action_list_exported = bool(getattr(args, "client_list_exported_keys", False))
     action_generate = bool(getattr(args, "client_generate_key", False))
     action_import = bool(getattr(args, "client_import_key", False))
+    action_delete = bool(getattr(args, "client_delete_key", False))
+    action_export = bool(getattr(args, "client_export_key", False))
     action_show_handoff = bool(getattr(args, "client_show_key_handoff", False))
+    action_handoff_exported = bool(getattr(args, "client_handoff_exported_key", False))
+    action_purge_exported = bool(getattr(args, "client_purge_exported_key", False))
     selected_count = sum(
         1
         for flag in (
             action_list,
+            action_list_exported,
             action_generate,
             action_import,
+            action_delete,
+            action_export,
             action_show_handoff,
+            action_handoff_exported,
+            action_purge_exported,
         )
         if flag
     )
@@ -3318,6 +3408,15 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
             "client_realm_root": str(client_realm_root),
             "realm": realm,
             "keys": dict(payload.get("keys") or {}),
+        }
+    exported_keys_file_raw = str(getattr(args, "client_exported_keys_file", "") or "").strip()
+    exported_keys_file = Path(exported_keys_file_raw).expanduser().resolve() if exported_keys_file_raw else keys_file
+    if action_list_exported:
+        return {
+            "status": "ok",
+            "action": "client_list_exported_keys",
+            "keys_file": str(exported_keys_file),
+            "exported_keys": discover_exported_private_keys(keys_file=exported_keys_file),
         }
     key_id = str(getattr(args, "client_key_id", "") or "").strip()
     if not key_id:
@@ -3343,6 +3442,103 @@ def run_client_keys(args: argparse.Namespace) -> Dict[str, Any]:
             "handoff_text": handoff.get("handoff_text"),
             "audit_path": handoff.get("audit_path"),
         }
+    if action_delete:
+        deleted = delete_client_key_from_realm(client_realm_root, key_id=key_id, realm=realm)
+        audit_path = append_client_audit_event(
+            client_realm_root,
+            event_type="client_key_deleted",
+            realm=realm,
+            payload={
+                "key_id": key_id,
+                "secret_id": deleted.get("secret_id"),
+                "deleted_secret": bool(deleted.get("deleted_secret")),
+                "deleted_export_file": bool(deleted.get("deleted_export_file")),
+                "deleted_export_path": deleted.get("deleted_export_path"),
+            },
+        )
+        return {
+            **deleted,
+            "action": "client_delete_key",
+            "client_realm_root": str(client_realm_root),
+            "realm": realm,
+            "audit_path": str(audit_path),
+        }
+    if action_export:
+        export_raw = str(getattr(args, "client_export_key_path", "") or "").strip()
+        payload = _read_json(keys_file, {"keys": {}})
+        row = dict(dict(payload.get("keys") or {}).get(key_id) or {})
+        secret_id = str(row.get("private_key_secret_id") or "").strip()
+        if not secret_id:
+            raise ValueError(f"client key {key_id!r} does not reference a client-realm secret")
+        store = FileSecretStore(client_realm_root, realm=realm)
+        private_key_text = str(
+            store.get_secret_payload(
+                secret_id,
+                password=str(getattr(args, "client_secret_password", "") or "") or None,
+            )
+            or ""
+        )
+        if not private_key_text:
+            raise ValueError(f"client key {key_id!r} has an empty private-key secret")
+        export_path: Optional[Path] = None
+        if export_raw:
+            export_path = require_client_realm_private_key_path(client_realm_root, Path(export_raw))
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            export_path.write_text(private_key_text, encoding="utf-8")
+            try:
+                export_path.chmod(0o600)
+            except Exception:
+                pass
+        audit_path = append_client_audit_event(
+            client_realm_root,
+            event_type="client_key_export",
+            realm=realm,
+            payload={
+                "key_id": key_id,
+                "secret_id": secret_id,
+                "export_path": str(export_path) if export_path else None,
+                "terminal_output": export_path is None,
+            },
+        )
+        return {
+            "status": "ok",
+            "action": "client_export_key",
+            "client_realm_root": str(client_realm_root),
+            "realm": realm,
+            "key_id": key_id,
+            "export_path": str(export_path) if export_path else None,
+            "export_text": private_key_text if export_path is None else None,
+            "terminal_output": export_path is None,
+            "audit_path": str(audit_path),
+        }
+    if action_handoff_exported:
+        return {
+            "status": "ok",
+            "action": "client_handoff_exported_key",
+            **handoff_exported_private_key_to_realm(
+                keys_file=exported_keys_file,
+                target_root=client_realm_root,
+                key_id=key_id,
+                realm=realm,
+                tag=tag,
+                delete_source_file=bool(getattr(args, "client_delete_exported_key_file", False)),
+            ),
+        }
+    if action_purge_exported:
+        result = purge_exported_private_key(keys_file=exported_keys_file, key_id=key_id)
+        audit_path = append_client_audit_event(
+            client_realm_root,
+            event_type="client_exported_key_purged",
+            realm=realm,
+            payload={
+                "key_id": key_id,
+                "source_keys_file": str(exported_keys_file),
+                "source_export_path": result.get("source_export_path"),
+                "deleted_source_file": bool(result.get("deleted_source_file")),
+                "warning": result.get("warning") or "",
+            },
+        )
+        return {**result, "audit_path": str(audit_path)}
 
     client_secret_password = str(getattr(args, "client_secret_password", "") or "")
     if action_generate:
@@ -3897,9 +4093,11 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     admin_private_key_secret_realm: Optional[str] = None
     admin_private_key_secret_path: Optional[Path] = None
     admin_private_key_secret_encryption: Optional[str] = None
+    admin_private_key_export_path: Optional[Path] = None
+    admin_private_key_export_text: Optional[str] = None
     admin_private_key_handoff_command: Optional[str] = None
     admin_private_key_handoff_text: Optional[str] = None
-    print_handoff_now = bool(args.print_private_key_handoff)
+    print_handoff_now = bool(getattr(args, "print_private_key_handoff", False))
     key_origin = "imported"
     public_key_source = "existing_keyring" if key_action == "keep_existing" else "inline"
     private_key_storage = "not_managed"
@@ -3992,51 +4190,72 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             )
             admin_private_key_text = generated_private
             admin_public_key = str(generated_public).strip()
-            admin_private_key_secret_realm = "default"
-            client_realm_root = _client_realm_root(default_config_dir, admin_private_key_secret_realm)
-            secret_store = FileSecretStore(client_realm_root, realm=admin_private_key_secret_realm)
-            secret_record = secret_store.put_secret(
-                tag="rbac_private_key",
-                payload=str(generated_private),
-                secret_id=f"rbac-{admin_key_id}-private",
-                metadata={
-                    "key_id": admin_key_id,
-                    "role": "admin",
-                    "auth_method": "public_key",
-                    "source": "hosting_config_generate",
-                    "private_key_format": "openssh",
-                    "private_key_protection": admin_private_key_protection,
-                },
-                encryption="none",
-            )
-            admin_private_key_secret_id = secret_record.secret_id
-            admin_private_key_secret_path = secret_record_path(client_realm_root, secret_record.secret_id)
-            admin_private_key_secret_encryption = str(secret_record.encryption)
-            private_key_storage = "client_realm_secret"
-            private_key_warning = None
-            client_keys_file = ensure_client_realm_dirs(client_realm_root)["keys"]
-            _store_importable_key_record(
-                keys_file=client_keys_file,
-                key_id=admin_key_id,
-                role="admin",
-                auth_method="public_key",
-                public_key=admin_public_key,
-                key_source=key_source,
-                key_origin=key_origin,
-                public_key_source=public_key_source,
-                private_key_storage=private_key_storage,
-                private_key_secret_id=admin_private_key_secret_id,
-                private_key_secret_realm=admin_private_key_secret_realm,
-                private_key_protection=admin_private_key_protection,
-            )
-            if print_handoff_now:
-                handoff = create_private_key_handoff_text(
-                    client_realm_root,
-                    key_id=admin_key_id,
-                    realm=admin_private_key_secret_realm,
-                    password=client_secret_password or None,
+            if bool(getattr(args, "export_private_key", False)):
+                export_raw = str(getattr(args, "export_private_key_path", "") or "").strip()
+                if export_raw:
+                    export_realm_root = _client_realm_root(default_config_dir, "default")
+                    admin_private_key_export_path = require_client_realm_private_key_path(
+                        export_realm_root,
+                        Path(export_raw),
+                    )
+                    admin_private_key_export_path.parent.mkdir(parents=True, exist_ok=True)
+                    admin_private_key_export_path.write_text(str(generated_private), encoding="utf-8")
+                    try:
+                        admin_private_key_export_path.chmod(0o600)
+                    except Exception:
+                        pass
+                    private_key_storage = "exported_file"
+                    private_key_warning = "Generated private key remains in exported-file custody; hand it off to a client realm or purge it."
+                else:
+                    admin_private_key_export_text = str(generated_private)
+                    private_key_storage = "terminal_output"
+                    private_key_warning = "Generated private key was emitted to terminal output and is not stored by hosting."
+            else:
+                admin_private_key_secret_realm = "default"
+                client_realm_root = _client_realm_root(default_config_dir, admin_private_key_secret_realm)
+                secret_store = FileSecretStore(client_realm_root, realm=admin_private_key_secret_realm)
+                secret_record = secret_store.put_secret(
+                    tag="rbac_private_key",
+                    payload=str(generated_private),
+                    secret_id=f"rbac-{admin_key_id}-private",
+                    metadata={
+                        "key_id": admin_key_id,
+                        "role": "admin",
+                        "auth_method": "public_key",
+                        "source": "hosting_config_generate",
+                        "private_key_format": "openssh",
+                        "private_key_protection": admin_private_key_protection,
+                    },
+                    encryption="none",
                 )
-                admin_private_key_handoff_text = str(handoff.get("handoff_text") or "")
+                admin_private_key_secret_id = secret_record.secret_id
+                admin_private_key_secret_path = secret_record_path(client_realm_root, secret_record.secret_id)
+                admin_private_key_secret_encryption = str(secret_record.encryption)
+                private_key_storage = "client_realm_secret"
+                private_key_warning = None
+                client_keys_file = ensure_client_realm_dirs(client_realm_root)["keys"]
+                _store_importable_key_record(
+                    keys_file=client_keys_file,
+                    key_id=admin_key_id,
+                    role="admin",
+                    auth_method="public_key",
+                    public_key=admin_public_key,
+                    key_source=key_source,
+                    key_origin=key_origin,
+                    public_key_source=public_key_source,
+                    private_key_storage=private_key_storage,
+                    private_key_secret_id=admin_private_key_secret_id,
+                    private_key_secret_realm=admin_private_key_secret_realm,
+                    private_key_protection=admin_private_key_protection,
+                )
+                if print_handoff_now:
+                    handoff = create_private_key_handoff_text(
+                        client_realm_root,
+                        key_id=admin_key_id,
+                        realm=admin_private_key_secret_realm,
+                        password=client_secret_password or None,
+                    )
+                    admin_private_key_handoff_text = str(handoff.get("handoff_text") or "")
         else:
             key_origin = "imported"
             public_key_source = "file" if admin_public_key_file_value else "inline"
@@ -4076,6 +4295,9 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         private_key_storage=private_key_storage,
         private_key_secret_id=admin_private_key_secret_id,
         private_key_secret_realm=admin_private_key_secret_realm,
+        private_key_export_path=str(admin_private_key_export_path) if admin_private_key_export_path else None,
+        private_key_handoff_recorded=False if admin_private_key_export_path else None,
+        private_key_terminal_output=True if admin_private_key_export_text else None,
         private_key_protection=admin_private_key_protection if private_key_storage == "client_realm_secret" else None,
         private_key_warning=private_key_warning,
     )
@@ -4158,6 +4380,8 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
                 "admin_private_key_secret_id": admin_private_key_secret_id,
                 "admin_private_key_secret_realm": admin_private_key_secret_realm,
                 "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
+                "admin_private_key_export_path": str(admin_private_key_export_path) if admin_private_key_export_path else None,
+                "admin_private_key_terminal_output": bool(admin_private_key_export_text),
                 "admin_private_key_protection": admin_private_key_protection,
             },
             "files": {
@@ -4195,6 +4419,8 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
             "admin_private_key_secret_realm": admin_private_key_secret_realm,
             "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
             "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
+            "admin_private_key_export_path": str(admin_private_key_export_path) if admin_private_key_export_path else None,
+            "admin_private_key_terminal_output": bool(admin_private_key_export_text),
             "admin_private_key_protection": admin_private_key_protection,
         },
     )
@@ -4222,6 +4448,10 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
     if bool(admin_private_key_secret_id and admin_private_key_secret_path):
         changes.append(f"generated private key stored in client realm secret {admin_private_key_secret_path}")
         admin_private_key_handoff_command = "Manage RBAC keys -> Show local admin handoff text"
+    if bool(admin_private_key_export_path):
+        changes.append(f"generated private key exported to {admin_private_key_export_path}")
+    if bool(admin_private_key_export_text):
+        changes.append("generated private key emitted to terminal output")
     if permission_action == "tighten":
         changes.append("permission hardening attempted on hosting directories/files")
     result = {
@@ -4253,9 +4483,18 @@ def run_setup(args: argparse.Namespace) -> Dict[str, Any]:
         "admin_private_key_secret_id": admin_private_key_secret_id,
         "admin_private_key_secret_path": str(admin_private_key_secret_path) if admin_private_key_secret_path else None,
         "admin_private_key_secret_encryption": admin_private_key_secret_encryption,
+        "admin_private_key_export_path": str(admin_private_key_export_path) if admin_private_key_export_path else None,
+        "admin_private_key_terminal_output": bool(admin_private_key_export_text),
+        "admin_private_key_export_text": admin_private_key_export_text,
         "admin_private_key_protection": admin_private_key_protection,
+        "admin_private_key_export_command": (
+            f"python -m hosting.hosting_config_cli --client-export-key --client-key-id {admin_key_id} "
+            f"--client-realm-root {_client_realm_root(default_config_dir, admin_private_key_secret_realm or 'default')}"
+            if admin_private_key_secret_id
+            else None
+        ),
         "admin_private_key_handoff_command": admin_private_key_handoff_command,
-        "admin_private_key_handoff": "Paste handoff text into the consumer's client-realm setup API.",
+        "admin_private_key_handoff": "Paste handoff text into the consumer's client-realm setup API or use --client-import-key.",
         "admin_private_key_handoff_text": admin_private_key_handoff_text,
         "admin_private_key_warning": private_key_warning,
     }
@@ -4458,21 +4697,25 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
                     "private_key_protection": protection,
                 },
             )
-            _record(
-                "admin_client_secret_requires_handoff",
-                False,
-                {
-                    "key_id": admin_key_id,
-                    "secret_id": key_meta.get("private_key_secret_id"),
-                    "secret_path": key_meta.get("private_key_secret_path"),
-                },
-                blocking=False,
-            )
         elif storage == "embedded_keyring":
             _record(
                 "admin_embedded_private_key_legacy",
                 False,
                 {"key_id": admin_key_id, "storage": storage},
+                blocking=False,
+            )
+        elif storage == "exported_file":
+            export_exists = bool(key_meta.get("private_key_export_exists"))
+            handoff_recorded = bool(key_meta.get("private_key_handoff_recorded"))
+            _record(
+                "admin_exported_private_key_custody",
+                (not export_exists) and handoff_recorded,
+                {
+                    "key_id": admin_key_id,
+                    "export_path": key_meta.get("private_key_export_path"),
+                    "export_exists": export_exists,
+                    "handoff_recorded": handoff_recorded,
+                },
                 blocking=False,
             )
 
@@ -4660,9 +4903,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list-auth-audit", action="store_true", help="List auth audit events and exit")
     p.add_argument("--upsert-key", action="store_true", help="Create or update one RBAC key and exit")
     p.add_argument("--client-list-keys", action="store_true", help="List client-realm private-key metadata and exit")
+    p.add_argument("--client-list-exported-keys", action="store_true", help="List exported private-key files tracked by hosting keyring metadata")
     p.add_argument("--client-generate-key", action="store_true", help="Generate a client-realm private key and metadata record")
     p.add_argument("--client-import-key", action="store_true", help="Import a client private key into the client realm")
+    p.add_argument("--client-delete-key", action="store_true", help="Delete one client-realm key and its locally managed private-key custody")
+    p.add_argument("--client-export-key", action="store_true", help="Export a client-realm private key secret to an OpenSSH key file")
     p.add_argument("--client-show-key-handoff", action="store_true", help="Print structured client-realm private-key handoff text")
+    p.add_argument("--client-handoff-exported-key", action="store_true", help="Import an exported private-key file into the client realm and mark handoff")
+    p.add_argument("--client-purge-exported-key", action="store_true", help="Delete an exported private-key file tracked by hosting keyring metadata")
     p.add_argument("--revoke-key-id", default="", help="Revoke one RBAC key_id and its sessions, then exit")
     p.add_argument("--revoke-session", default="", help="Revoke one session token and exit")
     p.add_argument("--key-id", default="", help="RBAC key_id for --upsert-key")
@@ -4672,6 +4920,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--client-private-key", default="", help="Inline private key text for --client-import-key; cleared from args after read")
     p.add_argument("--client-public-key-file", default="", help="Public key file for --client-import-key")
     p.add_argument("--client-public-key-inline", default="", help="Inline public key for --client-import-key")
+    p.add_argument("--client-export-key-path", default="", help="Output path for --client-export-key")
+    p.add_argument("--client-exported-keys-file", default="", help="Hosting keyring keys.json path for exported-key handoff/purge")
+    p.add_argument("--client-delete-exported-key-file", action="store_true", default=False, help="Delete source exported private-key file after handoff")
     p.add_argument("--key-role", default="", choices=sorted(VALID_AUTH_ROLES), help="RBAC role for --upsert-key")
     p.add_argument(
         "--auth-method",
@@ -4718,6 +4969,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Deprecated alias for --generated-key-passphrase",
     )
     p.add_argument("--print-private-key-handoff", action="store_true", default=False)
+    p.add_argument("--export-private-key", action="store_true", default=False)
+    p.add_argument("--export-private-key-path", default="")
     p.add_argument("--client-realm", default="default", help="Client realm name for client-local secret/profile operations")
     p.add_argument("--client-realm-root", default="", help="Override client realm root path")
     p.add_argument("--transport-harden-ssh", action="store_true", help="Provision and validate hardened SSH transport mutual-auth artifacts")

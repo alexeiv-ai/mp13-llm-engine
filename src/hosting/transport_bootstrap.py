@@ -7,6 +7,7 @@ and pinned SSH host-key material to a client realm.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,29 @@ TRANSPORT_BOOTSTRAP_KIND = "hosting_transport_bootstrap"
 DEFAULT_TRANSPORT_AUTHORIZED_KEY_COMMAND = "python -m hosting.engine_host_cli --relay-wrapper"
 
 
+def _protect_windows_private_key_path(path: Path) -> None:
+    target = Path(path).expanduser().resolve()
+    try:
+        target.chmod(0o600 if target.is_file() else 0o700)
+    except Exception:
+        pass
+    if os.name != "nt":
+        return
+    username = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    if not username:
+        return
+    commands = [
+        ["icacls", str(target), "/inheritance:r"],
+        ["icacls", str(target), "/remove:g", "*S-1-3-4", "*S-1-1-0", "*S-1-5-11", "*S-1-5-32-545"],
+        ["icacls", str(target), "/grant:r", f"{username}:(F)"],
+    ]
+    for command in commands:
+        try:
+            subprocess.run(command, capture_output=True, text=True, timeout=15.0, check=False)  # noqa: S603
+        except Exception:
+            pass
+
+
 def _protect_openssh_private_key(
     private_key_text: str,
     *,
@@ -44,12 +68,10 @@ def _protect_openssh_private_key(
         return str(private_key_text or "").strip()
     tmpdir = Path(tempfile.mkdtemp(prefix="hosting_keyprotect_")).resolve()
     try:
+        _protect_windows_private_key_path(tmpdir)
         tmp_private = (tmpdir / "private_key").resolve()
         tmp_private.write_text(str(private_key_text or "").strip() + "\n", encoding="utf-8")
-        try:
-            tmp_private.chmod(0o600)
-        except Exception:
-            pass
+        _protect_windows_private_key_path(tmp_private)
         proc = subprocess.run(  # noqa: S603
             [
                 "ssh-keygen",

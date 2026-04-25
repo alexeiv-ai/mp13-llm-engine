@@ -145,7 +145,8 @@ What this means in practice:
    - print it during setup with `--print-private-key-handoff`
    - print it later with `--client-show-key-handoff` or `Manage RBAC keys` -> `Show local admin handoff text`
    - import it into the real hosting consumer with `hosting.client_realm_api.import_client_realm_key_handoff`
-5. Clients must not expect hosting to hand them private key material later through normal RPC/API calls.
+5. Client-realm API export helpers may return private-key material in the method result or materialize it under known client-realm private-key folders; they must not create an arbitrary bridge folder.
+6. Clients must not expect hosting to hand them private key material later through normal runtime daemon RPC/API calls.
 
 Imported-key example:
 1. A user already has `C:\Users\me\.ssh\id_ed25519` and `C:\Users\me\.ssh\id_ed25519.pub`.
@@ -168,6 +169,28 @@ What the user who installed the hosting component should do:
 4. If setup, status, or doctor output reports a private-key custody warning, fix that before treating the setup as complete.
 5. For `transport` keys, keep the private key on the hosting consumer side; hosting should only track the public key reference.
 
+Consumer checklist:
+1. Determine whether the key is `imported` or `generated`.
+2. If `imported`, use the private key that already exists in the consumer's normal key-management workflow.
+3. If `generated` for the same machine, keep custody in that machine's client realm and use `hosting.client_realm_api` if the consumer needs handoff text, export-in-result, or realm-local file materialization.
+4. If `generated` for a different machine, print handoff text on the setup machine with `--print-private-key-handoff` during setup or `--client-show-key-handoff --client-key-id <key_id> --client-realm <realm>` later, then import it on the real consumer with `hosting.client_realm_api.import_client_realm_key_handoff(...)`.
+5. After the remote consumer confirms import, clear setup-machine custody from the setup machine itself with `hosting.client_realm_api.delete_client_realm_key(...)` or `python -m hosting.hosting_config_cli --client-delete-key --client-key-id <key_id> --client-realm <realm>`; remote import does not delete setup-machine custody by itself.
+6. Do not expect normal daemon/runtime RPC to return the private key later.
+7. If file materialization is required, keep it only under known client-realm private-key folders; do not create an arbitrary temporary or bridge folder.
+8. Treat any custody warning from setup, status, or doctor as incomplete configuration.
+
+Consumer API reference:
+1. `hosting.client_realm_api.import_client_realm_key_handoff(...)`
+   - import copy/paste handoff text into the consumer's own client realm
+2. `hosting.client_realm_api.create_client_realm_key_handoff(...)`
+   - produce structured handoff text from a locally held client-realm secret
+3. `hosting.client_realm_api.export_client_realm_key(...)`
+   - return private-key text in the API result or write it under a known client-realm private-key folder
+4. `hosting.client_realm_api.delete_client_realm_key(...)`
+   - clear local client-realm custody after handoff/import has been confirmed elsewhere
+5. `auth-status`
+   - daemon control API reports metadata-only `local_private_key_custody` rows for keys still under host-local custody so a remote operator can discover which keys need handoff or cleanup through a terminal session; it never returns the private-key material itself
+
 What hosting consumer code or UX should assume:
 1. The hosting consumer already has the private key, or receives a generated key through structured client-realm handoff text.
 2. Hosting will report useful metadata about the key:
@@ -175,7 +198,7 @@ What hosting consumer code or UX should assume:
    - how the public key was supplied
    - whether the private key is externally managed or stored as a client-realm secret
    - which client realm and secret id hold generated private-key material, when hosting setup created it
-3. Consumer tooling should use `hosting.client_realm_api` to list client-realm keys, create handoff text, and import handoff text into the consumer realm.
+3. Consumer tooling should use `hosting.client_realm_api` for client-realm custody operations and `import_client_realm_key_handoff` for generated-key handoff import.
 4. The consumer-facing UX should show that information plainly to the user instead of making them infer it.
 
 ### 4.2 Keyring paradigm
@@ -684,6 +707,7 @@ This section is the authoritative integration contract for hosting consumers.
    - generate or import private keys into a client-realm secret record
    - create structured private-key handoff text from a client-realm secret
    - import structured handoff text into the real consumer realm
+   - export a client-realm key as method output or as a realm-local managed key file
    - audit handoff creation and import without recording private-key material
 7. `--client-import-key` remains an operator/script bridge for manual import and tests; consumer projects should prefer the client-realm API helpers directly.
 8. The interactive RBAC/key-management menu exposes custody operations for operators: show local admin handoff text when a local admin private key is available, list/revoke RBAC keys, list auth sessions, and list RBAC/session audit events.
@@ -692,6 +716,8 @@ This section is the authoritative integration contract for hosting consumers.
    - `client_realm_secret`: private key is stored in a client-realm secret record
    - externally managed or not managed by hosting: imported public key, private key remains with the operator or consumer
    - warning/follow-up fields when an expected client-realm secret is missing or unprotected for the selected workflow
+11. Private-key export, when needed, is limited to API method output or file materialization under known client-realm private-key folders.
+12. Remote-consumer cleanup ownership is asymmetric: successful import into the remote consumer realm does not by itself delete setup-machine custody.
 
 ### 11.3 Auth flows consumers must support
 
