@@ -14,7 +14,7 @@ Key classes and functions available for import:
     SSHRelayConnection        — persistent SSH subprocess running --relay-wrapper
     BaseConnection            — abstract base for connection strategies
     ConnectionError           — raised on unrecoverable connection failure
-    EngineHostControlChannel  — command channel with daemon connection + subprocess fallback
+    EngineHostControlChannel  — command channel requiring daemon control, with diagnostic-only fallback
     EngineProcessSupervisor   — in-process persisted tracker for managed worker processes
     WorkerSandboxPolicy       — worker sandbox policy schema
 """

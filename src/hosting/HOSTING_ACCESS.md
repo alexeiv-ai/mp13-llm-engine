@@ -683,6 +683,7 @@ This section is the authoritative integration contract for hosting consumers.
 8. Consumers that cannot execute any remote SSH command do not currently have a full remote control-plane transport.
 9. Straight SSH port forwarding to daemon TCP control is TBD and is blocked server-side today.
 10. Standard HTTP ingress, when needed, is handled by the separate `--daemon-http` process or by an external reverse proxy in front of loopback-only listeners. This ingress is for worker HTTP traffic and health, not full daemon control-plane commands.
+11. `EngineHostControlChannel` does not provide direct local-service fallback for runtime, config, auth, claim, model, toolbox, or proxy commands; callers must establish a daemon control channel first, and only explicitly diagnostic commands may use CLI subprocess fallback.
 
 ### 11.2 Consumer-local realm and key custody
 

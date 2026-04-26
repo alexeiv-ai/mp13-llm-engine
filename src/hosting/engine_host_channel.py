@@ -5,8 +5,9 @@ Primary path: persistent connection to a running EngineHostDaemon.
   - Local mode (no SSH): LocalSocketConnection via local IPC discovered from PID file
   - SSH mode:            SSHRelayConnection via SSH subprocess running --relay-wrapper
 
-Fallback: original per-command subprocess (engine_host_cli) when no daemon is
-reachable and auto-bootstrap is disabled or fails.
+Per-command CLI fallback is intentionally restricted to explicit diagnostic
+commands. Runtime, config, auth, claim, model, toolbox, and proxy commands must
+go through the persistent control channel.
 
 The entire existing public API is preserved; no callers need changes.
 """
@@ -42,13 +43,22 @@ _SESSION_AUTH_ERROR_KEYWORDS = (
 )
 
 
+_SUBPROCESS_FALLBACK_COMMANDS = frozenset(
+    {
+        # Diagnostic-only command. Lifecycle start/stop/restart use dedicated
+        # channel methods rather than the generic per-command CLI path.
+        "discover-running",
+    }
+)
+
+
 def _is_session_auth_error(msg: str) -> bool:
     ml = msg.lower()
     return any(k in ml for k in _SESSION_AUTH_ERROR_KEYWORDS)
 
 
 class EngineHostControlChannel:
-    """Command-channel wrapper — persistent daemon connection with subprocess fallback."""
+    """Command-channel wrapper that requires the persistent daemon control path."""
 
     def __init__(self, control_settings: Optional[Dict[str, Any]] = None):
         self.control_settings: Dict[str, Any] = resolve_client_profile_control_settings(control_settings)
@@ -416,7 +426,11 @@ class EngineHostControlChannel:
             return None
 
     def _invoke_subprocess(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
-        """Original per-command subprocess path (fallback)."""
+        """Restricted per-command subprocess path for explicit diagnostics only."""
+        if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
+            raise RuntimeError(
+                f"engine host command '{command}' requires the persistent daemon control channel"
+            )
         self._ensure_ssh_key_policy()
         argv = list(self._base_cmd) + ["--payload-stdin"]
         if self._engines_state_file:
@@ -463,7 +477,8 @@ class EngineHostControlChannel:
         """
         Send a command and return the result.
 
-        Tries persistent connection first; falls back to per-command subprocess.
+        Tries the persistent connection first. Per-command subprocess fallback
+        is restricted to explicit diagnostic commands.
         On auth/session errors, clears the session token and retries once so that
         an auto-issued fresh session can succeed without caller intervention.
         """
@@ -513,13 +528,36 @@ class EngineHostControlChannel:
             try:
                 return conn.invoke(command, effective_payload)
             except Exception as exc:
+                with self._connection_lock:
+                    self._connection = None
+                if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
+                    _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge"}
+                    if (
+                        _retry_on_auth_error
+                        and self._session_token
+                        and command not in _no_retry_cmds
+                        and _is_session_auth_error(str(exc))
+                    ):
+                        logger.info(
+                            "Auth error on '%s' (likely expired session); clearing token and retrying: %s",
+                            command,
+                            exc,
+                        )
+                        self._session_token = None
+                        self.control_settings["engine_host_session_token"] = None
+                        return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
+                    raise RuntimeError(
+                        f"persistent daemon control channel failed for '{command}': {exc}"
+                    ) from exc
                 logger.warning(
-                    "Persistent connection failed for '%s': %s. Falling back to subprocess.",
+                    "Persistent connection failed for diagnostic command '%s': %s. Falling back to subprocess.",
                     command,
                     exc,
                 )
-                with self._connection_lock:
-                    self._connection = None
+        elif str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
+            raise RuntimeError(
+                f"engine host command '{command}' requires a running persistent daemon control channel"
+            )
         try:
             return self._invoke_subprocess(command, effective_payload)
         except RuntimeError as exc:
