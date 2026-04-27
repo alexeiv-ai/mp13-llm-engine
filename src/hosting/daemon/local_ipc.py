@@ -674,6 +674,14 @@ class EngineHostDaemon:
         op["stage"] = "running"
         events = list(op.get("progress_events") or [])
         events.append(self._operation_event("running", "running", "Operation started"))
+        if str(command or "").strip() == "connect-from-config":
+            events.append(
+                self._operation_event(
+                    "connect.worker_ready",
+                    "running",
+                    "Loading model and waiting for worker RPC readiness",
+                )
+            )
         op["progress_events"] = events
         self._replace_operation(op)
         try:

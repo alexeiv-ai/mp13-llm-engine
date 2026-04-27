@@ -478,6 +478,49 @@ def test_daemon_operation_start_and_status(tmp_path: Path) -> None:
     assert denied["error_code"] == "missing_or_invalid_session_token"
 
 
+def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+
+    def _slow_call_service(cmd: str, payload: dict) -> dict:
+        assert cmd == "connect-from-config"
+        time.sleep(0.2)
+        return {"status": "ok", "stage": "completed", "progress_events": []}
+
+    daemon._call_service = _slow_call_service  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        started = await _dispatch_async(
+            daemon,
+            seq=1,
+            cmd="op-start",
+            payload={"command": "connect-from-config", "payload": {"config_path": "default"}},
+        )
+        assert started["ok"] is True
+        op_id = str((started.get("result") or {}).get("operation_id") or "")
+        assert op_id
+
+        found = False
+        for seq in range(2, 12):
+            status = await _dispatch_async(
+                daemon,
+                seq=seq,
+                cmd="op-status",
+                payload={"operation_id": op_id},
+            )
+            assert status["ok"] is True
+            events = list((status.get("result") or {}).get("progress_events") or [])
+            found = any(
+                str(x.get("stage") or "") == "connect.worker_ready" and str(x.get("status") or "") == "running"
+                for x in events
+            )
+            if found:
+                break
+            await asyncio.sleep(0.03)
+        assert found
+
+    asyncio.run(_run())
+
+
 def test_daemon_operation_cancel_marks_running_task_canceled(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
 

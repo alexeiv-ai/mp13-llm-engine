@@ -187,6 +187,41 @@ class EnginesMixin:
             "worker_auth_header": str(cfg.get("worker_auth_header") or "").strip() or None,
         }
 
+    def _wait_for_worker_rpc_ready(
+        self,
+        reg: Dict[str, Any],
+        *,
+        timeout_seconds: float = 600.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> Dict[str, Any]:
+        deadline = time.time() + max(1.0, float(timeout_seconds or 600.0))
+        interval = max(0.1, min(float(poll_interval_seconds or 0.5), 5.0))
+        last_error = ""
+        attempts = 0
+        while time.time() < deadline:
+            attempts += 1
+            pid = int(reg.get("pid") or 0)
+            if pid > 0 and not self._pid_alive(pid):
+                raise RuntimeError(f"worker process exited before RPC became ready (pid={pid})")
+            try:
+                out = self._ipc_call(
+                    reg=reg,
+                    payload={"kind": "hello", "engine_id": str(reg.get("engine_id") or "")},
+                    timeout_seconds=min(5.0, max(0.25, interval)),
+                )
+                if str(out.get("status") or "").strip().lower() == "ok":
+                    return {
+                        "status": "ok",
+                        "attempts": attempts,
+                        "ready_at": time.time(),
+                        "worker": dict(out or {}),
+                    }
+                last_error = str(out.get("message") or out.get("status") or "worker_not_ready")
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(interval)
+        raise TimeoutError(f"worker RPC did not become ready within {float(timeout_seconds or 600.0):.1f}s: {last_error}")
+
     def connect_from_config(self, *, config_path: str, engine_id: Optional[str] = None, model_path: Optional[str] = None) -> Dict[str, Any]:
         progress_events: List[Dict[str, Any]] = [
             self._progress_event("connect.resolve_config", "running", "Resolving engine config"),
@@ -283,6 +318,46 @@ class EnginesMixin:
             progress_events.append(
                 self._progress_event("connect.spawn_engine", "completed", "Engine started", engine_id=eid)
             )
+            ready: Optional[Dict[str, Any]] = None
+            if worker_class != "generic" and str(rec.get("worker_transport") or "").strip().lower() == "ipc":
+                progress_events.append(
+                    self._progress_event(
+                        "connect.worker_ready",
+                        "running",
+                        "Loading model and waiting for worker RPC readiness",
+                        engine_id=eid,
+                    )
+                )
+                try:
+                    ready = self._wait_for_worker_rpc_ready(
+                        dict(rec),
+                        timeout_seconds=float(cfg.get("worker_ready_timeout_seconds") or 600.0),
+                    )
+                    progress_events.append(
+                        self._progress_event(
+                            "connect.worker_ready",
+                            "completed",
+                            "Worker RPC is ready",
+                            engine_id=eid,
+                            attempts=int(ready.get("attempts") or 0),
+                        )
+                    )
+                except Exception as exc:
+                    progress_events.append(
+                        self._progress_event("connect.worker_ready", "failed", str(exc), engine_id=eid)
+                    )
+                    return {
+                        "status": "failed",
+                        "stage": "failed",
+                        "engine_id": eid,
+                        "config_path": str(selected),
+                        "model_path": effective_model_path,
+                        "worker_class": worker_class,
+                        "reason": "worker_not_ready",
+                        "message": str(exc),
+                        "managed_engine": rec,
+                        "progress_events": progress_events,
+                    }
             return {
                 "status": "ok",
                 "stage": "completed",
@@ -291,6 +366,7 @@ class EnginesMixin:
                 "model_path": effective_model_path,
                 "worker_class": worker_class,
                 "managed_engine": rec,
+                "worker_ready": ready,
                 "progress_events": progress_events,
             }
         except Exception as e:
