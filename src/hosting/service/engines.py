@@ -68,7 +68,8 @@ class EnginesMixin:
         worker_auth_token = secrets.token_urlsafe(24)
         worker_auth_header = "X-MP13-Host-Token"
         ipc_family, ipc_address = self._allocate_ipc_address(engine_id)
-        endpoint = "ipc://local"
+        import socket
+        endpoint = f"ipc://{socket.gethostname()}"
         command = [
             python,
             "-m",

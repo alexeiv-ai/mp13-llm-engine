@@ -49,7 +49,8 @@ class ProxyMixin:
         family = str(reg.get("worker_ipc_family") or "").strip()
         address = str(reg.get("worker_ipc_address") or "").strip()
         auth_token = str(reg.get("worker_auth_token") or "").strip()
-        endpoint = str(reg.get("endpoint") or "").strip() or "ipc://local"
+        import socket
+        endpoint = str(reg.get("endpoint") or "").strip() or f"ipc://{socket.gethostname()}"
         if not family or not address:
             raise ValueError("engine ipc endpoint is not registered")
         authkey = self._parse_worker_authkey_token(auth_token)
