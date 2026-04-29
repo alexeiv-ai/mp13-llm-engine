@@ -408,6 +408,8 @@ class EngineHostControlChannel:
                             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
                             pid_file=Path(pid_file_path) if pid_file_path else None,
                             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
+                            engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
+                            control_state_file=Path(self._control_state_file) if self._control_state_file else None,
                             wait_ready_seconds=wait,
                         )
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
@@ -672,6 +674,8 @@ class EngineHostControlChannel:
             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
             pid_file=Path(pid_file_path) if pid_file_path else None,
             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
+            engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
+            control_state_file=Path(self._control_state_file) if self._control_state_file else None,
             wait_ready_seconds=wait_ready_seconds,
         )
         with self._connection_lock:

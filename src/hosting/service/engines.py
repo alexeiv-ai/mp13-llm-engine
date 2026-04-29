@@ -36,56 +36,18 @@ class EnginesMixin:
     def _check_module_available(self, python: str, module_name: str) -> Tuple[bool, str]:
         """
         Check whether engine runtime symbols are importable by *python*.
-
-        Runs a tiny subprocess so it works even when the calling process lives
-        in a different venv (e.g. the docs venv checking the engine venv).
-        Returns (True, "") on success, (False, reason) on failure.
         """
-        try:
-            result = subprocess.run(  # noqa: S603
-                [python, "-c", f"from {module_name} import MP13Engine"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode == 0:
-                return True, ""
-            stderr = (result.stderr or "").strip()
-            last_line = stderr.splitlines()[-1] if stderr else "import failed"
-            return False, last_line
-        except FileNotFoundError:
-            return False, f"Python executable not found: {python}"
-        except Exception as exc:
-            return False, str(exc)
+        from ..engine_discovery import is_engine_available
+        # We assume module_name is "mp13_engine" which is the only one used here
+        return is_engine_available(python)
 
     def _check_module_discoverable(self, python: str, module_name: str) -> Tuple[bool, str]:
         """
         Lightweight module check for UX surfaces (e.g., list-configs).
-
-        Uses importlib.find_spec instead of importing heavy module trees.
         """
-        probe = (
-            "import importlib.util, sys; "
-            f"sys.exit(0 if importlib.util.find_spec({module_name!r}) else 1)"
-        )
-        try:
-            result = subprocess.run(  # noqa: S603
-                [python, "-c", probe],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if result.returncode == 0:
-                return True, ""
-            stderr = (result.stderr or "").strip()
-            last_line = stderr.splitlines()[-1] if stderr else "module not discoverable"
-            return False, last_line
-        except FileNotFoundError:
-            return False, f"Python executable not found: {python}"
-        except Exception as exc:
-            return False, str(exc)
+        from ..engine_discovery import is_engine_discoverable
+        # We assume module_name is "mp13_engine" which is the only one used here
+        return is_engine_discoverable(python)
 
     def _engine_python_executable(self) -> str:
         python = os.environ.get("MP13_ENGINE_PYTHON", "").strip()

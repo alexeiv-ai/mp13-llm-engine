@@ -30,6 +30,9 @@ class WorkerLaunchResult:
 def _normal_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = open(req.log_path, "ab")
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x08000000  # subprocess.CREATE_NO_WINDOW
     try:
         proc = subprocess.Popen(  # noqa: S603,S607
             list(req.command),
@@ -39,6 +42,7 @@ def _normal_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:
             stdout=log_fp,
             stderr=subprocess.STDOUT,
             close_fds=not req.sandbox_policy.process.inherit_parent_handles,
+            **kwargs
         )
     finally:
         log_fp.close()

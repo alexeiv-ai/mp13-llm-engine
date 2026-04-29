@@ -90,6 +90,10 @@ from .toolbox_harness import (
     SandboxedToolboxFacade,
 )
 from .toolbox_admin import HostedToolboxAdmin
+from .engine_discovery import (
+    is_engine_available,
+    is_engine_discoverable,
+)
 
 __all__ = [
     "EngineHostService",
@@ -152,4 +156,6 @@ __all__ = [
     "HostedToolBoxRef",
     "SandboxedToolboxFacade",
     "HostedToolboxAdmin",
+    "is_engine_available",
+    "is_engine_discoverable",
 ]
