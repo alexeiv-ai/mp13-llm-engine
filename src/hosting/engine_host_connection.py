@@ -26,6 +26,8 @@ from multiprocessing.connection import Client as MPClient
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ._process_utils import hidden_subprocess_kwargs
+
 logger = logging.getLogger(__name__)
 
 
@@ -254,6 +256,7 @@ class SSHRelayConnection(BaseConnection):
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             bufsize=0,
+            **hidden_subprocess_kwargs(),
         )
 
     def _close_proc(self) -> None:

@@ -25,6 +25,8 @@ LUA_TOKEN = 0x4
 CREATE_NEW_CONSOLE = 0x00000010
 CREATE_NO_WINDOW = 0x08000000
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
+STARTF_USESHOWWINDOW = 0x00000001
+SW_HIDE = 0
 SYNCHRONIZE = 0x00100000
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 WAIT_OBJECT_0 = 0x00000000
@@ -288,6 +290,8 @@ def launch_restricted_worker(
     try:
         si = STARTUPINFOW()
         si.cb = ctypes.sizeof(si)
+        si.dwFlags = STARTF_USESHOWWINDOW
+        si.wShowWindow = SW_HIDE
         pi = PROCESS_INFORMATION()
         env_block = _build_env_block(env)
         command_line = subprocess.list2cmdline(list(argv or []))

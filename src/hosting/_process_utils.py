@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+from typing import Any, Dict
+
+
+WINDOWS_DETACHED_PROCESS = 0x00000008
+WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_CREATE_NO_WINDOW = 0x08000000
+WINDOWS_SW_HIDE = 0
 
 
 def pid_alive(pid: int) -> bool:
@@ -64,3 +72,31 @@ def _pid_alive_windows(pid: int) -> bool:
         return int(exit_code.value) == STILL_ACTIVE
     finally:
         close_handle(handle)
+
+
+def hidden_subprocess_kwargs(
+    *,
+    detached: bool = False,
+    new_process_group: bool = False,
+) -> Dict[str, Any]:
+    """
+    Return Popen/run kwargs that prevent transient console windows on Windows.
+
+    CREATE_NO_WINDOW is normally enough for console children, but pairing it
+    with STARTF_USESHOWWINDOW/SW_HIDE covers launch paths that briefly create a
+    window before honoring creation flags.
+    """
+    if sys.platform != "win32":
+        return {}
+    flags = WINDOWS_CREATE_NO_WINDOW
+    if detached:
+        flags |= WINDOWS_DETACHED_PROCESS
+    if new_process_group:
+        flags |= WINDOWS_CREATE_NEW_PROCESS_GROUP
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = WINDOWS_SW_HIDE
+    return {
+        "creationflags": flags,
+        "startupinfo": startupinfo,
+    }

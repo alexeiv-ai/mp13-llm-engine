@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict
 
+from .._process_utils import hidden_subprocess_kwargs
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,6 +23,7 @@ def _current_windows_account_name() -> str:
             text=True,
             timeout=5.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         raw = str(proc.stdout or "").strip()
         if raw:
@@ -55,6 +58,7 @@ def _tighten_windows_acl(path: Path, *, is_dir: bool) -> None:
         text=True,
         timeout=10.0,
         check=False,
+        **hidden_subprocess_kwargs(),
     )
     if int(proc.returncode) != 0:
         stderr = str(proc.stderr or "").strip()

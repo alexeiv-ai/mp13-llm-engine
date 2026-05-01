@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .._process_utils import hidden_subprocess_kwargs
 from .policy import WorkerSandboxPolicy
 
 
@@ -30,9 +31,7 @@ class WorkerLaunchResult:
 def _normal_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = open(req.log_path, "ab")
-    kwargs = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x08000000  # subprocess.CREATE_NO_WINDOW
+    kwargs = hidden_subprocess_kwargs()
     try:
         proc = subprocess.Popen(  # noqa: S603,S607
             list(req.command),

@@ -9,6 +9,7 @@ import venv
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .._process_utils import hidden_subprocess_kwargs
 from .common import _sha256_text, _stable_json
 from .bundle_models import SandboxProfileSpec, ToolboxEnvironmentSpec
 
@@ -526,6 +527,7 @@ class ToolboxEnvironmentManager:
             text=True,
             timeout=300,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         resolution = {
             "status": "ok" if int(result.returncode or 0) == 0 else "failed",
@@ -799,6 +801,7 @@ class ToolboxEnvironmentManager:
             text=True,
             timeout=300,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         execution = {
             "status": "ok" if int(result.returncode or 0) == 0 else "failed",
@@ -827,6 +830,7 @@ class ToolboxEnvironmentManager:
                     text=True,
                     timeout=120,
                     check=False,
+                    **hidden_subprocess_kwargs(),
                 )
                 freeze_output = str(freeze_result.stdout or "")
                 lines = [

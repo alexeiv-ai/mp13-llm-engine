@@ -19,7 +19,7 @@ from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ._process_utils import pid_alive
+from ._process_utils import hidden_subprocess_kwargs, pid_alive
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +480,7 @@ class EngineProcessSupervisor:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **hidden_subprocess_kwargs(),
         )
         return self.register_spawned(
             engine_id=engine_id,
@@ -596,6 +597,7 @@ class EngineProcessSupervisor:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **hidden_subprocess_kwargs(),
         )
         record = self.register_spawned(
             engine_id=eid,

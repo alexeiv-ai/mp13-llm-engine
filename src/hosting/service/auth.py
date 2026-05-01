@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .._process_utils import hidden_subprocess_kwargs
 from ..client_realm import secret_record_path
 from .constants import (
     DAEMON_VERSION,
@@ -105,6 +106,7 @@ class AuthMixin:
                     capture_output=True,
                     timeout=15.0,
                     check=False,
+                    **hidden_subprocess_kwargs(),
                 )
                 return int(proc.returncode) == 0
         except Exception:

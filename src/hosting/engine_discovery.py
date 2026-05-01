@@ -7,6 +7,8 @@ import subprocess
 import sys
 from typing import Optional, Tuple
 
+from ._process_utils import hidden_subprocess_kwargs
+
 
 def _get_target_python(python_executable: Optional[str] = None) -> str:
     if python_executable:
@@ -47,9 +49,7 @@ def is_engine_discoverable(python_executable: Optional[str] = None) -> Tuple[boo
         "sys.exit(0 if importlib.util.find_spec('mp13_engine') else 1)"
     )
 
-    kwargs = {}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = 0x08000000  # subprocess.CREATE_NO_WINDOW
+    kwargs = hidden_subprocess_kwargs()
 
     try:
         result = subprocess.run(  # noqa: S603
@@ -96,9 +96,7 @@ def is_engine_available(python_executable: Optional[str] = None) -> Tuple[bool, 
         except Exception as exc:
             return False, str(exc)
 
-    kwargs = {}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = 0x08000000  # subprocess.CREATE_NO_WINDOW
+    kwargs = hidden_subprocess_kwargs()
 
     try:
         result = subprocess.run(  # noqa: S603

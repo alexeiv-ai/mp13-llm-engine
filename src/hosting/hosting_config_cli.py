@@ -25,6 +25,7 @@ if __package__ in {None, ""}:
     _SRC_ROOT = Path(__file__).resolve().parents[1]
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
+    from hosting._process_utils import hidden_subprocess_kwargs
     from hosting.service.host_service import EngineHostService, VALID_AUTH_ROLES
     from hosting.client_realm import (
         FileSecretStore,
@@ -55,6 +56,7 @@ if __package__ in {None, ""}:
         write_transport_bootstrap_bundle,
     )
 else:
+    from ._process_utils import hidden_subprocess_kwargs
     from .service.host_service import EngineHostService, VALID_AUTH_ROLES
     from .client_realm import (
         FileSecretStore,
@@ -2405,7 +2407,14 @@ def _generate_keypair(
             "-N",
             str(passphrase or ""),
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=30.0)  # noqa: S603
+        proc = subprocess.run(  # noqa: S603
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30.0,
+            **hidden_subprocess_kwargs(),
+        )
         if int(proc.returncode) != 0:
             stderr = str(proc.stderr or "").strip()
             raise RuntimeError(f"ssh-keygen failed: {stderr or 'unknown error'}")
@@ -2443,6 +2452,7 @@ def _derive_public_key_from_private(private_key_text: str) -> str:
             text=True,
             timeout=30.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         if int(proc.returncode) != 0:
             raise RuntimeError(str(proc.stderr or "").strip() or "ssh-keygen -y failed")
@@ -4540,6 +4550,7 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
             text=True,
             timeout=10.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         _record("ssh_dependency", proc.returncode in {0, 1})
     except Exception as exc:
@@ -4620,6 +4631,7 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
             text=True,
             timeout=30.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         key_probe_details["returncode"] = int(probe.returncode)
         if int(probe.returncode) == 0 and key_probe_private.exists() and key_probe_public.exists():

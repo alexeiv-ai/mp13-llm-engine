@@ -7,8 +7,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+from .._process_utils import hidden_subprocess_kwargs
 from .constants import DEFAULT_DAEMON_PORT, DEFAULT_HTTP_INGRESS_PORT
 from .paths import _default_http_pid_file
 from .pidfile import DaemonPidFile
@@ -63,10 +64,7 @@ def start_daemon_background(
         "env": env,
     }
     if sys.platform == "win32":
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        CREATE_NO_WINDOW = 0x08000000
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        kwargs.update(hidden_subprocess_kwargs(detached=True, new_process_group=True))
         kwargs["close_fds"] = True
     else:
         kwargs["start_new_session"] = True
@@ -171,10 +169,7 @@ def start_http_ingress_background(
         "env": env,
     }
     if sys.platform == "win32":
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        CREATE_NO_WINDOW = 0x08000000
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        kwargs.update(hidden_subprocess_kwargs(detached=True, new_process_group=True))
         kwargs["close_fds"] = True
     else:
         kwargs["start_new_session"] = True

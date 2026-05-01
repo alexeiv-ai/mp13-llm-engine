@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ._process_utils import hidden_subprocess_kwargs
 from .client_realm import (
     FileSecretStore,
     append_client_audit_event,
@@ -61,6 +62,7 @@ def _generate_keypair(*, key_id: str, passphrase: str = "") -> tuple[str, str]:
             text=True,
             timeout=30.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         if int(proc.returncode) != 0:
             raise RuntimeError(str(proc.stderr or "").strip() or "ssh-keygen failed")
@@ -83,6 +85,7 @@ def _derive_public_key(private_key_text: str) -> str:
             text=True,
             timeout=30.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         if int(proc.returncode) != 0:
             raise RuntimeError(str(proc.stderr or "").strip() or "ssh-keygen -y failed")

@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from ._process_utils import pid_alive
+from ._process_utils import hidden_subprocess_kwargs, pid_alive
 from .client_realm import resolve_client_profile_control_settings
 from .engine_host_connection import CommandError
 
@@ -448,6 +448,7 @@ class EngineHostControlChannel:
             env=self._cmd_env(),
             timeout=self._timeout,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         raw = (proc.stdout or "").strip()
         if not raw:
@@ -829,6 +830,7 @@ class EngineHostControlChannel:
                 capture_output=True,
                 timeout=float(wait_seconds) + 10.0,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             if proc.returncode != 0:
                 stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()

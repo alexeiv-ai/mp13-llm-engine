@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ._process_utils import hidden_subprocess_kwargs
 from .client_realm import (
     FileSecretStore,
     append_client_audit_event,
@@ -52,7 +53,14 @@ def _protect_windows_private_key_path(path: Path) -> None:
     ]
     for command in commands:
         try:
-            subprocess.run(command, capture_output=True, text=True, timeout=15.0, check=False)  # noqa: S603
+            subprocess.run(  # noqa: S603
+                command,
+                capture_output=True,
+                text=True,
+                timeout=15.0,
+                check=False,
+                **hidden_subprocess_kwargs(),
+            )
         except Exception:
             pass
 
@@ -87,6 +95,7 @@ def _protect_openssh_private_key(
             text=True,
             timeout=30.0,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         if int(proc.returncode) != 0:
             raise RuntimeError(str(proc.stderr or "").strip() or "ssh-keygen -p failed")
@@ -594,6 +603,7 @@ def validate_client_transport_profile(
         capture_output=True,
         text=True,
         timeout=max(1.0, float(timeout_seconds or 15.0)),
+        **hidden_subprocess_kwargs(),
     )
     result["ssh_probe_ran"] = True
     result["ssh_probe_command"] = cmd
