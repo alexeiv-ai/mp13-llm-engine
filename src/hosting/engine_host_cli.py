@@ -29,6 +29,12 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+if __package__ in {None, ""}:
+    _SRC_ROOT = Path(__file__).resolve().parents[1]
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
+    __package__ = "hosting"
+
 from .service.host_service import EngineHostService
 
 
@@ -623,11 +629,107 @@ def _try_daemon_invoke(
         return False
 
 
+def _channel_settings_from_args(args: argparse.Namespace, *, auto_bootstrap: bool = False) -> Dict[str, Any]:
+    settings: Dict[str, Any] = {
+        "engine_host_daemon_auto_bootstrap": bool(auto_bootstrap),
+        "engine_host_daemon_pid_file": str(getattr(args, "pid_file", "") or "") or None,
+        "engine_host_state_file": str(getattr(args, "engines_state_file", "") or "") or None,
+        "engine_host_control_state_file": str(getattr(args, "control_state_file", "") or "") or None,
+    }
+    for attr in (
+        "engine_host_ssh_target",
+        "control_endpoint",
+        "control_ssh_key",
+        "control_ssh_fingerprint",
+        "ssh_known_hosts_line",
+        "engine_host_remote_cmd",
+        "engine_host_client_profile",
+        "engine_host_client_realm",
+        "engine_host_client_realm_root",
+        "engine_host_client_secret_password",
+        "engine_host_timeout_seconds",
+        "engine_host_daemon_port",
+        "engine_host_session_token",
+        "engine_host_session_scope",
+        "engine_host_session_ttl_seconds",
+        "engine_host_bind_session_to_ssh",
+    ):
+        value = getattr(args, attr, None)
+        if value not in (None, ""):
+            settings[attr] = value
+    return settings
+
+
+def _has_explicit_channel_target(args: argparse.Namespace) -> bool:
+    return any(
+        str(getattr(args, attr, "") or "").strip()
+        for attr in (
+            "engine_host_ssh_target",
+            "control_endpoint",
+            "engine_host_client_profile",
+            "engine_host_client_realm_root",
+        )
+    )
+
+
+def _payload_with_cli_selectors(args: argparse.Namespace, payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(payload or {})
+    for attr in ("engine_id", "resource_kind", "resource_id"):
+        value = str(getattr(args, attr, "") or "").strip()
+        if value:
+            out.setdefault(attr, value)
+    return out
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Engine host control CLI")
     p.add_argument("--engines-state-file", type=Path, default=None)
     p.add_argument("--control-state-file", type=Path, default=None)
     p.add_argument("--pid-file", type=Path, default=None, help="Daemon PID file path (for daemon client mode)")
+    p.add_argument(
+        "--ssh-target",
+        "--remote-target",
+        "--engine-host-ssh-target",
+        dest="engine_host_ssh_target",
+        default="",
+        help="Remote host target for SSH relay control, for example user@example-host",
+    )
+    p.add_argument(
+        "--control-endpoint",
+        default="",
+        help="Control endpoint override; ssh:// or user@host values imply SSH relay mode",
+    )
+    p.add_argument(
+        "--control-ssh-key",
+        default="",
+        help="Private key file used for SSH relay control",
+    )
+    p.add_argument(
+        "--control-ssh-fingerprint",
+        default="",
+        help="Expected SSH control key fingerprint used when binding issued sessions",
+    )
+    p.add_argument(
+        "--ssh-known-hosts-line",
+        default="",
+        help="Pinned SSH known_hosts line for strict remote host verification",
+    )
+    p.add_argument(
+        "--engine-host-remote-cmd",
+        default="",
+        help="Remote base command for engine_host_cli; relay mode appends/uses --relay-wrapper as needed",
+    )
+    p.add_argument("--client-profile", dest="engine_host_client_profile", default="", help="Client-realm profile name")
+    p.add_argument("--client-realm", dest="engine_host_client_realm", default="", help="Client-realm name")
+    p.add_argument("--client-realm-root", dest="engine_host_client_realm_root", default="", help="Client-realm root")
+    p.add_argument(
+        "--client-secret-password",
+        dest="engine_host_client_secret_password",
+        default="",
+        help="Password for client-realm secret materialization when needed",
+    )
+    p.add_argument("--session-token", dest="engine_host_session_token", default="", help="Existing daemon session token")
+    p.add_argument("--timeout-seconds", dest="engine_host_timeout_seconds", type=float, default=0.0, help="Control command timeout")
     p.add_argument("--payload-stdin", action="store_true")
     p.add_argument("--payload-json", type=str, default="")
     p.add_argument(
@@ -638,7 +740,14 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="COMMAND",
         help="Print lifecycle/control usage examples (optionally for one command) and exit",
     )
-    sp = p.add_subparsers(dest="command", required=True)
+    p.add_argument(
+        "--color-scheme",
+        default="dark",
+        choices=["dark", "light"],
+        help="Terminal color scheme for interactive output",
+    )
+    p.add_argument("--interactive", action="store_true", help="Launch interactive control menu")
+    sp = p.add_subparsers(dest="command", required=False)
 
     for name in [
         "discover-running",
@@ -874,26 +983,46 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         print(_examples_text(ex_cmd))
         return 0
     args = parser.parse_args(argv)
+
+    if bool(getattr(args, "interactive", False)):
+        from .engine_host_cli_interactive import run_interactive_mode
+        return run_interactive_mode(args)
+
+    if not args.command:
+        parser.print_help()
+        return 1
+
     payload = _load_payload(args)
     cmd_name = str(args.command or "").strip()
+    effective_payload = _payload_with_cli_selectors(args, payload)
 
     # Local-only recovery helper. Intentionally bypasses daemon RPC/auth surfaces.
     if cmd_name == "reset-hosting-access":
+        if _has_explicit_channel_target(args):
+            print(json.dumps({"ok": False, "error": "reset-hosting-access is local-only"}, ensure_ascii=False))
+            return 2
         from .engine_host_channel import EngineHostControlChannel
 
         ch = EngineHostControlChannel(
-            {
-                "engine_host_daemon_auto_bootstrap": False,
-                "engine_host_daemon_pid_file": str(args.pid_file) if args.pid_file else None,
-                "engine_host_control_state_file": str(args.control_state_file) if args.control_state_file else None,
-            }
+            _channel_settings_from_args(args, auto_bootstrap=False)
         )
         _print_ok(ch.reset_hosting_access())
         return 0
 
+    if _has_explicit_channel_target(args):
+        from .engine_host_channel import EngineHostControlChannel
+
+        ch = EngineHostControlChannel(_channel_settings_from_args(args, auto_bootstrap=False))
+        try:
+            _print_ok(ch.invoke_control_command(cmd_name, effective_payload))
+            return 0
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+            return 2
+
     # Try sending the command to the running daemon first
     pid_file_arg = getattr(args, "pid_file", None)
-    if cmd_name and _try_daemon_invoke(cmd_name, payload, pid_file=pid_file_arg):
+    if cmd_name and _try_daemon_invoke(cmd_name, effective_payload, pid_file=pid_file_arg):
         return 0
 
     # Fallback: direct EngineHostService call (original behavior)
@@ -903,6 +1032,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     )
     try:
         cmd = str(args.command or "").strip()
+        payload = effective_payload
         svc.authorize_command(cmd, payload)
         if cmd == "discover-running":
             _print_ok(svc.discover_running())

@@ -192,6 +192,44 @@ def test_channel_init_resolves_client_profile_into_ssh_settings(tmp_path: Path) 
     assert ch.control_settings["ssh_known_hosts_line"] == "example ssh-ed25519 AAAATEST"
     assert ch.control_settings["control_ssh_fingerprint"] == "SHA256:abc"
     assert Path(str(ch.control_settings["control_ssh_key"])).exists()
+
+
+def test_raw_auth_begin_challenge_includes_ssh_binding_for_remote_target() -> None:
+    class FakeConn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def invoke(self, command: str, payload: dict) -> dict:
+            self.calls.append((command, dict(payload)))
+            return {"challenge_id": "chal-1", "challenge": "payload"}
+
+    fake = FakeConn()
+    ch = EngineHostControlChannel(
+        {
+            "engine_host_ssh_target": "user@example-host",
+            "control_ssh_key": "C:/keys/transport_ed25519",
+            "control_ssh_fingerprint": "SHA256:abc",
+            "ssh_known_hosts_line": "example-host ssh-ed25519 AAAATEST",
+        }
+    )
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    out = ch.invoke_control_command("auth-begin-challenge", {"key_id": "admin-main", "scope": "control"})
+
+    assert out["challenge_id"] == "chal-1"
+    assert fake.calls == [
+        (
+            "auth-begin-challenge",
+            {
+                "key_id": "admin-main",
+                "scope": "control",
+                "ssh_binding": {
+                    "target": "user@example-host",
+                    "key_fingerprint": "SHA256:abc",
+                },
+            },
+        )
+    ]
     target = ch.get_target()
     assert target["mode"] == "ssh"
     assert target["target"] == "user@example-host"

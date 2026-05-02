@@ -518,7 +518,7 @@ class EngineHostControlChannel:
 
         effective_payload = dict(payload or {})
         ssh_binding = self._current_ssh_session_binding()
-        if command == "auth-issue-session":
+        if command in {"auth-issue-session", "auth-begin-challenge"}:
             if ssh_binding and not effective_payload.get("ssh_binding"):
                 effective_payload["ssh_binding"] = ssh_binding
         elif ssh_binding:
@@ -588,6 +588,10 @@ class EngineHostControlChannel:
 
     def get_session_token(self) -> Optional[str]:
         return self._session_token
+
+    def invoke_control_command(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+        """Invoke a daemon control command through this channel."""
+        return self._invoke(str(command or "").strip(), dict(payload or {}))
 
     def _current_ssh_session_binding(self) -> Optional[Dict[str, str]]:
         if not self._bind_session_to_ssh:

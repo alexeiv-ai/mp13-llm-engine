@@ -9,7 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from hosting.client_realm_api import delete_client_realm_key, export_client_realm_key, import_client_realm_key
+import hosting.client_realm_api as client_realm_api
+from hosting.client_realm_api import (
+    authenticate_client_with_key,
+    begin_client_key_authentication,
+    complete_client_key_authentication,
+    delete_client_realm_key,
+    export_client_realm_key,
+    import_client_realm_key,
+    sign_client_auth_challenge_with_private_key,
+)
 from hosting.client_realm import (
     CLIENT_REALM_ROOT_SUBDIR,
     FileSecretStore,
@@ -150,6 +159,98 @@ def test_client_realm_api_delete_key_removes_secret_and_metadata() -> None:
         assert not secret_path.exists()
         assert "delete-me" not in dict(read_client_key_metadata(realm_root).get("keys") or {})
         assert Path(str(deleted["audit_path"])).exists()
+
+
+def test_client_realm_auth_helpers_support_gui_signer_flow() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.begin_payload: dict = {}
+            self.complete_payload: dict = {}
+
+        def auth_begin_challenge(self, **kwargs):
+            self.begin_payload = dict(kwargs)
+            return {"challenge_id": "chal-1", "challenge": "sign-me"}
+
+        def auth_complete_challenge(self, **kwargs):
+            self.complete_payload = dict(kwargs)
+            return {"status": "ok", "token": "session-token"}
+
+    client = FakeClient()
+    seen: dict = {}
+
+    def signer(challenge: dict) -> str:
+        seen.update(challenge)
+        return "-----BEGIN SSH SIGNATURE-----\nSIG\n-----END SSH SIGNATURE-----"
+
+    token = authenticate_client_with_key(
+        client,
+        "admin-main",
+        signer=signer,
+        ttl_seconds=300,
+        engine_ids=["worker1"],
+    )
+
+    assert token == "session-token"
+    assert client.begin_payload["key_id"] == "admin-main"
+    assert client.begin_payload["ttl_seconds"] == 300
+    assert client.begin_payload["engine_ids"] == ["worker1"]
+    assert seen["challenge_id"] == "chal-1"
+    assert seen["challenge_text"] == "sign-me"
+    assert client.complete_payload["challenge_id"] == "chal-1"
+    assert "SIG" in client.complete_payload["signature_ssh"]
+    assert client.complete_payload["adopt"] is True
+
+
+def test_client_realm_auth_step_helpers_validate_and_complete() -> None:
+    class FakeClient:
+        def auth_begin_challenge(self, **_kwargs):
+            return {"challenge_id": "chal-2", "challenge": "payload"}
+
+        def auth_complete_challenge(self, **kwargs):
+            return {"status": "ok", "token": "tok", "echo": dict(kwargs)}
+
+    challenge = begin_client_key_authentication(FakeClient(), key_id="admin-main")
+    assert challenge["challenge_text"] == "payload"
+
+    result = complete_client_key_authentication(
+        FakeClient(),
+        challenge_id=challenge["challenge_id"],
+        signature_ssh="-----BEGIN SSH SIGNATURE-----\nSIG\n-----END SSH SIGNATURE-----",
+        adopt=False,
+    )
+    assert result["token"] == "tok"
+    assert result["echo"]["adopt"] is False
+
+
+def test_client_realm_auth_signer_uses_noninteractive_ssh_keygen(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": list(cmd), **kwargs})
+        challenge_file = Path(cmd[-1])
+        Path(str(challenge_file) + ".sig").write_text(
+            "-----BEGIN SSH SIGNATURE-----\nSIGNED\n-----END SSH SIGNATURE-----\n",
+            encoding="utf-8",
+        )
+
+        class Result:
+            returncode = 0
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(client_realm_api.subprocess, "run", fake_run)
+    signature = sign_client_auth_challenge_with_private_key(
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE\n-----END OPENSSH PRIVATE KEY-----",
+        challenge_text="challenge-body",
+    )
+
+    assert "SIGNED" in signature
+    sign_call = next(call for call in calls if call["cmd"][:3] == ["ssh-keygen", "-Y", "sign"])
+    assert sign_call["stdin"] == client_realm_api.subprocess.DEVNULL
+    assert sign_call["capture_output"] is True
+    assert sign_call["env"]["SSH_ASKPASS_REQUIRE"] == "never"
+    assert sign_call["cmd"][:5] == ["ssh-keygen", "-Y", "sign", "-f", sign_call["cmd"][4]]
 
 
 def test_file_secret_store_rejects_custom_password_encryption() -> None:

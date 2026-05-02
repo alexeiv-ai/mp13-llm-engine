@@ -5,12 +5,13 @@ returns structured dictionaries and does not depend on CLI output.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ._process_utils import hidden_subprocess_kwargs
 from .client_realm import (
@@ -286,6 +287,182 @@ def delete_client_realm_key(request: ClientRealmKeyRequest | Dict[str, Any]) -> 
     return {**deleted, "audit_path": str(audit_path)}
 
 
+def begin_client_key_authentication(
+    client: Any,
+    *,
+    key_id: str,
+    scope: str = "control",
+    ttl_seconds: int = 120,
+    config_paths: Optional[list[str]] = None,
+    engine_ids: Optional[list[str]] = None,
+    bind_to_ssh: bool = True,
+) -> Dict[str, Any]:
+    """Request a daemon auth challenge without performing any UI or signing work."""
+    key_id_norm = str(key_id or "").strip()
+    if not key_id_norm:
+        raise ValueError("key_id is required")
+    challenge = client.auth_begin_challenge(
+        key_id=key_id_norm,
+        scope=str(scope or "control").strip() or "control",
+        ttl_seconds=int(ttl_seconds or 120),
+        config_paths=list(config_paths or []),
+        engine_ids=list(engine_ids or []),
+        bind_to_ssh=bool(bind_to_ssh),
+    )
+    out = dict(challenge or {})
+    challenge_id = str(out.get("challenge_id") or "").strip()
+    challenge_text = str(out.get("challenge") or out.get("challenge_text") or "")
+    if not challenge_id or not challenge_text:
+        raise RuntimeError("daemon did not return a usable auth challenge")
+    out["challenge_id"] = challenge_id
+    out["challenge"] = challenge_text
+    out["challenge_text"] = challenge_text
+    out.setdefault("key_id", key_id_norm)
+    out.setdefault("scope", str(scope or "control").strip() or "control")
+    return out
+
+
+def sign_client_auth_challenge_with_private_key(
+    *,
+    private_key_text: str,
+    challenge_text: str,
+    namespace: str = "engine-host-auth",
+    timeout_seconds: float = 30.0,
+) -> str:
+    """
+    Sign a daemon challenge with an unencrypted OpenSSH private key.
+
+    This helper is deliberately non-interactive: it does not call input(), does
+    not attach stdin, and disables SSH_ASKPASS. GUI clients that need passphrase
+    prompts should use begin_client_key_authentication(), sign in their UI/key
+    layer, then call complete_client_key_authentication().
+    """
+    private_key = str(private_key_text or "").strip()
+    challenge = str(challenge_text or "")
+    if not private_key:
+        raise ValueError("private_key_text is required")
+    if not challenge:
+        raise ValueError("challenge_text is required")
+    ns = str(namespace or "").strip()
+    if not ns:
+        raise ValueError("namespace is required")
+    tmpdir = Path(tempfile.mkdtemp(prefix="host_auth_")).resolve()
+    try:
+        _protect_windows_private_key_path(tmpdir)
+
+        pk_file = tmpdir / "private_key"
+        pk_file.write_text(private_key + "\n", encoding="utf-8")
+        _protect_windows_private_key_path(pk_file)
+
+        chal_file = tmpdir / "challenge.txt"
+        chal_file.write_text(challenge, encoding="utf-8")
+        _protect_windows_private_key_path(chal_file)
+
+        proc = subprocess.run(  # noqa: S603
+            ["ssh-keygen", "-Y", "sign", "-f", str(pk_file), "-n", ns, str(chal_file)],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=float(timeout_seconds or 30.0),
+            check=False,
+            env={**os.environ, "SSH_ASKPASS_REQUIRE": "never"},
+            **hidden_subprocess_kwargs(),
+        )
+        if int(proc.returncode) != 0:
+            err = str(proc.stderr or "").strip()
+            raise RuntimeError(f"ssh-keygen failed to sign challenge: {err or f'exit {proc.returncode}'}")
+
+        sig_file = tmpdir / "challenge.txt.sig"
+        if not sig_file.exists():
+            raise RuntimeError("ssh-keygen did not create a signature file")
+
+        signature = sig_file.read_text(encoding="utf-8").strip()
+        if not signature:
+            raise RuntimeError("ssh-keygen returned an empty signature")
+        return signature
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def complete_client_key_authentication(
+    client: Any,
+    *,
+    challenge_id: str,
+    signature_ssh: str,
+    adopt: bool = True,
+) -> Dict[str, Any]:
+    """Complete daemon challenge authentication with a caller-provided signature."""
+    cid = str(challenge_id or "").strip()
+    sig = str(signature_ssh or "").strip()
+    if not cid:
+        raise ValueError("challenge_id is required")
+    if not sig:
+        raise ValueError("signature_ssh is required")
+    try:
+        result = client.auth_complete_challenge(challenge_id=cid, signature_ssh=sig, adopt=bool(adopt))
+    except TypeError:
+        result = client.auth_complete_challenge(challenge_id=cid, signature_ssh=sig)
+    return dict(result or {})
+
+
+def authenticate_client_with_key(
+    client: Any,
+    key_id: str,
+    private_key_text: str = "",
+    scope: str = "control",
+    *,
+    signer: Optional[Callable[[Dict[str, Any]], str]] = None,
+    signature_ssh: str = "",
+    ttl_seconds: int = 120,
+    config_paths: Optional[list[str]] = None,
+    engine_ids: Optional[list[str]] = None,
+    bind_to_ssh: bool = True,
+    adopt: bool = True,
+    namespace: str = "engine-host-auth",
+    sign_timeout_seconds: float = 30.0,
+) -> str:
+    """
+    Orchestrate daemon public-key authentication and return the session token.
+
+    GUI clients should usually pass a signer callback. The callback receives the
+    challenge dictionary from begin_client_key_authentication() and returns an
+    OpenSSH armored signature. Headless callers may pass unencrypted
+    private_key_text to use the non-interactive ssh-keygen signer.
+    """
+    challenge = begin_client_key_authentication(
+        client,
+        key_id=key_id,
+        scope=scope,
+        ttl_seconds=ttl_seconds,
+        config_paths=config_paths,
+        engine_ids=engine_ids,
+        bind_to_ssh=bind_to_ssh,
+    )
+    signature = str(signature_ssh or "").strip()
+    if not signature and signer is not None:
+        signature = str(signer(dict(challenge)) or "").strip()
+    if not signature and private_key_text:
+        signature = sign_client_auth_challenge_with_private_key(
+            private_key_text=private_key_text,
+            challenge_text=str(challenge["challenge_text"]),
+            namespace=namespace,
+            timeout_seconds=sign_timeout_seconds,
+        )
+    if not signature:
+        raise ValueError("signature_ssh, signer, or private_key_text is required")
+
+    result = complete_client_key_authentication(
+        client,
+        challenge_id=str(challenge["challenge_id"]),
+        signature_ssh=signature,
+        adopt=adopt,
+    )
+    token = str(result.get("token") or "").strip()
+    if not token:
+        raise RuntimeError("authentication failed: no token returned")
+    return token
+
+
 __all__ = [
     "ClientRealmKeyRequest",
     "list_client_realm_keys",
@@ -295,4 +472,8 @@ __all__ = [
     "create_client_realm_key_handoff",
     "import_client_realm_key_handoff",
     "delete_client_realm_key",
+    "begin_client_key_authentication",
+    "sign_client_auth_challenge_with_private_key",
+    "complete_client_key_authentication",
+    "authenticate_client_with_key",
 ]

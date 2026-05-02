@@ -1389,6 +1389,16 @@ class AuthMixin:
         auth = dict(cfg.get("auth") or {})
         sessions = dict(auth.get("sessions") or {})
         existed = tok in sessions
+        
+        # If exact token not found, try matching by token_preview (for interactive CLI support)
+        if not existed:
+            matched_keys = [k for k in sessions.keys() if self._token_preview(k) == tok]
+            if len(matched_keys) == 1:
+                tok = matched_keys[0]
+                existed = True
+            elif len(matched_keys) > 1:
+                raise ValueError("Ambiguous token preview: multiple sessions match.")
+                
         sessions.pop(tok, None)
         auth["sessions"] = sessions
         cfg["auth"] = auth
