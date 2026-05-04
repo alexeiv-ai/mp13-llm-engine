@@ -32,6 +32,13 @@ from ._process_utils import hidden_subprocess_kwargs, pid_alive
 from .client_realm import resolve_client_profile_control_settings
 from .engine_host_connection import CommandError
 
+
+def _resolved_pid_path(pid_info: Any, pid_file_path: Any) -> Optional[Path]:
+    if pid_file_path:
+        return Path(pid_file_path)
+    path = getattr(pid_info, "path", None)
+    return Path(path) if path is not None else None
+
 # Keywords that indicate an expired or invalid session token in daemon error strings.
 _SESSION_AUTH_ERROR_KEYWORDS = (
     "auth_failed",
@@ -239,6 +246,69 @@ class EngineHostControlChannel:
             logger.debug("Failed to read local hosting control snapshot: %s", exc)
             return None
 
+    def _configured_access_root_conflict(self) -> Optional[Dict[str, Any]]:
+        selected = self._local_control_state_path()
+        if selected is None:
+            return None
+        try:
+            selected_resolved = selected.expanduser().resolve()
+        except Exception:
+            selected_resolved = selected
+
+        candidates: List[Path] = []
+        try:
+            from .service.constants import DEFAULT_CONTROL_STATE_FILE
+
+            candidates.append(DEFAULT_CONTROL_STATE_FILE.expanduser().resolve())
+        except Exception:
+            pass
+        try:
+            if selected_resolved.name != "access_control.json":
+                candidates.append((selected_resolved.parent.parent / "hosting" / "access_control.json").resolve())
+        except Exception:
+            pass
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            if candidate == selected_resolved or not candidate.exists():
+                continue
+            try:
+                from .service.host_service import EngineHostService
+
+                cfg = EngineHostService(control_state_file=candidate).get_control_config()
+            except Exception:
+                continue
+            if int(dict(cfg or {}).get("keys_count") or 0) <= 0:
+                continue
+            return {
+                "selected_control_state_file": str(selected_resolved),
+                "configured_control_state_file": str(candidate),
+                "configured_require_auth": bool(dict(cfg or {}).get("require_auth", False)),
+                "configured_keys_count": int(dict(cfg or {}).get("keys_count") or 0),
+                "configured_endpoint_mode_default": str(dict(cfg or {}).get("endpoint_mode_default") or ""),
+            }
+        return None
+
+    def _should_auto_recover_unreachable_local_daemon(self) -> Dict[str, Any]:
+        snapshot = dict(self._read_local_control_snapshot() or {})
+        endpoint_mode = str(snapshot.get("endpoint_mode_default") or "").strip().lower()
+        lifecycle_profile = str(snapshot.get("lifecycle_profile") or "").strip().lower()
+        auto_recover = endpoint_mode == "exclusive" or lifecycle_profile == "foreground_terminal_bound"
+        return {
+            "auto_recover": bool(auto_recover),
+            "endpoint_mode_default": endpoint_mode or None,
+            "lifecycle_profile": lifecycle_profile or None,
+            "reason": (
+                "exclusive_or_foreground_daemon"
+                if auto_recover
+                else "shared_or_detached_daemon_requires_explicit_force"
+            ),
+        }
+
     @staticmethod
     def _compose_unconfigured_hosting_warning(snapshot: Optional[Dict[str, Any]]) -> Optional[str]:
         cfg = dict(snapshot or {})
@@ -319,6 +389,13 @@ class EngineHostControlChannel:
             return None
         if int(snapshot.get("keys_count") or 0) != 0:
             return snapshot
+        conflict = self._configured_access_root_conflict()
+        if conflict:
+            raise RuntimeError(
+                "Refusing temporary no-auth local daemon bootstrap because configured hosting access "
+                f"already exists at {conflict['configured_control_state_file']} "
+                f"(selected control state: {conflict['selected_control_state_file']})"
+            )
         try:
             from .service.host_service import EngineHostService
 
@@ -379,6 +456,7 @@ class EngineHostControlChannel:
 
                 pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
                 pid_info = DaemonPidFile(pid_file_path)
+                pid_path = _resolved_pid_path(pid_info, pid_file_path)
 
                 # If we already have a connection, check it first
                 if self._connection is not None and isinstance(self._connection, LocalSocketConnection):
@@ -390,7 +468,7 @@ class EngineHostControlChannel:
                 if port and pid_info.is_alive():
                     conn = LocalSocketConnection(
                         port=port,
-                        pid_file=Path(pid_file_path) if pid_file_path else None,
+                        pid_file=pid_path,
                         timeout=self._timeout,
                     )
                     if conn.is_alive():
@@ -406,7 +484,7 @@ class EngineHostControlChannel:
                         )
                         result = start_daemon_background(
                             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
-                            pid_file=Path(pid_file_path) if pid_file_path else None,
+                            pid_file=pid_path,
                             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
                             engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
                             control_state_file=Path(self._control_state_file) if self._control_state_file else None,
@@ -415,7 +493,7 @@ class EngineHostControlChannel:
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
                         conn = LocalSocketConnection(
                             port=new_port,
-                            pid_file=Path(pid_file_path) if pid_file_path else None,
+                            pid_file=pid_path,
                             timeout=self._timeout,
                         )
                         self._connection = conn
@@ -620,6 +698,7 @@ class EngineHostControlChannel:
         from .engine_host_connection import LocalSocketConnection
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
+        pid_path = _resolved_pid_path(pid_info, pid_file_path)
         info = pid_info.read() or {}
         pid_alive = bool(pid_info.is_alive())
         status: Dict[str, Any] = {
@@ -643,7 +722,7 @@ class EngineHostControlChannel:
                 return self._finalize_daemon_status(status)
             conn = LocalSocketConnection(
                 port=port,
-                pid_file=Path(pid_file_path) if pid_file_path else None,
+                pid_file=pid_path,
                 timeout=min(self._timeout, 5.0),
                 max_reconnect_attempts=1,
             )
@@ -657,7 +736,12 @@ class EngineHostControlChannel:
             payload: Dict[str, Any] = {}
             if self._session_token:
                 payload["session_token"] = self._session_token
-            auth = conn.invoke("auth-status", payload)
+            try:
+                auth = conn.invoke("auth-status", payload)
+            except Exception as exc:
+                status["auth_status_error"] = str(exc)
+                conn.close()
+                return self._finalize_daemon_status(status)
             conn.close()
             status["auth_status"] = dict(auth or {}) if isinstance(auth, dict) else None
         except Exception as exc:
@@ -672,12 +756,42 @@ class EngineHostControlChannel:
         from .daemon import DaemonPidFile, start_daemon_background, DEFAULT_DAEMON_PORT
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
+        pid_path = _resolved_pid_path(pid_info, pid_file_path)
+        auto_recovery_attempted = False
+        auto_recovery_policy: Optional[Dict[str, Any]] = None
+        auto_recovery_stop: Optional[Dict[str, Any]] = None
         if pid_info.is_alive():
-            return {"already_running": True, **self.get_daemon_status()}
+            status = self.get_daemon_status()
+            if bool(status.get("alive") or status.get("reachable")):
+                return {"already_running": True, **status}
+            recovery_policy = self._should_auto_recover_unreachable_local_daemon()
+            if bool(recovery_policy.get("auto_recover")):
+                auto_recovery_attempted = True
+                auto_recovery_policy = dict(recovery_policy)
+                auto_recovery_stop = self.force_stop_daemon(stop_workers=True, stop_orphan_workers=True)
+                if pid_info.is_alive():
+                    return {
+                        "already_running": False,
+                        "blocked_by_unreachable_pid": True,
+                        "auto_recovery_attempted": True,
+                        "auto_recovery_policy": recovery_policy,
+                        "force_stop": auto_recovery_stop,
+                        "error": "existing daemon PID is alive but automatic recovery did not stop it",
+                        **self.get_daemon_status(),
+                    }
+            else:
+                return {
+                    "already_running": False,
+                    "blocked_by_unreachable_pid": True,
+                    "auto_recovery_attempted": False,
+                    "auto_recovery_policy": recovery_policy,
+                    "error": "existing daemon PID is alive but the local control channel is not reachable",
+                    **status,
+                }
         bootstrap_cfg = self._prepare_local_unconfigured_bootstrap()
         result = start_daemon_background(
             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
-            pid_file=Path(pid_file_path) if pid_file_path else None,
+            pid_file=pid_path,
             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
             engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
             control_state_file=Path(self._control_state_file) if self._control_state_file else None,
@@ -687,6 +801,9 @@ class EngineHostControlChannel:
             self._connection = None  # Force reconnect on next invoke
         return {
             "already_running": False,
+            "auto_recovery_attempted": auto_recovery_attempted,
+            "auto_recovery_policy": auto_recovery_policy,
+            "force_stop": auto_recovery_stop,
             "bootstrap_control_config": dict(bootstrap_cfg or {}) if isinstance(bootstrap_cfg, dict) else None,
             **result,
             **self.get_daemon_status(),
@@ -698,6 +815,7 @@ class EngineHostControlChannel:
         from .engine_host_connection import LocalSocketConnection
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
+        pid_path = _resolved_pid_path(pid_info, pid_file_path)
         info = pid_info.read()
         if not info:
             return {"status": "not_running"}
@@ -708,7 +826,7 @@ class EngineHostControlChannel:
         try:
             conn = LocalSocketConnection(
                 port=port,
-                pid_file=Path(pid_file_path) if pid_file_path else None,
+                pid_file=pid_path,
                 timeout=5.0,
                 max_reconnect_attempts=1,
             )
@@ -719,6 +837,203 @@ class EngineHostControlChannel:
             return {"status": "shutdown_sent"}
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
+
+    def _list_local_engine_worker_processes(self) -> List[Dict[str, Any]]:
+        current_pid = os.getpid()
+        rows: List[Dict[str, Any]] = []
+        try:
+            if sys.platform == "win32":
+                script = (
+                    "Get-CimInstance Win32_Process | "
+                    "Where-Object { $_.CommandLine -match 'hosting\\.engine_worker_ipc' } | "
+                    "Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"
+                )
+                proc = subprocess.run(  # noqa: S603
+                    ["powershell", "-NoProfile", "-Command", script],
+                    text=True,
+                    capture_output=True,
+                    timeout=8.0,
+                    check=False,
+                    **hidden_subprocess_kwargs(),
+                )
+                raw = (proc.stdout or "").strip()
+                if not raw:
+                    return []
+                parsed = json.loads(raw)
+                items = parsed if isinstance(parsed, list) else [parsed]
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    pid = int(item.get("ProcessId") or 0)
+                    if pid > 0 and pid != current_pid:
+                        rows.append(
+                            {
+                                "pid": pid,
+                                "parent_pid": int(item.get("ParentProcessId") or 0),
+                                "command": str(item.get("CommandLine") or ""),
+                            }
+                        )
+                return rows
+            proc = subprocess.run(  # noqa: S603
+                ["ps", "-eo", "pid=,ppid=,command="],
+                text=True,
+                capture_output=True,
+                timeout=8.0,
+                check=False,
+                **hidden_subprocess_kwargs(),
+            )
+            for line in (proc.stdout or "").splitlines():
+                if "hosting.engine_worker_ipc" not in line:
+                    continue
+                parts = line.strip().split(None, 2)
+                if len(parts) < 3:
+                    continue
+                pid = int(parts[0])
+                if pid > 0 and pid != current_pid:
+                    rows.append({"pid": pid, "parent_pid": int(parts[1]), "command": parts[2]})
+        except Exception as exc:
+            logger.debug("Failed to list local hosting worker processes: %s", exc)
+        return rows
+
+    def force_stop_daemon(
+        self,
+        *,
+        stop_workers: bool = True,
+        stop_orphan_workers: bool = True,
+        wait_seconds: float = 3.0,
+    ) -> Dict[str, Any]:
+        """
+        Local-only recovery helper: stop registered workers, then terminate the daemon PID.
+
+        This is intentionally stronger than stop_daemon() and should only be used
+        from operator recovery flows.
+        """
+        if str(self.get_target().get("mode") or "local") != "local":
+            raise ValueError("force_stop_daemon is only valid in local mode")
+        from .daemon import DaemonPidFile
+        from .service.host_service import EngineHostService
+
+        pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
+        pid_info = DaemonPidFile(pid_file_path)
+        info = dict(pid_info.read() or {})
+        worker_report: Dict[str, Any] = {
+            "enabled": bool(stop_workers),
+            "registered_attempted": 0,
+            "registered_stopped": 0,
+            "registered_failed": 0,
+            "orphan_scan_enabled": bool(stop_orphan_workers),
+            "orphan_attempted": 0,
+            "orphan_stopped": 0,
+            "orphan_failed": 0,
+            "attempted": 0,
+            "stopped": 0,
+            "failed": 0,
+            "results": [],
+        }
+        registered_pids: set[int] = set()
+        if stop_workers:
+            svc = EngineHostService(
+                engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
+                control_state_file=self._local_control_state_path(),
+            )
+            try:
+                rows = svc.discover_running(
+                    prune_stale=False,
+                    include_progress=False,
+                    include_reachability=False,
+                )
+                for row in list(rows or []) if isinstance(rows, list) else []:
+                    engine_id = str((row or {}).get("engine_id") or "").strip()
+                    if not engine_id:
+                        continue
+                    pid = int((row or {}).get("pid") or 0)
+                    if pid > 0:
+                        registered_pids.add(pid)
+                    worker_report["registered_attempted"] = int(worker_report.get("registered_attempted") or 0) + 1
+                    try:
+                        out = svc.shutdown(engine_id, timeout_seconds=2.0)
+                        status = str((out or {}).get("status") or "")
+                        ok = status in {"stopped", "already_stopped", "not_found", "invalid_pid"}
+                        key = "registered_stopped" if ok else "registered_failed"
+                        worker_report[key] = int(worker_report.get(key) or 0) + 1
+                        worker_report["results"].append({"kind": "registered", "engine_id": engine_id, "pid": pid, "status": status, "ok": ok})
+                    except Exception as exc:
+                        worker_report["registered_failed"] = int(worker_report.get("registered_failed") or 0) + 1
+                        worker_report["results"].append({"kind": "registered", "engine_id": engine_id, "pid": pid, "status": "exception", "ok": False, "error": str(exc)})
+            except Exception as exc:
+                worker_report["error"] = str(exc)
+
+        if stop_workers and stop_orphan_workers:
+            for proc_info in self._list_local_engine_worker_processes():
+                worker_pid = int(proc_info.get("pid") or 0)
+                if worker_pid <= 0 or worker_pid in registered_pids:
+                    continue
+                worker_report["orphan_attempted"] = int(worker_report.get("orphan_attempted") or 0) + 1
+                try:
+                    os.kill(worker_pid, getattr(signal, "SIGTERM", 15))
+                    deadline = time.time() + 1.5
+                    while time.time() < deadline:
+                        if not pid_alive(worker_pid):
+                            break
+                        time.sleep(0.1)
+                    if pid_alive(worker_pid):
+                        os.kill(worker_pid, getattr(signal, "SIGKILL", getattr(signal, "SIGTERM", 15)))
+                        time.sleep(0.1)
+                    alive = pid_alive(worker_pid)
+                    ok = not alive
+                    key = "orphan_stopped" if ok else "orphan_failed"
+                    worker_report[key] = int(worker_report.get(key) or 0) + 1
+                    worker_report["results"].append({"kind": "orphan_process", "pid": worker_pid, "status": "stopped" if ok else "stop_failed", "ok": ok})
+                except Exception as exc:
+                    worker_report["orphan_failed"] = int(worker_report.get("orphan_failed") or 0) + 1
+                    worker_report["results"].append({"kind": "orphan_process", "pid": worker_pid, "status": "exception", "ok": False, "error": str(exc)})
+
+        worker_report["attempted"] = int(worker_report.get("registered_attempted") or 0) + int(worker_report.get("orphan_attempted") or 0)
+        worker_report["stopped"] = int(worker_report.get("registered_stopped") or 0) + int(worker_report.get("orphan_stopped") or 0)
+        worker_report["failed"] = int(worker_report.get("registered_failed") or 0) + int(worker_report.get("orphan_failed") or 0)
+
+        graceful = self.stop_daemon()
+        pid = int(info.get("pid") or 0)
+        terminate_result: Dict[str, Any] = {"pid": pid, "attempted": False, "status": "not_needed"}
+        if pid > 0 and pid_info.is_alive():
+            terminate_result = {"pid": pid, "attempted": True, "status": "running"}
+            try:
+                os.kill(pid, getattr(signal, "SIGTERM", 15))
+                deadline = time.time() + max(0.1, float(wait_seconds))
+                while time.time() < deadline:
+                    if not pid_info.is_alive():
+                        break
+                    time.sleep(0.1)
+                if pid_info.is_alive():
+                    sigkill = getattr(signal, "SIGKILL", getattr(signal, "SIGTERM", 15))
+                    os.kill(pid, sigkill)
+                    time.sleep(0.2)
+                terminate_result["status"] = "terminated" if not pid_info.is_alive() else "terminate_failed"
+            except Exception as exc:
+                terminate_result["status"] = "error"
+                terminate_result["error"] = str(exc)
+        if not pid_info.is_alive():
+            pid_info.remove()
+        with self._connection_lock:
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
+        return {
+            "status": "ok" if str(terminate_result.get("status") or "") != "terminate_failed" else "error",
+            "local_helper_only": True,
+            "worker_shutdown": worker_report,
+            "graceful_stop": graceful,
+            "daemon_terminate": terminate_result,
+            "daemon_status": self.get_daemon_status(),
+        }
+
+    def force_restart_daemon(self, *, wait_ready_seconds: float = 8.0) -> Dict[str, Any]:
+        stop = self.force_stop_daemon(stop_workers=True, stop_orphan_workers=True)
+        start = self.bootstrap_daemon(wait_ready_seconds=wait_ready_seconds)
+        return {"status": "ok" if (start.get("alive") or start.get("reachable") or start.get("already_running")) else "error", "force_stop": stop, "start": start}
 
     def reset_hosting_access(self) -> Dict[str, Any]:
         """

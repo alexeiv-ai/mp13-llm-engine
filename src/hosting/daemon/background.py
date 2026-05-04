@@ -30,6 +30,48 @@ def start_daemon_background(
     Returns {"pid": N, "port": P, "log_file": ...?} on success.
     Raises RuntimeError if daemon does not become reachable within wait_ready_seconds.
     """
+    pid_info = DaemonPidFile(pid_file)
+    existing_info = pid_info.read() or {}
+    # Only treat a live PID file as an existing hosting daemon when it has the
+    # metadata written by DaemonPidFile.write(). This avoids mistaking minimal
+    # test/stale PID-like records for a reusable daemon instance.
+    if pid_info.is_alive() and (existing_info.get("started_at") or existing_info.get("shutdown_token")):
+        actual_port = int(existing_info.get("port") or 0)
+        if actual_port:
+            try:
+                from ..engine_host_connection import LocalSocketConnection
+
+                conn_kwargs: Dict[str, Any] = {
+                    "port": actual_port,
+                    "timeout": 1.0,
+                    "max_reconnect_attempts": 1,
+                }
+                pid_path = getattr(pid_info, "path", None)
+                if pid_path is not None:
+                    conn_kwargs["pid_file"] = pid_path
+                conn = LocalSocketConnection(**conn_kwargs)
+                pong = conn.invoke("__ping__", {})
+                conn.close()
+                if str(pong) == "pong":
+                    out: Dict[str, Any] = {
+                        "pid": int(existing_info.get("pid") or 0),
+                        "port": int(actual_port),
+                        "already_running": True,
+                    }
+                    if log_file:
+                        out["log_file"] = str(log_file)
+                    return out
+            except Exception as exc:
+                raise RuntimeError(
+                    "Existing engine host daemon PID is alive but local control is not reachable; "
+                    "stop or force-restart it before starting another daemon "
+                    f"(pid={int(existing_info.get('pid') or 0)}, pid_file={pid_info.path}, error={exc})"
+                ) from exc
+        raise RuntimeError(
+            "Existing engine host daemon PID is alive but PID metadata is incomplete; "
+            f"stop or force-restart it before starting another daemon (pid_file={pid_info.path})"
+        )
+
     argv: List[str] = [
         sys.executable,
         "-m",
@@ -84,7 +126,6 @@ def start_daemon_background(
         pass
 
     # Poll until PID file appears and daemon responds to a protocol ping.
-    pid_info = DaemonPidFile(pid_file)
     deadline = time.time() + max(1.0, float(wait_ready_seconds))
     while time.time() < deadline:
         time.sleep(0.15)

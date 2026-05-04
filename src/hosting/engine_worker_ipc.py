@@ -155,20 +155,61 @@ class _StreamSession:
         self.done = False
         self.closed = False
         self.error: Optional[str] = None
+        self.final_response: Optional[Dict[str, Any]] = None
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"ipc-stream-{self.stream_id[:8]}")
 
     def start(self) -> None:
         self._thread.start()
 
-    def _emit(self, event: Dict[str, Any]) -> None:
+    def _emit(self, event: Dict[str, Any]) -> bool:
         row = dict(event or {})
         row.setdefault("stream_id", self.stream_id)
         row.setdefault("request_id", self.request_id)
         try:
             self.events.put_nowait(row)
+            return True
         except queue.Full:
             self.error = "stream_queue_full"
-            self.done = True
+            return False
+
+    def _emit_final(self) -> None:
+        final_event: Dict[str, Any] = {
+            "event": "final",
+            "ok": self.error is None and not self.stop_event.is_set(),
+        }
+        if self.final_response is not None:
+            final_event["response"] = dict(self.final_response)
+            final_event["final_response"] = dict(self.final_response)
+        row = dict(final_event)
+        row.setdefault("stream_id", self.stream_id)
+        row.setdefault("request_id", self.request_id)
+        while True:
+            try:
+                self.events.put_nowait(row)
+                return
+            except queue.Full:
+                try:
+                    self.events.get_nowait()
+                except queue.Empty:
+                    return
+
+    def _record_final_response(self, item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        response_text = item.get("response_text")
+        chunk_text = item.get("chunk_text")
+        is_final_chunk = bool(item.get("is_final_chunk"))
+        chunk_type = item.get("chunkType")
+        if not is_final_chunk and response_text is None:
+            return
+        final_response = dict(item)
+        if response_text is not None:
+            final_response["response_text"] = str(response_text)
+        elif chunk_text is not None:
+            final_response["response_text"] = str(chunk_text)
+        if chunk_type is not None:
+            final_response["chunkType"] = str(chunk_type)
+        self.final_response = final_response
 
     def _run(self) -> None:
         asyncio.run(self._run_async())
@@ -179,7 +220,8 @@ class _StreamSession:
         try:
             resp = await handle_call_tool(self.method, dict(self.params or {}))
             if str(getattr(resp, "status", "")) != "success":
-                self._emit({"event": "error", "message": str(getattr(resp, "message", "rpc_failed"))})
+                self.error = str(getattr(resp, "message", "rpc_failed"))
+                self._emit({"event": "error", "message": self.error})
                 return
             self._emit(
                 {
@@ -197,13 +239,17 @@ class _StreamSession:
             async for item in inference_stream_to_dict_stream(stream):
                 if self.stop_event.is_set():
                     break
-                self._emit({"event": "chunk", "seq": seq, "chunk": item})
+                self._record_final_response(item)
+                if not self._emit({"event": "chunk", "seq": seq, "chunk": item}):
+                    self.stop_event.set()
+                    break
                 seq += 1
         except Exception as exc:
-            self._emit({"event": "error", "message": f"{type(exc).__name__}: {exc}"})
+            self.error = f"{type(exc).__name__}: {exc}"
+            self._emit({"event": "error", "message": self.error})
         finally:
+            self._emit_final()
             self.done = True
-            self._emit({"event": "final", "ok": self.error is None and not self.stop_event.is_set()})
 
 
 _stream_lock = threading.Lock()
@@ -304,7 +350,7 @@ async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
     done = bool(sess.done and sess.events.empty())
     if done:
         _stream_pop(stream_id)
-    return {
+    out = {
         "status": "ok",
         "stream_id": stream_id,
         "engine_id": sess.engine_id,
@@ -312,6 +358,10 @@ async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
         "events": items,
         "done": done,
     }
+    if done and sess.final_response is not None:
+        out["response"] = dict(sess.final_response)
+        out["final_response"] = dict(sess.final_response)
+    return out
 
 
 async def _handle_stream_send(payload: Dict[str, Any]) -> Dict[str, Any]:

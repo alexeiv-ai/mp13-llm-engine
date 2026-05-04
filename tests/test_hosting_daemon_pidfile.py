@@ -108,6 +108,153 @@ def test_start_daemon_background_uses_protocol_ping_for_readiness(monkeypatch) -
     assert result == {"pid": 55555, "port": 19876}
 
 
+def test_start_daemon_background_reuses_existing_reachable_daemon(monkeypatch) -> None:
+    captured: dict[str, object] = {"popen_called": False}
+
+    class _FakePidFile:
+        path = Path("X:/tmp/daemon.pid")
+
+        def __init__(self, _path=None):
+            return
+
+        def is_alive(self) -> bool:
+            return True
+
+        def read(self):
+            return {
+                "pid": 55555,
+                "port": 19876,
+                "started_at": 123.0,
+                "shutdown_token": "tok",
+                "transport": "local_ipc",
+            }
+
+    class _FakeConn:
+        def __init__(self, *, port: int, timeout: float, max_reconnect_attempts: int, pid_file=None):
+            captured["port"] = port
+            captured["pid_file"] = pid_file
+
+        def invoke(self, cmd: str, payload=None):
+            captured["cmd"] = cmd
+            return "pong"
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    def _fake_popen(*_args, **_kwargs):
+        captured["popen_called"] = True
+        raise AssertionError("should not spawn a second daemon")
+
+    monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
+
+    result = start_daemon_background(port=19876, wait_ready_seconds=1.0)
+
+    assert result == {"pid": 55555, "port": 19876, "already_running": True}
+    assert captured["cmd"] == "__ping__"
+    assert captured["closed"] is True
+    assert captured["popen_called"] is False
+
+
+def test_start_daemon_background_refuses_unreachable_live_pid(monkeypatch) -> None:
+    captured: dict[str, object] = {"popen_called": False}
+
+    class _FakePidFile:
+        path = Path("X:/tmp/daemon.pid")
+
+        def __init__(self, _path=None):
+            return
+
+        def is_alive(self) -> bool:
+            return True
+
+        def read(self):
+            return {
+                "pid": 55555,
+                "port": 19876,
+                "started_at": 123.0,
+                "shutdown_token": "tok",
+                "transport": "local_ipc",
+            }
+
+    class _FakeConn:
+        def __init__(self, **_kwargs):
+            return
+
+        def invoke(self, cmd: str, payload=None):
+            raise RuntimeError("connect refused")
+
+        def close(self) -> None:
+            return
+
+    def _fake_popen(*_args, **_kwargs):
+        captured["popen_called"] = True
+        raise AssertionError("should not spawn a second daemon")
+
+    monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
+
+    try:
+        start_daemon_background(port=19876, wait_ready_seconds=1.0)
+    except RuntimeError as exc:
+        assert "PID is alive but local control is not reachable" in str(exc)
+    else:
+        raise AssertionError("start_daemon_background should refuse unreachable live PID")
+
+    assert captured["popen_called"] is False
+
+
+def test_foreground_daemon_rejects_existing_reachable_pidfile(monkeypatch, tmp_path: Path) -> None:
+    daemon = EngineHostDaemon(pid_file=tmp_path / "daemon.pid")
+    started_listener = {"called": False}
+
+    class _FakePidFile:
+        path = tmp_path / "daemon.pid"
+
+        def read(self):
+            return {
+                "pid": 55555,
+                "port": 19876,
+                "started_at": 123.0,
+                "shutdown_token": "tok",
+            }
+
+        def is_alive(self) -> bool:
+            return True
+
+        def remove(self) -> None:
+            return
+
+    class _FakeConn:
+        def __init__(self, **_kwargs):
+            return
+
+        def is_alive(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            return
+
+    daemon.pid_file = _FakePidFile()  # type: ignore[assignment]
+
+    def _start_listener() -> None:
+        started_listener["called"] = True
+
+    monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
+    monkeypatch.setattr(daemon, "_start_local_control_listener", _start_listener)
+
+    try:
+        asyncio.run(daemon.run())
+    except RuntimeError as exc:
+        assert "already running" in str(exc)
+    else:
+        raise AssertionError("daemon.run() should reject an existing reachable daemon")
+
+    assert started_listener["called"] is False
+
+
 def test_pidfile_read_and_get_port_handle_system_error() -> None:
     class _BadPath:
         def exists(self) -> bool:

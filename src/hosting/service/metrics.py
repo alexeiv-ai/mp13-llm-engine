@@ -193,5 +193,14 @@ class MetricsMixin:
         snapshot["control_state_file"] = str(self.control_state_file)
         snapshot["hosting_root"] = str(self.hosting_root)
         snapshot["timestamp"] = time.time()
+        try:
+            auth_status = dict(self.auth_status() or {})  # type: ignore[attr-defined]
+        except Exception as exc:
+            snapshot["auth_status_error"] = str(exc)
+        else:
+            snapshot["auth_status"] = auth_status
+            snapshot["auth_status_error"] = None
+            snapshot["require_auth"] = bool(auth_status.get("require_auth", False))
+            snapshot["keys_count"] = int(auth_status.get("keys_count") or 0)
+            snapshot["sessions_count"] = int(auth_status.get("sessions_count") or 0)
         return snapshot
-

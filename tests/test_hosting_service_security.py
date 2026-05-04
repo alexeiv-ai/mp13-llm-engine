@@ -86,6 +86,39 @@ def test_reset_hosting_access_clears_only_auth_state(tmp_path: Path) -> None:
     assert cfg["sessions_count"] == 0
 
 
+def test_discover_running_adds_operator_state_and_kind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=123,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    svc.register_spawned(
+        engine_id="tools1",
+        pid=456,
+        command=["python", "-m", "hosting.toolbox_executor_ipc"],
+        env={"MP13_TOOLBOX_EXECUTOR_ENGINE_ID": "tools1"},
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "generic_worker_v1"}},
+        executor_kind="toolbox_executor",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {"reachable": True},
+    )
+
+    rows = {row["engine_id"]: row for row in svc.discover_running()}
+
+    assert rows["model1"]["state"] == "running"
+    assert rows["model1"]["kind"] == "model instance"
+    assert rows["tools1"]["state"] == "running"
+    assert rows["tools1"]["kind"] == "tools sandbox"
+    assert rows["tools1"]["sandbox"]["enabled"] is True
+
+
 def test_traffic_scope_engine_allowlist_enforced(tmp_path: Path) -> None:
     svc = _make_service(tmp_path)
     svc.auth_upsert_key(
@@ -122,6 +155,37 @@ def test_config_selector_restriction_blocks_path_traversal(tmp_path: Path) -> No
         svc.connect_from_config(config_path="C:\\windows\\system32\\x.json")
 
 
+def test_engine_shutdown_terminates_process_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="worker_tree",
+        pid=12345,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+    )
+    alive = {"value": True}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: bool(alive["value"]))
+
+    def _fake_terminate(pid: int, *, timeout_seconds: float = 8.0):
+        captured["pid"] = pid
+        captured["timeout_seconds"] = timeout_seconds
+        alive["value"] = False
+        return {"pid": pid, "status": "stopped", "alive": False, "children": [23456]}
+
+    monkeypatch.setattr("hosting.service.engines.terminate_process_tree", _fake_terminate)
+
+    out = svc.shutdown("worker_tree", timeout_seconds=1.25)
+
+    assert out["status"] == "stopped"
+    assert captured == {"pid": 12345, "timeout_seconds": 1.25}
+    assert out["termination"]["children"] == [23456]
+    assert svc.get_registration("worker_tree") is None
+
+
 def test_proxy_request_policy_and_metrics_ring_buffer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc = _make_service(tmp_path)
     _install_ipc_http_stub(monkeypatch)
@@ -152,6 +216,8 @@ def test_proxy_request_policy_and_metrics_ring_buffer(tmp_path: Path, monkeypatc
     assert b'"ok":true' in payload
 
     metrics = svc.get_host_metrics()
+    assert metrics["require_auth"] is False
+    assert metrics["auth_status_error"] is None
     proxy = dict(metrics.get("proxy") or {})
     assert int(proxy.get("total") or 0) >= 1
     assert int(proxy.get("ok") or 0) >= 1

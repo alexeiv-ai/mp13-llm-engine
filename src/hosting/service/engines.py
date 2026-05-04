@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .._process_utils import terminate_process_tree
 from ..sandbox import (
     BrokeredFilesystem,
     HostBrokeredHttpClient,
@@ -416,6 +417,49 @@ class EnginesMixin:
                 "error": str(exc),
             }
 
+    @staticmethod
+    def _describe_registration_state(
+        item: Dict[str, Any],
+        *,
+        alive: bool,
+        include_reachability: bool,
+    ) -> str:
+        if not alive:
+            return "stopped"
+        if include_reachability and not bool(item.get("reachable", False)):
+            return "unreachable"
+        return "running"
+
+    @staticmethod
+    def _describe_registration_kind(item: Dict[str, Any]) -> str:
+        executor_kind = str(item.get("executor_kind") or "").strip()
+        worker_class = str(item.get("worker_profile_class") or "").strip().lower()
+        command_text = " ".join(str(x) for x in list(item.get("command") or [])).lower()
+        env = {str(k): str(v) for k, v in dict(item.get("env") or {}).items()}
+        sandbox = WorkerSandboxPolicy.from_mapping(dict(item.get("sandbox_policy") or {}))
+
+        is_toolbox = (
+            executor_kind == "toolbox_executor"
+            or "hosting.toolbox_executor_ipc" in command_text
+            or "MP13_TOOLBOX_EXECUTOR_ENGINE_ID" in env
+            or isinstance(item.get("tool_access"), dict)
+        )
+        if is_toolbox:
+            return "tools sandbox" if sandbox.enabled else "tools worker"
+
+        is_model = (
+            worker_class == "model"
+            or "MP13_MODEL_PATH" in env
+            or "hosting.engine_worker_ipc" in command_text
+        )
+        if is_model:
+            return "sandboxed model instance" if sandbox.enabled else "model instance"
+
+        if worker_class == "generic":
+            return "sandboxed worker" if sandbox.enabled else "generic worker"
+
+        return "sandboxed worker" if sandbox.enabled else "worker"
+
     def discover_running(
         self,
         *,
@@ -448,6 +492,15 @@ class EnginesMixin:
                 item["reachability"] = reachability
                 if item["reachable"]:
                     reachable_count += 1
+            item["state"] = self._describe_registration_state(
+                item,
+                alive=alive,
+                include_reachability=include_reachability,
+            )
+            item["kind"] = self._describe_registration_kind(item)
+            item["sandbox"] = WorkerSandboxPolicy.from_mapping(
+                dict(item.get("sandbox_policy") or {})
+            ).summary()
             out.append(item)
             if not alive:
                 stale_ids.append(str(item.get("engine_id") or ""))
@@ -668,24 +721,17 @@ class EnginesMixin:
         if not self._pid_alive(pid):
             self.remove_registration(eid)
             return {"status": "already_stopped", "engine_id": eid, "pid": pid, "alive": False}
-        try:
-            os.kill(pid, signal.SIGTERM)
-            deadline = time.time() + max(0.1, float(timeout_seconds))
-            while time.time() < deadline:
-                if not self._pid_alive(pid):
-                    break
-                time.sleep(0.1)
-        except Exception:
-            pass
-        if self._pid_alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass
+        termination = terminate_process_tree(pid, timeout_seconds=timeout_seconds)
         alive = self._pid_alive(pid)
         if not alive:
             self.remove_registration(eid)
-        return {"status": "stopped" if not alive else "stop_failed", "engine_id": eid, "pid": pid, "alive": alive}
+        return {
+            "status": "stopped" if not alive else "stop_failed",
+            "engine_id": eid,
+            "pid": pid,
+            "alive": alive,
+            "termination": termination,
+        }
 
     def ensure_running(self, engine_id: str) -> Dict[str, Any]:
         entry = self._find_registration(engine_id)

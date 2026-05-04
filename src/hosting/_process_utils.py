@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import time
 from typing import Any, Dict
 
 
@@ -99,4 +101,110 @@ def hidden_subprocess_kwargs(
     return {
         "creationflags": flags,
         "startupinfo": startupinfo,
+    }
+
+
+def _child_pids_posix(pid: int) -> list[int]:
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["ps", "-eo", "pid=,ppid="],
+            text=True,
+            capture_output=True,
+            timeout=5.0,
+            check=False,
+            **hidden_subprocess_kwargs(),
+        )
+    except Exception:
+        return []
+    children_by_parent: dict[int, list[int]] = {}
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+        try:
+            child = int(parts[0])
+            parent = int(parts[1])
+        except Exception:
+            continue
+        children_by_parent.setdefault(parent, []).append(child)
+    out: list[int] = []
+    stack = list(children_by_parent.get(int(pid), []))
+    while stack:
+        child = stack.pop()
+        if child in out:
+            continue
+        out.append(child)
+        stack.extend(children_by_parent.get(child, []))
+    return out
+
+
+def terminate_process_tree(pid: int, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
+    """
+    Best-effort terminate of a process and descendants.
+
+    On Windows this uses taskkill /T so venv launcher processes do not leave the
+    real Python worker behind. On POSIX it walks the process table and signals
+    descendants before the root PID.
+    """
+    root = int(pid or 0)
+    if root <= 0:
+        return {"pid": root, "status": "invalid_pid", "alive": False, "children": []}
+    if not pid_alive(root):
+        return {"pid": root, "status": "already_stopped", "alive": False, "children": []}
+
+    deadline = time.time() + max(0.1, float(timeout_seconds or 8.0))
+    children: list[int] = []
+    errors: list[str] = []
+
+    if sys.platform == "win32":
+        try:
+            proc = subprocess.run(  # noqa: S603
+                ["taskkill", "/PID", str(root), "/T", "/F"],
+                text=True,
+                capture_output=True,
+                timeout=max(1.0, float(timeout_seconds or 8.0)),
+                check=False,
+                **hidden_subprocess_kwargs(),
+            )
+            if proc.returncode not in (0, 128):
+                detail = (proc.stderr or proc.stdout or "").strip()
+                if detail:
+                    errors.append(detail)
+        except Exception as exc:
+            errors.append(str(exc))
+    else:
+        children = _child_pids_posix(root)
+        for target in list(reversed(children)) + [root]:
+            try:
+                os.kill(target, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                errors.append(f"SIGTERM {target}: {exc}")
+        while time.time() < deadline:
+            live = [p for p in [root] + children if pid_alive(p)]
+            if not live:
+                break
+            time.sleep(0.1)
+        for target in list(reversed(children)) + [root]:
+            if not pid_alive(target):
+                continue
+            try:
+                os.kill(target, getattr(signal, "SIGKILL", signal.SIGTERM))
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                errors.append(f"SIGKILL {target}: {exc}")
+
+    while time.time() < deadline:
+        if not pid_alive(root):
+            break
+        time.sleep(0.1)
+    alive = pid_alive(root)
+    return {
+        "pid": root,
+        "status": "stopped" if not alive else "stop_failed",
+        "alive": alive,
+        "children": children,
+        "errors": errors,
     }

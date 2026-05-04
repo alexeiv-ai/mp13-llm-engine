@@ -16,6 +16,10 @@ py hosting_cli.py --ssh-target user@example-host --control-ssh-key C:\keys\id_ed
 : Launches the terminal menu. Local targets use the local daemon lifecycle helpers.
 Remote targets use `EngineHostControlChannel` and SSH relay control.
 
+The interactive menu also contains a local-only recovery/auth submenu. Those
+actions intentionally bypass daemon RPC and read or mutate local control state
+through `EngineHostService`; they are not available for remote targets.
+
 `<subcommand>`
 : Runs one command and prints a JSON envelope: `{"ok": true, "result": ...}` or
 `{"ok": false, "error": ...}`. If a remote target or client profile is supplied,
@@ -213,6 +217,90 @@ or passphrase. Use one of these patterns instead:
 - For unattended automation, use a pre-issued short-lived token or an
   environment-specific secret manager that can sign the challenge without a TTY.
 
+## Local Recovery/Auth Tools
+
+The interactive CLI has a `Local recovery/auth tools` submenu for cases where the
+local daemon is stopped, unreachable, or has auth state that needs repair. This
+submenu is intentionally local-only. It uses the configured `--control-state-file`
+and `--engines-state-file` directly and does not use the daemon control channel.
+
+Use it for local recovery, not for normal daemon operation. Remote targets must
+use the SSH relay/channel path instead.
+
+Available local recovery actions:
+
+`Show local auth status`
+: Reads local control state and prints auth status such as `require_auth`, key
+count, session count, challenge count, and roles.
+
+`Authenticate locally with admin private key`
+: Uses local `EngineHostService` to create and complete a public-key challenge in
+the local control state. The private-key prompt accepts a file path, a
+client-realm `SecretRecord` JSON blob, or a raw OpenSSH private-key block. If the
+admin key is passphrase-protected, `ssh-keygen` prompts locally for that
+passphrase. The resulting session token is kept in the current interactive CLI
+process and can make stopped-daemon offline reads work until the token expires.
+
+`List local sessions`
+: Reads saved sessions directly from local control state. This may include stale
+or expired entries after pruning rules run.
+
+`Revoke local session`
+: Shows a numbered list of saved local sessions, then mutates local control
+state to revoke the selected token preview. This is useful when a token should
+be invalidated before restarting the daemon.
+
+`List local auth keys`
+: Reads registered key IDs, roles, auth methods, and disabled state from local
+control state.
+
+`Revoke local auth key`
+: Shows a numbered list of registered local keys, then mutates local control
+state to revoke the selected key. This requires an explicit confirmation prompt.
+
+`Clear local auth keys/sessions`
+: Stops or terminates the local daemon if possible, then clears only saved auth
+keys, active sessions, and pending auth challenges from local control state. It
+does not reset hosting to unconfigured: access policy such as `require_auth`,
+endpoint mode, lifecycle profile, setup artifacts, keyring/bootstrap files, and
+client-realm custody are kept. If `require_auth=true`, this can leave the host
+requiring auth with no registered keys until setup or RBAC repair adds a key.
+
+`Force stop daemon and workers`
+: Stops registered workers from local state, scans for local orphan
+`hosting.engine_worker_ipc` processes, then terminates the local daemon PID if it
+is still alive. Use this when the daemon is unreachable or stale and normal stop
+cannot run the daemon shutdown path.
+
+`Force restart daemon and workers`
+: Runs the force-stop action, then starts a fresh local daemon. Use this when an
+old daemon PID is alive but local control is unreachable and blocks startup.
+
+Daemon start uses lifecycle policy when an old PID is alive but local control is
+unreachable:
+
+- `exclusive` endpoint mode or `foreground_terminal_bound` lifecycle: the CLI
+  treats the daemon as recoverable local state, force-stops workers/daemon, then
+  starts a fresh daemon.
+- `shared` endpoint mode with `detached_user_process` lifecycle: the CLI does
+  not kill it automatically because it may be serving another long-lived
+  consumer. Use `Force restart daemon and workers` when the operator has decided
+  that process is stale.
+
+In all cases, only one daemon instance is allowed for a PID file. A second daemon
+is not spawned on top of a live unreachable PID.
+
+`Start daemon after recovery`
+: Calls the normal local daemon bootstrap helper after recovery edits.
+
+Offline read views in the normal menu are narrower: they can read local state
+while the daemon is stopped when auth policy allows it or the interactive process
+has a valid session token. If auth is required and no token is available, the
+view starts the local admin-key auth workflow and retries the read after a token
+is acquired. You can also authenticate first through `Local recovery/auth tools
+-> Authenticate locally with admin private key`, or start the daemon and
+authenticate through the normal daemon challenge flow.
+
 ## Display And Help
 
 `--examples [COMMAND]`
@@ -278,5 +366,7 @@ pinning, agent setup, or remote command policy first. After the preflight works,
 use either explicit CLI flags or a client-realm profile so callers do not have to
 repeat key and host-pin settings.
 
-`reset-hosting-access` is local-only and is rejected when a remote target/profile
-is explicitly selected.
+`reset-hosting-access`, `force-stop-daemon`, and `force-restart-daemon` are
+local-only and are rejected when a remote target/profile is explicitly selected.
+`reset-hosting-access` is the auth-table clear helper described above; it is not
+the full `hosting_config_cli` reset-to-unconfigured workflow.

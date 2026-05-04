@@ -816,6 +816,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "get-endpoint-mode-effective",
         "get-lifecycle-policy-effective",
         "reset-hosting-access",
+        "force-stop-daemon",
+        "force-restart-daemon",
         "op-start",
         "op-status",
         "op-cancel",
@@ -996,17 +998,22 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     cmd_name = str(args.command or "").strip()
     effective_payload = _payload_with_cli_selectors(args, payload)
 
-    # Local-only recovery helper. Intentionally bypasses daemon RPC/auth surfaces.
-    if cmd_name == "reset-hosting-access":
+    # Local-only recovery helpers. Intentionally bypass daemon RPC/auth surfaces.
+    if cmd_name in {"reset-hosting-access", "force-stop-daemon", "force-restart-daemon"}:
         if _has_explicit_channel_target(args):
-            print(json.dumps({"ok": False, "error": "reset-hosting-access is local-only"}, ensure_ascii=False))
+            print(json.dumps({"ok": False, "error": f"{cmd_name} is local-only"}, ensure_ascii=False))
             return 2
         from .engine_host_channel import EngineHostControlChannel
 
         ch = EngineHostControlChannel(
             _channel_settings_from_args(args, auto_bootstrap=False)
         )
-        _print_ok(ch.reset_hosting_access())
+        if cmd_name == "reset-hosting-access":
+            _print_ok(ch.reset_hosting_access())
+        elif cmd_name == "force-stop-daemon":
+            _print_ok(ch.force_stop_daemon(stop_workers=True))
+        else:
+            _print_ok(ch.force_restart_daemon())
         return 0
 
     if _has_explicit_channel_target(args):

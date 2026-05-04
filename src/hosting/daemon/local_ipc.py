@@ -738,7 +738,35 @@ class EngineHostDaemon:
         self._stop_event = asyncio.Event()
         self._loop = asyncio.get_running_loop()
         enable_tcp = self._should_enable_tcp()
+        started = False
         try:
+            existing = dict(self.pid_file.read() or {})
+            if self.pid_file.is_alive() and existing.get("shutdown_token"):
+                try:
+                    from ..engine_host_connection import LocalSocketConnection
+
+                    conn = LocalSocketConnection(
+                        port=int(existing.get("port") or self.port),
+                        pid_file=self.pid_file.path,
+                        timeout=1.0,
+                        max_reconnect_attempts=1,
+                    )
+                    try:
+                        if conn.is_alive():
+                            raise RuntimeError(
+                                f"Engine host daemon is already running for pid file {self.pid_file.path}"
+                            )
+                        raise RuntimeError(
+                            f"Engine host daemon PID is alive but local control is not reachable for pid file {self.pid_file.path}"
+                        )
+                    finally:
+                        conn.close()
+                except RuntimeError:
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Engine host daemon PID is alive but local control is not reachable for pid file {self.pid_file.path}: {exc}"
+                    ) from exc
             self._start_local_control_listener()
             if enable_tcp:
                 self._server = await asyncio.start_server(
@@ -771,6 +799,7 @@ class EngineHostDaemon:
                     port=int(write_kwargs["port"]),
                     shutdown_token=str(write_kwargs["shutdown_token"]),
                 )
+            started = True
             logger.info(
                 "EngineHostDaemon starting on local IPC %s:%s",
                 self._local_transport.get("family"),
@@ -783,56 +812,59 @@ class EngineHostDaemon:
             else:
                 await self._stop_event.wait()
         finally:
-            try:
-                self._shutdown_stage_events = []
-                self._record_shutdown_stage(
-                    "shutdown.begin",
-                    "running",
-                    "Daemon shutdown sequence started",
-                )
-                self._record_shutdown_stage(
-                    "shutdown.operations_drain",
-                    "running",
-                    "Draining in-flight operations",
-                )
-                drain_report = await self._drain_inflight_operations(timeout_seconds=5.0)
-                self._record_shutdown_stage(
-                    "shutdown.operations_drain",
-                    "completed",
-                    "In-flight operations drain complete",
-                    pending_before=int(drain_report.get("pending_before") or 0),
-                    pending_after=int(drain_report.get("pending_after") or 0),
-                    timed_out=bool(drain_report.get("timed_out", False)),
-                )
-                self._record_shutdown_stage(
-                    "shutdown.managed_workers",
-                    "running",
-                    "Running managed worker shutdown checkpoints",
-                )
-                report = await asyncio.to_thread(self._execute_shutdown_checkpoints)
-                report["operation_drain"] = dict(drain_report)
-                report["shutdown_stages"] = list(self._shutdown_stage_events)
-                self._last_shutdown_checkpoints = dict(report)
-                self._record_shutdown_stage(
-                    "shutdown.managed_workers",
-                    "completed",
-                    "Managed worker shutdown checkpoints complete",
-                    attempted=int(report.get("attempted") or 0),
-                    stopped=int(report.get("stopped") or 0),
-                    failed=int(report.get("failed") or 0),
-                )
-                logger.info(
-                    "Daemon shutdown checkpoints: attempted=%s stopped=%s failed=%s",
-                    report.get("attempted"),
-                    report.get("stopped"),
-                    report.get("failed"),
-                )
-            except Exception as exc:
-                logger.warning("Shutdown checkpoints failed: %s", exc)
-            self._stop_local_control_listener()
-            self.pid_file.remove()
-            self._loop = None
-            logger.info("EngineHostDaemon stopped")
+            if not started:
+                self._loop = None
+            else:
+                try:
+                    self._shutdown_stage_events = []
+                    self._record_shutdown_stage(
+                        "shutdown.begin",
+                        "running",
+                        "Daemon shutdown sequence started",
+                    )
+                    self._record_shutdown_stage(
+                        "shutdown.operations_drain",
+                        "running",
+                        "Draining in-flight operations",
+                    )
+                    drain_report = await self._drain_inflight_operations(timeout_seconds=5.0)
+                    self._record_shutdown_stage(
+                        "shutdown.operations_drain",
+                        "completed",
+                        "In-flight operations drain complete",
+                        pending_before=int(drain_report.get("pending_before") or 0),
+                        pending_after=int(drain_report.get("pending_after") or 0),
+                        timed_out=bool(drain_report.get("timed_out", False)),
+                    )
+                    self._record_shutdown_stage(
+                        "shutdown.managed_workers",
+                        "running",
+                        "Running managed worker shutdown checkpoints",
+                    )
+                    report = await asyncio.to_thread(self._execute_shutdown_checkpoints)
+                    report["operation_drain"] = dict(drain_report)
+                    report["shutdown_stages"] = list(self._shutdown_stage_events)
+                    self._last_shutdown_checkpoints = dict(report)
+                    self._record_shutdown_stage(
+                        "shutdown.managed_workers",
+                        "completed",
+                        "Managed worker shutdown checkpoints complete",
+                        attempted=int(report.get("attempted") or 0),
+                        stopped=int(report.get("stopped") or 0),
+                        failed=int(report.get("failed") or 0),
+                    )
+                    logger.info(
+                        "Daemon shutdown checkpoints: attempted=%s stopped=%s failed=%s",
+                        report.get("attempted"),
+                        report.get("stopped"),
+                        report.get("failed"),
+                    )
+                except Exception as exc:
+                    logger.warning("Shutdown checkpoints failed: %s", exc)
+                self._stop_local_control_listener()
+                self.pid_file.remove()
+                self._loop = None
+                logger.info("EngineHostDaemon stopped")
 
     async def _dispatch(self, raw_line: str, *, peer_host: Optional[str] = None) -> Dict[str, Any]:
         try:

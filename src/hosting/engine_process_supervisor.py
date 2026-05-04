@@ -19,7 +19,7 @@ from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ._process_utils import hidden_subprocess_kwargs, pid_alive
+from ._process_utils import hidden_subprocess_kwargs, pid_alive, terminate_process_tree
 
 logger = logging.getLogger(__name__)
 
@@ -520,30 +520,7 @@ class EngineProcessSupervisor:
             self.remove_registration(engine_id)
             return {"status": "already_stopped", "engine_id": engine_id, "pid": pid, "alive": False}
 
-        terminated = False
-        try:
-            os.kill(pid, signal.SIGTERM)
-            deadline = time.time() + max(0.1, float(timeout_seconds))
-            while time.time() < deadline:
-                if not self._pid_alive(pid):
-                    terminated = True
-                    break
-                time.sleep(0.1)
-        except Exception as e:
-            logger.warning(f"Failed SIGTERM for managed engine {engine_id} (pid={pid}): {e}")
-
-        if not terminated and self._pid_alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-                deadline = time.time() + max(0.1, float(timeout_seconds))
-                while time.time() < deadline:
-                    if not self._pid_alive(pid):
-                        terminated = True
-                        break
-                    time.sleep(0.1)
-            except Exception as e:
-                logger.warning(f"Failed SIGKILL for managed engine {engine_id} (pid={pid}): {e}")
-
+        termination = terminate_process_tree(pid, timeout_seconds=timeout_seconds)
         alive = self._pid_alive(pid)
         if not alive:
             self.remove_registration(engine_id)
@@ -552,6 +529,7 @@ class EngineProcessSupervisor:
             "engine_id": engine_id,
             "pid": pid,
             "alive": alive,
+            "termination": termination,
         }
 
     def ensure_running(self, engine_id: str) -> Dict[str, Any]:

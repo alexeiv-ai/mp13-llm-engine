@@ -152,6 +152,10 @@ Use your control token to manage engines:
 ### 2.5 Proxying Worker Requests (RPC & Streams)
 
 Once a traffic session is issued, developers can test proxy commands.
+Use `proxy-rpc-open`/`proxy-rpc-recv`/`proxy-rpc-close` for streamed
+`run-inference`. Do not retry an empty streamed completion through
+`proxy-rpc-call`; an empty terminal stream without chunk text, `response`, or
+`final_response` is a relay/runtime error that should be surfaced.
 
 ```powershell
 # Sync RPC call
