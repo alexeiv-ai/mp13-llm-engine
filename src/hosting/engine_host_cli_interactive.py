@@ -902,6 +902,19 @@ def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Opt
                 details.append(f"reachable={'yes' if bool(info.get('reachable')) else 'no'}")
             suffix = f" {' '.join(details)}" if details else ""
             print(f"  - {_c('accent', eid)} [{_c(status_color, state)}] ({_c('value', kind)}){suffix}")
+            loaded_models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
+            config_bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
+            if loaded_models:
+                for model in loaded_models:
+                    mid = str(model.get("model_instance_id") or model.get("engine_id") or "").strip()
+                    mpath = str(model.get("model_path") or model.get("canonical_model_path") or "").strip()
+                    print(f"    Model: {_c('accent', mid)}" + (f" {_c('muted', mpath)}" if mpath else ""))
+                    for binding in config_bindings:
+                        if str(binding.get("model_instance_id") or "").strip() != mid:
+                            continue
+                        bid = str(binding.get("engine_id") or "").strip()
+                        cpath = str(binding.get("config_path") or binding.get("canonical_config_path") or "").strip()
+                        print(f"      Binding: {_c('value', bid)}" + (f" {_c('muted', cpath)}" if cpath else ""))
             
             if _sandbox_enabled(info):
                 sandbox = dict(info.get("sandbox") or {})
@@ -1025,22 +1038,48 @@ def _kill_resource(args: argparse.Namespace, session_token: Optional[str]) -> Op
             print(_c('warn', "  Daemon is stopped. Kill/disconnect actions require a running daemon."))
             return session_token
         opts = {
-            "e": ("Kill Engine/Sandbox", ""),
+            "u": ("Unload Model Binding", ""),
+            "e": ("Stop Worker/Sandbox", ""),
             "c": ("Disconnect Consumer (Revoke Session)", ""),
         }
         ch = _prompt_menu("What to kill?", opts, "b", allow_back=True, allow_changes=False)
         if ch in ("b", "back"): return session_token
         
-        if ch == "e":
+        if ch == "u":
+            res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+            engines = _get_engines_dict(res)
+            model_opts = {}
+            for wid, info in engines.items():
+                bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
+                if bindings:
+                    for binding in bindings:
+                        eid = str(binding.get("engine_id") or "").strip()
+                        if eid:
+                            model_opts[eid] = (f"Unload {eid} from worker {wid}", "")
+                elif _operator_resource_kind(info).endswith("model instance"):
+                    model_opts[wid] = (f"Unload {wid}", "")
+            if not model_opts:
+                print("  No model bindings to unload.")
+                return session_token
+            ech = _prompt_menu("Select Model Binding", model_opts, "b", allow_back=True, allow_changes=False)
+            if ech in ("b", "back"): return session_token
+            print(f"Unloading {ech}...")
+            _api_invoke(args, "unload-model", {"engine_id": ech}, session_token=session_token)
+            print(_c('good', "Unload requested."))
+
+        elif ch == "e":
             res = _api_invoke(args, "discover-running", {}, session_token=session_token)
             engines = _get_engines_dict(res)
             if not engines:
-                print("  No engines to kill.")
+                print("  No workers to stop.")
                 return session_token
-            eopts = {eid: (f"Kill {eid}", "") for eid in engines.keys()}
-            ech = _prompt_menu("Select Engine", eopts, "b", allow_back=True, allow_changes=False)
+            eopts = {
+                str(info.get("worker_id") or eid): (f"Stop {info.get('worker_id') or eid}", "")
+                for eid, info in engines.items()
+            }
+            ech = _prompt_menu("Select Worker", eopts, "b", allow_back=True, allow_changes=False)
             if ech in ("b", "back"): return session_token
-            print(f"Killing {ech}...")
+            print(f"Stopping {ech}...")
             _api_invoke(args, "shutdown", {"engine_id": ech}, session_token=session_token)
             print(_c('good', "Shutdown signal sent."))
             

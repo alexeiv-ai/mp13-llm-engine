@@ -135,6 +135,149 @@ def test_connect_from_config_waits_for_model_worker_rpc_ready(tmp_path: Path, mo
     )
 
 
+def test_connect_from_config_reuses_reachable_worker_for_same_model(tmp_path: Path, monkeypatch) -> None:
+    cfg_path = tmp_path / "default.json"
+    cfg_path.write_text("{}", encoding="utf-8")
+    alt_cfg = tmp_path / "alt.json"
+    alt_cfg.write_text("{}", encoding="utf-8")
+    model_path = tmp_path / "models" / "demo"
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    spawned = []
+
+    monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, selector: alt_cfg if selector == "alt" else cfg_path)
+    monkeypatch.setattr(EngineHostService, "_merge_default_and_selected_config", lambda self, _selector: {})
+    monkeypatch.setattr(EngineHostService, "_engine_python_executable", lambda self: "python")
+    monkeypatch.setattr(EngineHostService, "_pid_alive", staticmethod(lambda _pid: True))
+    monkeypatch.setattr(
+        EngineHostService,
+        "_probe_registration_reachability",
+        lambda self, _reg, **_kwargs: {"reachable": True, "status": "ok"},
+    )
+    def _fake_spawn(self, **kwargs):
+        spawned.append(kwargs)
+        return self.register_spawned(
+            engine_id=str(kwargs.get("engine_id") or "model-demo"),
+            pid=1234,
+            command=list(kwargs.get("command") or ["python"]),
+            cwd=kwargs.get("cwd"),
+            env=dict(kwargs.get("env") or {}),
+            worker_auth_token="tok",
+            worker_auth_header="X-MP13-Host-Token",
+            worker_ipc_family="AF_PIPE",
+            worker_ipc_address=r"\\.\pipe\mp13-test-worker",
+            worker_profile_class="model",
+        )
+
+    monkeypatch.setattr(EngineHostService, "spawn", _fake_spawn)
+    monkeypatch.setattr(
+        EngineHostService,
+        "_build_engine_spawn_spec",
+        lambda self, **_kwargs: {
+            "command": ["python", "-m", "hosting.engine_worker_ipc"],
+            "cwd": None,
+            "env": {},
+            "worker_auth_token": "tok",
+            "worker_auth_header": "X-MP13-Host-Token",
+            "worker_ipc_family": "AF_PIPE",
+            "worker_ipc_address": r"\\.\pipe\mp13-test-worker",
+        },
+    )
+    monkeypatch.setattr(
+        EngineHostService,
+        "_wait_for_worker_rpc_ready",
+        lambda self, _reg, **_kwargs: {"status": "ok", "attempts": 1, "worker": {"status": "ok"}},
+    )
+
+    first = svc.connect_from_config(config_path="default", model_path=str(model_path))
+    assert first["status"] == "ok"
+    assert first["spawned"] is True
+    assert len(spawned) == 1
+
+    second = svc.connect_from_config(config_path="alt", model_path=str(model_path))
+    assert second["status"] == "attached"
+    assert second["reconciled"] is True
+    assert second["spawned"] is False
+    assert second["worker_id"] == first["worker_id"]
+    assert second["model_instance_id"] == first["model_instance_id"]
+    assert len(spawned) == 1
+
+    reg = svc.get_registration(str(second["engine_id"]))
+    assert reg is not None
+    assert str(reg.get("_route_model_instance_id") or "") == first["model_instance_id"]
+
+    third = svc.connect_from_config(config_path="alt", model_path=str(model_path))
+    assert third["status"] == "reused"
+    assert third["engine_id"] == second["engine_id"]
+    assert len(spawned) == 1
+
+
+def test_connect_from_config_force_new_worker_bypasses_reuse(tmp_path: Path, monkeypatch) -> None:
+    cfg_path = tmp_path / "default.json"
+    cfg_path.write_text("{}", encoding="utf-8")
+    model_path = tmp_path / "models" / "demo"
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    spawned = []
+
+    monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
+    monkeypatch.setattr(EngineHostService, "_merge_default_and_selected_config", lambda self, _selector: {})
+    monkeypatch.setattr(EngineHostService, "_engine_python_executable", lambda self: "python")
+    monkeypatch.setattr(EngineHostService, "_pid_alive", staticmethod(lambda _pid: True))
+    monkeypatch.setattr(
+        EngineHostService,
+        "_probe_registration_reachability",
+        lambda self, _reg, **_kwargs: {"reachable": True, "status": "ok"},
+    )
+    def _fake_spawn(self, **kwargs):
+        spawned.append(kwargs)
+        return self.register_spawned(
+            engine_id=str(kwargs.get("engine_id") or f"model-demo-{len(spawned)}"),
+            pid=1234 + len(spawned),
+            command=list(kwargs.get("command") or ["python"]),
+            cwd=kwargs.get("cwd"),
+            env=dict(kwargs.get("env") or {}),
+            worker_auth_token="tok",
+            worker_auth_header="X-MP13-Host-Token",
+            worker_ipc_family="AF_PIPE",
+            worker_ipc_address=rf"\\.\pipe\mp13-test-worker-{len(spawned)}",
+            worker_profile_class="model",
+        )
+
+    monkeypatch.setattr(EngineHostService, "spawn", _fake_spawn)
+    monkeypatch.setattr(
+        EngineHostService,
+        "_build_engine_spawn_spec",
+        lambda self, **_kwargs: {
+            "command": ["python", "-m", "hosting.engine_worker_ipc"],
+            "cwd": None,
+            "env": {},
+            "worker_auth_token": "tok",
+            "worker_auth_header": "X-MP13-Host-Token",
+            "worker_ipc_family": "AF_PIPE",
+            "worker_ipc_address": r"\\.\pipe\mp13-test-worker",
+        },
+    )
+    monkeypatch.setattr(
+        EngineHostService,
+        "_wait_for_worker_rpc_ready",
+        lambda self, _reg, **_kwargs: {"status": "ok", "attempts": 1, "worker": {"status": "ok"}},
+    )
+
+    first = svc.connect_from_config(config_path="default", model_path=str(model_path))
+    second = svc.connect_from_config(config_path="default", model_path=str(model_path), force_new_worker=True)
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert second["spawned"] is True
+    assert second["worker_id"] != first["worker_id"]
+    assert len(spawned) == 2
+
+
 def test_connect_from_config_fails_when_model_worker_rpc_not_ready(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")

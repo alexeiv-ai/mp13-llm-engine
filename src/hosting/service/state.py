@@ -30,13 +30,104 @@ class StateMixin:
     def _read_engines(self) -> List[Dict[str, Any]]:
         data = self._read_json(self.engines_state_file, {"version": 1, "engines": []})
         rows = data.get("engines")
-        return rows if isinstance(rows, list) else []
+        if not isinstance(rows, list):
+            return []
+        return [self._normalize_engine_registration(dict(row or {})) for row in rows if isinstance(row, dict)]
 
     def _write_engines(self, rows: List[Dict[str, Any]]) -> None:
         self._write_json(
             self.engines_state_file,
-            {"version": 1, "updated_at": time.time(), "engines": list(rows or [])},
+            {
+                "version": 2,
+                "updated_at": time.time(),
+                "engines": [self._normalize_engine_registration(dict(row or {})) for row in list(rows or [])],
+            },
         )
+
+    @staticmethod
+    def _registration_binding_id(engine_id: str, config_path: str) -> str:
+        import hashlib
+
+        raw = f"{str(engine_id or '').strip()}|{str(config_path or '').strip()}"
+        digest = hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        return f"binding-{digest}"
+
+    @staticmethod
+    def _registration_path_value(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        try:
+            return str(Path(raw).expanduser().resolve())
+        except Exception:
+            return raw
+
+    def _normalize_engine_registration(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        record = dict(row or {})
+        engine_id = str(record.get("engine_id") or "").strip()
+        worker_id = str(record.get("worker_id") or "").strip() or engine_id
+        if worker_id:
+            record["worker_id"] = worker_id
+        model_instance_id = str(record.get("model_instance_id") or "").strip() or engine_id
+        if model_instance_id:
+            record["model_instance_id"] = model_instance_id
+
+        env = dict(record.get("env") or {}) if isinstance(record.get("env"), dict) else {}
+        model_path = str(record.get("model_path") or env.get("MP13_MODEL_PATH") or "").strip()
+        config_path = str(record.get("config_path") or env.get("MP13_ENGINE_CONFIG_PATH") or "").strip()
+        canonical_model_path = str(record.get("canonical_model_path") or "").strip() or self._registration_path_value(model_path)
+        canonical_config_path = str(record.get("canonical_config_path") or "").strip() or self._registration_path_value(config_path)
+
+        loaded_models = [dict(item or {}) for item in list(record.get("loaded_models") or []) if isinstance(item, dict)]
+        if not loaded_models and model_path and model_instance_id:
+            loaded_models = [
+                {
+                    "model_instance_id": model_instance_id,
+                    "engine_id": engine_id,
+                    "model_path": model_path,
+                    "canonical_model_path": canonical_model_path,
+                    "loaded_at": float(record.get("spawned_at") or time.time()),
+                    "runtime_profile": str(record.get("worker_profile_class") or "").strip() or "model",
+                    "config_binding_ids": [],
+                }
+            ]
+
+        config_bindings = [dict(item or {}) for item in list(record.get("config_bindings") or []) if isinstance(item, dict)]
+        if not config_bindings and config_path and engine_id:
+            binding_id = self._registration_binding_id(engine_id, canonical_config_path or config_path)
+            config_bindings = [
+                {
+                    "config_binding_id": binding_id,
+                    "engine_id": engine_id,
+                    "model_instance_id": model_instance_id,
+                    "config_path": config_path,
+                    "canonical_config_path": canonical_config_path,
+                    "created_at": float(record.get("spawned_at") or time.time()),
+                }
+            ]
+            for model in loaded_models:
+                ids = [str(x) for x in list(model.get("config_binding_ids") or []) if str(x).strip()]
+                if binding_id not in ids:
+                    ids.append(binding_id)
+                model["config_binding_ids"] = ids
+
+        if loaded_models:
+            record["loaded_models"] = loaded_models
+        else:
+            record.setdefault("loaded_models", [])
+        if config_bindings:
+            record["config_bindings"] = config_bindings
+        else:
+            record.setdefault("config_bindings", [])
+        if model_path:
+            record.setdefault("model_path", model_path)
+        if canonical_model_path:
+            record.setdefault("canonical_model_path", canonical_model_path)
+        if config_path:
+            record.setdefault("config_path", config_path)
+        if canonical_config_path:
+            record.setdefault("canonical_config_path", canonical_config_path)
+        return record
 
     def _toolboxes_state_file(self) -> Path:
         return (self.hosting_root / "state" / "toolbox_sandboxes.json").resolve()

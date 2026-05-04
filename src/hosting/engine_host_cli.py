@@ -755,6 +755,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "get-registration",
         "shutdown",
         "ensure-running",
+        "unload-model",
         "remove-registration",
         "claim-engine",
         "claim-endpoint",
@@ -1074,6 +1075,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "ensure-running":
             _print_ok(svc.ensure_running(str(payload.get("engine_id") or args.engine_id)))
             return 0
+        if cmd == "unload-model":
+            _print_ok(
+                svc.unload_model(
+                    str(payload.get("engine_id") or args.engine_id),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                )
+            )
+            return 0
         if cmd == "remove-registration":
             _print_ok(svc.remove_registration(str(payload.get("engine_id") or args.engine_id)))
             return 0
@@ -1185,6 +1194,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     config_path=str(payload.get("config_path") or "default"),
                     engine_id=payload.get("engine_id"),
                     model_path=payload.get("model_path"),
+                    force_new_worker=bool(payload.get("force_new_worker", False)),
+                    launch_policy=payload.get("launch_policy"),
                 )
             )
             return 0

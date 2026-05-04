@@ -740,8 +740,10 @@ class EngineHostDaemon:
         enable_tcp = self._should_enable_tcp()
         started = False
         try:
-            existing = dict(self.pid_file.read() or {})
-            if self.pid_file.is_alive() and existing.get("shutdown_token"):
+            read_pid_file = getattr(self.pid_file, "read", None)
+            is_pid_alive = getattr(self.pid_file, "is_alive", None)
+            existing = dict(read_pid_file() or {}) if callable(read_pid_file) else {}
+            if callable(is_pid_alive) and is_pid_alive() and existing.get("shutdown_token"):
                 try:
                     from ..engine_host_connection import LocalSocketConnection
 
@@ -1220,6 +1222,11 @@ class EngineHostDaemon:
             )
         if cmd == "ensure-running":
             return svc.ensure_running(str(payload.get("engine_id") or ""))
+        if cmd == "unload-model":
+            return svc.unload_model(
+                str(payload.get("engine_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+            )
         if cmd == "remove-registration":
             return svc.remove_registration(str(payload.get("engine_id") or ""))
         if cmd == "claim-engine":
@@ -1299,6 +1306,8 @@ class EngineHostDaemon:
                 config_path=str(payload.get("config_path") or "default"),
                 engine_id=payload.get("engine_id"),
                 model_path=payload.get("model_path"),
+                force_new_worker=bool(payload.get("force_new_worker", False)),
+                launch_policy=payload.get("launch_policy"),
             )
         if cmd == "inspect-capabilities":
             return svc.inspect_engine_capabilities(

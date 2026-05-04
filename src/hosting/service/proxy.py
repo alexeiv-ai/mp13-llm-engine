@@ -134,6 +134,15 @@ class ProxyMixin:
             raise ValueError(f"{command_label} is only supported for ipc transport")
         return reg
 
+    def _route_model_instance_id(self, reg: Dict[str, Any], engine_id: str) -> str:
+        routed = str(reg.get("_route_model_instance_id") or "").strip()
+        if routed:
+            return routed
+        try:
+            return self._model_instance_for_engine_id(reg, engine_id)
+        except Exception:
+            return str(engine_id or "").strip()
+
     def proxy_request(
         self,
         *,
@@ -155,6 +164,7 @@ class ProxyMixin:
         if not eid:
             raise ValueError("engine_id is required")
         reg = self._find_registration(eid) or {}
+        worker_engine_id = self._route_model_instance_id(reg, eid) if reg else eid
         endpoint = str(reg.get("endpoint") or "").strip()
         if not endpoint:
             self._metrics_proxy_finish(
@@ -258,7 +268,7 @@ class ProxyMixin:
         try:
             out = self._proxy_request_via_ipc(
                 reg=reg,
-                engine_id=eid,
+                engine_id=worker_engine_id,
                 method=m,
                 path=req_path,
                 query=query,
@@ -266,6 +276,8 @@ class ProxyMixin:
                 body_b64=str(body_b64 or ""),
                 timeout_seconds=timeout_seconds,
             )
+            out["engine_id"] = eid
+            out["worker_engine_id"] = worker_engine_id
             raw = base64.b64decode(str(out.get("body_b64") or "")) if str(out.get("body_b64") or "") else b""
             lim = min(
                 max(1024, int(max_response_bytes or 1024 * 1024)),
@@ -332,9 +344,10 @@ class ProxyMixin:
         if not meth:
             raise ValueError("method is required")
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
+        worker_engine_id = self._route_model_instance_id(reg, eid)
         out = self._ipc_call(
             reg=reg,
-            payload={"kind": "rpc_call", "engine_id": eid, "method": meth, "params": dict(params or {})},
+            payload={"kind": "rpc_call", "engine_id": worker_engine_id, "method": meth, "params": dict(params or {})},
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":
@@ -360,11 +373,12 @@ class ProxyMixin:
         if not req_id:
             raise ValueError("request_id is required")
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
+        worker_engine_id = self._route_model_instance_id(reg, eid)
         out = self._ipc_call(
             reg=reg,
             payload={
                 "kind": "stream_open",
-                "engine_id": eid,
+                "engine_id": worker_engine_id,
                 "method": meth,
                 "params": dict(params or {}),
                 "request_id": req_id,
@@ -373,7 +387,7 @@ class ProxyMixin:
         )
         if str(out.get("status") or "").strip().lower() == "error":
             raise RuntimeError(str(out.get("message") or "rpc_open_failed"))
-        return {"status": "ok", "engine_id": eid, "stream_id": str(out.get("stream_id") or ""), "request_id": req_id}
+        return {"status": "ok", "engine_id": eid, "worker_engine_id": worker_engine_id, "stream_id": str(out.get("stream_id") or ""), "request_id": req_id}
 
     def proxy_rpc_send(
         self,
@@ -390,9 +404,10 @@ class ProxyMixin:
         if not sid:
             raise ValueError("stream_id is required")
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
+        worker_engine_id = self._route_model_instance_id(reg, eid)
         out = self._ipc_call(
             reg=reg,
-            payload={"kind": "stream_send", "engine_id": eid, "stream_id": sid, "message": dict(message or {})},
+            payload={"kind": "stream_send", "engine_id": worker_engine_id, "stream_id": sid, "message": dict(message or {})},
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":
@@ -414,11 +429,12 @@ class ProxyMixin:
         if not sid:
             raise ValueError("stream_id is required")
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
+        worker_engine_id = self._route_model_instance_id(reg, eid)
         out = self._ipc_call(
             reg=reg,
             payload={
                 "kind": "stream_recv",
-                "engine_id": eid,
+                "engine_id": worker_engine_id,
                 "stream_id": sid,
                 "timeout_seconds": float(timeout_seconds or 2.0),
                 "max_items": int(max_items or 64),
@@ -443,9 +459,10 @@ class ProxyMixin:
         if not sid:
             raise ValueError("stream_id is required")
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
+        worker_engine_id = self._route_model_instance_id(reg, eid)
         out = self._ipc_call(
             reg=reg,
-            payload={"kind": "stream_close", "engine_id": eid, "stream_id": sid},
+            payload={"kind": "stream_close", "engine_id": worker_engine_id, "stream_id": sid},
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":

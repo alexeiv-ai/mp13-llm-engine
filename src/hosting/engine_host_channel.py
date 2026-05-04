@@ -1208,6 +1208,13 @@ class EngineHostControlChannel:
         res = self._invoke("ensure-running", {"engine_id": str(engine_id)})
         return dict(res or {})
 
+    def unload_model(self, engine_id: str, *, timeout_seconds: float = 30.0) -> Dict[str, Any]:
+        res = self._invoke(
+            "unload-model",
+            {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds or 30.0)},
+        )
+        return dict(res or {})
+
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:
         res = self._invoke("remove-registration", {"engine_id": str(engine_id)})
         return dict(res or {})
@@ -1329,13 +1336,23 @@ class EngineHostControlChannel:
         res = self._invoke("models-from-config", {"config_path": str(config_path or "default")})
         return list(res or []) if isinstance(res, list) else []
 
-    def connect_from_config(self, *, config_path: str, engine_id: Optional[str] = None, model_path: Optional[str] = None) -> Dict[str, Any]:
+    def connect_from_config(
+        self,
+        *,
+        config_path: str,
+        engine_id: Optional[str] = None,
+        model_path: Optional[str] = None,
+        force_new_worker: bool = False,
+        launch_policy: Optional[str] = None,
+    ) -> Dict[str, Any]:
         res = self._invoke(
             "connect-from-config",
             {
                 "config_path": str(config_path or "default"),
                 "engine_id": str(engine_id).strip() if engine_id else None,
                 "model_path": str(model_path).strip() if model_path else None,
+                "force_new_worker": bool(force_new_worker),
+                "launch_policy": str(launch_policy).strip() if launch_policy else None,
             },
         )
         return dict(res or {})
@@ -1380,6 +1397,8 @@ class EngineHostControlChannel:
         config_path: str,
         engine_id: Optional[str] = None,
         model_path: Optional[str] = None,
+        force_new_worker: bool = False,
+        launch_policy: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.start_host_operation(
             command="connect-from-config",
@@ -1387,6 +1406,8 @@ class EngineHostControlChannel:
                 "config_path": str(config_path or "default"),
                 "engine_id": str(engine_id).strip() if engine_id else None,
                 "model_path": str(model_path).strip() if model_path else None,
+                "force_new_worker": bool(force_new_worker),
+                "launch_policy": str(launch_policy).strip() if launch_policy else None,
             },
         )
 

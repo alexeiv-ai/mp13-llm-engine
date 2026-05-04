@@ -21,12 +21,16 @@ import queue
 import secrets
 import socket
 import threading
+import time
 import traceback
 from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 PROTOCOL_VERSION = 1
+_loaded_models_lock = threading.Lock()
+_loaded_models: Dict[str, Dict[str, Any]] = {}
+_config_bindings: Dict[str, Dict[str, Any]] = {}
 
 
 def _env_int(name: str, default: int, *, lo: int, hi: int) -> int:
@@ -89,13 +93,36 @@ async def _init_engine() -> Dict[str, Any]:
     resp = await handle_call_tool("initialize-engine", init_args)
     if str(getattr(resp, "status", "")) != "success":
         return {"ok": False, "message": str(getattr(resp, "message", "initialize-engine failed"))}
+    with _loaded_models_lock:
+        _loaded_models[str(engine_id)] = {
+            "model_instance_id": str(engine_id),
+            "engine_id": str(engine_id),
+            "model_path": str(base_model),
+            "config_path": str(config_path),
+            "loaded_at": time.time(),
+        }
+        if config_path:
+            _config_bindings[str(engine_id)] = {
+                "config_binding_id": str(engine_id),
+                "engine_id": str(engine_id),
+                "model_instance_id": str(engine_id),
+                "config_path": str(config_path),
+            }
     return {"ok": True}
 
 
-async def _run_tool(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+def _targeted_arguments(engine_id: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(arguments or {})
+    eid = str(engine_id or "").strip()
+    if eid and "instance_id" not in out:
+        out["instance_id"] = eid
+    return out
+
+
+async def _run_tool(tool: str, arguments: Dict[str, Any], *, engine_id: str = "") -> Dict[str, Any]:
     from mp13_engine.mp13_engine_api import handle_call_tool, inference_stream_to_dict_stream
 
-    resp = await handle_call_tool(str(tool), dict(arguments or {}))
+    resp = await handle_call_tool(str(tool), _targeted_arguments(engine_id, dict(arguments or {})))
     if str(getattr(resp, "status", "")) != "success":
         msg = str(getattr(resp, "message", "tool failed"))
         return {"ok": False, "status_code": 400, "payload": {"status": "error", "message": msg}}
@@ -114,7 +141,7 @@ async def _run_tool(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "status_code": 200, "payload": out}
 
 
-async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+async def _rpc_call(method: str, params: Dict[str, Any], *, engine_id: str = "") -> Dict[str, Any]:
     m = str(method or "").strip()
     p = dict(params or {})
     if m in {"rpc.describe", "describe", "capabilities"}:
@@ -126,12 +153,73 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "sync_rpc": True,
             "async_rpc": True,
             "cancellation": True,
+            "model_management": True,
             "limits": lim,
         }
-    out = await _run_tool(m, p)
+    if m.startswith("model."):
+        return await _model_rpc_call(m, p)
+    out = await _run_tool(m, p, engine_id=engine_id)
     if not bool(out.get("ok")):
         return {"status": "error", "message": str((out.get("payload") or {}).get("message") or "rpc_call_failed")}
     return {"status": "ok", "result": dict(out.get("payload") or {})}
+
+
+async def _model_rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    from mp13_engine.mp13_engine_api import handle_call_tool
+
+    m = str(method or "").strip()
+    p = dict(params or {})
+    if m in {"model.list", "model.describe"}:
+        resp = await handle_call_tool("list-engines", {})
+        payload = {
+            "status": "success",
+            "data": getattr(resp, "data", None),
+            "message": str(getattr(resp, "message", "")),
+            "loaded_models": list(_loaded_models.values()),
+            "config_bindings": list(_config_bindings.values()),
+        }
+        return {"status": "ok", "result": payload}
+    if m == "model.load":
+        model_instance_id = str(p.get("model_instance_id") or p.get("engine_id") or p.get("instance_id") or "").strip()
+        model_path = str(p.get("model_path") or p.get("base_model_name_or_path") or "").strip()
+        config_path = str(p.get("config_path") or "").strip()
+        if not model_instance_id:
+            return {"status": "error", "message": "model_instance_id_required"}
+        if not model_path:
+            return {"status": "error", "message": "model_path_required"}
+        with _loaded_models_lock:
+            existing = dict(_loaded_models.get(model_instance_id) or {})
+        if existing:
+            return {"status": "ok", "result": {"status": "already_loaded", "model": existing}}
+        resp = await handle_call_tool(
+            "initialize-engine",
+            {"instance_id": model_instance_id, "base_model_name_or_path": model_path},
+        )
+        if str(getattr(resp, "status", "")) != "success":
+            return {"status": "error", "message": str(getattr(resp, "message", "model_load_failed"))}
+        model = {
+            "model_instance_id": model_instance_id,
+            "engine_id": model_instance_id,
+            "model_path": model_path,
+            "config_path": config_path,
+        }
+        with _loaded_models_lock:
+            _loaded_models[model_instance_id] = model
+        return {"status": "ok", "result": {"status": "loaded", "model": model, "data": getattr(resp, "data", None)}}
+    if m == "model.unload":
+        model_instance_id = str(p.get("model_instance_id") or p.get("engine_id") or p.get("instance_id") or "").strip()
+        if not model_instance_id:
+            return {"status": "error", "message": "model_instance_id_required"}
+        resp = await handle_call_tool("shutdown-engine", {"instance_id": model_instance_id})
+        if str(getattr(resp, "status", "")) != "success":
+            return {"status": "error", "message": str(getattr(resp, "message", "model_unload_failed"))}
+        with _loaded_models_lock:
+            _loaded_models.pop(model_instance_id, None)
+            for key, binding in list(_config_bindings.items()):
+                if str((binding or {}).get("model_instance_id") or "") == model_instance_id:
+                    _config_bindings.pop(key, None)
+        return {"status": "ok", "result": {"status": "unloaded", "model_instance_id": model_instance_id}}
+    return {"status": "error", "message": "unsupported_model_method"}
 
 
 class _StreamSession:
@@ -218,7 +306,7 @@ class _StreamSession:
         from mp13_engine.mp13_engine_api import handle_call_tool, inference_stream_to_dict_stream
 
         try:
-            resp = await handle_call_tool(self.method, dict(self.params or {}))
+            resp = await handle_call_tool(self.method, _targeted_arguments(self.engine_id, dict(self.params or {})))
             if str(getattr(resp, "status", "")) != "success":
                 self.error = str(getattr(resp, "message", "rpc_failed"))
                 self._emit({"event": "error", "message": self.error})
@@ -300,16 +388,18 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
         "sync_rpc": True,
         "async_rpc": True,
         "cancellation": True,
+        "model_management": True,
         "limits": lim,
     }
 
 
 async def _handle_rpc_call(payload: Dict[str, Any]) -> Dict[str, Any]:
     method = str(payload.get("method") or "").strip()
+    engine_id = str(payload.get("engine_id") or "").strip()
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     if not method:
         return {"status": "error", "message": "method_required"}
-    return await _rpc_call(method, dict(params or {}))
+    return await _rpc_call(method, dict(params or {}), engine_id=engine_id)
 
 
 async def _handle_stream_open(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -413,6 +503,7 @@ async def _handle_http_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             "rpc": True,
             "async_rpc": True,
             "cancellation": True,
+            "model_management": True,
             "ws": False,
             "contract": _contract_name(),
             "protocol_version": PROTOCOL_VERSION,
@@ -430,7 +521,8 @@ async def _handle_http_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             return _json_response(400, {"status": "error", "message": f"invalid_json:{exc}"})
         tool = str(req.get("tool") or "run-inference").strip() or "run-inference"
         arguments = req.get("arguments") if isinstance(req.get("arguments"), dict) else req
-        out = await _run_tool(tool, dict(arguments or {}))
+        target_engine_id = str(payload.get("engine_id") or "").strip()
+        out = await _run_tool(tool, dict(arguments or {}), engine_id=target_engine_id)
         return _json_response(int(out.get("status_code") or 200), dict(out.get("payload") or {}))
 
     return _json_response(404, {"status": "error", "message": "not_found"})

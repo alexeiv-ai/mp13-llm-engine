@@ -120,3 +120,56 @@ def test_stream_open_recv_contract_returns_terminal_response(monkeypatch) -> Non
 
     closed = asyncio.run(worker_ipc._handle_stream_close({"stream_id": opened["stream_id"]}))
     assert closed["status"] == "ok"
+
+
+def test_rpc_call_injects_target_instance_id(monkeypatch) -> None:
+    seen = {}
+
+    async def fake_handle_call_tool(method: str, params: dict) -> SimpleNamespace:
+        seen["method"] = method
+        seen["params"] = dict(params)
+        return SimpleNamespace(status="success", message="ok", data={"ok": True}, details=None, stream=None)
+
+    import mp13_engine.mp13_engine_api as engine_api
+
+    monkeypatch.setattr(engine_api, "handle_call_tool", fake_handle_call_tool)
+
+    out = asyncio.run(
+        worker_ipc._handle_rpc_call(
+            {
+                "engine_id": "model-target",
+                "method": "run-inference",
+                "params": {"messages_list": [[{"role": "user", "content": "hi"}]]},
+            }
+        )
+    )
+
+    assert out["status"] == "ok"
+    assert seen["method"] == "run-inference"
+    assert seen["params"]["instance_id"] == "model-target"
+
+
+def test_model_list_rpc_reports_protocol_model_state(monkeypatch) -> None:
+    async def fake_handle_call_tool(method: str, params: dict) -> SimpleNamespace:
+        assert method == "list-engines"
+        return SimpleNamespace(status="success", message="listed", data={"engines": []}, details=None, stream=None)
+
+    import mp13_engine.mp13_engine_api as engine_api
+
+    monkeypatch.setattr(engine_api, "handle_call_tool", fake_handle_call_tool)
+    with worker_ipc._loaded_models_lock:
+        worker_ipc._loaded_models.clear()
+        worker_ipc._loaded_models["model-one"] = {"model_instance_id": "model-one"}
+        worker_ipc._config_bindings.clear()
+        worker_ipc._config_bindings["binding-one"] = {"engine_id": "binding-one", "model_instance_id": "model-one"}
+    try:
+        out = asyncio.run(worker_ipc._handle_rpc_call({"method": "model.list", "params": {}}))
+    finally:
+        with worker_ipc._loaded_models_lock:
+            worker_ipc._loaded_models.clear()
+            worker_ipc._config_bindings.clear()
+
+    assert out["status"] == "ok"
+    result = out["result"]
+    assert result["loaded_models"][0]["model_instance_id"] == "model-one"
+    assert result["config_bindings"][0]["engine_id"] == "binding-one"
