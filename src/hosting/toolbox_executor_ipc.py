@@ -394,7 +394,11 @@ def _manifest_tool_names(manifest: Dict[str, Any]) -> list[str]:
 
 
 async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
-    _, manifest = _ensure_toolbox()
+    import json
+    try:
+        manifest = json.loads(_manifest_path().read_text(encoding="utf-8"))
+    except Exception:
+        manifest = {}
     tool_names = _manifest_tool_names(manifest)
     tool_metadata = {
         str(item.get("name") or "").strip(): {

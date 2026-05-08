@@ -119,6 +119,27 @@ def test_discover_running_adds_operator_state_and_kind(monkeypatch: pytest.Monke
     assert rows["tools1"]["sandbox"]["enabled"] is True
 
 
+def test_discover_running_prunes_registration_when_pid_was_reused(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    expected = str(tmp_path / "venv" / "Scripts" / "python.exe")
+    actual = str(tmp_path / "Windows" / "System32" / "svchost.exe")
+    svc.register_spawned(
+        engine_id="stale-tools",
+        pid=1700,
+        command=[expected, "-m", "hosting.toolbox_executor_ipc"],
+        env={"MP13_TOOLBOX_EXECUTOR_ENGINE_ID": "stale-tools"},
+        executor_kind="toolbox_executor",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(svc, "_process_image_path", lambda _pid: actual)
+
+    assert svc.discover_running() == []
+    assert svc._read_engines() == []
+
+
 def test_traffic_scope_engine_allowlist_enforced(tmp_path: Path) -> None:
     svc = _make_service(tmp_path)
     svc.auth_upsert_key(

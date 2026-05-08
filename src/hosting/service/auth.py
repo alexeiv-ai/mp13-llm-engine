@@ -569,7 +569,7 @@ class AuthMixin:
                 raise PermissionError("engine_access_denied")
         return session
 
-    def auth_status(self) -> Dict[str, Any]:
+    def auth_status(self, session_token: Optional[str] = None, presented_ssh_binding: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
@@ -579,7 +579,7 @@ class AuthMixin:
         sessions = dict(auth.get("sessions") or {})
         challenges = dict(auth.get("challenges") or {})
         private_key_custody = self._local_private_key_custody_metadata()
-        return {
+        res = {
             "daemon_version": DAEMON_VERSION,
             "capabilities": self.daemon_capabilities(),
             "require_auth": bool(cfg.get("require_auth", False)),
@@ -590,6 +590,16 @@ class AuthMixin:
             "roles": sorted(list({str((v or {}).get("role") or "") for v in keys.values() if isinstance(v, dict)})),
             "local_private_key_custody": private_key_custody,
         }
+        if session_token:
+            try:
+                # We do not strictly enforce scope here, just try to identify the caller.
+                session = dict(sessions.get(str(session_token).strip()) or {})
+                if session and not bool(session.get("revoked", False)):
+                    res["caller_key_id"] = str(session.get("key_id") or "")
+                    res["caller_role"] = str(session.get("role") or "")
+            except Exception:
+                pass
+        return res
 
     def auth_list_keys(self) -> List[Dict[str, Any]]:
         control = self._read_control()

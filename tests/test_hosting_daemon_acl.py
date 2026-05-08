@@ -400,6 +400,9 @@ def test_displaced_owner_is_denied_until_reclaim_then_cleared(tmp_path: Path) ->
         payload={"session_token": token_a},
     )
     assert allowed["ok"] is True
+    allowed_auth = dict(dict(allowed.get("result") or {}).get("auth_status") or {})
+    assert allowed_auth["caller_key_id"] == "owner-a"
+    assert allowed_auth["caller_role"] == "admin"
 
 
 def test_daemon_non_localhost_shared_claim_denied(tmp_path: Path) -> None:
@@ -519,6 +522,74 @@ def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> N
         assert found
 
     asyncio.run(_run())
+
+
+def test_connect_operation_status_reports_log_weight_progress(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    log_path = tmp_path / "logs" / "model.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "Loading weights:  74%|#######4  | 268/362 [00:03<00:01]\n",
+        encoding="utf-8",
+    )
+    daemon.svc.engines_state_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "engines": [
+                    {
+                        "engine_id": "model-granite",
+                        "model_instance_id": "model-granite",
+                        "canonical_model_path": str((tmp_path / "granite").resolve()),
+                        "canonical_config_path": str((tmp_path / "config.json").resolve()),
+                        "log_path": str(log_path),
+                        "spawned_at": time.time(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": str(tmp_path / "config.json"), "model_path": str(tmp_path / "granite")},
+    )
+    op_id = str(op.get("operation_id") or "")
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": op_id},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("progress_percent") == 74
+    assert "Loading model weights" in str(result.get("progress_text") or "")
+    diagnostics = dict(result.get("diagnostics") or {})
+    worker_log = dict(diagnostics.get("worker_log") or {})
+    assert worker_log.get("log_path") == str(log_path)
+
+
+def test_daemon_operation_status_survives_memory_reload(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    op = daemon._create_operation(command="discover-running", payload={})  # noqa: SLF001
+    op_id = str(op.get("operation_id") or "")
+
+    reloaded = _make_daemon(tmp_path)
+    status = _dispatch(
+        reloaded,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": op_id},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("operation_id") == op_id
+    assert (tmp_path / "state" / "operations.json").exists()
+    assert (tmp_path / "state" / "operation_audit.jsonl").exists()
 
 
 def test_daemon_operation_cancel_marks_running_task_canceled(tmp_path: Path) -> None:

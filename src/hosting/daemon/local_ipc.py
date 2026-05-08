@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -60,6 +61,9 @@ class EngineHostDaemon:
         self._operations: Dict[str, Dict[str, Any]] = {}
         self._operations_lock = threading.Lock()
         self._operations_max_entries = 200
+        self._operations_state_file = (self.svc.hosting_root / "state" / "operations.json").expanduser().resolve()
+        self._operations_journal_file = (self.svc.hosting_root / "state" / "operation_audit.jsonl").expanduser().resolve()
+        self._operations = self._load_persisted_operations()
         self._operation_tasks: set[asyncio.Task] = set()
         self._operation_tasks_by_id: Dict[str, asyncio.Task] = {}
         self._operation_tasks_lock = threading.Lock()
@@ -306,12 +310,197 @@ class EngineHostDaemon:
         return out
 
     @staticmethod
+    def _operation_payload_hint(command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        cmd = str(command or "").strip()
+        p = dict(payload or {})
+        allowed = {
+            "connect-from-config": [
+                "config_path",
+                "engine_id",
+                "model_path",
+                "force_new_worker",
+                "launch_policy",
+            ],
+            "spawn": [
+                "engine_id",
+                "cwd",
+                "worker_ipc_family",
+                "worker_profile_class",
+            ],
+        }.get(cmd, [])
+        return {key: p.get(key) for key in allowed if key in p}
+
+    def _load_persisted_operations(self) -> Dict[str, Dict[str, Any]]:
+        path = self._operations_state_file
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            rows = raw.get("operations") if isinstance(raw, dict) else raw
+            out: Dict[str, Dict[str, Any]] = {}
+            for row in rows if isinstance(rows, list) else []:
+                op = dict(row or {})
+                op_id = str(op.get("operation_id") or "").strip()
+                if op_id:
+                    out[op_id] = op
+            return out
+        except Exception:
+            return {}
+
+    def _persist_operations_locked(self) -> None:
+        path = self._operations_state_file
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            rows = [
+                self._operation_public_snapshot(op)
+                for op in sorted(
+                    self._operations.values(),
+                    key=lambda item: float((item or {}).get("updated_at") or (item or {}).get("created_at") or 0.0),
+                    reverse=True,
+                )
+            ][: self._operations_max_entries]
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(
+                json.dumps({"version": 1, "updated_at": time.time(), "operations": rows}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except Exception:
+            logger.debug("Failed to persist host operations", exc_info=True)
+
+    def _append_operation_journal(self, op: Dict[str, Any], *, event: str) -> None:
+        try:
+            path = self._operations_journal_file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "event": str(event or "operation_update"),
+                "timestamp": time.time(),
+                "operation": self._operation_public_snapshot(op),
+            }
+            with path.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.debug("Failed to append host operation journal", exc_info=True)
+
+    @staticmethod
     def _operation_target_engine_id(command: str, payload: Dict[str, Any]) -> Optional[str]:
         cmd = str(command or "").strip()
         if cmd not in {"connect-from-config", "spawn"}:
             return None
         engine_id = str((payload or {}).get("engine_id") or "").strip()
         return engine_id or None
+
+    def _read_tail_text(self, path: Path, *, max_bytes: int = 262144) -> str:
+        try:
+            size = path.stat().st_size
+            with path.open("rb") as fp:
+                if size > max_bytes:
+                    fp.seek(max(0, size - max_bytes))
+                return fp.read(max_bytes).decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def _parse_model_load_progress_from_log(self, log_path: str) -> Dict[str, Any]:
+        path = Path(str(log_path or "")).expanduser()
+        if not str(log_path or "").strip() or not path.exists():
+            return {}
+        text = self._read_tail_text(path)
+        if not text:
+            return {"log_path": str(path), "exists": True}
+        matches = list(re.finditer(r"Loading weights:\s+(\d{1,3})%", text))
+        if not matches:
+            return {"log_path": str(path), "exists": True}
+        percent = max(0, min(100, int(matches[-1].group(1))))
+        return {
+            "log_path": str(path),
+            "exists": True,
+            "progress_kind": "model_weights",
+            "progress_percent": percent,
+            "progress_text": (
+                "Model weights loaded; waiting for worker RPC readiness."
+                if percent >= 100
+                else f"Loading model weights ({percent}%)."
+            ),
+        }
+
+    def _registration_for_operation(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        target = str((op or {}).get("target_engine_id") or "").strip()
+        hint = dict((op or {}).get("payload_hint") or {})
+        model_path = str(hint.get("model_path") or "").strip()
+        config_path = str(hint.get("config_path") or "").strip()
+        requested = str(hint.get("engine_id") or "").strip()
+        rows = []
+        try:
+            rows = list(self.svc._read_engines() or [])  # type: ignore[attr-defined]
+        except Exception:
+            rows = []
+        if target or requested:
+            wanted = {x for x in [target, requested] if x}
+            for row in rows:
+                current = dict(row or {})
+                ids = {
+                    str(current.get("engine_id") or "").strip(),
+                    str(current.get("worker_id") or "").strip(),
+                    str(current.get("model_instance_id") or "").strip(),
+                }
+                if ids & wanted:
+                    return current
+        canonical_model = ""
+        canonical_config = ""
+        try:
+            canonical_model = self.svc._canonical_path_value(model_path) if model_path else ""  # type: ignore[attr-defined]
+            resolved_config = self.svc._resolve_json_config_path(config_path) if config_path else None  # type: ignore[attr-defined]
+            canonical_config = self.svc._canonical_path_value(str(resolved_config)) if resolved_config else ""  # type: ignore[attr-defined]
+        except Exception:
+            canonical_config = ""
+        candidates: List[Dict[str, Any]] = []
+        for row in rows:
+            current = dict(row or {})
+            row_model = str(current.get("canonical_model_path") or "").strip()
+            row_config = str(current.get("canonical_config_path") or "").strip()
+            if canonical_model and row_model and row_model != canonical_model:
+                continue
+            if canonical_config and row_config and row_config != canonical_config:
+                continue
+            if canonical_model or canonical_config:
+                candidates.append(current)
+        if not candidates:
+            return {}
+        candidates.sort(key=lambda item: float(item.get("spawned_at") or 0.0), reverse=True)
+        return candidates[0]
+
+    def _enrich_operation_progress(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(op or {})
+        if bool(out.get("done", False)) or str(out.get("command") or "").strip() != "connect-from-config":
+            return out
+        reg = self._registration_for_operation(out)
+        log_path = str(reg.get("log_path") or "").strip()
+        parsed = self._parse_model_load_progress_from_log(log_path)
+        if not parsed:
+            return out
+        diagnostics = dict(out.get("diagnostics") or {})
+        diagnostics["worker_log"] = parsed
+        if log_path:
+            diagnostics["log_path"] = log_path
+        out["diagnostics"] = diagnostics
+        if str(reg.get("engine_id") or "").strip() and not str(out.get("target_engine_id") or "").strip():
+            out["target_engine_id"] = str(reg.get("engine_id") or "").strip()
+        percent = parsed.get("progress_percent")
+        if isinstance(percent, int):
+            out["progress_percent"] = percent
+            out["progress_text"] = str(parsed.get("progress_text") or "").strip()
+            events = list(out.get("progress_events") or [])
+            stage = "connect.load_weights" if percent < 100 else "connect.worker_ready"
+            message = str(parsed.get("progress_text") or "").strip()
+            existing_sig = None
+            for event in reversed(events):
+                if str((event or {}).get("stage") or "") in {"connect.load_weights", "connect.worker_ready"} and "progress_percent" in dict(event or {}):
+                    existing_sig = (str((event or {}).get("stage") or ""), int((event or {}).get("progress_percent") or -1))
+                    break
+            next_sig = (stage, percent)
+            if existing_sig != next_sig:
+                events.append(self._operation_event(stage, "running", message, progress_percent=percent, log_path=log_path or None))
+                out["progress_events"] = events
+                out["updated_at"] = time.time()
+        return out
 
     @staticmethod
     def _is_claim_command(cmd: str) -> bool:
@@ -527,6 +716,8 @@ class EngineHostDaemon:
             "cancel_teardown_attempted": False,
             "cancel_teardown_status": None,
             "target_engine_id": self._operation_target_engine_id(command, payload),
+            "payload_hint": self._operation_payload_hint(command, payload),
+            "diagnostics": {},
             "progress_events": [
                 self._operation_event("queued", "queued", "Operation queued", command=str(command or ""))
             ],
@@ -535,22 +726,29 @@ class EngineHostDaemon:
         with self._operations_lock:
             self._operations[op_id] = op
             self._prune_operations_locked()
+            self._persist_operations_locked()
+        self._append_operation_journal(op, event="created")
         return self._operation_public_snapshot(op)
 
     def _get_operation(self, operation_id: str) -> Optional[Dict[str, Any]]:
+        op_id = str(operation_id or "").strip()
         with self._operations_lock:
-            op = self._operations.get(str(operation_id or ""))
+            op = self._operations.get(op_id)
             if not isinstance(op, dict):
-                return None
-            return dict(op)
+                persisted = self._load_persisted_operations().get(op_id)
+                return dict(persisted) if isinstance(persisted, dict) else None
+            return self._enrich_operation_progress(dict(op))
 
     def _replace_operation(self, op: Dict[str, Any]) -> None:
         op_id = str(op.get("operation_id") or "")
         if not op_id:
             return
+        enriched = self._enrich_operation_progress(dict(op))
         with self._operations_lock:
-            self._operations[op_id] = dict(op)
+            self._operations[op_id] = dict(enriched)
             self._prune_operations_locked()
+            self._persist_operations_locked()
+        self._append_operation_journal(enriched, event="updated")
 
     def _finalize_operation_canceled(self, operation_id: str, message: str = "Operation canceled") -> None:
         op = self._get_operation(operation_id) or {}
@@ -1097,7 +1295,10 @@ class EngineHostDaemon:
                     "error_code": "missing_or_invalid_session_token",
                     "error_details": {"operation_id": op_id},
                 }
-            return {"seq": seq, "ok": True, "result": self._operation_public_snapshot(op)}
+            enriched = self._enrich_operation_progress(op)
+            if enriched != op:
+                self._replace_operation(enriched)
+            return {"seq": seq, "ok": True, "result": self._operation_public_snapshot(enriched)}
 
         if cmd == "op-cancel":
             op_id = str(payload.get("operation_id") or "").strip()
@@ -1647,7 +1848,10 @@ class EngineHostDaemon:
         if cmd == "get-lifecycle-policy-effective":
             return svc.get_lifecycle_policy_effective()
         if cmd == "auth-status":
-            return svc.auth_status()
+            return svc.auth_status(
+                session_token=payload.get("session_token"),
+                presented_ssh_binding=dict(payload.get("_ssh_session_binding") or {}),
+            )
         if cmd == "auth-list-keys":
             return svc.auth_list_keys()
         if cmd == "auth-list-sessions":
@@ -1719,5 +1923,5 @@ class EngineHostDaemon:
         if cmd == "auth-revoke-session":
             return svc.auth_revoke_session(str(payload.get("token") or ""))
         if cmd == "host-metrics":
-            return svc.get_host_metrics()
+            return svc.get_host_metrics(session_token=payload.get("session_token"))
         raise ValueError(f"Unknown command '{cmd}'")

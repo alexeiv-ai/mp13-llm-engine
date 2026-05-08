@@ -85,11 +85,24 @@ def _raise_interactive_api_error(exc: Exception) -> None:
 
 
 def _api_invoke(args: argparse.Namespace, cmd: str, payload: dict, session_token: Optional[str] = None) -> Any:
-    channel = _control_channel(args, session_token=session_token)
+    channel = (
+        _control_channel(args)
+        if session_token is None
+        else _control_channel(args, session_token=session_token)
+    )
     try:
         return channel.invoke_control_command(str(cmd or "").strip(), dict(payload or {}))
     except Exception as exc:
         _raise_interactive_api_error(exc)
+
+
+def _active_session_token(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    channel = _control_channel(args)
+    get_token = getattr(channel, "get_session_token", None)
+    if not callable(get_token):
+        return session_token
+    current = get_token()
+    return current if current else session_token
 
 
 def _offline_service(args: argparse.Namespace):
@@ -110,7 +123,7 @@ def _offline_local_invoke(args: argparse.Namespace, cmd: str, payload: dict, ses
     if cmd == "discover-running":
         return svc.discover_running()
     if cmd == "host-metrics":
-        return svc.get_host_metrics()
+        return svc.get_host_metrics(session_token=session_token)
     if cmd == "auth-list-sessions":
         return svc.auth_list_sessions()
     if cmd == "auth-begin-challenge":
@@ -700,12 +713,20 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     daemon_up = _is_daemon_running(args, session_token=session_token)
                 else:
                     try:
-                        daemon_status = _control_channel(args, session_token=session_token).get_daemon_status()
+                        channel = (
+                            _control_channel(args)
+                            if session_token is None
+                            else _control_channel(args, session_token=session_token)
+                        )
+                        daemon_status = channel.get_daemon_status()
                         daemon_up = bool(daemon_status.get("alive") or daemon_status.get("reachable"))
                     except Exception:
                         daemon_up = False
                 status_c = _c("good", "Running") if daemon_up else _c("muted", "Stopped")
-                auth_value = daemon_status.get("require_auth")
+                auth_status = daemon_status.get("auth_status") or {}
+                auth_value = daemon_status.get("require_auth") if "require_auth" in daemon_status else auth_status.get("require_auth")
+                caller_key = auth_status.get("caller_key_id")
+                caller_role = auth_status.get("caller_role")
                 
                 # Print a more informative summary if daemon is running
                 if daemon_up:
@@ -713,28 +734,46 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     pid = daemon_status.get("pid")
                     if pid:
                         status_parts.append(f"PID: {pid}")
-                    if auth_value is not None:
-                        status_parts.append(f"Auth: {'required' if bool(auth_value) else 'not required'}")
                     try:
                         res = _api_invoke(args, "host-metrics", {}, session_token=session_token)
+                        session_token = _active_session_token(args, session_token)
                         if not pid and res.get("pid"):
                             status_parts.append(f"PID: {res.get('pid')}")
-                        if auth_value is None and "require_auth" in res:
-                            status_parts.append(f"Auth: {'required' if bool(res.get('require_auth')) else 'not required'}")
+                        if "require_auth" in res and auth_value is None:
+                            auth_value = res.get("require_auth")
+                        res_auth_status = res.get("auth_status") or {}
+                        if res_auth_status.get("caller_key_id"):
+                            caller_key = res_auth_status.get("caller_key_id")
+                            caller_role = res_auth_status.get("caller_role")
                         cpu = res.get("process_cpu_percent", 0.0)
                         mem = res.get("process_memory_mb", 0.0)
                         engines = res.get("engines_count", 0)
+                        
+                        if caller_key and caller_role:
+                            status_parts.append(f"Auth: {caller_key} ({caller_role})")
+                        elif auth_value is not None:
+                            status_parts.append(f"Auth: {'required' if bool(auth_value) else 'not required'}")
+                            
                         status_parts.extend([f"CPU: {cpu}%", f"Mem: {mem}MB", f"Engines: {engines}"])
                     except PermissionError as pe:
-                        if "session_token_required" in str(pe):
-                            if auth_value is None:
-                                status_parts.append(_c("warn", "Auth required"))
+                        if caller_key and caller_role:
+                            status_parts.append(f"Auth: {caller_key} ({caller_role})")
+                        elif auth_value is not None:
+                            status_parts.append(f"Auth: {'required' if bool(auth_value) else 'not required'}")
+                        if "session_token_required" in str(pe) and auth_value is None and not caller_key:
+                            status_parts.append(_c("warn", "Auth required"))
                     except Exception:
-                        pass
+                        if caller_key and caller_role:
+                            status_parts.append(f"Auth: {caller_key} ({caller_role})")
+                        elif auth_value is not None:
+                            status_parts.append(f"Auth: {'required' if bool(auth_value) else 'not required'}")
                     if status_parts:
                         status_c += f" ({', '.join(status_parts)})"
-                elif auth_value is not None:
-                    status_c += f" (Auth: {'required' if bool(auth_value) else 'not required'})"
+                else:
+                    if caller_key and caller_role:
+                        status_c += f" (Auth: {caller_key} ({caller_role}))"
+                    elif auth_value is not None:
+                        status_c += f" (Auth: {'required' if bool(auth_value) else 'not required'})"
 
                 if first_run or status_c != last_status_c:
                     print()
@@ -826,25 +865,17 @@ def _print_sessions(res: Dict[str, Any], session_token: Optional[str]) -> None:
     sessions = list(dict(res or {}).get("sessions") or [])
     cli_preview = _get_token_preview(session_token) if session_token else None
 
-    filtered = []
-    for s in sessions:
-        tok = s.get("token_preview") or s.get("token_prefix") or ""
-        if cli_preview and tok == cli_preview:
-            continue
-        filtered.append(s)
-
-    if not filtered:
-        if sessions:
-            print("  No active sessions/consumers (excluding this CLI).")
-        else:
-            print("  No active sessions/consumers.")
+    if not sessions:
+        print("  No active sessions/consumers.")
         return
 
-    for sess in filtered:
+    for sess in sessions:
         tok = sess.get("token_preview") or sess.get("token_prefix") or "<unknown>"
         key_id = sess.get("key_id", "<unknown>")
         scope = sess.get("scope", "")
-        print(f"  - Session [{_c('accent', tok)}] Key: {_c('value', key_id)} Scope: {scope}")
+        is_current_cli = bool(cli_preview and tok == cli_preview)
+        marker = f" {_c('good', '(this interactive CLI)')}" if is_current_cli else ""
+        print(f"  - Session [{_c('accent', tok)}] Key: {_c('value', key_id)} Scope: {scope}{marker}")
 
         ttl = sess.get("ttl_remaining_seconds")
         if ttl is not None:
@@ -855,6 +886,9 @@ def _print_sessions(res: Dict[str, Any], session_token: Optional[str]) -> None:
         role = sess.get("role")
         if role:
             print(f"    Role: {role}")
+
+        if is_current_cli:
+            print("    Consumer: interactive CLI")
 
         allowed_configs = sess.get("allowed_configs")
         if allowed_configs:
@@ -887,6 +921,7 @@ def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Opt
             print()
         else:
             res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
         engines = _get_engines_dict(res)
         if not engines:
             print("  No engines or sandboxes currently loaded.")
@@ -943,6 +978,7 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
             print()
         else:
             res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
         engines = _get_engines_dict(res)
         if not engines:
             print("  No engines or sandboxes available.")
@@ -992,6 +1028,7 @@ def _show_metrics(args: argparse.Namespace, session_token: Optional[str]) -> Opt
             print()
         else:
             res = _api_invoke(args, "host-metrics", {}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
             
         for metric, value in res.items():
             if isinstance(value, (dict, list)):
@@ -1022,6 +1059,7 @@ def _list_consumers(args: argparse.Namespace, session_token: Optional[str]) -> O
             print()
         else:
             res = _api_invoke(args, "auth-list-sessions", {}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
         _print_sessions(res, session_token)
         return session_token
     except PermissionError:

@@ -149,6 +149,39 @@ Use your control token to manage engines:
 @'{"config_path":"default","engine_id":"worker_cfg","model_path":"C:\\models\\granite-3.3-2b-instruct"}'@ | python -m hosting.engine_host_cli --payload-stdin connect-from-config
 ```
 
+For long-running lifecycle work, especially model startup, prefer the async
+operation wrapper. It returns an `operation_id` immediately and lets a UI or
+backend poll progress without blocking its control connection:
+
+```powershell
+# Start config-driven launch as an operation
+@'{
+  "command":"connect-from-config",
+  "payload":{
+    "config_path":"default",
+    "engine_id":"worker_cfg",
+    "model_path":"C:\\models\\granite-3.3-2b-instruct",
+    "session_token":"<control_token>"
+  }
+}'@ | python -m hosting.engine_host_cli --payload-stdin op-start
+
+# Poll status
+@'{"operation_id":"<operation_id>","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin op-status
+
+# Request cancellation when supported by the operation
+@'{"operation_id":"<operation_id>","reason":"user_requested","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin op-cancel
+```
+
+`op-status` returns a public operation snapshot with `status`, `done`,
+`result`/`error`, and `progress_events`. For `connect-from-config`, the daemon
+also makes a best-effort attempt to correlate the operation with the spawned
+worker registration and parse model-loading progress from the worker log. When
+available, callers may see `progress_percent`, `progress_text`, and
+`diagnostics.worker_log`. Operation snapshots are persisted best-effort under
+the hosting state directory so recent operation status can survive daemon
+object recreation; consumers should still treat operation status as operational
+telemetry, not as a durable job queue contract.
+
 ### 2.5 Proxying Worker Requests (RPC & Streams)
 
 Once a traffic session is issued, developers can test proxy commands.
@@ -196,7 +229,7 @@ python -m hosting.hosting_config_cli --no-interactive --doctor
 ```
 
 ### 3.2 Host Metrics
-`host-metrics` provides process-runtime diagnostics, including in-flight proxy requests, proxy byte totals, auth denial counters, and a recent request ring buffer.
+`host-metrics` provides process-runtime diagnostics, including in-flight proxy requests, proxy byte totals, auth denial counters, caller auth status for the supplied session token, and a recent request ring buffer.
 
 ```powershell
 @'{"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin host-metrics

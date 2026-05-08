@@ -168,6 +168,35 @@ def test_list_consumers_uses_offline_fallback_when_local_daemon_stopped(
     assert "tok...123" in out
 
 
+def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
+    current = "abcdefghijk"
+    other = "other-session-token"
+    interactive._print_sessions(
+        {
+            "sessions": [
+                {
+                    "token_preview": interactive._get_token_preview(current),
+                    "key_id": "admin-main",
+                    "scope": "control",
+                    "role": "admin",
+                },
+                {
+                    "token_preview": interactive._get_token_preview(other),
+                    "key_id": "backend",
+                    "scope": "traffic",
+                    "role": "worker_user",
+                },
+            ]
+        },
+        session_token=current,
+    )
+
+    out = capsys.readouterr().out
+    assert "this interactive CLI" in out
+    assert "Consumer: interactive CLI" in out
+    assert "backend" in out
+
+
 def test_offline_read_authenticates_and_retries_when_token_required(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -611,13 +611,12 @@ class EngineHostControlChannel:
             except Exception as exc:
                 with self._connection_lock:
                     self._connection = None
-                if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
-                    _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge"}
+                _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge"}
+                if _is_session_auth_error(str(exc)):
                     if (
                         _retry_on_auth_error
                         and self._session_token
                         and command not in _no_retry_cmds
-                        and _is_session_auth_error(str(exc))
                     ):
                         logger.info(
                             "Auth error on '%s' (likely expired session); clearing token and retrying: %s",
@@ -627,6 +626,10 @@ class EngineHostControlChannel:
                         self._session_token = None
                         self.control_settings["engine_host_session_token"] = None
                         return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
+                    raise RuntimeError(
+                        f"persistent daemon control channel failed for '{command}': {exc}"
+                    ) from exc
+                if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
                     raise RuntimeError(
                         f"persistent daemon control channel failed for '{command}': {exc}"
                     ) from exc

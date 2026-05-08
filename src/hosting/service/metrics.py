@@ -181,7 +181,7 @@ class MetricsMixin:
             auth["challenge_recent_events"] = recent
             cls._runtime_metrics["auth"] = auth
 
-    def get_host_metrics(self) -> Dict[str, Any]:
+    def get_host_metrics(self, session_token: Optional[str] = None) -> Dict[str, Any]:
         self._ensure_metrics_initialized()
         with self._metrics_lock:
             assert isinstance(self._runtime_metrics, dict)
@@ -194,7 +194,7 @@ class MetricsMixin:
         snapshot["hosting_root"] = str(self.hosting_root)
         snapshot["timestamp"] = time.time()
         try:
-            auth_status = dict(self.auth_status() or {})  # type: ignore[attr-defined]
+            auth_status = dict(self.auth_status(session_token=session_token) or {})  # type: ignore[attr-defined]
         except Exception as exc:
             snapshot["auth_status_error"] = str(exc)
         else:

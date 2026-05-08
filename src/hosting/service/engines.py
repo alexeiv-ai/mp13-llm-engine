@@ -51,6 +51,69 @@ class EnginesMixin:
         except Exception:
             return raw
 
+    @staticmethod
+    def _process_image_path(pid: int) -> str:
+        p = int(pid or 0)
+        if p <= 0:
+            return ""
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel32.OpenProcess
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            query_full_process_image_name = kernel32.QueryFullProcessImageNameW
+            query_full_process_image_name.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                wintypes.LPWSTR,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            query_full_process_image_name.restype = wintypes.BOOL
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
+
+            handle = open_process(PROCESS_QUERY_LIMITED_INFORMATION, False, p)
+            if not handle:
+                return ""
+            try:
+                size = wintypes.DWORD(32768)
+                buf = ctypes.create_unicode_buffer(size.value)
+                if not query_full_process_image_name(handle, 0, buf, ctypes.byref(size)):
+                    return ""
+                return str(buf.value or "").strip()
+            finally:
+                close_handle(handle)
+        try:
+            return str(Path(f"/proc/{p}/exe").resolve())
+        except Exception:
+            return ""
+
+    def _registration_pid_matches_command(self, item: Dict[str, Any], pid: int) -> Dict[str, Any]:
+        command = list(item.get("command") or [])
+        expected = str(command[0] if command else "").strip()
+        if not expected:
+            return {"matches": True}
+        expected_path = Path(expected)
+        if not expected_path.is_absolute():
+            return {"matches": True, "expected_executable": expected}
+        actual = self._process_image_path(pid)
+        if not actual:
+            return {"matches": True, "expected_executable": expected}
+        expected_norm = os.path.normcase(os.path.abspath(expected))
+        actual_norm = os.path.normcase(os.path.abspath(actual))
+        matches = expected_norm == actual_norm
+        return {
+            "matches": matches,
+            "expected_executable": expected,
+            "actual_executable": actual,
+            "reason": None if matches else "pid_reused_by_different_process",
+        }
+
     def _worker_id_for_model(self, model_path: str) -> str:
         stem = self._safe_config_name(Path(str(model_path or "model")).name or "model")
         digest = hashlib.sha256(str(model_path or "").encode("utf-8", errors="ignore")).hexdigest()[:10]
@@ -804,6 +867,12 @@ class EnginesMixin:
             item = dict(row)
             pid = int(item.get("pid") or 0)
             alive = self._pid_alive(pid)
+            if alive:
+                identity = self._registration_pid_matches_command(item, pid)
+                if identity:
+                    item["pid_identity"] = identity
+                if not bool(identity.get("matches", True)):
+                    alive = False
             item["alive"] = alive
             item["uptime_seconds"] = max(0.0, now - float(item.get("spawned_at") or now))
             item["reachable"] = False

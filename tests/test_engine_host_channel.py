@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import pytest
 
 from hosting.client_realm import FileSecretStore, write_client_profile
+from hosting.engine_host_connection import CommandError
 from hosting.engine_host_channel import EngineHostControlChannel
 
 
@@ -49,6 +50,29 @@ def test_auto_session_from_key_credentials() -> None:
     assert fake.calls[1][0] == "discover-running"
     assert fake.calls[1][1]["session_token"] == "tok-123"
     assert ch.get_session_token() == "tok-123"
+
+
+def test_discover_running_auth_failure_does_not_use_subprocess_fallback() -> None:
+    class _AuthFailConn(_FakeConn):
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+            self.calls.append((cmd, dict(payload or {})))
+            raise CommandError("auth_failed", code="missing_or_invalid_session_token")
+
+    fake = _AuthFailConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch.set_session_token("expired-token")
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    def fail_subprocess(_command: str, _payload: Dict[str, Any]) -> Any:
+        raise AssertionError("subprocess fallback should not be used for daemon auth failures")
+
+    ch._invoke_subprocess = fail_subprocess  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="auth_failed"):
+        ch.invoke_control_command("discover-running", {})
+
+    assert ch.get_session_token() is None
+    assert len(fake.calls) == 2
 
 
 def test_daemon_status_includes_auth_snapshot(monkeypatch) -> None:
