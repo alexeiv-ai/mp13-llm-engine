@@ -28,6 +28,10 @@ class CoreMixin:
             "reachability_status_v1": True,
             "non_blocking_ops_v1": True,
             "lifecycle_profiles_v1": True,
+            "auth_session_validate": True,
+            "auth_session_adopt": True,
+            "auth_session_list": True,
+            "auth_audit_list": True,
         }
 
     @staticmethod
@@ -63,4 +67,3 @@ class CoreMixin:
     @staticmethod
     def _resource_key(resource_kind: str, resource_id: str) -> str:
         return f"{str(resource_kind or '').strip().lower()}:{str(resource_id or '').strip()}"
-

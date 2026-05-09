@@ -94,9 +94,25 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
                 return {
                     "status": "ok",
                     "token": "pk-token",
+                    "key_id": "admin-pub",
+                    "auth_method": "public_key",
                     "scope": "traffic",
                     "expires_at": 9999999999.0,
                 }
+            if cmd == "auth-validate-session":
+                if payload and payload.get("token") == "pk-token":
+                    return {
+                        "valid": True,
+                        "reason": "ok",
+                        "key_id": "admin-pub",
+                        "auth_method": "public_key",
+                        "role": "admin",
+                        "scope": "traffic",
+                        "expires_at": 9999999999.0,
+                        "ssh_bound": False,
+                        "ssh_binding": {},
+                    }
+                return {"valid": False, "reason": "missing_or_invalid_session_token"}
             if cmd == "auth-status":
                 raise CommandError("auth_failed", code="insufficient_scope")
             return {}
@@ -116,7 +132,11 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
 
     assert first == "pk-token"
     assert second == "pk-token"
-    assert [cmd for cmd, _payload in fake.calls] == ["auth-begin-challenge", "auth-complete-challenge"]
+    assert [cmd for cmd, _payload in fake.calls] == [
+        "auth-begin-challenge",
+        "auth-complete-challenge",
+        "auth-validate-session",
+    ]
     assert len(signer_calls) == 1
 
 
@@ -135,9 +155,25 @@ def test_public_key_session_cache_reuses_non_control_token_across_channels() -> 
                 return {
                     "status": "ok",
                     "token": "pk-token",
+                    "key_id": "admin-pub",
+                    "auth_method": "public_key",
                     "scope": "traffic",
                     "expires_at": 9999999999.0,
                 }
+            if cmd == "auth-validate-session":
+                if payload and payload.get("token") == "pk-token":
+                    return {
+                        "valid": True,
+                        "reason": "ok",
+                        "key_id": "admin-pub",
+                        "auth_method": "public_key",
+                        "role": "admin",
+                        "scope": "traffic",
+                        "expires_at": 9999999999.0,
+                        "ssh_bound": False,
+                        "ssh_binding": {},
+                    }
+                return {"valid": False, "reason": "missing_or_invalid_session_token"}
             if cmd == "auth-status":
                 raise CommandError("auth_failed", code="insufficient_scope")
             return {}
@@ -160,7 +196,7 @@ def test_public_key_session_cache_reuses_non_control_token_across_channels() -> 
     assert ch2.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer) == "pk-token"
 
     assert [cmd for cmd, _payload in first.calls] == ["auth-begin-challenge", "auth-complete-challenge"]
-    assert second.calls == []
+    assert [cmd for cmd, _payload in second.calls] == ["auth-validate-session"]
     assert len(signer_calls) == 1
 
 

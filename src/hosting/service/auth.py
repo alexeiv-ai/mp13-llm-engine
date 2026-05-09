@@ -281,6 +281,7 @@ class AuthMixin:
             "list-live-consumers",
             "auth-list-issued-tokens",
             "auth-audit-list",
+            "auth-validate-session",
             "auth-upsert-key",
             "auth-revoke-key",
             "auth-issue-session",
@@ -674,6 +675,7 @@ class AuthMixin:
                 "token_preview": self._token_preview(str(token)),
                 "key_id": str(m.get("key_id") or ""),
                 "role": str(m.get("role") or ""),
+                "auth_method": str(m.get("auth_method") or ""),
                 "scope": str(m.get("scope") or ""),
                 "issued_at": float(m.get("issued_at") or 0.0),
                 "expires_at": expires_at,
@@ -706,6 +708,132 @@ class AuthMixin:
             "has_more": bool(next_offset < total),
             "next_offset": next_offset if next_offset < total else None,
             "sessions": page,
+        }
+
+    def auth_validate_session(
+        self,
+        *,
+        token: str,
+        scope: str = "control",
+        expected_key_id: Optional[str] = None,
+        check_ssh_binding: bool = True,
+        presented_ssh_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        tok = str(token or "").strip()
+        scope_norm = str(scope or "control").strip().lower() or "control"
+        if scope_norm not in {"control", "config", "traffic"}:
+            raise ValueError("scope must be 'control', 'config', or 'traffic'")
+        if not tok:
+            return {
+                "valid": False,
+                "reason": "token_required",
+                "scope": scope_norm,
+                "ssh_bound": False,
+            }
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+        sessions = dict(auth.get("sessions") or {})
+        raw_session = dict(sessions.get(tok) or {})
+        if not raw_session:
+            return {
+                "valid": False,
+                "reason": "missing_or_invalid_session_token",
+                "token_preview": self._token_preview(tok),
+                "scope": scope_norm,
+                "ssh_bound": False,
+            }
+        if bool(raw_session.get("revoked", False)):
+            return {
+                "valid": False,
+                "reason": "session_revoked",
+                "token_preview": self._token_preview(tok),
+                "key_id": str(raw_session.get("key_id") or ""),
+                "scope": str(raw_session.get("scope") or ""),
+                "ssh_bound": bool(dict(raw_session.get("ssh_binding") or {})),
+            }
+        expected = str(expected_key_id or "").strip()
+        actual_key_id = str(raw_session.get("key_id") or "").strip()
+        if expected and actual_key_id != expected:
+            return {
+                "valid": False,
+                "reason": "key_id_mismatch",
+                "token_preview": self._token_preview(tok),
+                "key_id": actual_key_id,
+                "auth_method": str(raw_session.get("auth_method") or ""),
+                "role": str(raw_session.get("role") or ""),
+                "scope": str(raw_session.get("scope") or ""),
+                "expires_at": float(raw_session.get("expires_at") or 0.0),
+                "ssh_bound": bool(dict(raw_session.get("ssh_binding") or {})),
+            }
+        if check_ssh_binding:
+            try:
+                session = self._validate_session(
+                    control,
+                    tok,
+                    required_scope=scope_norm,
+                    presented_ssh_binding=dict(presented_ssh_binding or {}),
+                )
+            except PermissionError as exc:
+                return {
+                    "valid": False,
+                    "reason": str(exc or "invalid_session"),
+                    "token_preview": self._token_preview(tok),
+                    "key_id": actual_key_id,
+                    "auth_method": str(raw_session.get("auth_method") or ""),
+                    "role": str(raw_session.get("role") or ""),
+                    "scope": str(raw_session.get("scope") or ""),
+                    "expires_at": float(raw_session.get("expires_at") or 0.0),
+                    "ssh_bound": bool(dict(raw_session.get("ssh_binding") or {})),
+                }
+        else:
+            session = raw_session
+            key_role = str(session.get("role") or "").strip().lower()
+            session_scope = str(session.get("scope") or "").strip().lower()
+            if key_role not in VALID_AUTH_ROLES:
+                return {
+                    "valid": False,
+                    "reason": "invalid_role",
+                    "token_preview": self._token_preview(tok),
+                    "key_id": actual_key_id,
+                    "auth_method": str(raw_session.get("auth_method") or ""),
+                    "role": key_role,
+                    "scope": session_scope,
+                    "expires_at": float(raw_session.get("expires_at") or 0.0),
+                    "ssh_bound": bool(dict(raw_session.get("ssh_binding") or {})),
+                }
+            if key_role != ROLE_ADMIN and (scope_norm not in self._role_allowed_scopes(key_role) or session_scope != scope_norm):
+                return {
+                    "valid": False,
+                    "reason": "insufficient_scope",
+                    "token_preview": self._token_preview(tok),
+                    "key_id": actual_key_id,
+                    "auth_method": str(raw_session.get("auth_method") or ""),
+                    "role": key_role,
+                    "scope": session_scope,
+                    "expires_at": float(raw_session.get("expires_at") or 0.0),
+                    "ssh_bound": bool(dict(raw_session.get("ssh_binding") or {})),
+                }
+        expires_at = float(session.get("expires_at") or 0.0)
+        now = time.time()
+        return {
+            "valid": True,
+            "reason": "ok",
+            "token_preview": self._token_preview(tok),
+            "key_id": str(session.get("key_id") or ""),
+            "actor_key_id": str(session.get("key_id") or ""),
+            "auth_method": str(session.get("auth_method") or ""),
+            "role": str(session.get("role") or ""),
+            "scope": str(session.get("scope") or ""),
+            "requested_scope": scope_norm,
+            "issued_at": float(session.get("issued_at") or 0.0),
+            "expires_at": expires_at,
+            "ttl_remaining_seconds": max(0, int(expires_at - now)) if expires_at > 0 else None,
+            "allowed_configs": list(session.get("allowed_configs") or []),
+            "allowed_engines": list(session.get("allowed_engines") or []),
+            "ssh_bound": bool(dict(session.get("ssh_binding") or {})),
+            "ssh_binding": dict(session.get("ssh_binding") or {}),
         }
 
     def auth_list_issued_tokens(
@@ -1157,9 +1285,11 @@ class AuthMixin:
             "key_fingerprint": binding_fp or None,
         } if (binding_target or binding_fp) else {}
         sessions = dict(auth.get("sessions") or {})
+        auth_method = str(key_meta.get("auth_method") or "").strip().lower()
         sessions[token] = {
             "key_id": str(key_id or ""),
             "role": role,
+            "auth_method": auth_method,
             "scope": scope_norm,
             "issued_at": now,
             "expires_at": now + ttl,
@@ -1176,6 +1306,7 @@ class AuthMixin:
             "token": token,
             "scope": scope_norm,
             "role": role,
+            "auth_method": auth_method,
             "expires_at": now + ttl,
             "ttl_seconds": ttl,
             "allowed_configs": allowed_configs,

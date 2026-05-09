@@ -787,6 +787,95 @@ def test_remote_connectivity_denies_legacy_unbound_session() -> None:
             )
 
 
+def test_auth_validate_session_reports_binding_and_identity() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="admin",
+            key_secret="admin-secret",
+            role="admin",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="admin",
+            key_secret="admin-secret",
+            scope="control",
+        )
+        token = str(session.get("token") or "")
+        out = svc.auth_validate_session(token=token, scope="control", expected_key_id="admin")
+        assert out["valid"] is True
+        assert out["reason"] == "ok"
+        assert out["key_id"] == "admin"
+        assert out["actor_key_id"] == "admin"
+        assert out["role"] == "admin"
+        assert out["scope"] == "control"
+        assert out["auth_method"] == "shared_secret"
+        assert out["ssh_bound"] is False
+
+        mismatch = svc.auth_validate_session(token=token, scope="control", expected_key_id="other")
+        assert mismatch["valid"] is False
+        assert mismatch["reason"] == "key_id_mismatch"
+
+
+def test_auth_validate_session_checks_remote_ssh_binding() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="admin",
+            key_secret="admin-secret",
+            role="admin",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="admin",
+            key_secret="admin-secret",
+            scope="control",
+            ssh_binding={"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
+        )
+        token = str(session.get("token") or "")
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "ssh_tunnel_only"},
+        )
+
+        denied = svc.auth_validate_session(token=token, scope="control", presented_ssh_binding={})
+        assert denied["valid"] is False
+        assert denied["reason"] in {"ssh_binding_required", "ssh_binding_required_for_remote_connectivity"}
+
+        unchecked = svc.auth_validate_session(token=token, scope="control", check_ssh_binding=False)
+        assert unchecked["valid"] is True
+        assert unchecked["ssh_bound"] is True
+
+        accepted = svc.auth_validate_session(
+            token=token,
+            scope="control",
+            presented_ssh_binding={"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
+        )
+        assert accepted["valid"] is True
+        assert accepted["ssh_bound"] is True
+
+
+def test_auth_capabilities_advertise_session_and_audit_contracts() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        caps = dict(svc.get_control_config().get("capabilities") or {})
+        assert caps["auth_session_validate"] is True
+        assert caps["auth_session_adopt"] is True
+        assert caps["auth_session_list"] is True
+        assert caps["auth_audit_list"] is True
+        status_caps = dict(svc.auth_status().get("capabilities") or {})
+        assert status_caps["auth_session_validate"] is True
+        assert status_caps["auth_audit_list"] is True
+
+
 def test_config_editor_cannot_authorize_admin_key_revocation_commands() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)

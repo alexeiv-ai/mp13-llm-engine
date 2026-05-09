@@ -886,6 +886,28 @@ class EngineHostControlChannel:
                 "ssh_binding": dict((self._current_ssh_session_binding() if bind_to_ssh else None) or {}),
             }
 
+    def _clear_cached_public_key_session(
+        self,
+        *,
+        key_id: str,
+        scope: str,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+    ) -> None:
+        try:
+            key = self._public_key_session_cache_key(
+                key_id=key_id,
+                scope=scope,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+            )
+        except Exception:
+            return
+        with _AUTO_SESSION_CACHE_LOCK:
+            _AUTO_SESSION_CACHE.pop(key, None)
+
     def invoke_control_command(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         """Invoke a daemon control command through this channel."""
         return self._invoke(str(command or "").strip(), dict(payload or {}))
@@ -2649,6 +2671,92 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def auth_validate_session(
+        self,
+        token: Optional[str] = None,
+        *,
+        scope: str = "control",
+        expected_key_id: Optional[str] = None,
+        check_ssh_binding: bool = True,
+    ) -> Dict[str, Any]:
+        tok = str(token or self.get_session_token() or "").strip()
+        binding = self._current_ssh_session_binding() if check_ssh_binding else None
+        res = self._invoke(
+            "auth-validate-session",
+            {
+                "token": tok,
+                "scope": str(scope or "control"),
+                "expected_key_id": str(expected_key_id or "").strip() or None,
+                "check_ssh_binding": bool(check_ssh_binding),
+                "ssh_binding": dict(binding or {}),
+            },
+            allow_auto_session=False,
+        )
+        out = dict(res or {})
+        if bool(out.get("valid", False)):
+            previous = dict(self._session_token_meta or {})
+            self._set_session_token_meta(
+                {
+                    **previous,
+                    "auth_method": str(out.get("auth_method") or previous.get("auth_method") or "").strip(),
+                    "key_id": str(out.get("key_id") or previous.get("key_id") or "").strip(),
+                    "scope": str(out.get("scope") or "").strip().lower(),
+                    "expires_at": float(out.get("expires_at") or 0.0),
+                    "ssh_binding": dict(out.get("ssh_binding") or {}),
+                    "allowed_configs": list(out.get("allowed_configs") or []),
+                    "allowed_engines": list(out.get("allowed_engines") or []),
+                }
+            )
+        return out
+
+    def adopt_session_token(
+        self,
+        token: str,
+        *,
+        scope: str = "control",
+        expected_key_id: Optional[str] = None,
+        check_ssh_binding: bool = True,
+    ) -> Dict[str, Any]:
+        out = self.auth_validate_session(
+            token,
+            scope=scope,
+            expected_key_id=expected_key_id,
+            check_ssh_binding=check_ssh_binding,
+        )
+        if bool(out.get("valid", False)):
+            self.set_session_token(token)
+            previous = dict(self._session_token_meta or {})
+            self._set_session_token_meta(
+                {
+                    **previous,
+                    "auth_method": str(out.get("auth_method") or previous.get("auth_method") or "").strip(),
+                    "key_id": str(out.get("key_id") or previous.get("key_id") or "").strip(),
+                    "scope": str(out.get("scope") or "").strip().lower(),
+                    "expires_at": float(out.get("expires_at") or 0.0),
+                    "ssh_binding": dict(out.get("ssh_binding") or {}),
+                    "allowed_configs": list(out.get("allowed_configs") or []),
+                    "allowed_engines": list(out.get("allowed_engines") or []),
+                }
+            )
+        return out
+
+    def current_session_status(
+        self,
+        *,
+        scope: str = "control",
+        expected_key_id: Optional[str] = None,
+        check_ssh_binding: bool = True,
+    ) -> Dict[str, Any]:
+        tok = self.get_session_token()
+        if not tok:
+            return {"valid": False, "reason": "no_adopted_session", "ssh_bound": False}
+        return self.auth_validate_session(
+            tok,
+            scope=scope,
+            expected_key_id=expected_key_id,
+            check_ssh_binding=check_ssh_binding,
+        )
+
     def auth_revoke_key(self, key_id: str) -> Dict[str, Any]:
         res = self._invoke("auth-revoke-key", {"key_id": str(key_id or "")})
         return dict(res or {})
@@ -2775,21 +2883,31 @@ class EngineHostControlChannel:
 
         current = self.get_session_token()
         if current:
-            if self._public_key_session_meta_matches(
-                key_id=kid,
-                scope=scope_norm,
-                config_paths=config_paths,
-                engine_ids=engine_ids,
-                bind_to_ssh=bind_to_ssh,
-            ):
+            try:
+                validation = self.auth_validate_session(
+                    current,
+                    scope=scope_norm,
+                    expected_key_id=kid,
+                    check_ssh_binding=bind_to_ssh,
+                )
+            except Exception:
+                validation = {"valid": False, "reason": "validation_unavailable"}
+            if bool(validation.get("valid", False)) and self._public_key_session_meta_matches(
+                    key_id=kid,
+                    scope=scope_norm,
+                    config_paths=config_paths,
+                    engine_ids=engine_ids,
+                    bind_to_ssh=bind_to_ssh,
+                ):
                 return current
             if scope_norm == "control":
                 try:
-                    status = self.auth_status()
-                    if str(status.get("caller_key_id") or "").strip() == kid:
+                    if bool(validation.get("valid", False)) and str(validation.get("key_id") or "").strip() == kid:
                         return current
                 except Exception:
                     self.set_session_token(None)
+            if not bool(validation.get("valid", False)):
+                self.set_session_token(None)
 
         cached = self._get_cached_public_key_session(
             key_id=kid,
@@ -2799,22 +2917,38 @@ class EngineHostControlChannel:
             bind_to_ssh=bind_to_ssh,
         )
         if cached:
-            self.set_session_token(cached)
-            if self._public_key_session_meta_matches(
-                key_id=kid,
-                scope=scope_norm,
-                config_paths=config_paths,
-                engine_ids=engine_ids,
-                bind_to_ssh=bind_to_ssh,
-            ):
+            try:
+                validation = self.adopt_session_token(
+                    cached,
+                    scope=scope_norm,
+                    expected_key_id=kid,
+                    check_ssh_binding=bind_to_ssh,
+                )
+            except Exception:
+                validation = {"valid": False, "reason": "validation_unavailable"}
+            if bool(validation.get("valid", False)) and self._public_key_session_meta_matches(
+                    key_id=kid,
+                    scope=scope_norm,
+                    config_paths=config_paths,
+                    engine_ids=engine_ids,
+                    bind_to_ssh=bind_to_ssh,
+                ):
                 return cached
             if scope_norm == "control":
                 try:
-                    status = self.auth_status()
-                    if str(status.get("caller_key_id") or "").strip() == kid:
+                    if bool(validation.get("valid", False)) and str(validation.get("key_id") or "").strip() == kid:
                         return cached
                 except Exception:
                     self.set_session_token(None)
+            if not bool(validation.get("valid", False)):
+                self._clear_cached_public_key_session(
+                    key_id=kid,
+                    scope=scope_norm,
+                    config_paths=config_paths,
+                    engine_ids=engine_ids,
+                    bind_to_ssh=bind_to_ssh,
+                )
+                self.set_session_token(None)
 
         challenge = self.auth_begin_challenge(
             key_id=kid,

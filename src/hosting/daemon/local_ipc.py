@@ -2309,6 +2309,14 @@ class EngineHostDaemon:
                 limit=int(payload.get("limit") or 100),
                 offset=int(payload.get("offset") or 0),
             )
+        if cmd == "auth-validate-session":
+            return svc.auth_validate_session(
+                token=str(payload.get("token") or payload.get("session_token") or ""),
+                scope=str(payload.get("scope") or "control"),
+                expected_key_id=payload.get("expected_key_id") or payload.get("key_id"),
+                check_ssh_binding=bool(payload.get("check_ssh_binding", True)),
+                presented_ssh_binding=dict(payload.get("_ssh_session_binding") or payload.get("ssh_binding") or {}),
+            )
         if cmd == "auth-upsert-key":
             return svc.auth_upsert_key(
                 key_id=str(payload.get("key_id") or ""),
