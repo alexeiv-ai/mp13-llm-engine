@@ -79,10 +79,24 @@ def _control_channel(args: argparse.Namespace, session_token: object = _TOKEN_UN
 
 def _raise_interactive_api_error(exc: Exception) -> None:
     msg = str(exc)
+    code = str(getattr(exc, "code", "") or "").strip()
+    details = dict(getattr(exc, "details", {}) or {})
+    auth_code = code or str(details.get("reason") or "").strip()
+    if auth_code in {
+        "session_token_required",
+        "missing_or_invalid_session_token",
+        "invalid_session",
+        "session_expired",
+        "session_not_found",
+        "invalid_token",
+        "expired_token",
+    }:
+        raise PermissionError(auth_code) from exc
+    if auth_code:
+        raise RuntimeError(auth_code) from exc
     if (
         "session_token_required" in msg
         or "missing_or_invalid_session_token" in msg
-        or "auth_failed" in msg
         or "invalid_session" in msg
         or "session_expired" in msg
     ):
@@ -96,6 +110,15 @@ def _api_invoke(args: argparse.Namespace, cmd: str, payload: dict, session_token
         if session_token is None
         else _control_channel(args, session_token=session_token)
     )
+    try:
+        return channel.invoke_control_command(str(cmd or "").strip(), dict(payload or {}))
+    except Exception as exc:
+        _raise_interactive_api_error(exc)
+
+
+def _auth_api_invoke(args: argparse.Namespace, cmd: str, payload: dict) -> Any:
+    channel = EngineHostControlChannel(_control_channel_settings(args))
+    channel.set_session_token(None)
     try:
         return channel.invoke_control_command(str(cmd or "").strip(), dict(payload or {}))
     except Exception as exc:
@@ -552,7 +575,7 @@ def _target_mode(args: argparse.Namespace) -> str:
 
 def _key_id_from_secret_id(secret_id: str) -> str:
     sid = str(secret_id or "").strip()
-    for prefix in ("rbac-", "transport-"):
+    for prefix in ("rbac-", "backend_rbac-", "backend-rbac-", "transport-"):
         if sid.startswith(prefix):
             sid = sid[len(prefix):]
             break
@@ -561,6 +584,43 @@ def _key_id_from_secret_id(secret_id: str) -> str:
             sid = sid[: -len(suffix)]
             break
     return sid.strip()
+
+
+def _private_key_input_path(value: str) -> tuple[Optional[Path], Optional[str]]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    unquoted = raw
+    while len(unquoted) >= 2 and unquoted[0] == unquoted[-1] and unquoted[0] in {"'", '"'}:
+        unquoted = unquoted[1:-1].strip()
+    sanitized = unquoted.replace('"', "")
+    recovered = ""
+    for idx in range(1, max(1, len(sanitized) - 2)):
+        if sanitized[idx] in {"\\", "/"} and sanitized[idx + 1].isalpha() and sanitized[idx + 2] == ":":
+            recovered = sanitized[idx + 1 :]
+    candidates = []
+    for candidate in (unquoted, recovered, sanitized):
+        candidate = candidate.strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        try:
+            path = Path(os.path.expanduser(candidate)).resolve()
+        except Exception:
+            continue
+        if path.is_file():
+            return path, None
+    path_like = (
+        "\\" in raw
+        or "/" in raw
+        or raw.startswith("~")
+        or raw.lower().endswith((".json", ".pem", ".key"))
+        or (len(raw) >= 2 and raw[1] == ":")
+    )
+    if path_like:
+        shown = sanitized if sanitized != raw else raw
+        return None, f"Private key input looks like a file path, but no file was found: {shown}"
+    return None, None
 
 
 def _extract_key_id_from_private_key_json(payload: Dict[str, Any]) -> Optional[str]:
@@ -572,6 +632,57 @@ def _extract_key_id_from_private_key_json(payload: Dict[str, Any]) -> Optional[s
             return key_id
     derived = _key_id_from_secret_id(str(data.get("secret_id") or ""))
     return derived or None
+
+
+def _print_invalid_challenge_signature_diagnostic(
+    args: argparse.Namespace,
+    *,
+    key_id: str,
+    pk_file_path: Optional[Path],
+    json_payload: Optional[Dict[str, Any]],
+) -> None:
+    print(_c("bad", "Authentication failed: private key signature does not match the registered public key."))
+    print(_c("muted", f"  Key ID used: {key_id or '<unknown>'}"))
+    if pk_file_path is not None:
+        print(_c("muted", f"  Private key input: {pk_file_path}"))
+    secret_id = ""
+    if isinstance(json_payload, dict):
+        secret_id = str(json_payload.get("secret_id") or "").strip()
+        if secret_id:
+            print(_c("muted", f"  SecretRecord id: {secret_id}"))
+    try:
+        keyring_path = pk_file_path.parent.parent / "keyring" / "keys.json" if pk_file_path is not None else None
+        if keyring_path is not None and keyring_path.exists():
+            keyring = json.loads(keyring_path.read_text(encoding="utf-8"))
+            key_row = dict(dict(keyring.get("keys") or {}).get(str(key_id or "").strip()) or {})
+            expected_secret_id = str(key_row.get("private_key_secret_id") or "").strip()
+            if expected_secret_id and secret_id and expected_secret_id != secret_id:
+                print(_c("warn", f"  Client realm keyring maps this key id to SecretRecord {expected_secret_id}, not {secret_id}."))
+    except Exception:
+        pass
+    if _target_mode(args) == "ssh":
+        return
+    try:
+        status = _offline_service(args).auth_status()
+    except Exception:
+        return
+    for row in list(dict(status or {}).get("local_private_key_custody") or []):
+        item = dict(row or {})
+        if str(item.get("key_id") or "").strip() != str(key_id or "").strip():
+            continue
+        expected = str(item.get("private_key_secret_path") or item.get("private_key_export_path") or "").strip()
+        exists = item.get("private_key_secret_exists")
+        warning = str(item.get("private_key_warning") or "").strip()
+        if expected:
+            print(_c("muted", f"  Registered key custody path: {expected}"))
+        if exists is False:
+            print(_c("warn", "  Registered key custody file is missing."))
+        if warning:
+            print(_c("warn", f"  Custody warning: {warning}"))
+        if expected and pk_file_path is not None and str(Path(expected).resolve()).lower() != str(pk_file_path.resolve()).lower():
+            print(_c("warn", "  The file you supplied is not the registered custody path for this key."))
+        break
+    print(_c("muted", "  Use the private key that was generated/imported with the current hosting access setup, or re-register this public key."))
 
 
 def _obtain_session_token(
@@ -602,16 +713,18 @@ def _obtain_session_token(
     is_json = False
     json_payload: Optional[Dict[str, Any]] = None
 
-    # Check if it's a file path
-    possible_path = lines[0].strip()
-    if possible_path.startswith('"') and possible_path.endswith('"'):
-        possible_path = possible_path[1:-1]
-    elif possible_path.startswith("'") and possible_path.endswith("'"):
-        possible_path = possible_path[1:-1]
+    # Check if it's a file path. Windows paths sometimes get pasted with a quoted
+    # filename component; normalize that before falling back to raw key text.
+    pk_input_path = None
+    if len(lines) == 1:
+        pk_input_path, path_error = _private_key_input_path(lines[0])
+        if path_error:
+            print(_c('bad', path_error))
+            return None
 
-    if len(lines) == 1 and os.path.isfile(os.path.expanduser(possible_path)):
+    if pk_input_path is not None:
         try:
-            pk_file_path = Path(os.path.expanduser(possible_path)).resolve()
+            pk_file_path = pk_input_path
             pk_text = pk_file_path.read_text(encoding="utf-8").strip()
             input_text = pk_text  # Update input_text so metadata extraction works if it's JSON
         except Exception as e:
@@ -674,7 +787,7 @@ def _obtain_session_token(
             except (KeyboardInterrupt, EOFError):
                 return None
 
-        invoke = invoke_fn or (lambda cmd, payload: _api_invoke(args, cmd, payload))
+        invoke = invoke_fn or (lambda cmd, payload: _auth_api_invoke(args, cmd, payload))
         chal_res = invoke("auth-begin-challenge", {"key_id": key_id, "scope": "control"})
         challenge_id = chal_res.get("challenge_id")
         challenge_text = chal_res.get("challenge")
@@ -717,7 +830,15 @@ def _obtain_session_token(
             print(_c('bad', "Authentication failed: no token returned."))
             return None
     except Exception as e:
-        print(_c('bad', f"Authentication error: {e}"))
+        if "invalid_challenge_signature" in str(e):
+            _print_invalid_challenge_signature_diagnostic(
+                args,
+                key_id=locals().get("key_id", ""),
+                pk_file_path=locals().get("pk_file_path"),
+                json_payload=locals().get("json_payload"),
+            )
+        else:
+            print(_c('bad', f"Authentication error: {e}"))
         return None
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

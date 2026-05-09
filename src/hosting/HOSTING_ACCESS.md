@@ -97,6 +97,11 @@ This document uses "client" in older sections because that was the original impl
 The target model is role-hierarchy-first with explicit command authorization.
 Implementation may internally use scope primitives, but this is not an external compatibility promise.
 
+Implementation note: daemon command authorization is currently split into two checks.
+`PolicyMixin.authorize_command()` classifies each command into its required session/scope path and rejects unknown commands.
+`AuthMixin._commands_allowed_for_role()` then checks whether the authenticated role may run the recognized command.
+New daemon control commands must be registered in both places unless they intentionally use a special bootstrap, config, traffic, or claim-policy path.
+
 ## 4. Key, Keyring, and Storage Model
 
 ### 4.1 Identity model

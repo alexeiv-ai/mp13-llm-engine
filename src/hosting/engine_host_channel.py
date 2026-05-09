@@ -41,12 +41,13 @@ def _resolved_pid_path(pid_info: Any, pid_file_path: Any) -> Optional[Path]:
 
 # Keywords that indicate an expired or invalid session token in daemon error strings.
 _SESSION_AUTH_ERROR_KEYWORDS = (
-    "auth_failed",
     "session_expired",
     "invalid_session",
     "missing_or_invalid_session_token",
     "session_token_required",
     "session_not_found",
+    "invalid_token",
+    "expired_token",
 )
 
 
@@ -63,8 +64,20 @@ _AUTO_SESSION_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _is_session_auth_error(msg: str) -> bool:
-    ml = msg.lower()
+    ml = str(msg or "").lower()
     return any(k in ml for k in _SESSION_AUTH_ERROR_KEYWORDS)
+
+
+def _exception_is_session_auth_error(exc: Exception) -> bool:
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code and _is_session_auth_error(code):
+        return True
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        reason = str(details.get("reason") or "").strip()
+        if reason and _is_session_auth_error(reason):
+            return True
+    return _is_session_auth_error(str(exc))
 
 
 def _command_error_message(command: str, exc: Exception) -> str:
@@ -623,7 +636,7 @@ class EngineHostControlChannel:
                 effective_payload["ssh_binding"] = ssh_binding
         elif ssh_binding:
             effective_payload.setdefault("_ssh_session_binding", ssh_binding)
-        if self._session_token and command not in {"auth-issue-session"}:
+        if self._session_token and command not in {"auth-issue-session", "auth-begin-challenge", "auth-complete-challenge"}:
             effective_payload.setdefault("session_token", self._session_token)
 
         conn = self._get_connection()
@@ -633,8 +646,8 @@ class EngineHostControlChannel:
             except Exception as exc:
                 with self._connection_lock:
                     self._connection = None
-                _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge"}
-                if _is_session_auth_error(str(exc)):
+                _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge", "auth-complete-challenge"}
+                if _exception_is_session_auth_error(exc):
                     if (
                         _retry_on_auth_error
                         and self._session_token
@@ -666,12 +679,12 @@ class EngineHostControlChannel:
             return self._invoke_subprocess(command, effective_payload)
         except RuntimeError as exc:
             # Retry once on session/auth errors: clear stale token so auto-issue fires again.
-            _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge"}
+            _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge", "auth-complete-challenge"}
             if (
                 _retry_on_auth_error
                 and self._session_token
                 and command not in _no_retry_cmds
-                and _is_session_auth_error(str(exc))
+                and _exception_is_session_auth_error(exc)
             ):
                 logger.info(
                     "Auth error on '%s' (likely expired session); clearing token and retrying: %s",

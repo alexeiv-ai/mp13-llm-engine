@@ -78,6 +78,7 @@ class AuthMixin:
         sig = str(signature_ssh or "").strip()
         if not (kid and pub and ch and sig):
             return False
+        verifier_identity = f"mp13-key-{hashlib.sha256(kid.encode('utf-8')).hexdigest()[:24]}"
         try:
             with tempfile.TemporaryDirectory(prefix="host_auth_") as td:
                 tdp = Path(td)
@@ -86,7 +87,7 @@ class AuthMixin:
                 allowed_file = tdp / "allowed_signers"
                 data_file.write_text(ch, encoding="utf-8")
                 sig_file.write_text(sig, encoding="utf-8")
-                allowed_file.write_text(f"{kid} {pub}\n", encoding="utf-8")
+                allowed_file.write_text(f"{verifier_identity} {pub}\n", encoding="utf-8")
                 proc = subprocess.run(  # noqa: S603
                     [
                         "ssh-keygen",
@@ -95,7 +96,7 @@ class AuthMixin:
                         "-f",
                         str(allowed_file),
                         "-I",
-                        kid,
+                        verifier_identity,
                         "-n",
                         "engine-host-auth",
                         "-s",
@@ -253,6 +254,25 @@ class AuthMixin:
             "toolbox-review-snapshot",
             "toolbox-repair",
             "toolbox-reconcile",
+            "toolbox-register-auto",
+            "toolbox-unregister-auto",
+            "toolbox-register-intrinsics",
+            "toolbox-unregister-intrinsics",
+            "toolbox-register-manual",
+            "toolbox-unregister-manual",
+            "toolbox-environment-list",
+            "toolbox-environment-upsert",
+            "toolbox-environment-clone",
+            "toolbox-environment-resolve",
+            "toolbox-environment-apply",
+            "toolbox-environment-realize",
+            "toolbox-environment-sync",
+            "toolbox-environment-prepare-install",
+            "toolbox-environment-lock-install",
+            "toolbox-environment-resolve-install-lock",
+            "toolbox-environment-verify-install-lock",
+            "toolbox-environment-verify-install-receipt",
+            "toolbox-environment-execute-install",
             "get-control-config",
             "set-control-config",
             "auth-status",
