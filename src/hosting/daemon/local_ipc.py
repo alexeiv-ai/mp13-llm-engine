@@ -71,11 +71,18 @@ class EngineHostDaemon:
         self._runtime_profile = str(runtime_profile or "foreground_terminal_bound").strip().lower()
         self._actor_connections: Dict[str, int] = {}
         self._actor_connections_lock = threading.Lock()
+        self._live_connections: Dict[str, Dict[str, Any]] = {}
         self._last_shutdown_checkpoints: Dict[str, Any] = {}
         self._shutdown_stage_events: List[Dict[str, Any]] = []
 
     def _serve_local_control_client(self, conn: Any) -> None:
+        connection_id = secrets.token_urlsafe(9)
         connection_actor_ids: set[str] = set()
+        self._register_live_connection(
+            connection_id,
+            transport="local_ipc",
+            peer_host="127.0.0.1",
+        )
         try:
             while not self._local_listener_stop.is_set():
                 try:
@@ -107,6 +114,13 @@ class EngineHostDaemon:
                     if actor_id and actor_id not in connection_actor_ids:
                         connection_actor_ids.add(actor_id)
                         self._track_actor_connected(actor_id)
+                    if actor_id:
+                        self._update_live_connection(
+                            connection_id,
+                            command=str(req_obj.get("cmd") or ""),
+                            actor_id=actor_id,
+                            session_token=tok,
+                        )
                 raw = json.dumps(req_obj, ensure_ascii=False)
                 loop = self._loop
                 if loop is None:
@@ -137,6 +151,7 @@ class EngineHostDaemon:
                 conn.close()
             except Exception:
                 pass
+            self._unregister_live_connection(connection_id)
 
     def _run_local_control_listener(self) -> None:
         family = str(self._local_transport.get("family") or "").strip() or "AF_UNIX"
@@ -236,6 +251,18 @@ class EngineHostDaemon:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         logger.debug("Client connected: %s", peer)
+        connection_id = secrets.token_urlsafe(9)
+        peer_host = ""
+        try:
+            if isinstance(peer, tuple) and len(peer) >= 1:
+                peer_host = str(peer[0] or "")
+        except Exception:
+            peer_host = ""
+        self._register_live_connection(
+            connection_id,
+            transport="tcp",
+            peer_host=peer_host,
+        )
         connection_actor_ids: set[str] = set()
         try:
             while True:
@@ -261,14 +288,15 @@ class EngineHostDaemon:
                         if actor_id and actor_id not in connection_actor_ids:
                             connection_actor_ids.add(actor_id)
                             self._track_actor_connected(actor_id)
+                        if actor_id:
+                            self._update_live_connection(
+                                connection_id,
+                                command=str((req_obj or {}).get("cmd") or ""),
+                                actor_id=actor_id,
+                                session_token=tok,
+                            )
                 except Exception:
                     pass
-                peer_host = ""
-                try:
-                    if isinstance(peer, tuple) and len(peer) >= 1:
-                        peer_host = str(peer[0] or "")
-                except Exception:
-                    peer_host = ""
                 response = await self._dispatch(raw, peer_host=peer_host)
                 writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
@@ -290,6 +318,7 @@ class EngineHostDaemon:
             except Exception:
                 pass
             logger.debug("Client disconnected: %s", peer)
+            self._unregister_live_connection(connection_id)
 
     @staticmethod
     def _operation_event(stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
@@ -673,6 +702,85 @@ class EngineHostDaemon:
             next_count = current - 1
             self._actor_connections[aid] = next_count
             return next_count
+
+    def _register_live_connection(self, connection_id: str, *, transport: str, peer_host: str) -> None:
+        cid = str(connection_id or "").strip()
+        if not cid:
+            return
+        now = time.time()
+        with self._actor_connections_lock:
+            self._live_connections[cid] = {
+                "connection_id": cid,
+                "transport": str(transport or "unknown"),
+                "peer_host": str(peer_host or "") or None,
+                "connected_at": now,
+                "last_seen_at": now,
+                "last_command": None,
+                "command_count": 0,
+                "actor_ids": [],
+                "session_token_previews": [],
+            }
+
+    def _update_live_connection(
+        self,
+        connection_id: str,
+        *,
+        command: str,
+        actor_id: str,
+        session_token: str,
+    ) -> None:
+        cid = str(connection_id or "").strip()
+        if not cid:
+            return
+        aid = str(actor_id or "").strip()
+        preview = self.svc._token_preview(str(session_token or "")) if session_token else ""
+        with self._actor_connections_lock:
+            row = dict(self._live_connections.get(cid) or {})
+            if not row:
+                return
+            row["last_seen_at"] = time.time()
+            row["last_command"] = str(command or "") or None
+            row["command_count"] = int(row.get("command_count") or 0) + 1
+            actor_ids = [str(x) for x in list(row.get("actor_ids") or []) if str(x or "").strip()]
+            if aid and aid not in actor_ids:
+                actor_ids.append(aid)
+            previews = [str(x) for x in list(row.get("session_token_previews") or []) if str(x or "").strip()]
+            if preview and preview not in previews:
+                previews.append(preview)
+            row["actor_ids"] = actor_ids
+            row["session_token_previews"] = previews
+            self._live_connections[cid] = row
+
+    def _unregister_live_connection(self, connection_id: str) -> None:
+        cid = str(connection_id or "").strip()
+        if not cid:
+            return
+        with self._actor_connections_lock:
+            self._live_connections.pop(cid, None)
+
+    def _list_live_consumers(self) -> Dict[str, Any]:
+        now = time.time()
+        with self._actor_connections_lock:
+            connections = [dict(row or {}) for row in self._live_connections.values()]
+            actor_counts = dict(self._actor_connections)
+        for row in connections:
+            connected_at = float(row.get("connected_at") or 0.0)
+            last_seen_at = float(row.get("last_seen_at") or 0.0)
+            row["age_seconds"] = max(0, int(now - connected_at)) if connected_at > 0 else None
+            row["idle_seconds"] = max(0, int(now - last_seen_at)) if last_seen_at > 0 else None
+        connections.sort(key=lambda x: (str(x.get("transport") or ""), float(x.get("connected_at") or 0.0)))
+        actors = [
+            {"actor_id": actor_id, "connection_count": int(count or 0)}
+            for actor_id, count in sorted(actor_counts.items())
+            if int(count or 0) > 0
+        ]
+        return {
+            "timestamp": now,
+            "connections_count": len(connections),
+            "actors_count": len(actors),
+            "connections": connections,
+            "actors": actors,
+        }
 
     def _should_shutdown_on_owner_disconnect(self) -> bool:
         policy = self.svc.get_lifecycle_policy_effective()
@@ -1189,6 +1297,10 @@ class EngineHostDaemon:
         if cmd == "op-start":
             target_cmd = str(payload.get("command") or "").strip()
             target_payload = dict(payload.get("payload") or payload.get("command_payload") or {})
+            if payload.get("session_token") and not target_payload.get("session_token"):
+                target_payload["session_token"] = payload.get("session_token")
+            if payload.get("_ssh_session_binding") and not target_payload.get("_ssh_session_binding"):
+                target_payload["_ssh_session_binding"] = payload.get("_ssh_session_binding")
             if not target_cmd:
                 return {
                     "seq": seq,
@@ -1863,6 +1975,8 @@ class EngineHostDaemon:
                 limit=int(payload.get("limit") or 100),
                 offset=int(payload.get("offset") or 0),
             )
+        if cmd == "list-live-consumers":
+            return self._list_live_consumers()
         if cmd == "auth-list-issued-tokens":
             return svc.auth_list_issued_tokens(
                 engine_id=payload.get("engine_id"),

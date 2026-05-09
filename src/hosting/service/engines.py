@@ -114,6 +114,11 @@ class EnginesMixin:
             "reason": None if matches else "pid_reused_by_different_process",
         }
 
+    @staticmethod
+    def _reachability_indicates_missing_ipc_endpoint(reachability: Dict[str, Any]) -> bool:
+        error = str((reachability or {}).get("error") or "").strip().lower()
+        return "worker ipc endpoint is unavailable" in error
+
     def _worker_id_for_model(self, model_path: str) -> str:
         stem = self._safe_config_name(Path(str(model_path or "model")).name or "model")
         digest = hashlib.sha256(str(model_path or "").encode("utf-8", errors="ignore")).hexdigest()[:10]
@@ -866,6 +871,7 @@ class EnginesMixin:
         for row in rows:
             item = dict(row)
             pid = int(item.get("pid") or 0)
+            age_seconds = max(0.0, now - float(item.get("spawned_at") or now))
             alive = self._pid_alive(pid)
             if alive:
                 identity = self._registration_pid_matches_command(item, pid)
@@ -885,6 +891,13 @@ class EnginesMixin:
                 item["reachability"] = reachability
                 if item["reachable"]:
                     reachable_count += 1
+                elif (
+                    age_seconds > 30.0
+                    and self._reachability_indicates_missing_ipc_endpoint(reachability)
+                ):
+                    item["stale_reason"] = "worker_ipc_endpoint_unavailable"
+                    alive = False
+                    item["alive"] = False
             item["state"] = self._describe_registration_state(
                 item,
                 alive=alive,

@@ -58,10 +58,18 @@ _SUBPROCESS_FALLBACK_COMMANDS = frozenset(
     }
 )
 
+_AUTO_SESSION_CACHE_LOCK = threading.Lock()
+_AUTO_SESSION_CACHE: Dict[str, Dict[str, Any]] = {}
+
 
 def _is_session_auth_error(msg: str) -> bool:
     ml = msg.lower()
     return any(k in ml for k in _SESSION_AUTH_ERROR_KEYWORDS)
+
+
+def _clear_auto_session_cache_for_tests() -> None:
+    with _AUTO_SESSION_CACHE_LOCK:
+        _AUTO_SESSION_CACHE.clear()
 
 
 class EngineHostControlChannel:
@@ -570,27 +578,32 @@ class EngineHostControlChannel:
             and self._key_id
             and self._key_secret
         ):
+            cached = self._get_cached_auto_session()
+            if cached:
+                self.set_session_token(cached)
             try:
-                target_mode = str(self.get_target().get("mode") or "").strip().lower()
-                if target_mode == "ssh":
-                    # Shared-secret auto-bootstrap is local-only by policy; SSH-targeted
-                    # channels must use a pre-issued token or explicit challenge flow.
-                    raise RuntimeError("auto_shared_secret_bootstrap_not_supported_for_ssh_target")
-                ssh_binding = self._current_ssh_session_binding()
-                issued = self._invoke(
-                    "auth-issue-session",
-                    {
-                        "key_id": self._key_id,
-                        "key_secret": self._key_secret,
-                        "scope": self._session_scope,
-                        "ttl_seconds": self._session_ttl_seconds,
-                        "ssh_binding": ssh_binding if ssh_binding else None,
-                    },
-                    allow_auto_session=False,
-                )
-                token = str((issued or {}).get("token") or "").strip()
-                if token:
-                    self.set_session_token(token)
+                if not self._session_token:
+                    target_mode = str(self.get_target().get("mode") or "").strip().lower()
+                    if target_mode == "ssh":
+                        # Shared-secret auto-bootstrap is local-only by policy; SSH-targeted
+                        # channels must use a pre-issued token or explicit challenge flow.
+                        raise RuntimeError("auto_shared_secret_bootstrap_not_supported_for_ssh_target")
+                    ssh_binding = self._current_ssh_session_binding()
+                    issued = self._invoke(
+                        "auth-issue-session",
+                        {
+                            "key_id": self._key_id,
+                            "key_secret": self._key_secret,
+                            "scope": self._session_scope,
+                            "ttl_seconds": self._session_ttl_seconds,
+                            "ssh_binding": ssh_binding if ssh_binding else None,
+                        },
+                        allow_auto_session=False,
+                    )
+                    token = str((issued or {}).get("token") or "").strip()
+                    if token:
+                        self.set_session_token(token)
+                        self._store_cached_auto_session(token, dict(issued or {}))
             except Exception as exc:
                 logger.debug("Auto session issuance failed: %s", exc)
 
@@ -625,6 +638,7 @@ class EngineHostControlChannel:
                         )
                         self._session_token = None
                         self.control_settings["engine_host_session_token"] = None
+                        self._clear_cached_auto_session()
                         return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
                     raise RuntimeError(
                         f"persistent daemon control channel failed for '{command}': {exc}"
@@ -660,6 +674,7 @@ class EngineHostControlChannel:
                 )
                 self._session_token = None
                 self.control_settings["engine_host_session_token"] = None
+                self._clear_cached_auto_session()
                 return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
             raise
 
@@ -669,6 +684,58 @@ class EngineHostControlChannel:
 
     def get_session_token(self) -> Optional[str]:
         return self._session_token
+
+    def _auto_session_cache_key(self) -> str:
+        binding = self._current_ssh_session_binding() or {}
+        payload = {
+            "control_state_file": str(self._control_state_file or ""),
+            "engine_state_file": str(self._engines_state_file or ""),
+            "key_id": str(self._key_id or ""),
+            "scope": str(self._session_scope or ""),
+            "target": self.get_target(),
+            "ssh_binding": binding,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def _get_cached_auto_session(self) -> Optional[str]:
+        try:
+            key = self._auto_session_cache_key()
+        except Exception:
+            return None
+        now = time.time()
+        with _AUTO_SESSION_CACHE_LOCK:
+            row = dict(_AUTO_SESSION_CACHE.get(key) or {})
+            token = str(row.get("token") or "").strip()
+            expires_at = float(row.get("expires_at") or 0.0)
+            if not token:
+                _AUTO_SESSION_CACHE.pop(key, None)
+                return None
+            if expires_at > 0 and now >= expires_at - 5:
+                _AUTO_SESSION_CACHE.pop(key, None)
+                return None
+            return token
+
+    def _store_cached_auto_session(self, token: str, issued: Dict[str, Any]) -> None:
+        tok = str(token or "").strip()
+        if not tok:
+            return
+        try:
+            key = self._auto_session_cache_key()
+        except Exception:
+            return
+        expires_at = float(issued.get("expires_at") or 0.0)
+        if expires_at <= 0:
+            expires_at = time.time() + max(60, int(self._session_ttl_seconds or 900))
+        with _AUTO_SESSION_CACHE_LOCK:
+            _AUTO_SESSION_CACHE[key] = {"token": tok, "expires_at": expires_at}
+
+    def _clear_cached_auto_session(self) -> None:
+        try:
+            key = self._auto_session_cache_key()
+        except Exception:
+            return
+        with _AUTO_SESSION_CACHE_LOCK:
+            _AUTO_SESSION_CACHE.pop(key, None)
 
     def invoke_control_command(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         """Invoke a daemon control command through this channel."""
@@ -2344,6 +2411,10 @@ class EngineHostControlChannel:
                 "offset": int(offset or 0),
             },
         )
+        return dict(res or {}) if isinstance(res, dict) else {}
+
+    def list_live_consumers(self) -> Dict[str, Any]:
+        res = self._invoke("list-live-consumers", {})
         return dict(res or {}) if isinstance(res, dict) else {}
 
     def auth_list_issued_tokens(

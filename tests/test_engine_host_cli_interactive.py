@@ -168,6 +168,35 @@ def test_list_consumers_uses_offline_fallback_when_local_daemon_stopped(
     assert "tok...123" in out
 
 
+def test_print_live_consumers_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
+    current = "abcdefghijk"
+    interactive._print_live_consumers(
+        {
+            "connections": [
+                {
+                    "connection_id": "conn-123456",
+                    "transport": "local_ipc",
+                    "peer_host": "127.0.0.1",
+                    "actor_ids": ["key:admin-main"],
+                    "session_token_previews": [interactive._get_token_preview(current)],
+                    "age_seconds": 2,
+                    "idle_seconds": 0,
+                    "command_count": 3,
+                    "last_command": "list-live-consumers",
+                }
+            ],
+            "actors": [{"actor_id": "key:admin-main", "connection_count": 1}],
+        },
+        session_token=current,
+    )
+
+    out = capsys.readouterr().out
+    assert "conn-123456" in out
+    assert "local_ipc" in out
+    assert "(this interactive CLI)" in out
+    assert "key:admin-main" in out
+
+
 def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
     current = "abcdefghijk"
     other = "other-session-token"
@@ -195,6 +224,89 @@ def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixt
     assert "this interactive CLI" in out
     assert "Consumer: interactive CLI" in out
     assert "backend" in out
+
+
+def test_session_identity_from_list_matches_current_token() -> None:
+    token = "abcdefghijk"
+    other = "other-session-token"
+
+    key_id, role = interactive._session_identity_from_list(
+        {
+            "sessions": [
+                {"token_preview": interactive._get_token_preview(other), "key_id": "backend", "role": "worker_user"},
+                {"token_preview": interactive._get_token_preview(token), "key_id": "admin-main", "role": "admin"},
+            ]
+        },
+        token,
+    )
+
+    assert key_id == "admin-main"
+    assert role == "admin"
+
+
+def test_reachability_summary_explains_unavailable_ipc() -> None:
+    note = interactive._reachability_summary(
+        {
+            "alive": True,
+            "reachable": False,
+            "reachability": {
+                "error": "worker IPC endpoint is unavailable for engine 'tools1' at 'pipe'; worker process may not be running"
+            },
+        }
+    )
+
+    assert note is not None
+    assert "IPC endpoint unavailable" in note
+    assert "stale PID" in note
+
+
+def test_worker_status_summary_counts_alive_workers_once_per_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    monkeypatch.setattr(
+        interactive,
+        "_api_invoke",
+        lambda *_args, **_kwargs: [
+            {"engine_id": "a", "alive": True, "pid": 100},
+            {"engine_id": "b", "alive": True, "pid": 100},
+            {"engine_id": "c", "alive": False, "pid": 200},
+        ],
+    )
+    monkeypatch.setattr(
+        interactive,
+        "_process_resource_snapshot",
+        lambda _pid: {"cpu_percent": 12.34, "memory_mb": 56.78},
+    )
+
+    summary = interactive._worker_status_summary(args, session_token="tok")
+
+    assert summary["workers_count"] == 2
+    assert summary["worker_cpu_percent"] == 12.3
+    assert summary["worker_memory_mb"] == 56.8
+
+
+def test_configured_model_path_from_config_row_reads_common_fields(tmp_path: Path) -> None:
+    cfg = tmp_path / "demo.json"
+    cfg.write_text('{"engine_params":{"base_model_path":"C:/models/demo"}}', encoding="utf-8")
+
+    assert interactive._configured_model_path_from_config_row({"path": str(cfg)}) == "C:/models/demo"
+
+
+def test_config_uses_generic_worker_detects_spawn_command(tmp_path: Path) -> None:
+    cfg = tmp_path / "generic.json"
+    cfg.write_text('{"spawn":{"command":["python","worker.py"]}}', encoding="utf-8")
+
+    assert interactive._config_uses_generic_worker({"path": str(cfg)}) is True
+
+
+def test_print_progress_snapshot_prefers_percent(capsys: pytest.CaptureFixture[str]) -> None:
+    line = interactive._print_progress_snapshot(
+        {"progress_percent": 74, "progress_text": "Loading model weights (74%)."}
+    )
+
+    out = capsys.readouterr().out
+    assert "74%" in out
+    assert "Loading model weights" in out
+    assert "74%" in line
 
 
 def test_offline_read_authenticates_and_retries_when_token_required(

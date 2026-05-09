@@ -140,6 +140,37 @@ def test_discover_running_prunes_registration_when_pid_was_reused(
     assert svc._read_engines() == []
 
 
+def test_discover_running_prunes_old_registration_with_missing_ipc_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="stale-tools",
+        pid=1700,
+        command=["python", "-m", "hosting.toolbox_executor_ipc"],
+        env={"MP13_TOOLBOX_EXECUTOR_ENGINE_ID": "stale-tools"},
+        executor_kind="toolbox_executor",
+    )
+    rows = svc._read_engines()
+    rows[0]["spawned_at"] = time.time() - 120.0
+    svc._write_engines(rows)
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {
+            "reachable": False,
+            "transport": "ipc",
+            "probe": "hello",
+            "error": "worker IPC endpoint is unavailable for engine 'stale-tools' at 'pipe'; worker process may not be running",
+        },
+    )
+
+    assert svc.discover_running() == []
+    assert svc._read_engines() == []
+
+
 def test_traffic_scope_engine_allowlist_enforced(tmp_path: Path) -> None:
     svc = _make_service(tmp_path)
     svc.auth_upsert_key(

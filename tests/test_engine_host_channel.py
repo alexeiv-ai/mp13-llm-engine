@@ -5,9 +5,17 @@ from typing import Any, Dict, Optional
 
 import pytest
 
+import hosting.engine_host_channel as channel_module
 from hosting.client_realm import FileSecretStore, write_client_profile
 from hosting.engine_host_connection import CommandError
 from hosting.engine_host_channel import EngineHostControlChannel
+
+
+@pytest.fixture(autouse=True)
+def _clear_auto_session_cache() -> None:
+    channel_module._clear_auto_session_cache_for_tests()
+    yield
+    channel_module._clear_auto_session_cache_for_tests()
 
 
 class _FakeConn:
@@ -50,6 +58,30 @@ def test_auto_session_from_key_credentials() -> None:
     assert fake.calls[1][0] == "discover-running"
     assert fake.calls[1][1]["session_token"] == "tok-123"
     assert ch.get_session_token() == "tok-123"
+
+
+def test_auto_session_is_reused_across_channels_in_process() -> None:
+    settings = {
+        "engine_host_key_id": "mgmt-key",
+        "engine_host_key_secret": "secret-1",
+        "engine_host_session_scope": "control",
+        "engine_host_daemon_auto_bootstrap": False,
+        "engine_host_control_state_file": "C:/state/access_control.json",
+    }
+    first = _FakeConn()
+    ch1 = EngineHostControlChannel(settings)
+    ch1._get_connection = lambda: first  # type: ignore[method-assign]
+
+    second = _FakeConn()
+    ch2 = EngineHostControlChannel(settings)
+    ch2._get_connection = lambda: second  # type: ignore[method-assign]
+
+    assert ch1.discover_running() == []
+    assert ch2.discover_running() == []
+
+    assert [cmd for cmd, _payload in first.calls] == ["auth-issue-session", "discover-running"]
+    assert [cmd for cmd, _payload in second.calls] == ["discover-running"]
+    assert second.calls[0][1]["session_token"] == "tok-123"
 
 
 def test_discover_running_auth_failure_does_not_use_subprocess_fallback() -> None:

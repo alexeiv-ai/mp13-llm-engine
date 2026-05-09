@@ -49,6 +49,37 @@ def test_daemon_unauthorized_command_denied(tmp_path: Path) -> None:
     assert out["error_code"] == "session_token_required"
 
 
+def test_daemon_lists_live_consumers(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-main", "secret")
+    actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
+    assert actor_id
+    daemon._register_live_connection("conn-1", transport="local_ipc", peer_host="127.0.0.1")
+    daemon._track_actor_connected(actor_id)
+    daemon._update_live_connection(
+        "conn-1",
+        command="discover-running",
+        actor_id=actor_id,
+        session_token=token,
+    )
+
+    out = _dispatch(
+        daemon,
+        seq=1,
+        cmd="list-live-consumers",
+        payload={"session_token": token},
+    )
+
+    assert out["ok"] is True
+    result = dict(out["result"])
+    assert result["connections_count"] == 1
+    assert result["actors_count"] == 1
+    assert result["connections"][0]["connection_id"] == "conn-1"
+    assert result["connections"][0]["actor_ids"] == [actor_id]
+    assert result["actors"][0]["connection_count"] == 1
+
+
 def test_daemon_non_member_denied_on_shared_claim(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
     daemon.svc.set_control_config(require_auth=True)
@@ -479,6 +510,34 @@ def test_daemon_operation_start_and_status(tmp_path: Path) -> None:
     )
     assert denied["ok"] is False
     assert denied["error_code"] == "missing_or_invalid_session_token"
+
+
+def test_daemon_operation_start_copies_outer_session_token(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-op", "secret-op")
+
+    started = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-start",
+        payload={
+            "command": "discover-running",
+            "payload": {"include_progress": True},
+            "session_token": token,
+        },
+    )
+
+    assert started["ok"] is True
+    op_id = str((started.get("result") or {}).get("operation_id") or "")
+    assert op_id
+    status = _dispatch(
+        daemon,
+        seq=2,
+        cmd="op-status",
+        payload={"operation_id": op_id, "session_token": token},
+    )
+    assert status["ok"] is True
 
 
 def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> None:

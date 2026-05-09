@@ -1162,8 +1162,16 @@ def _ordered_options(values: set[str]) -> list[str]:
     return sorted(values, key=lambda value: (OPTION_ORDER.get(value, 1000), value))
 
 
-def _print_prompt_help(*, allow_back: bool = True, allow_changes: bool = True) -> None:
-    controls = ["Enter=default/keep"]
+def _print_prompt_help(
+    *,
+    allow_back: bool = True,
+    allow_changes: bool = True,
+    enter_hint: str = "default/keep",
+) -> None:
+    controls = []
+    hint = str(enter_hint or "").strip()
+    if hint:
+        controls.append(f"Enter={hint}")
     if allow_back:
         controls.append("b=back")
     if allow_changes:
@@ -1253,6 +1261,7 @@ def _prompt_menu(
     *,
     allow_back: bool = False,
     allow_changes: bool = True,
+    enter_hint: str = "default/keep",
 ) -> str:
     while True:
         _print_block(question.strip(": \n") or "Menu", kind="accent")
@@ -1266,7 +1275,7 @@ def _prompt_menu(
                 hint = ""
             normalized.append((str(key), label, hint))
         index = _print_options(normalized, default=default, label_width=30)
-        _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes)
+        _print_prompt_help(allow_back=allow_back, allow_changes=allow_changes, enter_hint=enter_hint)
         _print_rule(".", width=78)
         raw = _input_or_quit(_c("rule", f"Select [{_option_label(default)}]: "), lower=True)
         if raw == "c" and allow_changes:

@@ -128,6 +128,9 @@ EXAMPLES_BY_COMMAND = {
     "auth-status": [
         "python -m hosting.engine_host_cli auth-status",
     ],
+    "list-live-consumers": [
+        "python -m hosting.engine_host_cli list-live-consumers --session-token <control_token>",
+    ],
     "auth-begin-challenge": [
         "@'{\"key_id\":\"admin-pub\",\"scope\":\"control\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-begin-challenge",
     ],
@@ -794,6 +797,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "auth-status",
         "auth-list-keys",
         "auth-list-sessions",
+        "list-live-consumers",
         "auth-list-issued-tokens",
         "auth-audit-list",
         "auth-upsert-key",
@@ -1694,6 +1698,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "list-live-consumers":
+            _print_error("list-live-consumers requires a running daemon")
+            return 1
         if cmd == "auth-list-issued-tokens":
             _print_ok(
                 svc.auth_list_issued_tokens(

@@ -80,6 +80,7 @@ class PolicyMixin:
             "auth-revoke-key",
             "auth-list-keys",
             "auth-list-sessions",
+            "list-live-consumers",
             "auth-list-issued-tokens",
             "auth-audit-list",
             "auth-revoke-session",

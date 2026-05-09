@@ -537,6 +537,26 @@ def test_prompt_menu_reprompts_on_invalid_choice(
     assert out.count("Demo Menu") == 2
 
 
+def test_prompt_menu_can_use_custom_enter_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    selected = _prompt_menu(
+        "Demo Menu",
+        {"apply": ("Apply", "use this")},
+        "refresh",
+        allow_changes=False,
+        enter_hint="refresh",
+    )
+
+    out = capsys.readouterr().out
+    assert selected == "refresh"
+    assert "Enter=refresh" in out
+    assert "Enter=default/keep" not in out
+
+
 def test_wizard_home_reports_detected_admin_key_in_partial_state(capsys: pytest.CaptureFixture[str]) -> None:
     _print_wizard_home(
         {

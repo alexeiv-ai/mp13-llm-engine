@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, List
 
 from .hosting_config_cli import (
     _c,
@@ -103,6 +104,193 @@ def _active_session_token(args: argparse.Namespace, session_token: Optional[str]
         return session_token
     current = get_token()
     return current if current else session_token
+
+
+def _session_identity_from_list(res: Dict[str, Any], session_token: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not session_token:
+        return None, None
+    cli_preview = _get_token_preview(session_token)
+    for sess in list(dict(res or {}).get("sessions") or []):
+        tok = str(sess.get("token_preview") or sess.get("token_prefix") or "").strip()
+        if tok != cli_preview:
+            continue
+        key_id = str(sess.get("key_id") or "").strip() or None
+        role = str(sess.get("role") or "").strip() or None
+        return key_id, role
+    return None, None
+
+
+def _lookup_current_session_identity(args: argparse.Namespace, session_token: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not session_token:
+        return None, None
+    try:
+        res = _api_invoke(args, "auth-list-sessions", {}, session_token=session_token)
+    except Exception:
+        return None, None
+    return _session_identity_from_list(res if isinstance(res, dict) else {}, session_token)
+
+
+def _reachability_summary(info: Dict[str, Any]) -> Optional[str]:
+    if bool(info.get("reachable", False)):
+        return None
+    reachability = dict(info.get("reachability") or {})
+    error = str(reachability.get("error") or "").strip()
+    if error:
+        if "worker IPC endpoint is unavailable" in error:
+            return "IPC endpoint unavailable; worker exited, failed to start its IPC server, or this is a stale PID registration."
+        return error
+    if bool(info.get("alive", False)):
+        return "PID exists, but the worker did not answer the hosting IPC health probe."
+    return None
+
+
+def _process_resource_snapshot(pid: int) -> Dict[str, float]:
+    target = int(pid or 0)
+    if target <= 0:
+        return {"cpu_percent": 0.0, "memory_mb": 0.0}
+    if sys.platform == "win32":
+        try:
+            ps = (
+                "Get-CimInstance Win32_Process -Filter \"ProcessId=%d\" | "
+                "Select-Object -First 1 WorkingSetSize,KernelModeTime,UserModeTime | ConvertTo-Json -Compress"
+            ) % target
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                text=True,
+                capture_output=True,
+                timeout=3.0,
+                check=False,
+            )
+            raw = (proc.stdout or "").strip()
+            if not raw:
+                return {"cpu_percent": 0.0, "memory_mb": 0.0}
+            data = json.loads(raw)
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            memory_mb = float(dict(data or {}).get("WorkingSetSize") or 0.0) / (1024.0 * 1024.0)
+            return {"cpu_percent": 0.0, "memory_mb": memory_mb}
+        except Exception:
+            return {"cpu_percent": 0.0, "memory_mb": 0.0}
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(target), "-o", "%cpu=,rss="],
+            text=True,
+            capture_output=True,
+            timeout=3.0,
+            check=False,
+        )
+        parts = (proc.stdout or "").strip().split()
+        if len(parts) < 2:
+            return {"cpu_percent": 0.0, "memory_mb": 0.0}
+        return {"cpu_percent": float(parts[0]), "memory_mb": float(parts[1]) / 1024.0}
+    except Exception:
+        return {"cpu_percent": 0.0, "memory_mb": 0.0}
+
+
+def _worker_status_summary(args: argparse.Namespace, session_token: Optional[str]) -> Dict[str, Any]:
+    try:
+        res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+    except Exception:
+        return {}
+    engines = _get_engines_dict(res)
+    seen_pids: set[int] = set()
+    worker_count = 0
+    cpu_total = 0.0
+    memory_total = 0.0
+    for info in engines.values():
+        if not bool(info.get("alive", False)):
+            continue
+        worker_count += 1
+        pid = int(info.get("pid") or 0)
+        if pid <= 0 or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+        resources = _process_resource_snapshot(pid)
+        cpu_total += float(resources.get("cpu_percent") or 0.0)
+        memory_total += float(resources.get("memory_mb") or 0.0)
+    return {
+        "workers_count": worker_count,
+        "worker_cpu_percent": round(cpu_total, 1),
+        "worker_memory_mb": round(memory_total, 1),
+    }
+
+
+def _read_json_file(path: str) -> Dict[str, Any]:
+    raw = str(path or "").strip()
+    if not raw:
+        return {}
+    try:
+        p = Path(raw).expanduser()
+        if not p.exists() or not p.is_file():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return dict(data or {}) if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _configured_model_path_from_config_row(row: Dict[str, Any]) -> Optional[str]:
+    cfg = _read_json_file(str(row.get("path") or ""))
+    if not cfg:
+        return None
+    engine_params = cfg.get("engine_params") if isinstance(cfg.get("engine_params"), dict) else {}
+    value = (
+        engine_params.get("base_model_path")
+        or cfg.get("base_model_path")
+        or cfg.get("model")
+        or cfg.get("base_model_name_or_path")
+    )
+    text = str(value or "").strip()
+    return text or None
+
+
+def _config_uses_generic_worker(row: Dict[str, Any]) -> bool:
+    cfg = _read_json_file(str(row.get("path") or ""))
+    if not cfg:
+        return False
+    hosting_cfg = cfg.get("hosting") if isinstance(cfg.get("hosting"), dict) else {}
+    marker = str(
+        cfg.get("worker_kind")
+        or cfg.get("worker_type")
+        or hosting_cfg.get("worker_kind")
+        or hosting_cfg.get("worker_type")
+        or ""
+    ).strip().lower()
+    if marker in {"generic", "non_model", "worker", "generic_worker"}:
+        return True
+    spawn_cfg = cfg.get("spawn") if isinstance(cfg.get("spawn"), dict) else {}
+    return bool(
+        (isinstance(cfg.get("worker_command"), list) and cfg.get("worker_command"))
+        or (isinstance(spawn_cfg.get("command"), list) and spawn_cfg.get("command"))
+    )
+
+
+def _config_selector(row: Dict[str, Any]) -> str:
+    name = str(row.get("name") or "").strip()
+    if name and name != "default":
+        return name
+    return "default"
+
+
+def _print_progress_snapshot(snapshot: Dict[str, Any], *, last_text: str = "") -> str:
+    percent = snapshot.get("progress_percent")
+    text = str(snapshot.get("progress_text") or "").strip()
+    if not text:
+        events = [dict(item or {}) for item in list(snapshot.get("progress_events") or []) if isinstance(item, dict)]
+        if events:
+            text = str(events[-1].get("message") or events[-1].get("stage") or "").strip()
+    if isinstance(percent, int):
+        line = f"  Progress: {percent}%"
+        if text:
+            line += f" - {text}"
+    elif text:
+        line = f"  Progress: {text}"
+    else:
+        line = f"  Status: {snapshot.get('status') or 'running'}"
+    if line != last_text:
+        print(_c("muted", line))
+        return line
+    return last_text
 
 
 def _offline_service(args: argparse.Namespace):
@@ -701,8 +889,6 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
         })
 
     session_token = None
-    last_status_c = None
-    first_run = True
 
     try:
         while True:
@@ -745,16 +931,23 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         if res_auth_status.get("caller_key_id"):
                             caller_key = res_auth_status.get("caller_key_id")
                             caller_role = res_auth_status.get("caller_role")
-                        cpu = res.get("process_cpu_percent", 0.0)
-                        mem = res.get("process_memory_mb", 0.0)
-                        engines = res.get("engines_count", 0)
+                        if session_token and not caller_key:
+                            caller_key, caller_role = _lookup_current_session_identity(args, session_token)
+                        worker_status = _worker_status_summary(args, session_token)
+                        workers = worker_status.get("workers_count")
+                        worker_cpu = worker_status.get("worker_cpu_percent")
+                        worker_mem = worker_status.get("worker_memory_mb")
                         
                         if caller_key and caller_role:
                             status_parts.append(f"Auth: {caller_key} ({caller_role})")
                         elif auth_value is not None:
                             status_parts.append(f"Auth: {'required' if bool(auth_value) else 'not required'}")
-                            
-                        status_parts.extend([f"CPU: {cpu}%", f"Mem: {mem}MB", f"Engines: {engines}"])
+                        if workers is not None:
+                            status_parts.extend([
+                                f"Workers: {workers}",
+                                f"Worker CPU: {worker_cpu}%",
+                                f"Worker Mem: {worker_mem}MB",
+                            ])
                     except PermissionError as pe:
                         if caller_key and caller_role:
                             status_parts.append(f"Auth: {caller_key} ({caller_role})")
@@ -775,35 +968,41 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     elif auth_value is not None:
                         status_c += f" (Auth: {'required' if bool(auth_value) else 'not required'})"
 
-                if first_run or status_c != last_status_c:
-                    print()
-                    _print_title("Engine Host Interactive Control")
-                    _kv_rows([("Daemon Status", status_c)])
-                    last_status_c = status_c
-                    first_run = False
+                print()
+                _print_title("Engine Host Interactive Control")
+                _kv_rows([("Daemon", status_c)], min_width = 6)
                 
                 lifecycle_label = "Restart remote daemon" if target_mode == "ssh" else ("Start daemon" if not daemon_up else "Stop daemon")
                 opts = {
                     "l": ("List loaded engines and sandboxes", ""),
+                    "o": ("Load engine from config", ""),
                     "d": ("Engine/Sandbox details", ""),
                     "m": ("Print daemon metrics", ""),
-                    "c": ("List connected consumers", ""),
+                    "c": ("List live consumers", ""),
+                    "a": ("List auth sessions", ""),
                     "k": ("Kill/Disconnect resource", ""),
                     "s": (lifecycle_label, ""),
                     "r": ("Local recovery/auth tools", "" if target_mode != "ssh" else "local only"),
                 }
-                choice = _prompt_menu("Main Menu", opts, "q", allow_changes=False)
-                if choice == "q":                    return 0
+                choice = _prompt_menu("Main Menu", opts, "refresh", allow_changes=False, enter_hint="refresh")
+                if choice == "q":
+                    return 0
+                if choice == "refresh":
+                    continue
 
                 try:
                     if choice == "l":
                         session_token = _list_engines(args, session_token)
+                    elif choice == "o":
+                        session_token = _load_engine(args, session_token)
                     elif choice == "d":
                         session_token = _engine_details(args, session_token)
                     elif choice == "m":
                         session_token = _show_metrics(args, session_token)
                     elif choice == "c":
-                        session_token = _list_consumers(args, session_token)
+                        session_token = _list_live_consumers(args, session_token)
+                    elif choice == "a":
+                        session_token = _list_auth_sessions(args, session_token)
                     elif choice == "k":
                         session_token = _kill_resource(args, session_token)
                     elif choice == "s":
@@ -866,9 +1065,11 @@ def _print_sessions(res: Dict[str, Any], session_token: Optional[str]) -> None:
     cli_preview = _get_token_preview(session_token) if session_token else None
 
     if not sessions:
-        print("  No active sessions/consumers.")
+        print("  No active auth sessions.")
         return
 
+    print(_c('muted', "  Auth sessions are issued tokens; they are not a live socket/process count."))
+    print()
     for sess in sessions:
         tok = sess.get("token_preview") or sess.get("token_prefix") or "<unknown>"
         key_id = sess.get("key_id", "<unknown>")
@@ -882,6 +1083,10 @@ def _print_sessions(res: Dict[str, Any], session_token: Optional[str]) -> None:
             print(f"    Expires in: {ttl} seconds")
         elif "expires_at" in sess and sess["expires_at"] > 0:
             print(f"    Expires at: {sess['expires_at']}")
+        issued_at = float(sess.get("issued_at") or 0.0)
+        if issued_at > 0:
+            age = max(0, int(time.time() - issued_at))
+            print(f"    Issued: {age} seconds ago")
 
         role = sess.get("role")
         if role:
@@ -908,6 +1113,49 @@ def _print_sessions(res: Dict[str, Any], session_token: Optional[str]) -> None:
         if claims:
             for ck, cv in claims.items():
                 print(f"    {ck}: {cv}")
+
+
+def _print_live_consumers(res: Dict[str, Any], session_token: Optional[str]) -> None:
+    rows = [dict(item or {}) for item in list(dict(res or {}).get("connections") or []) if isinstance(item, dict)]
+    cli_preview = _get_token_preview(session_token) if session_token else None
+    if not rows:
+        print("  No live authenticated consumer connections.")
+        return
+
+    for row in rows:
+        cid = str(row.get("connection_id") or "<unknown>")
+        transport = str(row.get("transport") or "unknown")
+        peer = str(row.get("peer_host") or "local")
+        previews = [str(x) for x in list(row.get("session_token_previews") or []) if str(x or "").strip()]
+        is_current_cli = bool(cli_preview and cli_preview in previews)
+        marker = f" {_c('good', '(this interactive CLI)')}" if is_current_cli else ""
+        print(f"  - Connection [{_c('accent', cid[:12])}] Transport: {transport} Peer: {peer}{marker}")
+        actors = [str(x) for x in list(row.get("actor_ids") or []) if str(x or "").strip()]
+        if actors:
+            print(f"    Actors: {', '.join(actors)}")
+        if previews:
+            print(f"    Session Tokens: {', '.join(previews)}")
+        age = row.get("age_seconds")
+        idle = row.get("idle_seconds")
+        bits = []
+        if age is not None:
+            bits.append(f"age={age}s")
+        if idle is not None:
+            bits.append(f"idle={idle}s")
+        command_count = row.get("command_count")
+        if command_count is not None:
+            bits.append(f"commands={command_count}")
+        if row.get("last_command"):
+            bits.append(f"last={row.get('last_command')}")
+        if bits:
+            print(f"    Activity: {', '.join(bits)}")
+
+    actors = [dict(item or {}) for item in list(dict(res or {}).get("actors") or []) if isinstance(item, dict)]
+    if actors:
+        print()
+        print("  Actor connection counts:")
+        for row in actors:
+            print(f"    - {row.get('actor_id')}: {row.get('connection_count')}")
 
 
 def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
@@ -958,6 +1206,9 @@ def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Opt
                 if sandbox.get("network_mode"):
                     bits.append(f"network={sandbox.get('network_mode')}")
                 print(f"    Sandbox: {_c('good', 'enabled')}" + (f" {' '.join(bits)}" if bits else ""))
+            reachability_note = _reachability_summary(info)
+            if reachability_note:
+                print(f"    Reachability: {_c('warn', reachability_note)}")
         return session_token
     except PermissionError:
         raise
@@ -996,6 +1247,12 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
             ("Kind", _operator_resource_kind(info)),
             ("Pid", info.get("pid")),
         ])
+        reachability_note = _reachability_summary(info)
+        if reachability_note:
+            print()
+            _kv_rows([
+                ("Reachability", reachability_note),
+            ])
         
         sandbox_policy = info.get("sandbox_policy", {})
         if sandbox_policy:
@@ -1046,8 +1303,25 @@ def _show_metrics(args: argparse.Namespace, session_token: Optional[str]) -> Opt
         raise e
 
 
-def _list_consumers(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
-    _print_block("Connected Consumers & Sessions")
+def _list_live_consumers(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    _print_block("Live Consumer Connections")
+    if _can_use_offline_local_fallback(args, session_token=session_token):
+        print(_c('warn', "  Daemon is stopped. Live consumers are only available from a running daemon."))
+        return session_token
+    try:
+        res = _api_invoke(args, "list-live-consumers", {}, session_token=session_token)
+        session_token = _active_session_token(args, session_token)
+        _print_live_consumers(res if isinstance(res, dict) else {}, session_token)
+        return session_token
+    except PermissionError:
+        raise
+    except Exception as e:
+        print(_c('bad', f"Error listing live consumers: {e}"))
+        raise e
+
+
+def _list_auth_sessions(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    _print_block("Issued Auth Sessions")
     try:
         offline = _can_use_offline_local_fallback(args, session_token=session_token)
         if offline:
@@ -1065,7 +1339,147 @@ def _list_consumers(args: argparse.Namespace, session_token: Optional[str]) -> O
     except PermissionError:
         raise
     except Exception as e:
-        print(_c('bad', f"Error listing consumers: {e}"))
+        print(_c('bad', f"Error listing auth sessions: {e}"))
+        raise e
+
+
+def _list_consumers(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    return _list_auth_sessions(args, session_token)
+
+
+def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    _print_block("Load Engine")
+    if _can_use_offline_local_fallback(args, session_token=session_token):
+        print(_c('warn', "  Daemon is stopped. Loading an engine requires a running daemon."))
+        return session_token
+    try:
+        configs_raw = _api_invoke(args, "list-configs", {}, session_token=session_token)
+        session_token = _active_session_token(args, session_token)
+        configs = [dict(item or {}) for item in list(configs_raw or []) if isinstance(item, dict)]
+        if not configs:
+            print("  No hosted configs found.")
+            return session_token
+        opts: Dict[str, tuple[str, str]] = {}
+        by_key: Dict[str, Dict[str, Any]] = {}
+        for idx, row in enumerate(configs, start=1):
+            key = str(idx)
+            name = str(row.get("name") or _config_selector(row))
+            hint_bits = []
+            if row.get("is_default"):
+                hint_bits.append("default")
+            reason = str(row.get("connect_reason") or "").strip()
+            if reason:
+                hint_bits.append(reason)
+            by_key[key] = row
+            opts[key] = (name, " ".join(hint_bits))
+        choice = _prompt_menu("Select Config", opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
+        if choice in {"b", "back"}:
+            return session_token
+        selected = by_key.get(choice)
+        if not selected:
+            return session_token
+        config_selector = _config_selector(selected)
+
+        model_path = _configured_model_path_from_config_row(selected)
+        generic_worker = _config_uses_generic_worker(selected)
+        if not model_path and not generic_worker:
+            try:
+                models_raw = _api_invoke(args, "models-from-config", {"config_path": config_selector}, session_token=session_token)
+                session_token = _active_session_token(args, session_token)
+            except Exception:
+                models_raw = []
+            models = [dict(item or {}) for item in list(models_raw or []) if isinstance(item, dict)]
+            model_opts: Dict[str, tuple[str, str]] = {}
+            model_by_key: Dict[str, str] = {}
+            for idx, row in enumerate(models, start=1):
+                key = str(idx)
+                path = str(row.get("path") or "").strip()
+                if not path:
+                    continue
+                model_by_key[key] = path
+                model_opts[key] = (str(row.get("name") or Path(path).name), path)
+            if model_opts:
+                model_opts["p"] = ("Enter model path", "")
+                model_choice = _prompt_menu("Select Model", model_opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
+                if model_choice in {"b", "back"}:
+                    return session_token
+                if model_choice == "p":
+                    model_path = input("Model path: ").strip()
+                else:
+                    model_path = model_by_key.get(model_choice, "")
+            else:
+                print(_c('warn', "  Selected config does not specify a model path."))
+                model_path = input("Model path: ").strip()
+            if not str(model_path or "").strip():
+                print(_c('bad', "Model path is required."))
+                return session_token
+
+        force_new = False
+        if not generic_worker:
+            existing_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
+            existing = _get_engines_dict(existing_raw)
+            load_opts: Dict[str, tuple[str, str]] = {
+                "n": ("Create new engine instance", str(model_path)),
+                "r": ("Reuse any compatible running instance", str(model_path)),
+            }
+            model_by_key: Dict[str, str] = {}
+            idx = 1
+            for eid, info in existing.items():
+                for model in [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]:
+                    mpath = str(model.get("model_path") or model.get("canonical_model_path") or "").strip()
+                    mid = str(model.get("model_instance_id") or model.get("engine_id") or eid).strip()
+                    if not mpath:
+                        continue
+                    key = str(idx)
+                    idx += 1
+                    model_by_key[key] = mpath
+                    load_opts[key] = (f"Use running {mid}", mpath)
+            load_choice = _prompt_menu("Load Target", load_opts, "r", allow_back=True, allow_changes=False)
+            if load_choice in {"b", "back"}:
+                return session_token
+            force_new = load_choice == "n"
+            if load_choice in model_by_key:
+                model_path = model_by_key[load_choice]
+                force_new = False
+
+        payload = {
+            "config_path": config_selector,
+            "model_path": model_path or None,
+            "force_new_worker": force_new,
+        }
+        if session_token:
+            payload["session_token"] = session_token
+        print(_c("muted", "Starting load operation..."))
+        started = _api_invoke(args, "op-start", {"command": "connect-from-config", "payload": payload}, session_token=session_token)
+        session_token = _active_session_token(args, session_token)
+        op_id = str(dict(started or {}).get("operation_id") or "").strip()
+        if not op_id:
+            print(_c("bad", "Load did not return an operation id."))
+            return session_token
+        last_line = ""
+        while True:
+            status = _api_invoke(args, "op-status", {"operation_id": op_id}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
+            snap = dict(status or {})
+            last_line = _print_progress_snapshot(snap, last_text=last_line)
+            if bool(snap.get("done", False)):
+                if str(snap.get("status") or "").lower() in {"completed", "ok"} or not snap.get("error"):
+                    result = dict(snap.get("result") or {})
+                    final_status = str(result.get("status") or snap.get("status") or "completed")
+                    print(_c("good", f"Load finished: {final_status}"))
+                else:
+                    print(_c("bad", f"Load failed: {snap.get('error') or snap.get('error_code') or 'unknown error'}"))
+                return session_token
+            time.sleep(1.0)
+    except PermissionError:
+        raise
+    except KeyboardInterrupt:
+        print()
+        print(_c("warn", "Load progress display interrupted; operation may still be running."))
+        return session_token
+    except Exception as e:
+        print(_c('bad', f"Error loading engine: {e}"))
         raise e
 
 

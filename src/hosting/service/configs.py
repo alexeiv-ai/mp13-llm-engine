@@ -234,9 +234,9 @@ class ConfigMixin:
         engine_python = self._engine_python_executable()
         engine_runtime_ok, _engine_runtime_err = self._check_module_discoverable(engine_python, "mp13_engine")
 
-        def _config_meta(path_str: str) -> Dict[str, Any]:
+        def _config_meta(selector: str) -> Dict[str, Any]:
             try:
-                _ = self._merge_default_and_selected_config(path_str)
+                _ = self._merge_default_and_selected_config(selector)
             except Exception as e:
                 return {"has_spawn_command": False, "connect_reason": f"invalid_config: {e}"}
             return {
@@ -246,7 +246,7 @@ class ConfigMixin:
 
         if default_path.exists():
             row = {"name": "default", "path": str(default_path), "is_default": True}
-            row.update(_config_meta(str(default_path)))
+            row.update(_config_meta("default"))
             out.append(row)
             seen.add(str(default_path.resolve()))
         cfg_dir = self._config_store_dir()
@@ -259,7 +259,7 @@ class ConfigMixin:
                 if rp in seen:
                     continue
                 row = {"name": fp.stem, "path": str(fp), "is_default": False}
-                row.update(_config_meta(str(fp)))
+                row.update(_config_meta(fp.stem))
                 out.append(row)
                 seen.add(rp)
         return out

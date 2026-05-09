@@ -37,6 +37,45 @@ def test_list_configs_uses_lightweight_module_discovery(monkeypatch) -> None:
     assert bool(rows[0].get("has_spawn_command")) is True
 
 
+def test_list_configs_validates_config_selectors_not_paths(tmp_path: Path, monkeypatch) -> None:
+    default_cfg = tmp_path / "default.json"
+    default_cfg.write_text("{}", encoding="utf-8")
+    cfg_store = tmp_path / "configs"
+    cfg_store.mkdir()
+    named_cfg = cfg_store / "granite-2b.json"
+    named_cfg.write_text("{}", encoding="utf-8")
+
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    seen_selectors = []
+
+    def _merge(self, selector):
+        selector = str(selector)
+        seen_selectors.append(selector)
+        assert not Path(selector).is_absolute()
+        assert "\\" not in selector
+        assert "/" not in selector
+        return {}
+
+    monkeypatch.setattr(EngineHostService, "_default_config_path", lambda self: default_cfg)
+    monkeypatch.setattr(EngineHostService, "_config_store_dir", lambda self: cfg_store)
+    monkeypatch.setattr(EngineHostService, "_merge_default_and_selected_config", _merge)
+    monkeypatch.setattr(EngineHostService, "_engine_python_executable", lambda self: "python")
+    monkeypatch.setattr(
+        EngineHostService,
+        "_check_module_discoverable",
+        staticmethod(lambda _python, _module: (True, "")),
+    )
+
+    rows = svc.list_engine_configs()
+
+    assert seen_selectors == ["default", "granite-2b"]
+    assert [row["name"] for row in rows] == ["default", "granite-2b"]
+    assert all(row.get("connect_reason") is None for row in rows)
+
+
 def test_connect_from_config_emits_progress_events(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")
