@@ -320,6 +320,87 @@ def _print_operation_diagnostics(snapshot: Dict[str, Any]) -> None:
         print(_c("muted", f"  Worker log: {log_path}"))
 
 
+def _inference_text_and_metrics(rpc_result: Dict[str, Any]) -> tuple[str, Dict[str, Any], list[Dict[str, Any]]]:
+    payload = dict(rpc_result.get("result") or {}) if isinstance(rpc_result.get("result"), dict) else {}
+    chunks = [dict(item or {}) for item in list(payload.get("stream") or []) if isinstance(item, dict)]
+    final_text = ""
+    streamed_parts: list[str] = []
+    metrics: Dict[str, Any] = {}
+    metric_keys = {
+        "input_tokens",
+        "output_tokens",
+        "generation_duration_sec",
+        "tokens_per_second",
+        "time_to_first_token_sec",
+        "total_input_tokens",
+        "total_output_tokens",
+        "total_generation_duration_sec",
+        "overall_tps",
+        "avg_time_to_first_token_sec",
+        "mem_allocated",
+        "mem_reserved",
+        "cache_metric",
+        "cache_warming",
+        "cache_queued",
+        "was_truncated",
+        "was_canceled",
+        "had_error",
+    }
+    for chunk in chunks:
+        chunk_text = str(chunk.get("chunk_text") or "")
+        if chunk_text:
+            streamed_parts.append(chunk_text)
+        response_text = str(chunk.get("response_text") or "")
+        if response_text:
+            final_text = response_text
+        for key in metric_keys:
+            if key in chunk and chunk.get(key) is not None:
+                metrics[key] = chunk.get(key)
+        if str(chunk.get("error") or "").strip():
+            metrics["error"] = str(chunk.get("error") or "").strip()
+    if not final_text:
+        final_text = "".join(streamed_parts)
+    return final_text, metrics, chunks
+
+
+def _print_inference_metrics(metrics: Dict[str, Any], *, observed_latency_sec: float) -> None:
+    reported = dict(metrics or {})
+    reported_duration = reported.get("total_generation_duration_sec")
+    if reported_duration is None:
+        reported_duration = reported.get("generation_duration_sec")
+    rows: list[tuple[str, Any]] = [
+        ("observed_e2e_sec", f"{observed_latency_sec:.3f}"),
+    ]
+    try:
+        if reported_duration is not None:
+            reported_float = float(reported_duration)
+            rows.append(("reported_generation_sec", f"{reported_float:.3f}"))
+            rows.append(("observed_minus_reported_sec", f"{observed_latency_sec - reported_float:.3f}"))
+    except Exception:
+        rows.append(("reported_generation_sec", reported_duration))
+    for key in [
+        "avg_time_to_first_token_sec",
+        "time_to_first_token_sec",
+        "total_input_tokens",
+        "total_output_tokens",
+        "input_tokens",
+        "output_tokens",
+        "overall_tps",
+        "tokens_per_second",
+        "mem_allocated",
+        "mem_reserved",
+        "cache_metric",
+        "cache_warming",
+        "cache_queued",
+        "was_truncated",
+        "had_error",
+        "error",
+    ]:
+        if key in reported:
+            rows.append((key, reported.get(key)))
+    _kv_rows(rows, min_width=30)
+
+
 def _offline_service(args: argparse.Namespace):
     from .service.host_service import EngineHostService
 
@@ -1007,6 +1088,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     "o": ("Load engine from config", ""),
                     "d": ("Engine/Sandbox details", ""),
                     "m": ("Print daemon metrics", ""),
+                    "t": ("Test loaded model prompt", ""),
                     "c": ("List live consumers", ""),
                     "a": ("List auth sessions", ""),
                     "k": ("Kill/Disconnect resource", ""),
@@ -1028,6 +1110,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         session_token = _engine_details(args, session_token)
                     elif choice == "m":
                         session_token = _show_metrics(args, session_token)
+                    elif choice == "t":
+                        session_token = _test_loaded_model(args, session_token)
                     elif choice == "c":
                         session_token = _list_live_consumers(args, session_token)
                     elif choice == "a":
@@ -1350,6 +1434,77 @@ def _show_metrics(args: argparse.Namespace, session_token: Optional[str]) -> Opt
         raise
     except Exception as e:
         print(_c('bad', f"Error fetching metrics (daemon may not be running?): {e}"))
+        raise e
+
+
+def _test_loaded_model(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    _print_block("Test Loaded Model")
+    try:
+        res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+        session_token = _active_session_token(args, session_token)
+        engines = _get_engines_dict(res)
+        opts: Dict[str, tuple[str, str]] = {}
+        for eid, info in engines.items():
+            if not bool(info.get("reachable", False)):
+                continue
+            loaded_models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
+            for model in loaded_models:
+                mid = str(model.get("model_instance_id") or model.get("engine_id") or eid).strip()
+                mpath = str(model.get("model_path") or model.get("canonical_model_path") or "").strip()
+                if mid:
+                    opts[mid] = (f"Test {mid}", mpath)
+        if not opts:
+            print("  No reachable loaded model instances to test.")
+            return session_token
+        engine_id = _prompt_menu("Select Model", opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
+        if engine_id in {"b", "back"}:
+            return session_token
+        prompt = input("Prompt [Say hello in one short sentence.]: ").strip() or "Say hello in one short sentence."
+        max_tokens_raw = input("Max new tokens [64]: ").strip()
+        try:
+            max_new_tokens = max(1, min(4096, int(max_tokens_raw or "64")))
+        except Exception:
+            max_new_tokens = 64
+        params = {
+            "messages_list": [[{"role": "user", "content": prompt}]],
+            "stream": True,
+            "generation_config": {
+                "max_new_tokens": max_new_tokens,
+                "do_sample": False,
+            },
+        }
+        print(_c("muted", "Sending prompt through hosting proxy-rpc-call..."))
+        started = time.perf_counter()
+        rpc_result = dict(_api_invoke(
+            args,
+            "proxy-rpc-call",
+            {
+                "engine_id": engine_id,
+                "method": "run-inference",
+                "params": params,
+                "timeout_seconds": 300.0,
+            },
+            session_token=session_token,
+        ) or {})
+        observed_latency = time.perf_counter() - started
+        session_token = _active_session_token(args, session_token)
+        response_text, reported_metrics, chunks = _inference_text_and_metrics(rpc_result)
+        errors = [str(chunk.get("error") or "").strip() for chunk in chunks if str(chunk.get("error") or "").strip()]
+        if errors:
+            print(_c("bad", "Model returned error:"))
+            for error in errors:
+                print(_c("bad", f"  {error}"))
+        print()
+        print(_c("accent", "Response"))
+        print(_c("value", response_text or "<empty response>"))
+        print()
+        print(_c("accent", "Metrics"))
+        _print_inference_metrics(reported_metrics, observed_latency_sec=observed_latency)
+        return session_token
+    except PermissionError:
+        raise
+    except Exception as e:
+        print(_c("bad", f"Error testing model: {e}"))
         raise e
 
 
