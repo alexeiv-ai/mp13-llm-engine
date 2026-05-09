@@ -1023,6 +1023,43 @@ class EnginesMixin:
             "gpu_vram_source": "worker_torch_cuda",
         }
 
+    def _prune_old_stopped_worker_logs(self, *, max_age_seconds: float = 3 * 24 * 60 * 60) -> None:
+        logs_dir = self._logs_dir()
+        try:
+            if not logs_dir.exists():
+                return
+        except Exception:
+            return
+        running_log_paths = set()
+        try:
+            for row in self._read_engines():
+                reg = dict(row or {})
+                pid = int(reg.get("pid") or 0)
+                if pid > 0 and self._pid_alive(pid):
+                    log_path = str(reg.get("log_path") or "").strip()
+                    if log_path:
+                        try:
+                            running_log_paths.add(str(Path(log_path).expanduser().resolve()))
+                        except Exception:
+                            running_log_paths.add(log_path)
+        except Exception:
+            running_log_paths = set()
+        cutoff = time.time() - max(0.0, float(max_age_seconds or 0.0))
+        try:
+            candidates = list(logs_dir.glob("*.log"))
+        except Exception:
+            return
+        for path in candidates:
+            try:
+                resolved = str(path.expanduser().resolve())
+                if resolved in running_log_paths:
+                    continue
+                if float(path.stat().st_mtime) >= cutoff:
+                    continue
+                path.unlink()
+            except Exception:
+                continue
+
     def discover_running(
         self,
         *,
@@ -1236,6 +1273,7 @@ class EnginesMixin:
             merged_env["MP13_HOSTING_ENGINES_STATE_FILE"] = str(self.engines_state_file)
             merged_env["MP13_HOSTING_CONTROL_STATE_FILE"] = str(self.control_state_file)
         log_path = self._engine_log_path(str(engine_id or ""))
+        self._prune_old_stopped_worker_logs()
         normalized_sandbox = WorkerSandboxPolicy.from_mapping(sandbox_policy)
         launched = self._launch_worker_process(
             WorkerLaunchRequest(
@@ -1504,6 +1542,7 @@ class EnginesMixin:
                 "endpoint": endpoint,
             }
         normalized_sandbox = WorkerSandboxPolicy.from_mapping(sandbox_policy_raw)
+        self._prune_old_stopped_worker_logs()
         launched = self._launch_worker_process(
             WorkerLaunchRequest(
                 engine_id=eid,

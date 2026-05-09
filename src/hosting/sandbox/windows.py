@@ -283,8 +283,7 @@ def launch_restricted_worker(
     use_job_object: bool = True,
 ) -> WindowsLaunchResult:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    if not log_path.exists():
-        log_path.write_bytes(b"")
+    log_path.write_bytes(b"")
 
     restricted = _create_restricted_token(integrity_level)
     try:

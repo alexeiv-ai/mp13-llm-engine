@@ -32,7 +32,7 @@ class WorkerLaunchResult:
 
 def _normal_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_fp = open(req.log_path, "ab")
+    log_fp = open(req.log_path, "wb")
     kwargs = hidden_subprocess_kwargs()
     try:
         proc = subprocess.Popen(  # noqa: S603,S607

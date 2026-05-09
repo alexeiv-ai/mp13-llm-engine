@@ -20,6 +20,27 @@ The interactive menu also contains a local-only recovery/auth submenu. Those
 actions intentionally bypass daemon RPC and read or mutate local control state
 through `EngineHostService`; they are not available for remote targets.
 
+Interactive menu capabilities include:
+
+- Listing loaded model workers, generic/tool workers, sandbox metadata,
+  reachability, process CPU/RAM, and worker-reported GPU VRAM when available.
+- Loading a model from a hosted config store entry. If the config does not name a
+  model path, the menu asks for one. Load progress is displayed from daemon
+  operation status and worker load progress. The loader reuses a compatible
+  already-loaded model worker by default, and also reuses reachable idle model
+  workers rather than starting a second process unless `Force new engine
+  instance` is selected.
+- Unloading model bindings through the engine worker management API. The menu
+  waits for completion and verifies daemon discovery no longer reports the
+  selected model binding.
+- Stopping workers/sandboxes and revoking auth sessions.
+- Listing live consumer connections separately from issued auth sessions. The
+  live view marks the current interactive CLI connection.
+- Testing a loaded model by sending a prompt through hosting `proxy-rpc-call` to
+  `run-inference`. The CLI prints response text separately from metrics and
+  compares model-reported generation duration with CLI-observed end-to-end
+  latency.
+
 `<subcommand>`
 : Runs one command and prints a JSON envelope: `{"ok": true, "result": ...}` or
 `{"ok": false, "error": ...}`. If a remote target or client profile is supplied,
