@@ -1084,6 +1084,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.unload_model(
                     str(payload.get("engine_id") or args.engine_id),
                     timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                    shutdown_all=bool(payload.get("shutdown_all", False)),
                 )
             )
             return 0
@@ -1200,6 +1201,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     model_path=payload.get("model_path"),
                     force_new_worker=bool(payload.get("force_new_worker", False)),
                     launch_policy=payload.get("launch_policy"),
+                    target_worker_id=payload.get("target_worker_id"),
                 )
             )
             return 0

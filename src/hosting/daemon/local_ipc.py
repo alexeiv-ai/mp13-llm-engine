@@ -359,6 +359,7 @@ class EngineHostDaemon:
                 "model_path",
                 "force_new_worker",
                 "launch_policy",
+                "target_worker_id",
             ],
             "spawn": [
                 "engine_id",
@@ -427,30 +428,51 @@ class EngineHostDaemon:
         engine_id = str((payload or {}).get("engine_id") or "").strip()
         return engine_id or None
 
-    def _read_tail_text(self, path: Path, *, max_bytes: int = 262144) -> str:
+    @staticmethod
+    def _log_size(path: Path) -> int:
+        try:
+            return max(0, int(path.stat().st_size))
+        except Exception:
+            return 0
+
+    def _read_tail_text(self, path: Path, *, max_bytes: int = 262144, start_offset: int = 0) -> str:
         try:
             size = path.stat().st_size
             with path.open("rb") as fp:
-                if size > max_bytes:
-                    fp.seek(max(0, size - max_bytes))
+                start = max(0, min(int(start_offset or 0), int(size or 0)))
+                if size - start > max_bytes:
+                    start = max(start, size - max_bytes)
+                fp.seek(start)
                 return fp.read(max_bytes).decode("utf-8", errors="replace")
         except Exception:
             return ""
 
-    def _parse_model_load_progress_from_log(self, log_path: str) -> Dict[str, Any]:
+    def _parse_model_load_progress_from_log(self, log_path: str, *, start_offset: int = 0) -> Dict[str, Any]:
         path = Path(str(log_path or "")).expanduser()
         if not str(log_path or "").strip() or not path.exists():
             return {}
-        text = self._read_tail_text(path)
+        text = self._read_tail_text(path, start_offset=start_offset)
         if not text:
-            return {"log_path": str(path), "exists": True}
-        matches = list(re.finditer(r"Loading weights:\s+(\d{1,3})%", text))
+            return {"log_path": str(path), "exists": True, "start_offset": max(0, int(start_offset or 0))}
+        matches = list(
+            re.finditer(
+                r"(?im)(?:loading|checkpoint|shard|weight|model)[^\r\n%]{0,120}?(\d{1,3})\s*%",
+                text,
+            )
+        )
         if not matches:
-            return {"log_path": str(path), "exists": True}
+            matches = list(re.finditer(r"(?m)(\d{1,3})\s*%\|", text))
+        parsed_error = self._parse_worker_log_error(text)
+        if not matches:
+            out = {"log_path": str(path), "exists": True, "start_offset": max(0, int(start_offset or 0))}
+            if parsed_error:
+                out.update(parsed_error)
+            return out
         percent = max(0, min(100, int(matches[-1].group(1))))
-        return {
+        out = {
             "log_path": str(path),
             "exists": True,
+            "start_offset": max(0, int(start_offset or 0)),
             "progress_kind": "model_weights",
             "progress_percent": percent,
             "progress_text": (
@@ -459,73 +481,80 @@ class EngineHostDaemon:
                 else f"Loading model weights ({percent}%)."
             ),
         }
+        if parsed_error:
+            out.update(parsed_error)
+        return out
 
-    def _registration_for_operation(self, op: Dict[str, Any]) -> Dict[str, Any]:
-        target = str((op or {}).get("target_engine_id") or "").strip()
-        hint = dict((op or {}).get("payload_hint") or {})
-        model_path = str(hint.get("model_path") or "").strip()
-        config_path = str(hint.get("config_path") or "").strip()
-        requested = str(hint.get("engine_id") or "").strip()
-        rows = []
-        try:
-            rows = list(self.svc._read_engines() or [])  # type: ignore[attr-defined]
-        except Exception:
-            rows = []
-        if target or requested:
-            wanted = {x for x in [target, requested] if x}
-            for row in rows:
-                current = dict(row or {})
-                ids = {
-                    str(current.get("engine_id") or "").strip(),
-                    str(current.get("worker_id") or "").strip(),
-                    str(current.get("model_instance_id") or "").strip(),
-                }
-                if ids & wanted:
-                    return current
-        canonical_model = ""
-        canonical_config = ""
-        try:
-            canonical_model = self.svc._canonical_path_value(model_path) if model_path else ""  # type: ignore[attr-defined]
-            resolved_config = self.svc._resolve_json_config_path(config_path) if config_path else None  # type: ignore[attr-defined]
-            canonical_config = self.svc._canonical_path_value(str(resolved_config)) if resolved_config else ""  # type: ignore[attr-defined]
-        except Exception:
-            canonical_config = ""
-        candidates: List[Dict[str, Any]] = []
-        for row in rows:
-            current = dict(row or {})
-            row_model = str(current.get("canonical_model_path") or "").strip()
-            row_config = str(current.get("canonical_config_path") or "").strip()
-            if canonical_model and row_model and row_model != canonical_model:
-                continue
-            if canonical_config and row_config and row_config != canonical_config:
-                continue
-            if canonical_model or canonical_config:
-                candidates.append(current)
-        if not candidates:
+    @staticmethod
+    def _parse_worker_log_error(text: str) -> Dict[str, Any]:
+        lines = [line.strip() for line in str(text or "").replace("\r", "\n").splitlines() if line.strip()]
+        if not lines:
             return {}
-        candidates.sort(key=lambda item: float(item.get("spawned_at") or 0.0), reverse=True)
-        return candidates[0]
+        markers = (
+            "Global Engine Initialization Failed",
+            "Initializing engine failed",
+            "Traceback (most recent call last)",
+            "RepositoryNotFoundError",
+            "OSError:",
+            "RuntimeError:",
+            "EngineInitializationError",
+        )
+        marker_indexes = [
+            idx for idx, line in enumerate(lines)
+            if any(marker in line for marker in markers)
+        ]
+        if not marker_indexes:
+            return {}
+        preferred = [
+            idx for idx in marker_indexes
+            if "Traceback (most recent call last)" not in lines[idx]
+        ]
+        start = (preferred or marker_indexes)[-1]
+        excerpt = lines[start:start + 8]
+        message = excerpt[0]
+        for line in excerpt:
+            if "Global Engine Initialization Failed" in line or line.startswith(("OSError:", "RuntimeError:", "EngineInitializationError")):
+                message = line
+                break
+        return {
+            "log_error": {
+                "message": message,
+                "excerpt": excerpt,
+            },
+            "progress_error": message,
+        }
 
     def _enrich_operation_progress(self, op: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(op or {})
         if bool(out.get("done", False)) or str(out.get("command") or "").strip() != "connect-from-config":
             return out
-        reg = self._registration_for_operation(out)
-        log_path = str(reg.get("log_path") or "").strip()
-        parsed = self._parse_model_load_progress_from_log(log_path)
-        if not parsed:
-            return out
         diagnostics = dict(out.get("diagnostics") or {})
-        diagnostics["worker_log"] = parsed
-        if log_path:
-            diagnostics["log_path"] = log_path
-        out["diagnostics"] = diagnostics
-        if str(reg.get("engine_id") or "").strip() and not str(out.get("target_engine_id") or "").strip():
-            out["target_engine_id"] = str(reg.get("engine_id") or "").strip()
+        log_path = str(diagnostics.get("log_path") or "").strip()
+        has_log_start_offset = "log_start_offset" in diagnostics
+        log_start_offset = int(diagnostics.get("log_start_offset") or 0)
+        parsed = (
+            self._parse_model_load_progress_from_log(log_path, start_offset=log_start_offset)
+            if log_path and has_log_start_offset
+            else {}
+        )
+        if parsed:
+            diagnostics["worker_log"] = parsed
+            if parsed.get("log_error"):
+                diagnostics["worker_log_error"] = parsed.get("log_error")
+                out["progress_error"] = str(parsed.get("progress_error") or "")
+            if log_path:
+                diagnostics["log_path"] = log_path
+            out["diagnostics"] = diagnostics
         percent = parsed.get("progress_percent")
         if isinstance(percent, int):
+            current = int(out.get("progress_percent") or 0)
+            if percent < current:
+                percent = current
+                parsed["progress_percent"] = percent
+                parsed["progress_text"] = f"Loading model weights ({percent}%)."
             out["progress_percent"] = percent
             out["progress_text"] = str(parsed.get("progress_text") or "").strip()
+            out.pop("progress_estimated", None)
             events = list(out.get("progress_events") or [])
             stage = "connect.load_weights" if percent < 100 else "connect.worker_ready"
             message = str(parsed.get("progress_text") or "").strip()
@@ -539,6 +568,16 @@ class EngineHostDaemon:
                 events.append(self._operation_event(stage, "running", message, progress_percent=percent, log_path=log_path or None))
                 out["progress_events"] = events
                 out["updated_at"] = time.time()
+            return out
+        current = int(out.get("progress_percent") or 0)
+        started_at = float(diagnostics.get("worker_ready_started_at") or out.get("started_at") or out.get("created_at") or time.time())
+        elapsed = max(0.0, time.time() - started_at)
+        estimated = min(10, max(current, int(elapsed * 2.0)))
+        if estimated != current or out.get("progress_percent") is None:
+            out["progress_percent"] = estimated
+            out["progress_text"] = "Loading model and waiting for worker RPC readiness"
+            out["progress_estimated"] = True
+            out["updated_at"] = time.time()
         return out
 
     @staticmethod
@@ -985,6 +1024,10 @@ class EngineHostDaemon:
             ],
             "session_token": session_token or None,
         }
+        if str(command or "").strip() == "connect-from-config":
+            op["progress_percent"] = 0
+            op["progress_text"] = "Operation queued"
+            op["progress_events"][0]["progress_percent"] = 0
         with self._operations_lock:
             self._operations[op_id] = op
             self._prune_operations_locked()
@@ -999,7 +1042,11 @@ class EngineHostDaemon:
             if not isinstance(op, dict):
                 persisted = self._load_persisted_operations().get(op_id)
                 return dict(persisted) if isinstance(persisted, dict) else None
-            return self._enrich_operation_progress(dict(op))
+            enriched = self._enrich_operation_progress(dict(op))
+            if dict(enriched or {}) != dict(op or {}):
+                self._operations[op_id] = dict(enriched)
+                self._persist_operations_locked()
+            return enriched
 
     def _replace_operation(self, op: Dict[str, Any]) -> None:
         op_id = str(op.get("operation_id") or "")
@@ -1011,6 +1058,41 @@ class EngineHostDaemon:
             self._prune_operations_locked()
             self._persist_operations_locked()
         self._append_operation_journal(enriched, event="updated")
+
+    def _record_operation_progress_event(self, operation_id: str, event: Dict[str, Any]) -> None:
+        op_id = str(operation_id or "").strip()
+        if not op_id:
+            return
+        ev = dict(event or {})
+        with self._operations_lock:
+            op = dict(self._operations.get(op_id) or {})
+            if not op or bool(op.get("done", False)):
+                return
+            events = list(op.get("progress_events") or [])
+            events.append(ev)
+            op["progress_events"] = events
+            message = str(ev.get("message") or "").strip()
+            if message:
+                op["progress_text"] = message
+            if ev.get("progress_percent") is not None:
+                current = int(op.get("progress_percent") or 0)
+                incoming = max(0, min(100, int(ev.get("progress_percent") or 0)))
+                op["progress_percent"] = max(current, incoming)
+            engine_id = str(ev.get("engine_id") or "").strip()
+            if engine_id and not str(op.get("target_engine_id") or "").strip():
+                op["target_engine_id"] = engine_id
+            log_path = str(ev.get("log_path") or "").strip()
+            if log_path:
+                diagnostics = dict(op.get("diagnostics") or {})
+                diagnostics["log_path"] = log_path
+                if "log_start_offset" not in diagnostics:
+                    diagnostics["log_start_offset"] = self._log_size(Path(log_path).expanduser())
+                if str(ev.get("stage") or "") == "connect.worker_ready" and str(ev.get("status") or "") == "running":
+                    diagnostics["worker_ready_started_at"] = float(ev.get("timestamp") or time.time())
+                op["diagnostics"] = diagnostics
+            op["updated_at"] = time.time()
+            self._operations[op_id] = op
+            self._persist_operations_locked()
 
     def _finalize_operation_canceled(self, operation_id: str, message: str = "Operation canceled") -> None:
         op = self._get_operation(operation_id) or {}
@@ -1135,17 +1217,23 @@ class EngineHostDaemon:
         events = list(op.get("progress_events") or [])
         events.append(self._operation_event("running", "running", "Operation started"))
         if str(command or "").strip() == "connect-from-config":
+            op["progress_percent"] = 0
+            op["progress_text"] = "Starting model load"
             events.append(
                 self._operation_event(
                     "connect.worker_ready",
                     "running",
                     "Loading model and waiting for worker RPC readiness",
+                    progress_percent=0,
                 )
             )
         op["progress_events"] = events
         self._replace_operation(op)
         try:
-            result = await asyncio.to_thread(self._call_service, command, payload)
+            operation_payload = dict(payload or {})
+            if str(command or "").strip() == "connect-from-config":
+                operation_payload["_progress_callback"] = lambda event: self._record_operation_progress_event(operation_id, dict(event or {}))
+            result = await asyncio.to_thread(self._call_service, command, operation_payload)
             now = time.time()
             op = self._get_operation(operation_id) or op
             if bool(op.get("cancel_requested", False)) and not bool(op.get("done", False)):
@@ -1163,16 +1251,33 @@ class EngineHostDaemon:
                     return
                 self._finalize_operation_canceled(operation_id)
                 return
+            service_failed = isinstance(result, dict) and str(result.get("status") or "").strip().lower() in {"failed", "error"}
+            if isinstance(result, dict) and not str(op.get("target_engine_id") or "").strip():
+                result_engine_id = str(result.get("engine_id") or result.get("worker_id") or result.get("model_instance_id") or "").strip()
+                if result_engine_id:
+                    op["target_engine_id"] = result_engine_id
             op["done"] = True
-            op["status"] = "completed"
-            op["stage"] = "completed"
+            op["status"] = "failed" if service_failed else "completed"
+            op["stage"] = "failed" if service_failed else "completed"
             op["result"] = result
+            if service_failed and isinstance(result, dict):
+                op["error"] = str(result.get("message") or result.get("reason") or "operation_failed")
+                op["error_code"] = str(result.get("reason") or "operation_failed")
+            if str(command or "").strip() == "connect-from-config" and not service_failed:
+                op["progress_percent"] = 100
+                op["progress_text"] = "Operation completed"
             op["updated_at"] = now
             op["completed_at"] = now
             events = list(op.get("progress_events") or [])
             if isinstance(result, dict) and isinstance(result.get("progress_events"), list):
                 events.extend(list(result.get("progress_events") or []))
-            events.append(self._operation_event("completed", "completed", "Operation completed"))
+            if service_failed:
+                events.append(self._operation_event("failed", "failed", str(op.get("error") or "Operation failed")))
+            else:
+                extra: Dict[str, Any] = {}
+                if str(command or "").strip() == "connect-from-config":
+                    extra["progress_percent"] = 100
+                events.append(self._operation_event("completed", "completed", "Operation completed", **extra))
             op["progress_events"] = events
             self._replace_operation(op)
         except asyncio.CancelledError:
@@ -1693,6 +1798,7 @@ class EngineHostDaemon:
             return svc.unload_model(
                 str(payload.get("engine_id") or ""),
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                shutdown_all=bool(payload.get("shutdown_all", False)),
             )
         if cmd == "remove-registration":
             return svc.remove_registration(str(payload.get("engine_id") or ""))
@@ -1769,12 +1875,15 @@ class EngineHostDaemon:
         if cmd == "models-from-config":
             return svc.models_from_config(str(payload.get("config_path") or "default"))
         if cmd == "connect-from-config":
+            progress_callback = payload.get("_progress_callback")
             return svc.connect_from_config(
                 config_path=str(payload.get("config_path") or "default"),
                 engine_id=payload.get("engine_id"),
                 model_path=payload.get("model_path"),
                 force_new_worker=bool(payload.get("force_new_worker", False)),
                 launch_policy=payload.get("launch_policy"),
+                target_worker_id=payload.get("target_worker_id"),
+                progress_callback=progress_callback if callable(progress_callback) else None,
             )
         if cmd == "inspect-capabilities":
             return svc.inspect_engine_capabilities(

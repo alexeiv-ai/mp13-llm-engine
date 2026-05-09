@@ -1278,10 +1278,14 @@ class EngineHostControlChannel:
         res = self._invoke("ensure-running", {"engine_id": str(engine_id)})
         return dict(res or {})
 
-    def unload_model(self, engine_id: str, *, timeout_seconds: float = 30.0) -> Dict[str, Any]:
+    def unload_model(self, engine_id: str, *, timeout_seconds: float = 30.0, shutdown_all: bool = False) -> Dict[str, Any]:
         res = self._invoke(
             "unload-model",
-            {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds or 30.0)},
+            {
+                "engine_id": str(engine_id),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "shutdown_all": bool(shutdown_all),
+            },
         )
         return dict(res or {})
 
@@ -1414,6 +1418,7 @@ class EngineHostControlChannel:
         model_path: Optional[str] = None,
         force_new_worker: bool = False,
         launch_policy: Optional[str] = None,
+        target_worker_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "connect-from-config",
@@ -1423,6 +1428,7 @@ class EngineHostControlChannel:
                 "model_path": str(model_path).strip() if model_path else None,
                 "force_new_worker": bool(force_new_worker),
                 "launch_policy": str(launch_policy).strip() if launch_policy else None,
+                "target_worker_id": str(target_worker_id).strip() if target_worker_id else None,
             },
         )
         return dict(res or {})
@@ -1469,6 +1475,7 @@ class EngineHostControlChannel:
         model_path: Optional[str] = None,
         force_new_worker: bool = False,
         launch_policy: Optional[str] = None,
+        target_worker_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.start_host_operation(
             command="connect-from-config",
@@ -1478,6 +1485,7 @@ class EngineHostControlChannel:
                 "model_path": str(model_path).strip() if model_path else None,
                 "force_new_worker": bool(force_new_worker),
                 "launch_policy": str(launch_policy).strip() if launch_policy else None,
+                "target_worker_id": str(target_worker_id).strip() if target_worker_id else None,
             },
         )
 

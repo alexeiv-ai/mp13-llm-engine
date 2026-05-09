@@ -578,9 +578,13 @@ def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> N
                 payload={"operation_id": op_id},
             )
             assert status["ok"] is True
-            events = list((status.get("result") or {}).get("progress_events") or [])
+            result = dict(status.get("result") or {})
+            assert result.get("progress_percent") in {0, 100}
+            events = list(result.get("progress_events") or [])
             found = any(
-                str(x.get("stage") or "") == "connect.worker_ready" and str(x.get("status") or "") == "running"
+                str(x.get("stage") or "") == "connect.worker_ready"
+                and str(x.get("status") or "") == "running"
+                and x.get("progress_percent") == 0
                 for x in events
             )
             if found:
@@ -589,6 +593,48 @@ def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> N
         assert found
 
     asyncio.run(_run())
+
+
+def test_daemon_operation_marks_service_failed_result_failed(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+
+    def _failed_call_service(cmd: str, payload: dict) -> dict:
+        assert cmd == "connect-from-config"
+        return {
+            "status": "failed",
+            "stage": "failed",
+            "reason": "worker_not_ready",
+            "message": "worker RPC did not become ready",
+            "progress_events": [
+                {
+                    "stage": "connect.worker_ready",
+                    "status": "failed",
+                    "message": "worker RPC did not become ready",
+                }
+            ],
+        }
+
+    daemon._call_service = _failed_call_service  # type: ignore[method-assign]
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": "default"},
+    )
+    op_id = str(op.get("operation_id") or "")
+
+    asyncio.run(daemon._run_operation(op_id, "connect-from-config", {"config_path": "default"}))  # noqa: SLF001
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": op_id},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("status") == "failed"
+    assert result.get("error_code") == "worker_not_ready"
+    assert "worker RPC did not become ready" in str(result.get("error") or "")
 
 
 def test_connect_operation_status_reports_log_weight_progress(tmp_path: Path) -> None:
@@ -637,6 +683,247 @@ def test_connect_operation_status_reports_log_weight_progress(tmp_path: Path) ->
     diagnostics = dict(result.get("diagnostics") or {})
     worker_log = dict(diagnostics.get("worker_log") or {})
     assert worker_log.get("log_path") == str(log_path)
+
+
+def test_connect_operation_status_reports_checkpoint_shard_progress(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    log_path = tmp_path / "logs" / "model.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "Loading checkpoint shards:  42%|####2     | 5/12 [00:03<00:04]\n",
+        encoding="utf-8",
+    )
+    daemon.svc.engines_state_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "engines": [
+                    {
+                        "engine_id": "model-granite",
+                        "model_instance_id": "model-granite",
+                        "canonical_model_path": str((tmp_path / "granite").resolve()),
+                        "canonical_config_path": str((tmp_path / "config.json").resolve()),
+                        "log_path": str(log_path),
+                        "spawned_at": time.time(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": str(tmp_path / "config.json"), "model_path": str(tmp_path / "granite")},
+    )
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": str(op.get("operation_id") or "")},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("progress_percent") == 42
+    assert "Loading model weights" in str(result.get("progress_text") or "")
+
+
+def test_connect_operation_progress_resolves_relative_model_hint(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    cfg_path = tmp_path / "backend" / "configs" / "granite-2b.json"
+    model_dir = tmp_path / "models" / "granite-3.3-2b-instruct"
+    log_path = tmp_path / "logs" / "model.log"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        json.dumps({"category_dirs": {"models_root_dir": str(tmp_path / "models")}}),
+        encoding="utf-8",
+    )
+    log_path.write_text("Loading weights:  38%|###8      | 138/362 [00:12<00:20]\n", encoding="utf-8")
+    daemon.svc._resolve_json_config_path = lambda _config_path: cfg_path  # type: ignore[method-assign]
+    daemon.svc.engines_state_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "engines": [
+                    {
+                        "engine_id": "model-granite",
+                        "model_instance_id": "model-granite",
+                        "canonical_model_path": str(model_dir.resolve()),
+                        "canonical_config_path": str(cfg_path.resolve()),
+                        "log_path": str(log_path),
+                        "spawned_at": time.time(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": "granite-2b", "model_path": "granite-3.3-2b-instruct"},
+    )
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": str(op.get("operation_id") or "")},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("target_engine_id") == "model-granite"
+    assert result.get("progress_percent") == 38
+    assert dict(result.get("diagnostics") or {}).get("log_path") == str(log_path)
+
+
+def test_connect_operation_status_estimates_progress_without_log_percent(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": "default"},
+    )
+    op_id = str(op.get("operation_id") or "")
+    with daemon._operations_lock:  # noqa: SLF001
+        daemon._operations[op_id]["started_at"] = time.time() - 5.0  # noqa: SLF001
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": op_id},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert 1 <= int(result.get("progress_percent") or 0) < 100
+    assert result.get("progress_estimated") is True
+
+
+def test_operation_progress_callback_supplies_log_path(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": "default"},
+    )
+    op_id = str(op.get("operation_id") or "")
+    log_path = tmp_path / "logs" / "model.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("Loading weights: 100%|##########| stale previous run\n", encoding="utf-8")
+
+    daemon._record_operation_progress_event(  # noqa: SLF001
+        op_id,
+        {
+            "stage": "connect.worker_ready",
+            "status": "running",
+            "message": "Loading model and waiting for worker RPC readiness",
+            "engine_id": "model-demo",
+            "log_path": str(log_path),
+        },
+    )
+    with log_path.open("a", encoding="utf-8") as fp:
+        fp.write("Loading weights:  64%|######4   | 232/362 [00:03<00:01]\n")
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": op_id},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("target_engine_id") == "model-demo"
+    assert result.get("progress_percent") == 64
+    diagnostics = dict(result.get("diagnostics") or {})
+    assert diagnostics.get("log_path") == str(log_path)
+    assert int(diagnostics.get("log_start_offset") or 0) > 0
+
+
+def test_connect_operation_status_reports_worker_log_error(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    log_path = tmp_path / "logs" / "model.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "Loading weights:  12%|#2        | 44/362 [00:03<00:22]\n"
+        "Global Engine Initialization Failed: OSError: demo model is not a local folder\n"
+        "Traceback (most recent call last):\n"
+        "  File \"engine.py\", line 1, in load\n",
+        encoding="utf-8",
+    )
+    daemon.svc.engines_state_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "engines": [
+                    {
+                        "engine_id": "model-demo",
+                        "model_instance_id": "model-demo",
+                        "canonical_model_path": str((tmp_path / "demo").resolve()),
+                        "canonical_config_path": str((tmp_path / "config.json").resolve()),
+                        "log_path": str(log_path),
+                        "spawned_at": time.time(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": str(tmp_path / "config.json"), "model_path": str(tmp_path / "demo")},
+    )
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": str(op.get("operation_id") or "")},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("progress_percent") == 12
+    assert "not a local folder" in str(result.get("progress_error") or "")
+    diagnostics = dict(result.get("diagnostics") or {})
+    assert "worker_log_error" in diagnostics
+
+
+def test_connect_operation_progress_does_not_parse_stale_log_before_offset(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    op = daemon._create_operation(  # noqa: SLF001
+        command="connect-from-config",
+        payload={"config_path": "default"},
+    )
+    op_id = str(op.get("operation_id") or "")
+    log_path = tmp_path / "logs" / "model.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("Loading weights: 100%|##########| stale previous run\n", encoding="utf-8")
+    daemon._record_operation_progress_event(  # noqa: SLF001
+        op_id,
+        {
+            "stage": "connect.worker_ready",
+            "status": "running",
+            "message": "Loading model and waiting for worker RPC readiness",
+            "engine_id": "model-demo",
+            "log_path": str(log_path),
+        },
+    )
+    with log_path.open("a", encoding="utf-8") as fp:
+        fp.write("Loading weights:  14%|#4        | 51/362 [00:04<00:20]\n")
+
+    status = _dispatch(
+        daemon,
+        seq=1,
+        cmd="op-status",
+        payload={"operation_id": op_id},
+    )
+
+    assert status["ok"] is True
+    result = dict(status.get("result") or {})
+    assert result.get("progress_percent") == 14
 
 
 def test_daemon_operation_status_survives_memory_reload(tmp_path: Path) -> None:

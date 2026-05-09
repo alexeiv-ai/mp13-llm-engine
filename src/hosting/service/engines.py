@@ -9,7 +9,7 @@ import sys
 import time
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .._process_utils import terminate_process_tree
 from ..sandbox import (
@@ -162,7 +162,7 @@ class EnginesMixin:
             return None
         for row in self._read_engines():
             reg = dict(row or {})
-            if not self._compatible_runtime_profile(reg, runtime_profile):
+            if self._normalize_worker_profile_class(str(reg.get("worker_profile_class") or "")) != "model":
                 continue
             pid = int(reg.get("pid") or 0)
             if pid <= 0 or not self._pid_alive(pid):
@@ -178,6 +178,39 @@ class EnginesMixin:
                 reg["reachability"] = dict(reachability or {})
                 return reg
         return None
+
+    def _find_idle_model_worker(
+        self,
+        *,
+        runtime_profile: Dict[str, Any],
+        target_worker_id: str = "",
+        reachability_timeout_seconds: float = 0.35,
+    ) -> Optional[Dict[str, Any]]:
+        wanted = str(target_worker_id or "").strip()
+        candidates: List[Dict[str, Any]] = []
+        for row in self._read_engines():
+            reg = dict(row or {})
+            worker_id = str(reg.get("worker_id") or reg.get("engine_id") or "").strip()
+            if wanted and wanted not in {worker_id, str(reg.get("engine_id") or "").strip()}:
+                continue
+            if not self._compatible_runtime_profile(reg, runtime_profile):
+                continue
+            if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+                continue
+            if list(reg.get("loaded_models") or []):
+                continue
+            pid = int(reg.get("pid") or 0)
+            if pid <= 0 or not self._pid_alive(pid):
+                continue
+            reachability = self._probe_registration_reachability(reg, timeout_seconds=reachability_timeout_seconds)
+            if bool(reachability.get("reachable", False)):
+                reg["reachable"] = True
+                reg["reachability"] = dict(reachability or {})
+                candidates.append(reg)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: float(item.get("spawned_at") or 0.0), reverse=True)
+        return candidates[0]
 
     def _model_instance_for_engine_id(self, reg: Dict[str, Any], engine_id: str) -> str:
         eid = str(engine_id or "").strip()
@@ -457,16 +490,29 @@ class EnginesMixin:
         model_path: Optional[str] = None,
         force_new_worker: bool = False,
         launch_policy: Optional[str] = None,
+        target_worker_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         progress_events: List[Dict[str, Any]] = [
             self._progress_event("connect.resolve_config", "running", "Resolving engine config"),
         ]
+
+        def _emit_progress(event: Dict[str, Any]) -> None:
+            if not callable(progress_callback):
+                return
+            try:
+                progress_callback(dict(event or {}))
+            except Exception:
+                pass
+
+        _emit_progress(progress_events[-1])
         selected = self._resolve_json_config_path(config_path)
         cfg = self._merge_default_and_selected_config(config_path)
         if not isinstance(cfg, dict):
             cfg = {}
         base_name = self._safe_config_name(Path(selected).stem or "engine")
         requested = self._safe_config_name(engine_id) if str(engine_id or "").strip() else ""
+        requested_worker_id = str(target_worker_id or "").strip()
         worker_class = self._classify_connect_worker_class(
             config_path=config_path,
             payload={"model_path": model_path},
@@ -488,7 +534,12 @@ class EnginesMixin:
                 or cfg.get("model")
                 or cfg.get("base_model_name_or_path")
             )
-            effective_model_path = str(model_path or configured_model or "").strip() or None
+            effective_model_raw = str(model_path or configured_model or "").strip()
+            effective_model_path = (
+                self._resolve_model_path_from_config_value(effective_model_raw, config_path=config_path, cfg=cfg)
+                if effective_model_raw
+                else None
+            )
             if not effective_model_path:
                 progress_events.append(
                     self._progress_event("connect.resolve_model", "needs_input", "No model path configured")
@@ -575,6 +626,66 @@ class EnginesMixin:
                         "managed_engine": updated_reg or reusable,
                         "progress_events": progress_events,
                     }
+                idle_worker = self._find_idle_model_worker(
+                    runtime_profile=runtime_profile,
+                    target_worker_id=requested_worker_id,
+                )
+                if idle_worker is not None:
+                    worker_id = str(idle_worker.get("worker_id") or idle_worker.get("engine_id") or "").strip()
+                    model_instance_id = requested or worker_id or self._model_instance_id_for_model(str(effective_model_path))
+                    worker_out = self._ipc_call(
+                        reg=idle_worker,
+                        payload={
+                            "kind": "rpc_call",
+                            "engine_id": worker_id,
+                            "method": "model.load",
+                            "params": {
+                                "model_instance_id": model_instance_id,
+                                "model_path": str(effective_model_path),
+                                "config_path": str(selected),
+                            },
+                        },
+                        timeout_seconds=float(cfg.get("worker_ready_timeout_seconds") or 600.0),
+                    )
+                    if str(worker_out.get("status") or "").strip().lower() == "error":
+                        raise RuntimeError(str(worker_out.get("message") or "model_load_failed"))
+                    updated_reg = self._finalize_model_registration(
+                        dict(idle_worker),
+                        worker_id=worker_id,
+                        model_instance_id=model_instance_id,
+                        config_path=str(selected),
+                        canonical_config_path=canonical_config_path,
+                        model_path=str(effective_model_path),
+                        canonical_model_path=canonical_model_path,
+                    )
+                    progress_events.append(
+                        self._progress_event(
+                            "connect.reconcile_worker",
+                            "completed",
+                            "Loaded model into existing idle worker",
+                            worker_id=worker_id,
+                            engine_id=model_instance_id,
+                            model_instance_id=model_instance_id,
+                        )
+                    )
+                    return {
+                        "status": "loaded_existing_worker",
+                        "stage": "completed",
+                        "reconciled": True,
+                        "spawned": False,
+                        "worker_id": worker_id,
+                        "engine_id": model_instance_id,
+                        "model_instance_id": model_instance_id,
+                        "config_binding_id": self._config_binding_id(model_instance_id, canonical_config_path),
+                        "config_path": str(selected),
+                        "canonical_config_path": canonical_config_path,
+                        "model_path": effective_model_path,
+                        "canonical_model_path": canonical_model_path,
+                        "worker_class": worker_class,
+                        "managed_engine": updated_reg,
+                        "worker": dict(worker_out or {}),
+                        "progress_events": progress_events,
+                    }
                 progress_events.append(
                     self._progress_event("connect.reconcile_worker", "completed", "No reusable worker found")
                 )
@@ -646,8 +757,15 @@ class EnginesMixin:
                     canonical_model_path=self._canonical_path_value(effective_model_path),
                 )
             progress_events.append(
-                self._progress_event("connect.spawn_engine", "completed", "Engine started", engine_id=eid)
+                self._progress_event(
+                    "connect.spawn_engine",
+                    "completed",
+                    "Engine started",
+                    engine_id=eid,
+                    log_path=str(rec.get("log_path") or ""),
+                )
             )
+            _emit_progress(progress_events[-1])
             ready: Optional[Dict[str, Any]] = None
             if worker_class != "generic" and str(rec.get("worker_transport") or "").strip().lower() == "ipc":
                 progress_events.append(
@@ -656,8 +774,10 @@ class EnginesMixin:
                         "running",
                         "Loading model and waiting for worker RPC readiness",
                         engine_id=eid,
+                        log_path=str(rec.get("log_path") or ""),
                     )
                 )
+                _emit_progress(progress_events[-1])
                 try:
                     ready = self._wait_for_worker_rpc_ready(
                         dict(rec),
@@ -669,13 +789,16 @@ class EnginesMixin:
                             "completed",
                             "Worker RPC is ready",
                             engine_id=eid,
+                            log_path=str(rec.get("log_path") or ""),
                             attempts=int(ready.get("attempts") or 0),
                         )
                     )
+                    _emit_progress(progress_events[-1])
                 except Exception as exc:
                     progress_events.append(
-                        self._progress_event("connect.worker_ready", "failed", str(exc), engine_id=eid)
+                        self._progress_event("connect.worker_ready", "failed", str(exc), engine_id=eid, log_path=str(rec.get("log_path") or ""))
                     )
+                    _emit_progress(progress_events[-1])
                     return {
                         "status": "failed",
                         "stage": "failed",
@@ -1194,7 +1317,7 @@ class EnginesMixin:
             "termination": termination,
         }
 
-    def unload_model(self, engine_id: str, *, timeout_seconds: float = 30.0) -> Dict[str, Any]:
+    def unload_model(self, engine_id: str, *, timeout_seconds: float = 30.0, shutdown_all: bool = False) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
@@ -1204,6 +1327,96 @@ class EnginesMixin:
         worker_id = str(entry.get("worker_id") or entry.get("engine_id") or "").strip()
         model_instance_id = self._model_instance_for_engine_id(entry, eid)
         binding_id = str(entry.get("_route_config_binding_id") or "").strip()
+
+        def _worker_model_ids(reg: Dict[str, Any]) -> List[str]:
+            described = self._ipc_call(
+                reg=reg,
+                payload={
+                    "kind": "rpc_call",
+                    "engine_id": worker_id or eid,
+                    "method": "model.describe",
+                    "params": {},
+                },
+                timeout_seconds=min(10.0, max(1.0, float(timeout_seconds or 30.0))),
+            )
+            if str(described.get("status") or "").strip().lower() == "error":
+                raise RuntimeError(str(described.get("message") or "model_describe_failed"))
+            result = dict(described.get("result") or {}) if isinstance(described.get("result"), dict) else {}
+            return [
+                str((item or {}).get("model_instance_id") or (item or {}).get("engine_id") or "").strip()
+                for item in list(result.get("loaded_models") or [])
+                if isinstance(item, dict)
+            ]
+
+        if bool(shutdown_all):
+            reg = self._require_ipc_registration(worker_id or eid, command_label="unload-model")
+            worker_out = self._ipc_call(
+                reg=reg,
+                payload={
+                    "kind": "rpc_call",
+                    "engine_id": worker_id or eid,
+                    "method": "model.unload",
+                    "params": {"shutdown_all": True},
+                },
+                timeout_seconds=timeout_seconds,
+            )
+            if str(worker_out.get("status") or "").strip().lower() == "error":
+                raise RuntimeError(str(worker_out.get("message") or "model_unload_failed"))
+            remaining_worker_models = [mid for mid in _worker_model_ids(reg) if mid]
+            if remaining_worker_models:
+                raise RuntimeError(f"worker still reports loaded models after shutdown_all: {', '.join(remaining_worker_models)}")
+            updated: List[Dict[str, Any]] = []
+            for row in self._read_engines():
+                reg_row = dict(row or {})
+                if str(reg_row.get("worker_id") or reg_row.get("engine_id") or "") != worker_id:
+                    updated.append(reg_row)
+                    continue
+                reg_row["loaded_models"] = []
+                reg_row["config_bindings"] = []
+                reg_row.pop("model_path", None)
+                reg_row.pop("canonical_model_path", None)
+                reg_row.pop("config_path", None)
+                reg_row.pop("canonical_config_path", None)
+                updated.append(reg_row)
+            self._write_engines(updated)
+            return {
+                "status": "unloaded",
+                "engine_id": eid,
+                "worker_id": worker_id,
+                "shutdown_all": True,
+                "worker_still_running": True,
+                "remaining_model_count": 0,
+                "worker": dict(worker_out or {}),
+            }
+
+        bindings_for_model = [
+            dict(item or {})
+            for item in list(entry.get("config_bindings") or [])
+            if isinstance(item, dict)
+            and str((item or {}).get("model_instance_id") or "").strip() == model_instance_id
+        ]
+        unload_engine_instance = not binding_id or len(bindings_for_model) <= 1
+        worker_out: Dict[str, Any] = {}
+        if unload_engine_instance:
+            reg = self._require_ipc_registration(worker_id or eid, command_label="unload-model")
+            worker_out = self._ipc_call(
+                reg=reg,
+                payload={
+                    "kind": "rpc_call",
+                    "engine_id": model_instance_id,
+                    "method": "model.unload",
+                    "params": {"model_instance_id": model_instance_id},
+                },
+                timeout_seconds=timeout_seconds,
+            )
+            if str(worker_out.get("status") or "").strip().lower() == "error":
+                message = str(worker_out.get("message") or "model_unload_failed")
+                if "not found" not in message.lower():
+                    raise RuntimeError(message)
+            remaining_worker_models = [mid for mid in _worker_model_ids(reg) if mid]
+            if model_instance_id in remaining_worker_models:
+                raise RuntimeError(f"worker still reports model '{model_instance_id}' after unload")
+
         rows = self._read_engines()
         updated: List[Dict[str, Any]] = []
         removed_binding = False
@@ -1221,9 +1434,10 @@ class EnginesMixin:
                 for model in list(reg.get("loaded_models") or []):
                     ids = [str(x) for x in list((model or {}).get("config_binding_ids") or []) if str(x).strip() and str(x).strip() != binding_id]
                     model["config_binding_ids"] = ids
-                updated.append(reg)
-                remaining_models = len(list(reg.get("loaded_models") or []))
-                continue
+                if not unload_engine_instance:
+                    updated.append(reg)
+                    remaining_models = len(list(reg.get("loaded_models") or []))
+                    continue
             models = [dict(item or {}) for item in list(reg.get("loaded_models") or []) if isinstance(item, dict)]
             new_models = [m for m in models if str(m.get("model_instance_id") or "") != model_instance_id]
             reg["loaded_models"] = new_models
@@ -1232,9 +1446,14 @@ class EnginesMixin:
                 if str(b.get("model_instance_id") or "") != model_instance_id
             ]
             remaining_models = len(new_models)
+            if not new_models:
+                reg.pop("model_path", None)
+                reg.pop("canonical_model_path", None)
+                reg.pop("config_path", None)
+                reg.pop("canonical_config_path", None)
             updated.append(reg)
         self._write_engines(updated)
-        if binding_id:
+        if binding_id and not unload_engine_instance:
             return {
                 "status": "unloaded",
                 "engine_id": eid,
@@ -1245,27 +1464,16 @@ class EnginesMixin:
                 "worker_still_running": True,
                 "remaining_model_count": remaining_models,
             }
-        reg = self._require_ipc_registration(worker_id or eid, command_label="unload-model")
-        out = self._ipc_call(
-            reg=reg,
-            payload={
-                "kind": "rpc_call",
-                "engine_id": model_instance_id,
-                "method": "model.unload",
-                "params": {"model_instance_id": model_instance_id},
-            },
-            timeout_seconds=timeout_seconds,
-        )
-        if str(out.get("status") or "").strip().lower() == "error":
-            raise RuntimeError(str(out.get("message") or "model_unload_failed"))
         return {
             "status": "unloaded",
             "engine_id": eid,
             "worker_id": worker_id,
             "model_instance_id": model_instance_id,
+            "config_binding_id": binding_id or None,
+            "removed_binding": removed_binding if binding_id else None,
             "worker_still_running": True,
             "remaining_model_count": remaining_models,
-            "worker": dict(out or {}),
+            "worker": dict(worker_out or {}),
         }
 
     def ensure_running(self, engine_id: str) -> Dict[str, Any]:

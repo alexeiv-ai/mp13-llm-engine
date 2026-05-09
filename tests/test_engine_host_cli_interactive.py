@@ -318,9 +318,33 @@ def test_print_progress_snapshot_prefers_percent(capsys: pytest.CaptureFixture[s
     )
 
     out = capsys.readouterr().out
+    assert "[###############.....]" in out
     assert "74%" in out
     assert "Loading model weights" in out
     assert "74%" in line
+
+
+def test_print_progress_snapshot_without_percent_uses_zero_bar(capsys: pytest.CaptureFixture[str]) -> None:
+    line = interactive._print_progress_snapshot({"progress_text": "Starting model load"})
+
+    out = capsys.readouterr().out
+    assert "[....................]" in out
+    assert "0%" in out
+    assert "?" not in out
+    assert "Starting model load" in line
+
+
+def test_operation_failure_message_reads_service_result() -> None:
+    snap = {
+        "status": "completed",
+        "result": {
+            "status": "failed",
+            "reason": "worker_not_ready",
+            "message": "worker RPC did not become ready",
+        },
+    }
+
+    assert interactive._operation_failure_message(snap) == "worker RPC did not become ready"
 
 
 def test_offline_read_authenticates_and_retries_when_token_required(

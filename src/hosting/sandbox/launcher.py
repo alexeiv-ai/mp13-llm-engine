@@ -16,6 +16,8 @@ class WorkerLaunchRequest:
     command: List[str]
     cwd: Optional[Path]
     env: Dict[str, str]
+    # TBD: consider adding a daemon-owned real-time log sink here so worker
+    # stdout/stderr can be streamed through control APIs without tailing files.
     log_path: Path
     sandbox_policy: WorkerSandboxPolicy
 

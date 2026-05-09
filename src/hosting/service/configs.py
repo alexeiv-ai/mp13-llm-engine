@@ -210,22 +210,20 @@ class ConfigMixin:
 
     @staticmethod
     def _resolve_path_token(value: str, *, config_dir: Path) -> Path:
-        raw = (value or "").strip()
+        from mp13_engine.mp13_config_paths import PathResolver, detect_project_root
+
+        raw = str(value or "").strip()
         if not raw:
             return config_dir
-        if raw.startswith("@home"):
-            rest = raw[5:].lstrip("/\\")
-            return (Path.home() / rest).resolve()
-        if raw.startswith("@project"):
-            rest = raw[8:].lstrip("/\\")
-            return (Path.cwd() / rest).resolve()
-        if raw.startswith("@config"):
-            rest = raw[7:].lstrip("/\\")
-            return (config_dir / rest).resolve()
-        p = Path(raw).expanduser()
-        if p.is_absolute():
-            return p.resolve()
-        return (config_dir / p).resolve()
+        cwd = Path.cwd().resolve()
+        resolver = PathResolver(
+            cwd=cwd,
+            config_dir=config_dir.resolve(),
+            home_dir=Path.home().resolve(),
+            project_dir=detect_project_root(cwd),
+            category_roots={},
+        )
+        return Path(str(resolver.resolve(raw))).resolve()
 
     def list_engine_configs(self) -> List[Dict[str, Any]]:
         default_path = self._default_config_path()
@@ -277,12 +275,12 @@ class ConfigMixin:
         return {"name": stem, "path": str(path), "created": True, "overwrote": bool(existed and overwrite)}
 
     def models_from_config(self, config_path: str) -> List[Dict[str, Any]]:
+        from mp13_engine.mp13_config_paths import resolve_config_paths
+
         cfg = self._merge_default_and_selected_config(config_path)
         selected_path = self._resolve_json_config_path(config_path)
-        config_dir = selected_path.parent
-        category_dirs = cfg.get("category_dirs") if isinstance(cfg.get("category_dirs"), dict) else {}
-        models_root_raw = category_dirs.get("models_root_dir") or cfg.get("models_root_dir") or "@project/.."
-        models_root = self._resolve_path_token(str(models_root_raw), config_dir=config_dir)
+        _resolved_cfg, resolver = resolve_config_paths(cfg, config_path=selected_path)
+        models_root = resolver.category_roots.get("models") or selected_path.parent
         results: List[Dict[str, Any]] = []
         if not models_root.exists():
             return results
@@ -294,3 +292,14 @@ class ConfigMixin:
                 results.append({"name": child.name, "path": str(child), "safetensors_count": len(safes)})
         results.sort(key=lambda x: str(x.get("name") or "").lower())
         return results
+
+    def _resolve_model_path_from_config_value(self, value: str, *, config_path: str, cfg: Dict[str, Any]) -> str:
+        from mp13_engine.mp13_config_paths import resolve_config_paths
+
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        selected_path = self._resolve_json_config_path(config_path)
+        _resolved_cfg, resolver = resolve_config_paths(cfg, config_path=selected_path)
+        resolved = resolver.resolve(raw, category="models", allow_remote_id=False)
+        return str(resolved or raw)

@@ -207,6 +207,14 @@ async def _model_rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]
             _loaded_models[model_instance_id] = model
         return {"status": "ok", "result": {"status": "loaded", "model": model, "data": getattr(resp, "data", None)}}
     if m == "model.unload":
+        if p.get("shutdown_all") is True:
+            resp = await handle_call_tool("shutdown-engine", {"shutdown_all": True})
+            if str(getattr(resp, "status", "")) != "success":
+                return {"status": "error", "message": str(getattr(resp, "message", "model_unload_failed"))}
+            with _loaded_models_lock:
+                _loaded_models.clear()
+                _config_bindings.clear()
+            return {"status": "ok", "result": {"status": "unloaded_all"}}
         model_instance_id = str(p.get("model_instance_id") or p.get("engine_id") or p.get("instance_id") or "").strip()
         if not model_instance_id:
             return {"status": "error", "message": "model_instance_id_required"}

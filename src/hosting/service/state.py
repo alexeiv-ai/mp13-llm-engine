@@ -78,8 +78,9 @@ class StateMixin:
         canonical_model_path = str(record.get("canonical_model_path") or "").strip() or self._registration_path_value(model_path)
         canonical_config_path = str(record.get("canonical_config_path") or "").strip() or self._registration_path_value(config_path)
 
+        has_loaded_models_field = "loaded_models" in record
         loaded_models = [dict(item or {}) for item in list(record.get("loaded_models") or []) if isinstance(item, dict)]
-        if not loaded_models and model_path and model_instance_id:
+        if not has_loaded_models_field and not loaded_models and model_path and model_instance_id:
             loaded_models = [
                 {
                     "model_instance_id": model_instance_id,
@@ -92,8 +93,9 @@ class StateMixin:
                 }
             ]
 
+        has_config_bindings_field = "config_bindings" in record
         config_bindings = [dict(item or {}) for item in list(record.get("config_bindings") or []) if isinstance(item, dict)]
-        if not config_bindings and config_path and engine_id:
+        if not has_config_bindings_field and not config_bindings and config_path and engine_id:
             binding_id = self._registration_binding_id(engine_id, canonical_config_path or config_path)
             config_bindings = [
                 {

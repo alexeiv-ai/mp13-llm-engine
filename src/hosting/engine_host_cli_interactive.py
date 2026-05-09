@@ -258,17 +258,66 @@ def _print_progress_snapshot(snapshot: Dict[str, Any], *, last_text: str = "") -
         if events:
             text = str(events[-1].get("message") or events[-1].get("stage") or "").strip()
     if isinstance(percent, int):
-        line = f"  Progress: {percent}%"
+        pct = max(0, min(100, int(percent)))
+        filled = int(round(pct / 5.0))
+        bar = "#" * filled + "." * (20 - filled)
+        line = f"  Progress: [{bar}] {pct:3d}%"
         if text:
-            line += f" - {text}"
+            line += f"  {text}"
     elif text:
-        line = f"  Progress: {text}"
+        line = f"  Progress: [{'.' * 20}]   0%  {text}"
     else:
-        line = f"  Status: {snapshot.get('status') or 'running'}"
+        line = f"  Progress: [{'.' * 20}]   0%  {snapshot.get('status') or 'running'}"
     if line != last_text:
         print(_c("muted", line))
+        progress_error = str(snapshot.get("progress_error") or "").strip()
+        if progress_error:
+            print(_c("bad", f"  Worker log error: {progress_error}"))
         return line
     return last_text
+
+
+def _operation_failure_message(snapshot: Dict[str, Any]) -> str:
+    snap = dict(snapshot or {})
+    result = dict(snap.get("result") or {}) if isinstance(snap.get("result"), dict) else {}
+    candidates = [
+        result.get("message"),
+        result.get("reason"),
+        snap.get("error"),
+        snap.get("error_code"),
+        result.get("status"),
+        snap.get("status"),
+    ]
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "unknown error"
+
+
+def _print_operation_diagnostics(snapshot: Dict[str, Any]) -> None:
+    result = dict(snapshot.get("result") or {}) if isinstance(snapshot.get("result"), dict) else {}
+    reason = str(result.get("reason") or "").strip()
+    message = str(result.get("message") or "").strip()
+    if reason:
+        print(_c("muted", f"  Reason: {reason}"))
+    if message and message != reason:
+        print(_c("muted", f"  Detail: {message}"))
+    events = [
+        dict(item or {})
+        for item in list(result.get("progress_events") or snapshot.get("progress_events") or [])
+        if isinstance(item, dict)
+    ]
+    failed_events = [event for event in events if str(event.get("status") or "").lower() == "failed"]
+    if failed_events:
+        last = failed_events[-1]
+        stage = str(last.get("stage") or "").strip()
+        msg = str(last.get("message") or "").strip()
+        print(_c("muted", f"  Failed stage: {stage or 'unknown'}" + (f" - {msg}" if msg else "")))
+    managed = result.get("managed_engine") if isinstance(result.get("managed_engine"), dict) else {}
+    log_path = str(dict(managed or {}).get("log_path") or dict(snapshot.get("diagnostics") or {}).get("log_path") or "").strip()
+    if log_path:
+        print(_c("muted", f"  Worker log: {log_path}"))
 
 
 def _offline_service(args: argparse.Namespace):
@@ -1416,18 +1465,18 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                 return session_token
 
         force_new = False
+        target_worker_id = ""
         if not generic_worker:
             existing_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
             session_token = _active_session_token(args, session_token)
             existing = _get_engines_dict(existing_raw)
-            load_opts: Dict[str, tuple[str, str]] = {
-                "n": ("Create new engine instance", str(model_path)),
-                "r": ("Reuse any compatible running instance", str(model_path)),
-            }
+            load_opts: Dict[str, tuple[str, str]] = {}
             model_by_key: Dict[str, str] = {}
+            target_worker_by_key: Dict[str, str] = {}
             idx = 1
             for eid, info in existing.items():
-                for model in [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]:
+                loaded_models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
+                for model in loaded_models:
                     mpath = str(model.get("model_path") or model.get("canonical_model_path") or "").strip()
                     mid = str(model.get("model_instance_id") or model.get("engine_id") or eid).strip()
                     if not mpath:
@@ -1436,19 +1485,43 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                     idx += 1
                     model_by_key[key] = mpath
                     load_opts[key] = (f"Use running {mid}", mpath)
-            load_choice = _prompt_menu("Load Target", load_opts, "r", allow_back=True, allow_changes=False)
-            if load_choice in {"b", "back"}:
-                return session_token
-            force_new = load_choice == "n"
-            if load_choice in model_by_key:
-                model_path = model_by_key[load_choice]
-                force_new = False
+                if not loaded_models and _operator_resource_kind(info).endswith("model instance"):
+                    worker_id = str(info.get("worker_id") or eid).strip()
+                    if worker_id:
+                        key = str(idx)
+                        idx += 1
+                        target_worker_by_key[key] = worker_id
+                        load_opts[key] = (f"Load into idle worker {worker_id}", str(model_path))
+            if load_opts:
+                load_opts["a"] = ("Auto: reuse compatible or create new", str(model_path))
+                load_opts["n"] = ("Force new engine instance", str(model_path))
+                load_choice = _prompt_menu(
+                    "Load Target",
+                    load_opts,
+                    "a",
+                    allow_back=True,
+                    allow_changes=False,
+                    enter_hint="auto",
+                )
+                if load_choice in {"b", "back"}:
+                    return session_token
+                force_new = load_choice == "n"
+                if load_choice in model_by_key:
+                    model_path = model_by_key[load_choice]
+                    force_new = False
+                target_worker_id = target_worker_by_key.get(load_choice, "")
+                if target_worker_id:
+                    force_new = False
+            else:
+                print(_c("muted", "  No compatible running model workers found; creating a new engine instance."))
 
         payload = {
             "config_path": config_selector,
             "model_path": model_path or None,
             "force_new_worker": force_new,
         }
+        if not generic_worker and str(target_worker_id or "").strip():
+            payload["target_worker_id"] = str(target_worker_id or "").strip()
         if session_token:
             payload["session_token"] = session_token
         print(_c("muted", "Starting load operation..."))
@@ -1465,12 +1538,17 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
             snap = dict(status or {})
             last_line = _print_progress_snapshot(snap, last_text=last_line)
             if bool(snap.get("done", False)):
-                if str(snap.get("status") or "").lower() in {"completed", "ok"} or not snap.get("error"):
+                result = dict(snap.get("result") or {}) if isinstance(snap.get("result"), dict) else {}
+                op_status = str(snap.get("status") or "").lower()
+                result_status = str(result.get("status") or "").lower()
+                failed = bool(snap.get("error")) or op_status == "failed" or result_status in {"failed", "error"}
+                if not failed:
                     result = dict(snap.get("result") or {})
                     final_status = str(result.get("status") or snap.get("status") or "completed")
                     print(_c("good", f"Load finished: {final_status}"))
                 else:
-                    print(_c("bad", f"Load failed: {snap.get('error') or snap.get('error_code') or 'unknown error'}"))
+                    print(_c("bad", f"Load failed: {_operation_failure_message(snap)}"))
+                    _print_operation_diagnostics(snap)
                 return session_token
             time.sleep(1.0)
     except PermissionError:
@@ -1517,8 +1595,41 @@ def _kill_resource(args: argparse.Namespace, session_token: Optional[str]) -> Op
             ech = _prompt_menu("Select Model Binding", model_opts, "b", allow_back=True, allow_changes=False)
             if ech in ("b", "back"): return session_token
             print(f"Unloading {ech}...")
-            _api_invoke(args, "unload-model", {"engine_id": ech}, session_token=session_token)
-            print(_c('good', "Unload requested."))
+            unload_result = dict(_api_invoke(
+                args,
+                "unload-model",
+                {"engine_id": ech, "timeout_seconds": 120.0},
+                session_token=session_token,
+            ) or {})
+            session_token = _active_session_token(args, session_token)
+            status = str(unload_result.get("status") or "unknown").strip()
+            if status not in {"unloaded", "not_found"}:
+                print(_c("bad", f"Unload failed: {status}"))
+                message = str(unload_result.get("message") or unload_result.get("error") or "").strip()
+                if message:
+                    print(_c("muted", f"  Detail: {message}"))
+                return session_token
+            worker_result = dict(unload_result.get("worker") or {}) if isinstance(unload_result.get("worker"), dict) else {}
+            worker_status = str(worker_result.get("status") or "").strip()
+            if worker_status and worker_status != "ok":
+                print(_c("warn", f"Worker unload returned: {worker_status}"))
+            verify_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
+            session_token = _active_session_token(args, session_token)
+            verify_engines = _get_engines_dict(verify_raw)
+            still_bound = False
+            for _, info in verify_engines.items():
+                bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
+                models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
+                if any(str(binding.get("engine_id") or "").strip() == ech for binding in bindings):
+                    still_bound = True
+                if any(str(model.get("model_instance_id") or model.get("engine_id") or "").strip() == ech for model in models):
+                    still_bound = True
+            if still_bound:
+                print(_c("bad", "Unload completed but daemon still reports the model binding."))
+            else:
+                remaining = unload_result.get("remaining_model_count")
+                suffix = f" Remaining models on worker: {remaining}." if remaining is not None else ""
+                print(_c("good", f"Unload completed.{suffix}"))
 
         elif ch == "e":
             res = _api_invoke(args, "discover-running", {}, session_token=session_token)

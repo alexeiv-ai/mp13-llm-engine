@@ -17,6 +17,25 @@ def _make_service(tmp_path: Path) -> EngineHostService:
     )
 
 
+def test_resolve_model_path_from_config_value_uses_models_root(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    cfg_path = tmp_path / "backend" / "configs" / "granite-2b.json"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("{}", encoding="utf-8")
+    models_root = tmp_path / "models"
+    model_dir = models_root / "granite-3.3-2b-instruct"
+    model_dir.mkdir(parents=True)
+    svc._resolve_json_config_path = lambda _config_path: cfg_path  # type: ignore[method-assign]
+
+    resolved = svc._resolve_model_path_from_config_value(
+        "granite-3.3-2b-instruct",
+        config_path="granite-2b",
+        cfg={"category_dirs": {"models_root_dir": str(models_root)}},
+    )
+
+    assert resolved == str(model_dir.resolve())
+
+
 def _install_ipc_http_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     def _stub(
         self,
