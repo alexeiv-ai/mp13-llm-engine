@@ -84,6 +84,86 @@ def test_auto_session_is_reused_across_channels_in_process() -> None:
     assert second.calls[0][1]["session_token"] == "tok-123"
 
 
+def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
+    class _PublicKeyConn(_FakeConn):
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+            self.calls.append((cmd, dict(payload or {})))
+            if cmd == "auth-begin-challenge":
+                return {"challenge_id": "chal-1", "challenge": "sign-me"}
+            if cmd == "auth-complete-challenge":
+                return {
+                    "status": "ok",
+                    "token": "pk-token",
+                    "scope": "traffic",
+                    "expires_at": 9999999999.0,
+                }
+            if cmd == "auth-status":
+                raise CommandError("auth_failed", code="insufficient_scope")
+            return {}
+
+    fake = _PublicKeyConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    signer_calls: list[dict] = []
+
+    def signer(challenge: dict) -> dict:
+        signer_calls.append(dict(challenge))
+        return {"signature_ssh": "SIG"}
+
+    first = ch.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer)
+    second = ch.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer)
+
+    assert first == "pk-token"
+    assert second == "pk-token"
+    assert [cmd for cmd, _payload in fake.calls] == ["auth-begin-challenge", "auth-complete-challenge"]
+    assert len(signer_calls) == 1
+
+
+def test_public_key_session_cache_reuses_non_control_token_across_channels() -> None:
+    settings = {
+        "engine_host_daemon_auto_bootstrap": False,
+        "engine_host_control_state_file": "C:/state/access_control.json",
+    }
+
+    class _PublicKeyConn(_FakeConn):
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+            self.calls.append((cmd, dict(payload or {})))
+            if cmd == "auth-begin-challenge":
+                return {"challenge_id": "chal-1", "challenge": "sign-me"}
+            if cmd == "auth-complete-challenge":
+                return {
+                    "status": "ok",
+                    "token": "pk-token",
+                    "scope": "traffic",
+                    "expires_at": 9999999999.0,
+                }
+            if cmd == "auth-status":
+                raise CommandError("auth_failed", code="insufficient_scope")
+            return {}
+
+    first = _PublicKeyConn()
+    ch1 = EngineHostControlChannel(settings)
+    ch1._get_connection = lambda: first  # type: ignore[method-assign]
+
+    second = _PublicKeyConn()
+    ch2 = EngineHostControlChannel(settings)
+    ch2._get_connection = lambda: second  # type: ignore[method-assign]
+
+    signer_calls: list[dict] = []
+
+    def signer(challenge: dict) -> str:
+        signer_calls.append(dict(challenge))
+        return "SIG"
+
+    assert ch1.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer) == "pk-token"
+    assert ch2.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer) == "pk-token"
+
+    assert [cmd for cmd, _payload in first.calls] == ["auth-begin-challenge", "auth-complete-challenge"]
+    assert second.calls == []
+    assert len(signer_calls) == 1
+
+
 def test_discover_running_auth_failure_does_not_use_subprocess_fallback() -> None:
     class _AuthFailConn(_FakeConn):
         def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:

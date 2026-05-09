@@ -28,6 +28,16 @@ from .client_realm import (
 from .transport_bootstrap import _protect_openssh_private_key, _protect_windows_private_key_path
 
 
+def _coerce_signature_ssh(result: Any, *, expected_challenge_id: str = "") -> str:
+    if isinstance(result, dict):
+        signer_challenge_id = str(result.get("challenge_id") or "").strip()
+        expected = str(expected_challenge_id or "").strip()
+        if expected and signer_challenge_id and signer_challenge_id != expected:
+            raise ValueError("signer returned signature for a different challenge_id")
+        return str(result.get("signature_ssh") or result.get("signature") or "").strip()
+    return str(result or "").strip()
+
+
 @dataclass(frozen=True)
 class ClientRealmKeyRequest:
     client_realm_root: Path
@@ -429,6 +439,25 @@ def authenticate_client_with_key(
     OpenSSH armored signature. Headless callers may pass unencrypted
     private_key_text to use the non-interactive ssh-keygen signer.
     """
+    ensure_session = getattr(client, "ensure_public_key_session", None)
+    if callable(ensure_session):
+        return str(
+            ensure_session(
+                key_id=key_id,
+                scope=scope,
+                signer=signer,
+                private_key_text=private_key_text,
+                signature_ssh=signature_ssh,
+                ttl_seconds=ttl_seconds,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+                adopt=adopt,
+                namespace=namespace,
+                sign_timeout_seconds=sign_timeout_seconds,
+            )
+            or ""
+        )
     challenge = begin_client_key_authentication(
         client,
         key_id=key_id,
@@ -440,7 +469,10 @@ def authenticate_client_with_key(
     )
     signature = str(signature_ssh or "").strip()
     if not signature and signer is not None:
-        signature = str(signer(dict(challenge)) or "").strip()
+        signature = _coerce_signature_ssh(
+            signer(dict(challenge)),
+            expected_challenge_id=str(challenge.get("challenge_id") or ""),
+        )
     if not signature and private_key_text:
         signature = sign_client_auth_challenge_with_private_key(
             private_key_text=private_key_text,

@@ -548,7 +548,7 @@ def test_daemon_operation_start_copies_outer_session_token(tmp_path: Path) -> No
     assert status["ok"] is True
 
 
-def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> None:
+def test_connect_operation_status_reports_config_resolve_before_worker_ready(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
 
     def _slow_call_service(cmd: str, payload: dict) -> dict:
@@ -582,7 +582,7 @@ def test_connect_operation_status_reports_worker_ready_wait(tmp_path: Path) -> N
             assert result.get("progress_percent") in {0, 100}
             events = list(result.get("progress_events") or [])
             found = any(
-                str(x.get("stage") or "") == "connect.worker_ready"
+                str(x.get("stage") or "") == "connect.resolve_config"
                 and str(x.get("status") or "") == "running"
                 and x.get("progress_percent") == 0
                 for x in events

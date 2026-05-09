@@ -524,11 +524,61 @@ class EngineHostDaemon:
             "progress_error": message,
         }
 
+    def _connect_progress_registration(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        hint = dict((op or {}).get("payload_hint") or {})
+        config_hint = str(hint.get("config_path") or "").strip()
+        model_hint = str(hint.get("model_path") or "").strip()
+        canonical_config = ""
+        canonical_model = ""
+        try:
+            if config_hint:
+                selected = self.svc._resolve_json_config_path(config_hint)
+                canonical_config = self.svc._canonical_path_value(str(selected))
+                if model_hint:
+                    cfg = self.svc._merge_default_and_selected_config(config_hint)
+                    canonical_model = self.svc._canonical_path_value(
+                        self.svc._resolve_model_path_from_config_value(model_hint, config_path=config_hint, cfg=cfg)
+                    )
+        except Exception:
+            canonical_config = str(Path(config_hint).expanduser().resolve()) if config_hint else ""
+            canonical_model = str(Path(model_hint).expanduser().resolve()) if model_hint else ""
+        target_engine = str((op or {}).get("target_engine_id") or "").strip()
+        best: Dict[str, Any] = {}
+        for row in list(self.svc._read_engines() or []):
+            reg = dict(row or {})
+            engine_ids = {
+                str(reg.get("engine_id") or "").strip(),
+                str(reg.get("worker_id") or "").strip(),
+                str(reg.get("model_instance_id") or "").strip(),
+            }
+            if target_engine and target_engine in engine_ids:
+                return reg
+            if canonical_config and str(reg.get("canonical_config_path") or "").strip() == canonical_config:
+                best = reg
+            if canonical_model and str(reg.get("canonical_model_path") or "").strip() == canonical_model:
+                best = reg
+            for binding in list(reg.get("config_bindings") or []):
+                if canonical_config and str((binding or {}).get("canonical_config_path") or "").strip() == canonical_config:
+                    best = reg
+            for model in list(reg.get("loaded_models") or []):
+                if canonical_model and str((model or {}).get("canonical_model_path") or "").strip() == canonical_model:
+                    best = reg
+        return best
+
     def _enrich_operation_progress(self, op: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(op or {})
         if bool(out.get("done", False)) or str(out.get("command") or "").strip() != "connect-from-config":
             return out
         diagnostics = dict(out.get("diagnostics") or {})
+        if not str(diagnostics.get("log_path") or "").strip():
+            reg = self._connect_progress_registration(out)
+            log_path_from_reg = str(reg.get("log_path") or "").strip()
+            if log_path_from_reg:
+                diagnostics["log_path"] = log_path_from_reg
+                diagnostics.setdefault("log_start_offset", 0)
+                target = str(reg.get("engine_id") or reg.get("model_instance_id") or reg.get("worker_id") or "").strip()
+                if target and not str(out.get("target_engine_id") or "").strip():
+                    out["target_engine_id"] = target
         log_path = str(diagnostics.get("log_path") or "").strip()
         has_log_start_offset = "log_start_offset" in diagnostics
         log_start_offset = int(diagnostics.get("log_start_offset") or 0)
@@ -1218,12 +1268,12 @@ class EngineHostDaemon:
         events.append(self._operation_event("running", "running", "Operation started"))
         if str(command or "").strip() == "connect-from-config":
             op["progress_percent"] = 0
-            op["progress_text"] = "Starting model load"
+            op["progress_text"] = "Resolving engine config"
             events.append(
                 self._operation_event(
-                    "connect.worker_ready",
+                    "connect.resolve_config",
                     "running",
-                    "Loading model and waiting for worker RPC readiness",
+                    "Resolving engine config",
                     progress_percent=0,
                 )
             )

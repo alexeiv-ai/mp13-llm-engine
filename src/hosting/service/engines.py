@@ -591,15 +591,24 @@ class EnginesMixin:
                 progress_events.append(
                     self._progress_event("connect.reconcile_worker", "running", "Searching for reusable worker")
                 )
+                _emit_progress(progress_events[-1])
+                reconcile_started = time.perf_counter()
+                config_search_started = time.perf_counter()
                 reusable = self._find_reusable_config_binding_worker(
                     canonical_config_path=canonical_config_path,
                     runtime_profile=runtime_profile,
                 )
-                reusable = reusable or self._find_reusable_model_worker(
-                    canonical_model_path=canonical_model_path,
-                    runtime_profile=runtime_profile,
-                )
+                config_search_ms = int((time.perf_counter() - config_search_started) * 1000)
+                model_search_ms = 0
+                if reusable is None:
+                    model_search_started = time.perf_counter()
+                    reusable = self._find_reusable_model_worker(
+                        canonical_model_path=canonical_model_path,
+                        runtime_profile=runtime_profile,
+                    )
+                    model_search_ms = int((time.perf_counter() - model_search_started) * 1000)
                 if reusable is not None:
+                    reconcile_ms = int((time.perf_counter() - reconcile_started) * 1000)
                     models = [dict(item or {}) for item in list(reusable.get("loaded_models") or []) if isinstance(item, dict)]
                     binding_for_config = next(
                         (
@@ -651,8 +660,12 @@ class EnginesMixin:
                             engine_id=binding_engine_id,
                             model_instance_id=model_instance_id,
                             attached_config_binding=bool(attached),
+                            duration_ms=reconcile_ms,
+                            config_binding_search_ms=config_search_ms,
+                            model_search_ms=model_search_ms,
                         )
                     )
+                    _emit_progress(progress_events[-1])
                     return {
                         "status": "reused" if not attached else "attached",
                         "stage": "completed",
@@ -675,6 +688,7 @@ class EnginesMixin:
                     target_worker_id=requested_worker_id,
                 )
                 if idle_worker is not None:
+                    reconcile_ms = int((time.perf_counter() - reconcile_started) * 1000)
                     worker_id = str(idle_worker.get("worker_id") or idle_worker.get("engine_id") or "").strip()
                     model_instance_id = requested or worker_id or self._model_instance_id_for_model(str(effective_model_path))
                     worker_out = self._ipc_call(
@@ -710,8 +724,12 @@ class EnginesMixin:
                             worker_id=worker_id,
                             engine_id=model_instance_id,
                             model_instance_id=model_instance_id,
+                            duration_ms=reconcile_ms,
+                            config_binding_search_ms=config_search_ms,
+                            model_search_ms=model_search_ms,
                         )
                     )
+                    _emit_progress(progress_events[-1])
                     return {
                         "status": "loaded_existing_worker",
                         "stage": "completed",
@@ -731,12 +749,21 @@ class EnginesMixin:
                         "progress_events": progress_events,
                     }
                 progress_events.append(
-                    self._progress_event("connect.reconcile_worker", "completed", "No reusable worker found")
+                    self._progress_event(
+                        "connect.reconcile_worker",
+                        "completed",
+                        "No reusable worker found",
+                        duration_ms=int((time.perf_counter() - reconcile_started) * 1000),
+                        config_binding_search_ms=config_search_ms,
+                        model_search_ms=model_search_ms,
+                    )
                 )
+                _emit_progress(progress_events[-1])
             else:
                 progress_events.append(
                     self._progress_event("connect.reconcile_worker", "skipped", "Fresh worker launch requested")
                 )
+                _emit_progress(progress_events[-1])
             model_instance_id = self._model_instance_id_for_model(str(effective_model_path), requested=requested)
             worker_id = self._worker_id_for_model(str(effective_model_path))
             eid = model_instance_id

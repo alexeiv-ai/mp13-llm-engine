@@ -67,6 +67,14 @@ def _is_session_auth_error(msg: str) -> bool:
     return any(k in ml for k in _SESSION_AUTH_ERROR_KEYWORDS)
 
 
+def _command_error_message(command: str, exc: Exception) -> str:
+    code = str(getattr(exc, "code", "") or "").strip()
+    details = getattr(exc, "details", None)
+    suffix = f" ({code})" if code and code not in str(exc) else ""
+    details_suffix = f" details={details}" if isinstance(details, dict) and details else ""
+    return f"persistent daemon control channel failed for '{command}': {exc}{suffix}{details_suffix}"
+
+
 def _clear_auto_session_cache_for_tests() -> None:
     with _AUTO_SESSION_CACHE_LOCK:
         _AUTO_SESSION_CACHE.clear()
@@ -84,6 +92,7 @@ class EngineHostControlChannel:
         self._session_token: Optional[str] = str(
             self.control_settings.get("engine_host_session_token") or ""
         ).strip() or None
+        self._session_token_meta: Dict[str, Any] = {}
         self._key_id: Optional[str] = str(
             self.control_settings.get("engine_host_key_id") or ""
         ).strip() or None
@@ -638,15 +647,12 @@ class EngineHostControlChannel:
                         )
                         self._session_token = None
                         self.control_settings["engine_host_session_token"] = None
+                        self._session_token_meta = {}
                         self._clear_cached_auto_session()
                         return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
-                    raise RuntimeError(
-                        f"persistent daemon control channel failed for '{command}': {exc}"
-                    ) from exc
+                    raise RuntimeError(_command_error_message(command, exc)) from exc
                 if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
-                    raise RuntimeError(
-                        f"persistent daemon control channel failed for '{command}': {exc}"
-                    ) from exc
+                    raise RuntimeError(_command_error_message(command, exc)) from exc
                 logger.warning(
                     "Persistent connection failed for diagnostic command '%s': %s. Falling back to subprocess.",
                     command,
@@ -674,6 +680,7 @@ class EngineHostControlChannel:
                 )
                 self._session_token = None
                 self.control_settings["engine_host_session_token"] = None
+                self._session_token_meta = {}
                 self._clear_cached_auto_session()
                 return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
             raise
@@ -681,9 +688,43 @@ class EngineHostControlChannel:
     def set_session_token(self, token: Optional[str]) -> None:
         self._session_token = str(token or "").strip() or None
         self.control_settings["engine_host_session_token"] = self._session_token
+        if not self._session_token:
+            self._session_token_meta = {}
 
     def get_session_token(self) -> Optional[str]:
         return self._session_token
+
+    def _set_session_token_meta(self, meta: Optional[Dict[str, Any]]) -> None:
+        self._session_token_meta = dict(meta or {})
+
+    def _public_key_session_meta_matches(
+        self,
+        *,
+        key_id: str,
+        scope: str,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+    ) -> bool:
+        meta = dict(self._session_token_meta or {})
+        if str(meta.get("auth_method") or "") != "public_key":
+            return False
+        if str(meta.get("key_id") or "").strip() != str(key_id or "").strip():
+            return False
+        if str(meta.get("scope") or "").strip().lower() != (str(scope or "control").strip().lower() or "control"):
+            return False
+        expires_at = float(meta.get("expires_at") or 0.0)
+        if expires_at > 0 and time.time() >= expires_at - 5:
+            return False
+        expected_binding = self._current_ssh_session_binding() if bind_to_ssh else None
+        if dict(meta.get("ssh_binding") or {}) != dict(expected_binding or {}):
+            return False
+        expected_configs = sorted([str(item or "").strip() for item in list(config_paths or []) if str(item or "").strip()])
+        expected_engines = sorted([str(item or "").strip() for item in list(engine_ids or []) if str(item or "").strip()])
+        return (
+            list(meta.get("config_paths") or []) == expected_configs
+            and list(meta.get("engine_ids") or []) == expected_engines
+        )
 
     def _auto_session_cache_key(self) -> str:
         binding = self._current_ssh_session_binding() or {}
@@ -736,6 +777,101 @@ class EngineHostControlChannel:
             return
         with _AUTO_SESSION_CACHE_LOCK:
             _AUTO_SESSION_CACHE.pop(key, None)
+
+    def _public_key_session_cache_key(
+        self,
+        *,
+        key_id: str,
+        scope: str,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+    ) -> str:
+        binding = self._current_ssh_session_binding() if bind_to_ssh else None
+        payload = {
+            "auth_method": "public_key",
+            "control_state_file": str(self._control_state_file or ""),
+            "engine_state_file": str(self._engines_state_file or ""),
+            "key_id": str(key_id or "").strip(),
+            "scope": str(scope or "control").strip().lower() or "control",
+            "config_paths": sorted([str(item or "").strip() for item in list(config_paths or []) if str(item or "").strip()]),
+            "engine_ids": sorted([str(item or "").strip() for item in list(engine_ids or []) if str(item or "").strip()]),
+            "target": self.get_target(),
+            "ssh_binding": dict(binding or {}),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def _get_cached_public_key_session(
+        self,
+        *,
+        key_id: str,
+        scope: str,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+    ) -> Optional[str]:
+        try:
+            key = self._public_key_session_cache_key(
+                key_id=key_id,
+                scope=scope,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+            )
+        except Exception:
+            return None
+        now = time.time()
+        with _AUTO_SESSION_CACHE_LOCK:
+            row = dict(_AUTO_SESSION_CACHE.get(key) or {})
+            token = str(row.get("token") or "").strip()
+            expires_at = float(row.get("expires_at") or 0.0)
+            if not token:
+                _AUTO_SESSION_CACHE.pop(key, None)
+                return None
+            if expires_at > 0 and now >= expires_at - 5:
+                _AUTO_SESSION_CACHE.pop(key, None)
+                return None
+            self._set_session_token_meta(row)
+            return token
+
+    def _store_cached_public_key_session(
+        self,
+        token: str,
+        issued: Dict[str, Any],
+        *,
+        key_id: str,
+        scope: str,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+    ) -> None:
+        tok = str(token or "").strip()
+        if not tok:
+            return
+        try:
+            key = self._public_key_session_cache_key(
+                key_id=key_id,
+                scope=scope,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+            )
+        except Exception:
+            return
+        expires_at = float(issued.get("expires_at") or 0.0)
+        if expires_at <= 0:
+            expires_at = time.time() + 900
+        with _AUTO_SESSION_CACHE_LOCK:
+            _AUTO_SESSION_CACHE[key] = {
+                "token": tok,
+                "expires_at": expires_at,
+                "auth_method": "public_key",
+                "key_id": str(key_id or "").strip(),
+                "scope": str(scope or "control").strip().lower() or "control",
+                "config_paths": sorted([str(item or "").strip() for item in list(config_paths or []) if str(item or "").strip()]),
+                "engine_ids": sorted([str(item or "").strip() for item in list(engine_ids or []) if str(item or "").strip()]),
+                "ssh_binding": dict((self._current_ssh_session_binding() if bind_to_ssh else None) or {}),
+            }
 
     def invoke_control_command(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         """Invoke a daemon control command through this channel."""
@@ -2533,6 +2669,14 @@ class EngineHostControlChannel:
         token = str(out.get("token") or "").strip()
         if adopt and token:
             self.set_session_token(token)
+            self._set_session_token_meta(
+                {
+                    "auth_method": "shared_secret",
+                    "key_id": str(key_id or "").strip(),
+                    "scope": str(out.get("scope") or scope or "control").strip().lower() or "control",
+                    "expires_at": float(out.get("expires_at") or 0.0),
+                }
+            )
         return out
 
     def auth_begin_challenge(
@@ -2577,7 +2721,148 @@ class EngineHostControlChannel:
         token = str(out.get("token") or "").strip()
         if adopt and token:
             self.set_session_token(token)
+            self._set_session_token_meta(
+                {
+                    "auth_method": "public_key",
+                    "key_id": str(out.get("key_id") or "").strip(),
+                    "scope": str(out.get("scope") or "").strip().lower(),
+                    "expires_at": float(out.get("expires_at") or 0.0),
+                    "ssh_binding": dict(out.get("ssh_binding") or {}),
+                }
+            )
         return out
+
+    def ensure_public_key_session(
+        self,
+        *,
+        key_id: str,
+        scope: str = "control",
+        signer: Optional[Any] = None,
+        private_key_text: str = "",
+        signature_ssh: str = "",
+        ttl_seconds: int = 120,
+        config_paths: Optional[List[str]] = None,
+        engine_ids: Optional[List[str]] = None,
+        bind_to_ssh: bool = True,
+        adopt: bool = True,
+        namespace: str = "engine-host-auth",
+        sign_timeout_seconds: float = 30.0,
+    ) -> str:
+        """
+        Return a usable public-key session token, reusing an adopted/cached token
+        before falling back to challenge signing.
+
+        GUI/browser clients should prefer this over unconditionally running
+        auth-begin-challenge/auth-complete-challenge for every operation.
+        """
+        kid = str(key_id or "").strip()
+        if not kid:
+            raise ValueError("key_id is required")
+        scope_norm = str(scope or "control").strip().lower() or "control"
+
+        current = self.get_session_token()
+        if current:
+            if self._public_key_session_meta_matches(
+                key_id=kid,
+                scope=scope_norm,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+            ):
+                return current
+            if scope_norm == "control":
+                try:
+                    status = self.auth_status()
+                    if str(status.get("caller_key_id") or "").strip() == kid:
+                        return current
+                except Exception:
+                    self.set_session_token(None)
+
+        cached = self._get_cached_public_key_session(
+            key_id=kid,
+            scope=scope_norm,
+            config_paths=config_paths,
+            engine_ids=engine_ids,
+            bind_to_ssh=bind_to_ssh,
+        )
+        if cached:
+            self.set_session_token(cached)
+            if self._public_key_session_meta_matches(
+                key_id=kid,
+                scope=scope_norm,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+            ):
+                return cached
+            if scope_norm == "control":
+                try:
+                    status = self.auth_status()
+                    if str(status.get("caller_key_id") or "").strip() == kid:
+                        return cached
+                except Exception:
+                    self.set_session_token(None)
+
+        challenge = self.auth_begin_challenge(
+            key_id=kid,
+            scope=scope_norm,
+            ttl_seconds=int(ttl_seconds or 120),
+            config_paths=list(config_paths or []),
+            engine_ids=list(engine_ids or []),
+            bind_to_ssh=bool(bind_to_ssh),
+        )
+        challenge_text = str(challenge.get("challenge") or challenge.get("challenge_text") or "")
+        signature = str(signature_ssh or "").strip()
+        if not signature and signer is not None:
+            from .client_realm_api import _coerce_signature_ssh
+
+            signature = _coerce_signature_ssh(
+                signer(dict(challenge)),
+                expected_challenge_id=str(challenge.get("challenge_id") or ""),
+            )
+        if not signature and private_key_text:
+            from .client_realm_api import sign_client_auth_challenge_with_private_key
+
+            signature = sign_client_auth_challenge_with_private_key(
+                private_key_text=private_key_text,
+                challenge_text=challenge_text,
+                namespace=namespace,
+                timeout_seconds=sign_timeout_seconds,
+            )
+        if not signature:
+            raise ValueError("signature_ssh, signer, or private_key_text is required")
+
+        result = self.auth_complete_challenge(
+            challenge_id=str(challenge.get("challenge_id") or ""),
+            signature_ssh=signature,
+            adopt=adopt,
+        )
+        token = str(result.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("authentication failed: no token returned")
+        if adopt:
+            self.set_session_token(token)
+            self._set_session_token_meta(
+                {
+                    "auth_method": "public_key",
+                    "key_id": kid,
+                    "scope": scope_norm,
+                    "expires_at": float(result.get("expires_at") or 0.0),
+                    "config_paths": sorted([str(item or "").strip() for item in list(config_paths or []) if str(item or "").strip()]),
+                    "engine_ids": sorted([str(item or "").strip() for item in list(engine_ids or []) if str(item or "").strip()]),
+                    "ssh_binding": dict((self._current_ssh_session_binding() if bind_to_ssh else None) or {}),
+                }
+            )
+            self._store_cached_public_key_session(
+                token,
+                result,
+                key_id=kid,
+                scope=scope_norm,
+                config_paths=config_paths,
+                engine_ids=engine_ids,
+                bind_to_ssh=bind_to_ssh,
+            )
+        return token
 
     def auth_revoke_session(self, token: str) -> Dict[str, Any]:
         res = self._invoke("auth-revoke-session", {"token": str(token or "")})

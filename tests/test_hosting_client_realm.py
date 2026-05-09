@@ -201,6 +201,42 @@ def test_client_realm_auth_helpers_support_gui_signer_flow() -> None:
     assert client.complete_payload["adopt"] is True
 
 
+def test_client_realm_auth_helpers_accept_structured_signer_result() -> None:
+    class FakeClient:
+        def auth_begin_challenge(self, **_kwargs):
+            return {"challenge_id": "chal-structured", "challenge": "sign-me"}
+
+        def auth_complete_challenge(self, **kwargs):
+            return {"status": "ok", "token": "session-token", "echo": dict(kwargs)}
+
+    def signer(challenge: dict) -> dict:
+        return {
+            "challenge_id": challenge["challenge_id"],
+            "signature_ssh": "-----BEGIN SSH SIGNATURE-----\nSIG\n-----END SSH SIGNATURE-----",
+            "client_key_id": "client-admin",
+            "client_realm": "default",
+        }
+
+    token = authenticate_client_with_key(FakeClient(), "admin-main", signer=signer)
+
+    assert token == "session-token"
+
+
+def test_client_realm_auth_helpers_reject_mismatched_signer_challenge_id() -> None:
+    class FakeClient:
+        def auth_begin_challenge(self, **_kwargs):
+            return {"challenge_id": "chal-parent", "challenge": "sign-me"}
+
+    def signer(_challenge: dict) -> dict:
+        return {
+            "challenge_id": "chal-other",
+            "signature_ssh": "-----BEGIN SSH SIGNATURE-----\nSIG\n-----END SSH SIGNATURE-----",
+        }
+
+    with pytest.raises(ValueError, match="different challenge_id"):
+        authenticate_client_with_key(FakeClient(), "admin-main", signer=signer)
+
+
 def test_client_realm_auth_step_helpers_validate_and_complete() -> None:
     class FakeClient:
         def auth_begin_challenge(self, **_kwargs):
