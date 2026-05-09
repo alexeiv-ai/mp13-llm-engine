@@ -183,14 +183,20 @@ Interactive flow with a complete key file:
    py hosting_cli.py --ssh-target user@example-host --control-ssh-key C:\keys\transport_ed25519 --ssh-known-hosts-line "example-host ssh-ed25519 AAAA..." --interactive
    ```
 
-3. Choose an action. If the daemon returns `session_token_required`, the menu
-   prompts for admin private-key material. Paste a file path such as
-   `C:\keys\admin_ed25519`, or paste a client-realm `SecretRecord` JSON blob, or
-   paste the raw OpenSSH private-key block.
+3. If the daemon requires auth, choose `Authenticate` from the main menu before
+   protected actions. Protected actions fail with an authenticate-first message
+   instead of starting an auth prompt implicitly. For SSH targets, paste a file
+   path such as `C:\keys\admin_ed25519`, a client-realm `SecretRecord` JSON blob,
+   or the raw OpenSSH private-key block.
 
 4. If the admin key is passphrase-protected, `ssh-keygen` prompts on the local
    terminal for that key passphrase. This prompt is local; it is not a remote SSH
    password prompt and does not require a remote PTY.
+
+For local-only shared-secret deployments, the interactive `Authenticate` menu
+also offers `Shared key password`, which issues a control session via
+`auth-issue-session`. That option is intentionally unavailable for SSH targets
+and remote-capable access profiles.
 
 Interactive flow with only the raw OpenSSH private-key block:
 

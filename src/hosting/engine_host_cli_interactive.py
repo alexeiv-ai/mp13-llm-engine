@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import shutil
@@ -35,6 +36,9 @@ def _control_channel_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "engine_host_daemon_pid_file": str(_arg_value(args, "pid_file") or "") or None,
         "engine_host_state_file": str(_arg_value(args, "engines_state_file") or "") or None,
         "engine_host_control_state_file": str(_arg_value(args, "control_state_file") or "") or None,
+        # Interactive menus require explicit Authenticate selection; do not let
+        # profile-provided shared secrets auto-mint sessions for protected actions.
+        "engine_host_key_secret": "",
     }
     for attr in (
         "engine_host_cmd",
@@ -51,6 +55,8 @@ def _control_channel_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "engine_host_timeout_seconds",
         "engine_host_daemon_port",
         "engine_host_daemon_log_file",
+        "engine_host_key_id",
+        "engine_host_session_token",
         "engine_host_session_scope",
         "engine_host_session_ttl_seconds",
         "engine_host_bind_session_to_ssh",
@@ -446,7 +452,7 @@ def _can_use_offline_local_fallback(args: argparse.Namespace, session_token: Opt
 
 def _print_offline_auth_required() -> None:
     print(_c('warn', "  Daemon is stopped. This offline read is protected by hosting auth."))
-    print(_c('muted', "  Authenticate locally with an admin private key to continue."))
+    print(_c('muted', "  Start the daemon and choose Authenticate from the main menu, or use Local recovery/auth tools for explicit local state access."))
 
 
 def _offline_read_unavailable(exc: Exception) -> bool:
@@ -472,11 +478,7 @@ def _offline_local_read_with_auth(
         if not _offline_read_unavailable(exc):
             raise
         _print_offline_auth_required()
-        token = _local_authenticate(args)
-        if not token:
-            print(_c('bad', "Command failed: Authentication required."))
-            return None, session_token
-        return _offline_local_invoke(args, cmd, payload, session_token=token), token
+        return None, session_token
 
 
 def _is_daemon_running(args: argparse.Namespace, session_token: Optional[str] = None) -> bool:
@@ -719,6 +721,88 @@ def _obtain_session_token(
         return None
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _configured_auth_defaults(args: argparse.Namespace) -> tuple[str, str, int]:
+    try:
+        settings = dict(_control_channel(args).control_settings or {})
+    except Exception:
+        settings = {}
+    key_id = str(settings.get("engine_host_key_id") or "").strip() or "admin-main"
+    key_secret = str(settings.get("engine_host_key_secret") or "").strip()
+    try:
+        ttl = int(settings.get("engine_host_session_ttl_seconds") or 900)
+    except Exception:
+        ttl = 900
+    return key_id, key_secret, ttl
+
+
+def _obtain_shared_secret_session_token(args: argparse.Namespace) -> Optional[str]:
+    if _target_mode(args) == "ssh":
+        print(_c("bad", "Shared key password authentication is local-only. Use private-key challenge auth for SSH targets."))
+        return None
+
+    default_key_id, configured_secret, ttl = _configured_auth_defaults(args)
+    print(f"\n{_c('warn', 'Authenticate with local shared key password.')}")
+    print(_c("muted", "This uses auth-issue-session and is accepted only by local-only shared-secret keys."))
+    try:
+        key_id_raw = input(f"Key ID [{default_key_id}]: ").strip()
+        key_id = key_id_raw or default_key_id
+        if configured_secret:
+            secret = getpass.getpass("Shared key password [configured secret if empty]: ")
+            if not secret:
+                secret = configured_secret
+        else:
+            secret = getpass.getpass("Shared key password: ")
+    except (KeyboardInterrupt, EOFError):
+        return None
+
+    if not key_id or not secret:
+        print(_c("bad", "Key ID and shared key password are required."))
+        return None
+
+    try:
+        res = _api_invoke(
+            args,
+            "auth-issue-session",
+            {
+                "key_id": key_id,
+                "key_secret": secret,
+                "scope": "control",
+                "ttl_seconds": ttl,
+            },
+        )
+    except PermissionError as exc:
+        print(_c("bad", f"Shared key authentication failed: {exc}"))
+        return None
+    except Exception as exc:
+        print(_c("bad", f"Shared key authentication error: {exc}"))
+        return None
+
+    token = str(dict(res or {}).get("token") or "").strip() if isinstance(res, dict) else ""
+    if not token:
+        print(_c("bad", "Authentication failed: no token returned."))
+        return None
+    print(_c("good", "Authenticated successfully."))
+    return token
+
+
+def _authenticate_interactive(args: argparse.Namespace) -> Optional[str]:
+    if _target_mode(args) == "ssh":
+        return _obtain_session_token(args)
+
+    opts = {
+        "shared": ("Shared key password", "local only"),
+        "key": ("Admin private key challenge", ""),
+    }
+    choice = _prompt_menu("Authenticate", opts, "shared", allow_back=True, allow_changes=False, enter_hint="shared")
+    if choice in ("b", "back"):
+        return None
+    if choice == "shared":
+        return _obtain_shared_secret_session_token(args)
+    if choice == "key":
+        return _obtain_session_token(args)
+    return None
 
 def _get_token_preview(token: str) -> str:
     tok = str(token or "").strip()
@@ -1083,7 +1167,12 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                 _kv_rows([("Daemon", status_c)], min_width = 6)
                 
                 lifecycle_label = "Restart remote daemon" if target_mode == "ssh" else ("Start daemon" if not daemon_up else "Stop daemon")
-                opts = {
+                opts: Dict[str, tuple[str, str]] = {}
+                if daemon_up and bool(auth_value):
+                    auth_label = "Re-authenticate / switch identity" if (caller_key or session_token) else "Authenticate"
+                    auth_hint = f"{caller_key} ({caller_role})" if caller_key and caller_role else ""
+                    opts["auth"] = (auth_label, auth_hint)
+                opts.update({
                     "l": ("List loaded engines and sandboxes", ""),
                     "o": ("Load engine from config", ""),
                     "d": ("Engine/Sandbox details", ""),
@@ -1094,7 +1183,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     "k": ("Kill/Disconnect resource", ""),
                     "s": (lifecycle_label, ""),
                     "r": ("Local recovery/auth tools", "" if target_mode != "ssh" else "local only"),
-                }
+                })
                 choice = _prompt_menu("Main Menu", opts, "refresh", allow_changes=False, enter_hint="refresh")
                 if choice == "q":
                     return 0
@@ -1102,7 +1191,13 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     continue
 
                 try:
-                    if choice == "l":
+                    if choice == "auth":
+                        token = _authenticate_interactive(args)
+                        if token:
+                            session_token = token
+                            print(_c("good", "Please try your command now that you are authenticated."))
+                            time.sleep(1)
+                    elif choice == "l":
                         session_token = _list_engines(args, session_token)
                     elif choice == "o":
                         session_token = _load_engine(args, session_token)
@@ -1133,14 +1228,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                             print(_c('warn', "Daemon is stopped. Start the daemon before authenticating or running protected commands."))
                             time.sleep(1)
                             continue
-                        token = _obtain_session_token(args)
-                        if token:
-                            session_token = token
-                            print(_c('good', "Please try your command again now that you are authenticated."))
-                            time.sleep(1)
-                        else:
-                            print(_c('bad', "Command failed: Authentication required."))
-                            time.sleep(1)
+                        print(_c("bad", "Command requires authentication. Choose Authenticate from the main menu first."))
+                        time.sleep(1)
                     else:
                         raise pe
             except (KeyboardInterrupt, EOFError):
@@ -1558,154 +1647,165 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
         print(_c('warn', "  Daemon is stopped. Loading an engine requires a running daemon."))
         return session_token
     try:
-        configs_raw = _api_invoke(args, "list-configs", {}, session_token=session_token)
-        session_token = _active_session_token(args, session_token)
-        configs = [dict(item or {}) for item in list(configs_raw or []) if isinstance(item, dict)]
-        if not configs:
-            print("  No hosted configs found.")
-            return session_token
-        opts: Dict[str, tuple[str, str]] = {}
-        by_key: Dict[str, Dict[str, Any]] = {}
-        for idx, row in enumerate(configs, start=1):
-            key = str(idx)
-            name = str(row.get("name") or _config_selector(row))
-            hint_bits = []
-            if row.get("is_default"):
-                hint_bits.append("default")
-            reason = str(row.get("connect_reason") or "").strip()
-            if reason:
-                hint_bits.append(reason)
-            by_key[key] = row
-            opts[key] = (name, " ".join(hint_bits))
-        choice = _prompt_menu("Select Config", opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
-        if choice in {"b", "back"}:
-            return session_token
-        selected = by_key.get(choice)
-        if not selected:
-            return session_token
-        config_selector = _config_selector(selected)
-
-        model_path = _configured_model_path_from_config_row(selected)
-        generic_worker = _config_uses_generic_worker(selected)
-        if not model_path and not generic_worker:
-            try:
-                models_raw = _api_invoke(args, "models-from-config", {"config_path": config_selector}, session_token=session_token)
-                session_token = _active_session_token(args, session_token)
-            except Exception:
-                models_raw = []
-            models = [dict(item or {}) for item in list(models_raw or []) if isinstance(item, dict)]
-            model_opts: Dict[str, tuple[str, str]] = {}
-            model_by_key: Dict[str, str] = {}
-            for idx, row in enumerate(models, start=1):
-                key = str(idx)
-                path = str(row.get("path") or "").strip()
-                if not path:
-                    continue
-                model_by_key[key] = path
-                model_opts[key] = (str(row.get("name") or Path(path).name), path)
-            if model_opts:
-                model_opts["p"] = ("Enter model path", "")
-                model_choice = _prompt_menu("Select Model", model_opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
-                if model_choice in {"b", "back"}:
-                    return session_token
-                if model_choice == "p":
-                    model_path = input("Model path: ").strip()
-                else:
-                    model_path = model_by_key.get(model_choice, "")
-            else:
-                print(_c('warn', "  Selected config does not specify a model path."))
-                model_path = input("Model path: ").strip()
-            if not str(model_path or "").strip():
-                print(_c('bad', "Model path is required."))
-                return session_token
-
-        force_new = False
-        target_worker_id = ""
-        if not generic_worker:
-            existing_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
-            session_token = _active_session_token(args, session_token)
-            existing = _get_engines_dict(existing_raw)
-            load_opts: Dict[str, tuple[str, str]] = {}
-            model_by_key: Dict[str, str] = {}
-            target_worker_by_key: Dict[str, str] = {}
-            idx = 1
-            for eid, info in existing.items():
-                loaded_models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
-                for model in loaded_models:
-                    mpath = str(model.get("model_path") or model.get("canonical_model_path") or "").strip()
-                    mid = str(model.get("model_instance_id") or model.get("engine_id") or eid).strip()
-                    if not mpath:
-                        continue
-                    key = str(idx)
-                    idx += 1
-                    model_by_key[key] = mpath
-                    load_opts[key] = (f"Use running {mid}", mpath)
-                if not loaded_models and _operator_resource_kind(info).endswith("model instance"):
-                    worker_id = str(info.get("worker_id") or eid).strip()
-                    if worker_id:
-                        key = str(idx)
-                        idx += 1
-                        target_worker_by_key[key] = worker_id
-                        load_opts[key] = (f"Load into idle worker {worker_id}", str(model_path))
-            if load_opts:
-                load_opts["a"] = ("Auto: reuse compatible or create new", str(model_path))
-                load_opts["n"] = ("Force new engine instance", str(model_path))
-                load_choice = _prompt_menu(
-                    "Load Target",
-                    load_opts,
-                    "a",
-                    allow_back=True,
-                    allow_changes=False,
-                    enter_hint="auto",
-                )
-                if load_choice in {"b", "back"}:
-                    return session_token
-                force_new = load_choice == "n"
-                if load_choice in model_by_key:
-                    model_path = model_by_key[load_choice]
-                    force_new = False
-                target_worker_id = target_worker_by_key.get(load_choice, "")
-                if target_worker_id:
-                    force_new = False
-            else:
-                print(_c("muted", "  No compatible running model workers found; creating a new engine instance."))
-
-        payload = {
-            "config_path": config_selector,
-            "model_path": model_path or None,
-            "force_new_worker": force_new,
-        }
-        if not generic_worker and str(target_worker_id or "").strip():
-            payload["target_worker_id"] = str(target_worker_id or "").strip()
-        if session_token:
-            payload["session_token"] = session_token
-        print(_c("muted", "Starting load operation..."))
-        started = _api_invoke(args, "op-start", {"command": "connect-from-config", "payload": payload}, session_token=session_token)
-        session_token = _active_session_token(args, session_token)
-        op_id = str(dict(started or {}).get("operation_id") or "").strip()
-        if not op_id:
-            print(_c("bad", "Load did not return an operation id."))
-            return session_token
-        last_line = ""
         while True:
-            status = _api_invoke(args, "op-status", {"operation_id": op_id}, session_token=session_token)
+            configs_raw = _api_invoke(args, "list-configs", {}, session_token=session_token)
             session_token = _active_session_token(args, session_token)
-            snap = dict(status or {})
-            last_line = _print_progress_snapshot(snap, last_text=last_line)
-            if bool(snap.get("done", False)):
-                result = dict(snap.get("result") or {}) if isinstance(snap.get("result"), dict) else {}
-                op_status = str(snap.get("status") or "").lower()
-                result_status = str(result.get("status") or "").lower()
-                failed = bool(snap.get("error")) or op_status == "failed" or result_status in {"failed", "error"}
-                if not failed:
-                    result = dict(snap.get("result") or {})
-                    final_status = str(result.get("status") or snap.get("status") or "completed")
-                    print(_c("good", f"Load finished: {final_status}"))
-                else:
-                    print(_c("bad", f"Load failed: {_operation_failure_message(snap)}"))
-                    _print_operation_diagnostics(snap)
+            configs = [dict(item or {}) for item in list(configs_raw or []) if isinstance(item, dict)]
+            if not configs:
+                print("  No hosted configs found.")
                 return session_token
-            time.sleep(1.0)
+            opts: Dict[str, tuple[str, str]] = {}
+            by_key: Dict[str, Dict[str, Any]] = {}
+            for idx, row in enumerate(configs, start=1):
+                key = str(idx)
+                name = str(row.get("name") or _config_selector(row))
+                hint_bits = []
+                if row.get("is_default"):
+                    hint_bits.append("default")
+                reason = str(row.get("connect_reason") or "").strip()
+                if reason:
+                    hint_bits.append(reason)
+                by_key[key] = row
+                opts[key] = (name, " ".join(hint_bits))
+            choice = _prompt_menu("Select Config", opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
+            if choice in {"b", "back"}:
+                return session_token
+            selected = by_key.get(choice)
+            if not selected:
+                continue
+            config_selector = _config_selector(selected)
+
+            while True:
+                model_path = _configured_model_path_from_config_row(selected)
+                generic_worker = _config_uses_generic_worker(selected)
+                used_model_menu = False
+                if not model_path and not generic_worker:
+                    try:
+                        models_raw = _api_invoke(args, "models-from-config", {"config_path": config_selector}, session_token=session_token)
+                        session_token = _active_session_token(args, session_token)
+                    except Exception:
+                        models_raw = []
+                    models = [dict(item or {}) for item in list(models_raw or []) if isinstance(item, dict)]
+                    model_opts: Dict[str, tuple[str, str]] = {}
+                    model_by_key: Dict[str, str] = {}
+                    for idx, row in enumerate(models, start=1):
+                        key = str(idx)
+                        path = str(row.get("path") or "").strip()
+                        if not path:
+                            continue
+                        model_by_key[key] = path
+                        model_opts[key] = (str(row.get("name") or Path(path).name), path)
+                    if model_opts:
+                        used_model_menu = True
+                        model_opts["p"] = ("Enter model path", "")
+                        model_choice = _prompt_menu("Select Model", model_opts, "b", allow_back=True, allow_changes=False, enter_hint="back")
+                        if model_choice in {"b", "back"}:
+                            break
+                        if model_choice == "p":
+                            model_path = input("Model path: ").strip()
+                        else:
+                            model_path = model_by_key.get(model_choice, "")
+                    else:
+                        print(_c('warn', "  Selected config does not specify a model path."))
+                        model_path = input("Model path: ").strip()
+                    if not str(model_path or "").strip():
+                        print(_c('bad', "Model path is required."))
+                        if used_model_menu:
+                            continue
+                        break
+
+                force_new = False
+                target_worker_id = ""
+                if not generic_worker:
+                    existing_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
+                    session_token = _active_session_token(args, session_token)
+                    existing = _get_engines_dict(existing_raw)
+                    load_opts: Dict[str, tuple[str, str]] = {}
+                    model_by_key: Dict[str, str] = {}
+                    target_worker_by_key: Dict[str, str] = {}
+                    idx = 1
+                    for eid, info in existing.items():
+                        loaded_models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
+                        for model in loaded_models:
+                            mpath = str(model.get("model_path") or model.get("canonical_model_path") or "").strip()
+                            mid = str(model.get("model_instance_id") or model.get("engine_id") or eid).strip()
+                            if not mpath:
+                                continue
+                            key = str(idx)
+                            idx += 1
+                            model_by_key[key] = mpath
+                            load_opts[key] = (f"Use running {mid}", mpath)
+                        if not loaded_models and _operator_resource_kind(info).endswith("model instance"):
+                            worker_id = str(info.get("worker_id") or eid).strip()
+                            if worker_id:
+                                key = str(idx)
+                                idx += 1
+                                target_worker_by_key[key] = worker_id
+                                load_opts[key] = (f"Load into idle worker {worker_id}", str(model_path))
+                    if load_opts:
+                        load_opts["auto"] = ("Auto: reuse compatible or create new", str(model_path))
+                        load_opts["new"] = ("Force new engine instance", str(model_path))
+                        load_choice = _prompt_menu(
+                            "Load Target",
+                            load_opts,
+                            "auto",
+                            allow_back=True,
+                            allow_changes=False,
+                            enter_hint="auto",
+                        )
+                        if load_choice in {"b", "back"}:
+                            if used_model_menu:
+                                continue
+                            break
+                        force_new = load_choice == "new"
+                        if load_choice in model_by_key:
+                            model_path = model_by_key[load_choice]
+                            force_new = False
+                        target_worker_id = target_worker_by_key.get(load_choice, "")
+                        if target_worker_id:
+                            force_new = False
+                    else:
+                        print(_c("muted", "  No compatible running model workers found; creating a new engine instance."))
+
+                payload = {
+                    "config_path": config_selector,
+                    "model_path": model_path or None,
+                    "force_new_worker": force_new,
+                }
+                if not generic_worker and str(target_worker_id or "").strip():
+                    payload["target_worker_id"] = str(target_worker_id or "").strip()
+                if session_token:
+                    payload["session_token"] = session_token
+                print(_c("muted", "Starting load operation..."))
+                started = _api_invoke(args, "op-start", {"command": "connect-from-config", "payload": payload}, session_token=session_token)
+                session_token = _active_session_token(args, session_token)
+                op_id = str(dict(started or {}).get("operation_id") or "").strip()
+                if not op_id:
+                    print(_c("bad", "Load did not return an operation id."))
+                    return session_token
+                last_line = ""
+                while True:
+                    status = _api_invoke(args, "op-status", {"operation_id": op_id}, session_token=session_token)
+                    session_token = _active_session_token(args, session_token)
+                    snap = dict(status or {})
+                    last_line = _print_progress_snapshot(snap, last_text=last_line)
+                    if bool(snap.get("done", False)):
+                        result = dict(snap.get("result") or {}) if isinstance(snap.get("result"), dict) else {}
+                        op_status = str(snap.get("status") or "").lower()
+                        result_status = str(result.get("status") or "").lower()
+                        failed = bool(snap.get("error")) or op_status == "failed" or result_status in {"failed", "error"}
+                        if not failed:
+                            result = dict(snap.get("result") or {})
+                            final_status = str(result.get("status") or snap.get("status") or "completed")
+                            print(_c("good", f"Load finished: {final_status}"))
+                        else:
+                            print(_c("bad", f"Load failed: {_operation_failure_message(snap)}"))
+                            _print_operation_diagnostics(snap)
+                        return session_token
+                    time.sleep(1.0)
+                break
+
+            continue
     except PermissionError:
         raise
     except KeyboardInterrupt:
@@ -1723,112 +1823,113 @@ def _kill_resource(args: argparse.Namespace, session_token: Optional[str]) -> Op
         if _can_use_offline_local_fallback(args, session_token=session_token):
             print(_c('warn', "  Daemon is stopped. Kill/disconnect actions require a running daemon."))
             return session_token
-        opts = {
-            "u": ("Unload Model Binding", ""),
-            "e": ("Stop Worker/Sandbox", ""),
-            "c": ("Disconnect Consumer (Revoke Session)", ""),
-        }
-        ch = _prompt_menu("What to kill?", opts, "b", allow_back=True, allow_changes=False)
-        if ch in ("b", "back"): return session_token
-        
-        if ch == "u":
-            res = _api_invoke(args, "discover-running", {}, session_token=session_token)
-            engines = _get_engines_dict(res)
-            model_opts = {}
-            for wid, info in engines.items():
-                bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
-                if bindings:
-                    for binding in bindings:
-                        eid = str(binding.get("engine_id") or "").strip()
-                        if eid:
-                            model_opts[eid] = (f"Unload {eid} from worker {wid}", "")
-                elif _operator_resource_kind(info).endswith("model instance"):
-                    model_opts[wid] = (f"Unload {wid}", "")
-            if not model_opts:
-                print("  No model bindings to unload.")
-                return session_token
-            ech = _prompt_menu("Select Model Binding", model_opts, "b", allow_back=True, allow_changes=False)
-            if ech in ("b", "back"): return session_token
-            print(f"Unloading {ech}...")
-            unload_result = dict(_api_invoke(
-                args,
-                "unload-model",
-                {"engine_id": ech, "timeout_seconds": 120.0},
-                session_token=session_token,
-            ) or {})
-            session_token = _active_session_token(args, session_token)
-            status = str(unload_result.get("status") or "unknown").strip()
-            if status not in {"unloaded", "not_found"}:
-                print(_c("bad", f"Unload failed: {status}"))
-                message = str(unload_result.get("message") or unload_result.get("error") or "").strip()
-                if message:
-                    print(_c("muted", f"  Detail: {message}"))
-                return session_token
-            worker_result = dict(unload_result.get("worker") or {}) if isinstance(unload_result.get("worker"), dict) else {}
-            worker_status = str(worker_result.get("status") or "").strip()
-            if worker_status and worker_status != "ok":
-                print(_c("warn", f"Worker unload returned: {worker_status}"))
-            verify_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
-            session_token = _active_session_token(args, session_token)
-            verify_engines = _get_engines_dict(verify_raw)
-            still_bound = False
-            for _, info in verify_engines.items():
-                bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
-                models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
-                if any(str(binding.get("engine_id") or "").strip() == ech for binding in bindings):
-                    still_bound = True
-                if any(str(model.get("model_instance_id") or model.get("engine_id") or "").strip() == ech for model in models):
-                    still_bound = True
-            if still_bound:
-                print(_c("bad", "Unload completed but daemon still reports the model binding."))
-            else:
-                remaining = unload_result.get("remaining_model_count")
-                suffix = f" Remaining models on worker: {remaining}." if remaining is not None else ""
-                print(_c("good", f"Unload completed.{suffix}"))
-
-        elif ch == "e":
-            res = _api_invoke(args, "discover-running", {}, session_token=session_token)
-            engines = _get_engines_dict(res)
-            if not engines:
-                print("  No workers to stop.")
-                return session_token
-            eopts = {
-                str(info.get("worker_id") or eid): (f"Stop {info.get('worker_id') or eid}", "")
-                for eid, info in engines.items()
+        while True:
+            opts = {
+                "u": ("Unload Model Binding", ""),
+                "e": ("Stop Worker/Sandbox", ""),
+                "c": ("Disconnect Consumer (Revoke Session)", ""),
             }
-            ech = _prompt_menu("Select Worker", eopts, "b", allow_back=True, allow_changes=False)
-            if ech in ("b", "back"): return session_token
-            print(f"Stopping {ech}...")
-            _api_invoke(args, "shutdown", {"engine_id": ech}, session_token=session_token)
-            print(_c('good', "Shutdown signal sent."))
+            ch = _prompt_menu("What to kill?", opts, "b", allow_back=True, allow_changes=False)
+            if ch in ("b", "back"): return session_token
             
-        elif ch == "c":
-            res = _api_invoke(args, "auth-list-sessions", {}, session_token=session_token)
-            sessions = res.get("sessions", [])
-            cli_preview = _get_token_preview(session_token) if session_token else None
-                
-            sopts = {}
-            for s in sessions:
-                tok = s.get("token_preview") or s.get("token_prefix")
-                if cli_preview and tok == cli_preview:
+            if ch == "u":
+                res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+                engines = _get_engines_dict(res)
+                model_opts = {}
+                for wid, info in engines.items():
+                    bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
+                    if bindings:
+                        for binding in bindings:
+                            eid = str(binding.get("engine_id") or "").strip()
+                            if eid:
+                                model_opts[eid] = (f"Unload {eid} from worker {wid}", "")
+                    elif _operator_resource_kind(info).endswith("model instance"):
+                        model_opts[wid] = (f"Unload {wid}", "")
+                if not model_opts:
+                    print("  No model bindings to unload.")
                     continue
-                if tok:
-                    sopts[tok] = (f"Revoke session [{tok}] (Key: {s.get('key_id', '<unknown>')})", "")
-                    
-            if not sopts:
-                if sessions:
-                    print("  No active sessions to disconnect (excluding this CLI).")
+                ech = _prompt_menu("Select Model Binding", model_opts, "b", allow_back=True, allow_changes=False)
+                if ech in ("b", "back"): continue
+                print(f"Unloading {ech}...")
+                unload_result = dict(_api_invoke(
+                    args,
+                    "unload-model",
+                    {"engine_id": ech, "timeout_seconds": 120.0},
+                    session_token=session_token,
+                ) or {})
+                session_token = _active_session_token(args, session_token)
+                status = str(unload_result.get("status") or "unknown").strip()
+                if status not in {"unloaded", "not_found"}:
+                    print(_c("bad", f"Unload failed: {status}"))
+                    message = str(unload_result.get("message") or unload_result.get("error") or "").strip()
+                    if message:
+                        print(_c("muted", f"  Detail: {message}"))
+                    continue
+                worker_result = dict(unload_result.get("worker") or {}) if isinstance(unload_result.get("worker"), dict) else {}
+                worker_status = str(worker_result.get("status") or "").strip()
+                if worker_status and worker_status != "ok":
+                    print(_c("warn", f"Worker unload returned: {worker_status}"))
+                verify_raw = _api_invoke(args, "discover-running", {}, session_token=session_token)
+                session_token = _active_session_token(args, session_token)
+                verify_engines = _get_engines_dict(verify_raw)
+                still_bound = False
+                for _, info in verify_engines.items():
+                    bindings = [dict(item or {}) for item in list(info.get("config_bindings") or []) if isinstance(item, dict)]
+                    models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
+                    if any(str(binding.get("engine_id") or "").strip() == ech for binding in bindings):
+                        still_bound = True
+                    if any(str(model.get("model_instance_id") or model.get("engine_id") or "").strip() == ech for model in models):
+                        still_bound = True
+                if still_bound:
+                    print(_c("bad", "Unload completed but daemon still reports the model binding."))
                 else:
-                    print("  No active sessions to disconnect.")
-                return session_token
+                    remaining = unload_result.get("remaining_model_count")
+                    suffix = f" Remaining models on worker: {remaining}." if remaining is not None else ""
+                    print(_c("good", f"Unload completed.{suffix}"))
+
+            elif ch == "e":
+                res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+                engines = _get_engines_dict(res)
+                if not engines:
+                    print("  No workers to stop.")
+                    continue
+                eopts = {
+                    str(info.get("worker_id") or eid): (f"Stop {info.get('worker_id') or eid}", "")
+                    for eid, info in engines.items()
+                }
+                ech = _prompt_menu("Select Worker", eopts, "b", allow_back=True, allow_changes=False)
+                if ech in ("b", "back"): continue
+                print(f"Stopping {ech}...")
+                _api_invoke(args, "shutdown", {"engine_id": ech}, session_token=session_token)
+                print(_c('good', "Shutdown signal sent."))
                 
-            sch = _prompt_menu("Select Session Preview", sopts, "b", allow_back=True, allow_changes=False)
-            if sch in ("b", "back"): return session_token
-            
-            print(f"Revoking session...")
-            # Pass the token_preview. The API auth_revoke_session needs to support matching by preview.
-            _api_invoke(args, "auth-revoke-session", {"token": sch}, session_token=session_token)
-            print(_c('good', "Session revoked."))
+            elif ch == "c":
+                res = _api_invoke(args, "auth-list-sessions", {}, session_token=session_token)
+                sessions = res.get("sessions", [])
+                cli_preview = _get_token_preview(session_token) if session_token else None
+
+                sopts = {}
+                for s in sessions:
+                    tok = s.get("token_preview") or s.get("token_prefix")
+                    if cli_preview and tok == cli_preview:
+                        continue
+                    if tok:
+                        sopts[tok] = (f"Revoke session [{tok}] (Key: {s.get('key_id', '<unknown>')})", "")
+
+                if not sopts:
+                    if sessions:
+                        print("  No active sessions to disconnect (excluding this CLI).")
+                    else:
+                        print("  No active sessions to disconnect.")
+                    continue
+                    
+                sch = _prompt_menu("Select Session Preview", sopts, "b", allow_back=True, allow_changes=False)
+                if sch in ("b", "back"): continue
+                
+                print(f"Revoking session...")
+                # Pass the token_preview. The API auth_revoke_session needs to support matching by preview.
+                _api_invoke(args, "auth-revoke-session", {"token": sch}, session_token=session_token)
+                print(_c('good', "Session revoked."))
         return session_token
     except PermissionError:
         raise

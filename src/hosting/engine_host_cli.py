@@ -652,6 +652,8 @@ def _channel_settings_from_args(args: argparse.Namespace, *, auto_bootstrap: boo
         "engine_host_client_secret_password",
         "engine_host_timeout_seconds",
         "engine_host_daemon_port",
+        "engine_host_key_id",
+        "engine_host_key_secret",
         "engine_host_session_token",
         "engine_host_session_scope",
         "engine_host_session_ttl_seconds",

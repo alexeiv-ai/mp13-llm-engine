@@ -179,6 +179,35 @@ class EnginesMixin:
                 return reg
         return None
 
+    def _find_reusable_config_binding_worker(
+        self,
+        *,
+        canonical_config_path: str,
+        runtime_profile: Dict[str, Any],
+        reachability_timeout_seconds: float = 0.35,
+    ) -> Optional[Dict[str, Any]]:
+        target_config = str(canonical_config_path or "").strip()
+        if not target_config:
+            return None
+        for row in self._read_engines():
+            reg = dict(row or {})
+            if not self._compatible_runtime_profile(reg, runtime_profile):
+                continue
+            pid = int(reg.get("pid") or 0)
+            if pid <= 0 or not self._pid_alive(pid):
+                continue
+            if str(reg.get("worker_transport") or "").strip().lower() != "ipc":
+                continue
+            bindings = [dict(item or {}) for item in list(reg.get("config_bindings") or []) if isinstance(item, dict)]
+            if not any(str(binding.get("canonical_config_path") or "").strip() == target_config for binding in bindings):
+                continue
+            reachability = self._probe_registration_reachability(reg, timeout_seconds=reachability_timeout_seconds)
+            if bool(reachability.get("reachable", False)):
+                reg["reachable"] = True
+                reg["reachability"] = dict(reachability or {})
+                return reg
+        return None
+
     def _find_idle_model_worker(
         self,
         *,
@@ -562,12 +591,24 @@ class EnginesMixin:
                 progress_events.append(
                     self._progress_event("connect.reconcile_worker", "running", "Searching for reusable worker")
                 )
-                reusable = self._find_reusable_model_worker(
+                reusable = self._find_reusable_config_binding_worker(
+                    canonical_config_path=canonical_config_path,
+                    runtime_profile=runtime_profile,
+                )
+                reusable = reusable or self._find_reusable_model_worker(
                     canonical_model_path=canonical_model_path,
                     runtime_profile=runtime_profile,
                 )
                 if reusable is not None:
                     models = [dict(item or {}) for item in list(reusable.get("loaded_models") or []) if isinstance(item, dict)]
+                    binding_for_config = next(
+                        (
+                            dict(binding or {})
+                            for binding in list(reusable.get("config_bindings") or [])
+                            if str((binding or {}).get("canonical_config_path") or "").strip() == canonical_config_path
+                        ),
+                        {},
+                    )
                     model_row = next(
                         (
                             model for model in models
@@ -582,11 +623,14 @@ class EnginesMixin:
                             (
                                 dict(binding or {})
                                 for binding in list(reusable.get("config_bindings") or [])
-                                if str((binding or {}).get("model_instance_id") or "").strip() == model_instance_id
-                                and str((binding or {}).get("canonical_config_path") or "").strip() == canonical_config_path
-                            ),
+                            if str((binding or {}).get("model_instance_id") or "").strip() == model_instance_id
+                            and str((binding or {}).get("canonical_config_path") or "").strip() == canonical_config_path
+                        ),
                             {},
                         )
+                    if binding_for_config:
+                        model_instance_id = str(binding_for_config.get("model_instance_id") or model_instance_id).strip()
+                        existing_binding = binding_for_config
                     binding_engine_id = (
                         str(existing_binding.get("engine_id") or "").strip()
                         or self._next_engine_id(requested or base_name)
