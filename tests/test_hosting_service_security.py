@@ -119,6 +119,59 @@ def test_discover_running_adds_operator_state_and_kind(monkeypatch: pytest.Monke
     assert rows["tools1"]["sandbox"]["enabled"] is True
 
 
+def test_discover_running_adds_worker_reported_gpu_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=123,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {"reachable": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda _pid: {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None},
+    )
+
+    def _fake_ipc_call(*, reg, payload, timeout_seconds):
+        assert payload["method"] == "get-engine-status"
+        return {
+            "status": "ok",
+            "result": {
+                "data": {
+                    "gpu_info": [
+                        {
+                            "device_id": 0,
+                            "memory_allocated_gb": 1.25,
+                            "memory_reserved_gb": 2.5,
+                            "memory_total_gb": 24.0,
+                        }
+                    ]
+                }
+            },
+        }
+
+    monkeypatch.setattr(svc, "_ipc_call", _fake_ipc_call)
+
+    row = svc.discover_running()[0]
+
+    resources = dict(row["process_resources"])
+    assert resources["gpu_vram_mb"] == 2560.0
+    assert resources["gpu_allocated_mb"] == 1280.0
+    assert resources["gpu_devices"] == ["cuda:0"]
+    assert resources["gpu_vram_source"] == "worker_torch_cuda"
+
+
 def test_discover_running_prunes_registration_when_pid_was_reused(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -852,6 +852,54 @@ class EnginesMixin:
 
         return "sandboxed worker" if sandbox.enabled else "worker"
 
+    def _query_worker_reported_resources(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        kind = self._describe_registration_kind(item)
+        if "model" not in kind:
+            return {}
+        try:
+            out = self._ipc_call(
+                reg=item,
+                payload={
+                    "kind": "rpc_call",
+                    "method": "get-engine-status",
+                    "params": {},
+                    "engine_id": str(item.get("engine_id") or ""),
+                },
+                timeout_seconds=1.0,
+            )
+        except Exception:
+            return {}
+        if str(out.get("status") or "").strip().lower() != "ok":
+            return {}
+        result = dict(out.get("result") or {})
+        data = result.get("data") if isinstance(result.get("data"), dict) else result
+        gpu_info = (data or {}).get("gpu_info") if isinstance(data, dict) else None
+        if not isinstance(gpu_info, list):
+            return {}
+        reserved_mb = 0.0
+        allocated_mb = 0.0
+        devices: List[str] = []
+        for row in gpu_info:
+            if not isinstance(row, dict):
+                continue
+            device_id = row.get("device_id")
+            if device_id is not None:
+                devices.append(f"cuda:{device_id}")
+            try:
+                reserved_mb += float(row.get("memory_reserved_gb") or 0.0) * 1024.0
+            except Exception:
+                pass
+            try:
+                allocated_mb += float(row.get("memory_allocated_gb") or 0.0) * 1024.0
+            except Exception:
+                pass
+        return {
+            "gpu_vram_mb": round(reserved_mb, 1),
+            "gpu_allocated_mb": round(allocated_mb, 1),
+            "gpu_devices": devices,
+            "gpu_vram_source": "worker_torch_cuda",
+        }
+
     def discover_running(
         self,
         *,
@@ -881,6 +929,7 @@ class EnginesMixin:
                     alive = False
             item["alive"] = alive
             item["uptime_seconds"] = max(0.0, now - float(item.get("spawned_at") or now))
+            item["process_resources"] = self._process_resource_snapshot(pid)
             item["reachable"] = False
             if alive and include_reachability:
                 reachability = self._probe_registration_reachability(
@@ -891,6 +940,11 @@ class EnginesMixin:
                 item["reachability"] = reachability
                 if item["reachable"]:
                     reachable_count += 1
+                    worker_resources = self._query_worker_reported_resources(item)
+                    if worker_resources:
+                        merged_resources = dict(item.get("process_resources") or {})
+                        merged_resources.update(worker_resources)
+                        item["process_resources"] = merged_resources
                 elif (
                     age_seconds > 30.0
                     and self._reachability_indicates_missing_ipc_endpoint(reachability)

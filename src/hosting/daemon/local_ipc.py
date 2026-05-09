@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
 import re
 import secrets
+import socket
+import struct
+import sys
 import threading
 import time
 from multiprocessing.connection import Client as MPClient
@@ -77,11 +81,15 @@ class EngineHostDaemon:
 
     def _serve_local_control_client(self, conn: Any) -> None:
         connection_id = secrets.token_urlsafe(9)
+        client_pid = self._local_connection_peer_pid(conn)
+        process_info = self._process_info_for_pid(client_pid)
         connection_actor_ids: set[str] = set()
         self._register_live_connection(
             connection_id,
             transport="local_ipc",
             peer_host="127.0.0.1",
+            pid=client_pid,
+            process_info=process_info,
         )
         try:
             while not self._local_listener_stop.is_set():
@@ -262,6 +270,8 @@ class EngineHostDaemon:
             connection_id,
             transport="tcp",
             peer_host=peer_host,
+            pid=None,
+            process_info={},
         )
         connection_actor_ids: set[str] = set()
         try:
@@ -703,7 +713,148 @@ class EngineHostDaemon:
             self._actor_connections[aid] = next_count
             return next_count
 
-    def _register_live_connection(self, connection_id: str, *, transport: str, peer_host: str) -> None:
+    @staticmethod
+    def _local_connection_peer_pid(conn: Any) -> Optional[int]:
+        handle = getattr(conn, "_handle", None)
+        if handle is None:
+            return None
+        if sys.platform.startswith("win"):
+            try:
+                pid = ctypes.c_ulong(0)
+                ok = ctypes.windll.kernel32.GetNamedPipeClientProcessId(  # type: ignore[attr-defined]
+                    ctypes.c_void_p(int(handle)),
+                    ctypes.byref(pid),
+                )
+                if ok:
+                    return int(pid.value)
+            except Exception:
+                return None
+            return None
+        try:
+            fd = int(handle)
+            sock = socket.fromfd(fd, socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                if hasattr(socket, "SO_PEERCRED"):
+                    creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+                    pid, _uid, _gid = struct.unpack("3i", creds)
+                    return int(pid)
+            finally:
+                sock.close()
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _classify_consumer_process(command_line: str) -> str:
+        cmd = str(command_line or "").lower()
+        if "engine_host_cli" in cmd and "--relay-wrapper" in cmd:
+            return "ssh_relay_proxy"
+        if "ssh" in cmd and ("engine_host_cli" in cmd or "--relay-wrapper" in cmd):
+            return "ssh_proxy"
+        if "hosting_cli.py" in cmd and "--interactive" in cmd:
+            return "interactive_cli"
+        if "engine_host_cli_interactive" in cmd:
+            return "interactive_cli"
+        return "consumer"
+
+    @staticmethod
+    def _process_info_for_pid(pid: Optional[int]) -> Dict[str, Any]:
+        target = int(pid or 0)
+        if target <= 0:
+            return {}
+        if sys.platform.startswith("win"):
+            try:
+                from ctypes import wintypes
+
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel32.OpenProcess.restype = wintypes.HANDLE
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                kernel32.QueryFullProcessImageNameW.argtypes = [
+                    wintypes.HANDLE,
+                    wintypes.DWORD,
+                    wintypes.LPWSTR,
+                    ctypes.POINTER(wintypes.DWORD),
+                ]
+                kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, target)
+                if not handle:
+                    return {"pid": target, "consumer_kind": "consumer"}
+                try:
+                    size = wintypes.DWORD(32768)
+                    buf = ctypes.create_unicode_buffer(size.value)
+                    image_path = None
+                    if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                        image_path = str(buf.value or "") or None
+                    name = Path(image_path).name if image_path else None
+                    # The stdlib has no stable Windows command-line/parent-PID API.
+                    # Report PID and image path only instead of launching PowerShell/WMI.
+                    command_line = image_path or ""
+                    return {
+                        "pid": target,
+                        "parent_pid": None,
+                        "name": name,
+                        "image_path": image_path,
+                        "command_line": command_line or None,
+                        "consumer_kind": EngineHostDaemon._classify_consumer_process(command_line),
+                    }
+                finally:
+                    kernel32.CloseHandle(handle)
+            except Exception:
+                return {"pid": target, "consumer_kind": "consumer"}
+        if sys.platform.startswith("linux"):
+            try:
+                proc_root = Path("/proc") / str(target)
+                command_line = ""
+                try:
+                    raw_cmd = (proc_root / "cmdline").read_bytes()
+                    command_line = raw_cmd.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+                except Exception:
+                    command_line = ""
+                name = None
+                try:
+                    name = (proc_root / "comm").read_text(encoding="utf-8", errors="replace").strip() or None
+                except Exception:
+                    name = None
+                parent_pid = None
+                try:
+                    stat_text = (proc_root / "stat").read_text(encoding="utf-8", errors="replace")
+                    stat_end = stat_text.rfind(")")
+                    fields = stat_text[stat_end + 2 :].split()
+                    parent_pid = int(fields[1]) if len(fields) > 1 else None
+                except Exception:
+                    parent_pid = None
+                return {
+                    "pid": target,
+                    "parent_pid": parent_pid,
+                    "name": name,
+                    "command_line": command_line or None,
+                    "consumer_kind": EngineHostDaemon._classify_consumer_process(command_line),
+                }
+            except Exception:
+                return {"pid": target, "consumer_kind": "consumer"}
+        # macOS does not provide stdlib-only peer process details beyond the PID
+        # here; keep process metadata N/A rather than launching ps.
+        return {
+            "pid": target,
+            "parent_pid": None,
+            "name": None,
+            "command_line": None,
+            "consumer_kind": "consumer",
+            "process_info_status": "not_available_stdlib",
+        }
+
+    def _register_live_connection(
+        self,
+        connection_id: str,
+        *,
+        transport: str,
+        peer_host: str,
+        pid: Optional[int],
+        process_info: Dict[str, Any],
+    ) -> None:
         cid = str(connection_id or "").strip()
         if not cid:
             return
@@ -713,6 +864,9 @@ class EngineHostDaemon:
                 "connection_id": cid,
                 "transport": str(transport or "unknown"),
                 "peer_host": str(peer_host or "") or None,
+                "pid": int(pid or 0) or None,
+                "process": dict(process_info or {}),
+                "consumer_kind": str(dict(process_info or {}).get("consumer_kind") or "") or None,
                 "connected_at": now,
                 "last_seen_at": now,
                 "last_command": None,

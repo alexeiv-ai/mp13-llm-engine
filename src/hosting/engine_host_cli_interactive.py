@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import shutil
 import subprocess
 import tempfile
@@ -144,75 +143,54 @@ def _reachability_summary(info: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _process_resource_snapshot(pid: int) -> Dict[str, float]:
-    target = int(pid or 0)
-    if target <= 0:
-        return {"cpu_percent": 0.0, "memory_mb": 0.0}
-    if sys.platform == "win32":
-        try:
-            ps = (
-                "Get-CimInstance Win32_Process -Filter \"ProcessId=%d\" | "
-                "Select-Object -First 1 WorkingSetSize,KernelModeTime,UserModeTime | ConvertTo-Json -Compress"
-            ) % target
-            proc = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
-                text=True,
-                capture_output=True,
-                timeout=3.0,
-                check=False,
-            )
-            raw = (proc.stdout or "").strip()
-            if not raw:
-                return {"cpu_percent": 0.0, "memory_mb": 0.0}
-            data = json.loads(raw)
-            if isinstance(data, list):
-                data = data[0] if data else {}
-            memory_mb = float(dict(data or {}).get("WorkingSetSize") or 0.0) / (1024.0 * 1024.0)
-            return {"cpu_percent": 0.0, "memory_mb": memory_mb}
-        except Exception:
-            return {"cpu_percent": 0.0, "memory_mb": 0.0}
+def _worker_status_summary(
+    args: argparse.Namespace,
+    session_token: Optional[str],
+    metrics: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     try:
-        proc = subprocess.run(
-            ["ps", "-p", str(target), "-o", "%cpu=,rss="],
-            text=True,
-            capture_output=True,
-            timeout=3.0,
-            check=False,
-        )
-        parts = (proc.stdout or "").strip().split()
-        if len(parts) < 2:
-            return {"cpu_percent": 0.0, "memory_mb": 0.0}
-        return {"cpu_percent": float(parts[0]), "memory_mb": float(parts[1]) / 1024.0}
-    except Exception:
-        return {"cpu_percent": 0.0, "memory_mb": 0.0}
-
-
-def _worker_status_summary(args: argparse.Namespace, session_token: Optional[str]) -> Dict[str, Any]:
-    try:
-        res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+        res = dict(metrics or _api_invoke(args, "host-metrics", {}, session_token=session_token) or {})
     except Exception:
         return {}
-    engines = _get_engines_dict(res)
-    seen_pids: set[int] = set()
-    worker_count = 0
-    cpu_total = 0.0
-    memory_total = 0.0
-    for info in engines.values():
-        if not bool(info.get("alive", False)):
-            continue
-        worker_count += 1
-        pid = int(info.get("pid") or 0)
-        if pid <= 0 or pid in seen_pids:
-            continue
-        seen_pids.add(pid)
-        resources = _process_resource_snapshot(pid)
-        cpu_total += float(resources.get("cpu_percent") or 0.0)
-        memory_total += float(resources.get("memory_mb") or 0.0)
+    summary = dict(res.get("resource_summary") or {})
+    if not summary:
+        return {}
     return {
-        "workers_count": worker_count,
-        "worker_cpu_percent": round(cpu_total, 1),
-        "worker_memory_mb": round(memory_total, 1),
+        "workers_count": int(summary.get("workers_count") or 0),
+        "worker_cpu_percent": summary.get("worker_cpu_percent"),
+        "worker_memory_mb": summary.get("worker_memory_mb"),
+        "worker_gpu_vram_mb": summary.get("worker_gpu_vram_mb"),
     }
+
+
+def _format_percent_or_na(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.1f}%"
+    except Exception:
+        return "N/A"
+
+
+def _format_mb_or_na(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.1f}MB"
+    except Exception:
+        return "N/A"
+
+
+def _resource_bits(resources: Dict[str, Any]) -> list[str]:
+    res = dict(resources or {})
+    bits: list[str] = []
+    if "cpu_percent" in res:
+        bits.append(f"cpu={_format_percent_or_na(res.get('cpu_percent'))}")
+    if "memory_mb" in res:
+        bits.append(f"mem={_format_mb_or_na(res.get('memory_mb'))}")
+    if "gpu_vram_mb" in res:
+        bits.append(f"vram={_format_mb_or_na(res.get('gpu_vram_mb'))}")
+    return bits
 
 
 def _read_json_file(path: str) -> Dict[str, Any]:
@@ -933,10 +911,11 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                             caller_role = res_auth_status.get("caller_role")
                         if session_token and not caller_key:
                             caller_key, caller_role = _lookup_current_session_identity(args, session_token)
-                        worker_status = _worker_status_summary(args, session_token)
+                        worker_status = _worker_status_summary(args, session_token, metrics=res if isinstance(res, dict) else None)
                         workers = worker_status.get("workers_count")
                         worker_cpu = worker_status.get("worker_cpu_percent")
                         worker_mem = worker_status.get("worker_memory_mb")
+                        worker_vram = worker_status.get("worker_gpu_vram_mb")
                         
                         if caller_key and caller_role:
                             status_parts.append(f"Auth: {caller_key} ({caller_role})")
@@ -945,8 +924,9 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         if workers is not None:
                             status_parts.extend([
                                 f"Workers: {workers}",
-                                f"Worker CPU: {worker_cpu}%",
-                                f"Worker Mem: {worker_mem}MB",
+                                f"Worker CPU: {_format_percent_or_na(worker_cpu)}",
+                                f"Worker Mem: {_format_mb_or_na(worker_mem)}",
+                                f"Worker VRAM: {_format_mb_or_na(worker_vram)}",
                             ])
                     except PermissionError as pe:
                         if caller_key and caller_role:
@@ -1126,10 +1106,25 @@ def _print_live_consumers(res: Dict[str, Any], session_token: Optional[str]) -> 
         cid = str(row.get("connection_id") or "<unknown>")
         transport = str(row.get("transport") or "unknown")
         peer = str(row.get("peer_host") or "local")
+        pid = row.get("pid")
+        kind = str(row.get("consumer_kind") or dict(row.get("process") or {}).get("consumer_kind") or "").strip()
         previews = [str(x) for x in list(row.get("session_token_previews") or []) if str(x or "").strip()]
         is_current_cli = bool(cli_preview and cli_preview in previews)
         marker = f" {_c('good', '(this interactive CLI)')}" if is_current_cli else ""
-        print(f"  - Connection [{_c('accent', cid[:12])}] Transport: {transport} Peer: {peer}{marker}")
+        details = [f"Transport: {transport}", f"Peer: {peer}"]
+        if pid:
+            details.append(f"PID: {pid}")
+        if kind:
+            details.append(f"Kind: {kind}")
+        print(f"  - Connection [{_c('accent', cid[:12])}] {' '.join(details)}{marker}")
+        process = dict(row.get("process") or {})
+        if process.get("name") or process.get("parent_pid"):
+            proc_bits = []
+            if process.get("name"):
+                proc_bits.append(f"name={process.get('name')}")
+            if process.get("parent_pid"):
+                proc_bits.append(f"ppid={process.get('parent_pid')}")
+            print(f"    Process: {', '.join(proc_bits)}")
         actors = [str(x) for x in list(row.get("actor_ids") or []) if str(x or "").strip()]
         if actors:
             print(f"    Actors: {', '.join(actors)}")
@@ -1183,6 +1178,7 @@ def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Opt
                 details.append(f"pid={info.get('pid')}")
             if "reachable" in info:
                 details.append(f"reachable={'yes' if bool(info.get('reachable')) else 'no'}")
+            details.extend(_resource_bits(dict(info.get("process_resources") or {})))
             suffix = f" {' '.join(details)}" if details else ""
             print(f"  - {_c('accent', eid)} [{_c(status_color, state)}] ({_c('value', kind)}){suffix}")
             loaded_models = [dict(item or {}) for item in list(info.get("loaded_models") or []) if isinstance(item, dict)]
@@ -1247,6 +1243,11 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
             ("Kind", _operator_resource_kind(info)),
             ("Pid", info.get("pid")),
         ])
+        resource_bits = _resource_bits(dict(info.get("process_resources") or {}))
+        if resource_bits:
+            _kv_rows([
+                ("Resources", ", ".join(resource_bits)),
+            ])
         reachability_note = _reachability_summary(info)
         if reachability_note:
             print()

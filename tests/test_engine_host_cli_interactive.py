@@ -179,6 +179,9 @@ def test_print_live_consumers_marks_current_interactive_cli(capsys: pytest.Captu
                     "peer_host": "127.0.0.1",
                     "actor_ids": ["key:admin-main"],
                     "session_token_previews": [interactive._get_token_preview(current)],
+                    "pid": 1234,
+                    "consumer_kind": "interactive_cli",
+                    "process": {"name": "python.exe", "parent_pid": 1000},
                     "age_seconds": 2,
                     "idle_seconds": 0,
                     "command_count": 3,
@@ -193,6 +196,8 @@ def test_print_live_consumers_marks_current_interactive_cli(capsys: pytest.Captu
     out = capsys.readouterr().out
     assert "conn-123456" in out
     assert "local_ipc" in out
+    assert "PID: 1234" in out
+    assert "interactive_cli" in out
     assert "(this interactive CLI)" in out
     assert "key:admin-main" in out
 
@@ -260,21 +265,19 @@ def test_reachability_summary_explains_unavailable_ipc() -> None:
     assert "stale PID" in note
 
 
-def test_worker_status_summary_counts_alive_workers_once_per_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_status_summary_uses_daemon_resource_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
     monkeypatch.setattr(
         interactive,
         "_api_invoke",
-        lambda *_args, **_kwargs: [
-            {"engine_id": "a", "alive": True, "pid": 100},
-            {"engine_id": "b", "alive": True, "pid": 100},
-            {"engine_id": "c", "alive": False, "pid": 200},
-        ],
-    )
-    monkeypatch.setattr(
-        interactive,
-        "_process_resource_snapshot",
-        lambda _pid: {"cpu_percent": 12.34, "memory_mb": 56.78},
+        lambda *_args, **_kwargs: {
+            "resource_summary": {
+                "workers_count": 2,
+                "worker_cpu_percent": 12.3,
+                "worker_memory_mb": 56.8,
+                "worker_gpu_vram_mb": 1024.0,
+            }
+        },
     )
 
     summary = interactive._worker_status_summary(args, session_token="tok")
@@ -282,6 +285,17 @@ def test_worker_status_summary_counts_alive_workers_once_per_pid(monkeypatch: py
     assert summary["workers_count"] == 2
     assert summary["worker_cpu_percent"] == 12.3
     assert summary["worker_memory_mb"] == 56.8
+    assert summary["worker_gpu_vram_mb"] == 1024.0
+
+
+def test_resource_formatters_show_na_for_unknown_values() -> None:
+    assert interactive._format_percent_or_na(None) == "N/A"
+    assert interactive._format_mb_or_na(None) == "N/A"
+    assert interactive._resource_bits({"cpu_percent": None, "memory_mb": None, "gpu_vram_mb": None}) == [
+        "cpu=N/A",
+        "mem=N/A",
+        "vram=N/A",
+    ]
 
 
 def test_configured_model_path_from_config_row_reads_common_fields(tmp_path: Path) -> None:

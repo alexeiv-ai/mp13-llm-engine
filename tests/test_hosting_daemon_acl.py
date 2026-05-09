@@ -55,7 +55,13 @@ def test_daemon_lists_live_consumers(tmp_path: Path) -> None:
     token = _issue_mgmt_session(daemon, "admin-main", "secret")
     actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
     assert actor_id
-    daemon._register_live_connection("conn-1", transport="local_ipc", peer_host="127.0.0.1")
+    daemon._register_live_connection(
+        "conn-1",
+        transport="local_ipc",
+        peer_host="127.0.0.1",
+        pid=1234,
+        process_info={"pid": 1234, "consumer_kind": "consumer"},
+    )
     daemon._track_actor_connected(actor_id)
     daemon._update_live_connection(
         "conn-1",
@@ -76,6 +82,8 @@ def test_daemon_lists_live_consumers(tmp_path: Path) -> None:
     assert result["connections_count"] == 1
     assert result["actors_count"] == 1
     assert result["connections"][0]["connection_id"] == "conn-1"
+    assert result["connections"][0]["pid"] == 1234
+    assert result["connections"][0]["consumer_kind"] == "consumer"
     assert result["connections"][0]["actor_ids"] == [actor_id]
     assert result["actors"][0]["connection_count"] == 1
 
