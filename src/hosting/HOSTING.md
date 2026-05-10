@@ -132,6 +132,11 @@ Issue a local control session token:
 @'{"key_id":"admin-key","key_secret":"CHANGE_ME","scope":"control","ttl_seconds":900}'@ | python -m hosting.engine_host_cli --payload-stdin auth-issue-session
 ```
 
+Validate an existing token before reusing it:
+```powershell
+@'{"token":"<control_token>","scope":"control","expected_key_id":"admin-key","check_ssh_binding":true}'@ | python -m hosting.engine_host_cli --payload-stdin auth-validate-session
+```
+
 Then use the control token for authenticated config changes:
 ```powershell
 @'{"require_auth":true,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin set-control-config
@@ -246,6 +251,10 @@ Hosting maintains an audit trail of key and session lifecycle events.
 # Query specific audit events (Admin-only)
 @'{"session_token":"<control_token>","event_type":"auth_revoke_key","limit":50,"offset":0}'@ | python -m hosting.engine_host_cli --payload-stdin auth-audit-list
 ```
+
+`auth-list-sessions` returns session metadata and token previews only; it does
+not disclose bearer tokens. Use `auth-validate-session` to check a token already
+held by the client/channel before reusing or adopting it.
 
 ## 4. Current Limitations & Implementation Notes
 

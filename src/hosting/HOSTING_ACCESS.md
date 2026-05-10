@@ -309,8 +309,9 @@ The following points are intended as stable design notes rather than phased stat
 6. Shared-secret session issuance (`auth-issue-session`) is local-only and must be denied for non-local connectivity profiles.
 7. Auth lifecycle audit events and admin audit query surfaces are baseline operator controls, not optional add-ons.
 8. Lifecycle profiles/policies, terminal-control gating, and shutdown sequencing are part of the supported lifecycle contract.
-9. `auth-status` exposes contract metadata such as `daemon_version` and `capabilities`, but clients must treat retrieval failure under `require_auth=true` primarily as an auth/reachability-path problem.
-10. SSH-targeted control paths require explicit pinned SSH host-key input from the client side; `accept-new` host-key onboarding is not a supported baseline mode.
+9. `auth-status` exposes contract metadata such as `daemon_version` and `capabilities`, including `auth_session_validate`, `auth_session_adopt`, `auth_session_list`, and `auth_audit_list`; clients must treat retrieval failure under `require_auth=true` primarily as an auth/reachability-path problem.
+10. `auth-validate-session` is the supported remote-safe way to validate a token already held by the client/channel before reuse or adoption. Session listing remains metadata-only and must not disclose bearer tokens.
+11. SSH-targeted control paths require explicit pinned SSH host-key input from the client side; `accept-new` host-key onboarding is not a supported baseline mode.
 
 ## 7. `require_auth=false` Safe-Only Policy
 
@@ -734,6 +735,8 @@ This section is the authoritative integration contract for hosting consumers.
    - `auth-complete-challenge`
 3. Remote-capable consumers must include `_ssh_session_binding` metadata so issued sessions remain tied to the expected SSH route.
 4. Consumers must treat missing or rejected SSH binding as a hard security failure, not as a retry-without-binding hint.
+5. Consumers that cache or receive a session token should validate it with `auth-validate-session` using the requested scope, optional expected key id, and current SSH binding before adopting it or skipping public-key challenge auth.
+6. Consumers must not expect the daemon to return the latest valid bearer token from `auth-list-sessions`; that surface is intentionally redacted.
 
 ### 11.4 Transport bootstrap and profile handling
 
@@ -754,13 +757,14 @@ This section is the authoritative integration contract for hosting consumers.
 2. Use SSH relay or explicitly configured HTTP ingress according to deployment mode.
 3. Implement public-key challenge auth for remote-capable consumers.
 4. Inject `_ssh_session_binding` for SSH-mediated sessions.
-5. Parse structured denials (`error_code`, `error_details`) and preserve them in UX/logs.
-6. Distinguish auth-path failure from daemon-version incompatibility when `auth-status` metadata is unavailable.
-7. Surface key provenance and custody state clearly:
+5. Validate cached or externally supplied tokens with `auth-validate-session` before adopting them.
+6. Parse structured denials (`error_code`, `error_details`) and preserve them in UX/logs.
+7. Distinguish auth-path failure from daemon-version incompatibility when `auth-status` metadata is unavailable.
+8. Surface key provenance and custody state clearly:
    - `imported` vs `generated`
    - externally managed key vs client-realm secret or handoff text
    - OpenSSH passphrase-protected vs unprotected private key
-8. Validate imported transport profiles with strict host-key checking before treating them as ready.
+9. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
 ## 12. Advanced Hardening and Risk Assessment
 

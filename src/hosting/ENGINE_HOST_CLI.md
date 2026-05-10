@@ -136,6 +136,14 @@ Subcommands also accept selector flags:
 `--resource-kind`, `--resource-id`
 : Adds resource selectors to the command payload when provided.
 
+## Session Validation Command
+
+`auth-validate-session`
+: Validates a token the caller already holds for a requested scope and optional
+expected key id. For SSH targets, the channel supplies the current SSH binding
+so callers can verify the token is valid for this connection before adopting or
+reusing it.
+
 ## Remote Authentication Model
 
 Remote control uses two separate credentials. They are easy to confuse, but they
@@ -237,6 +245,12 @@ or passphrase. Use one of these patterns instead:
   py hosting_cli.py --ssh-target user@example-host --control-ssh-key C:\keys\transport_ed25519 --ssh-known-hosts-line "example-host ssh-ed25519 AAAA..." --session-token <token> host-metrics
   ```
 
+  To check a token before reuse:
+
+  ```powershell
+  py hosting_cli.py --ssh-target user@example-host --control-ssh-key C:\keys\transport_ed25519 --ssh-known-hosts-line "example-host ssh-ed25519 AAAA..." --payload-json '{"token":"<token>","scope":"control","expected_key_id":"admin-main","check_ssh_binding":true}' auth-validate-session
+  ```
+
 - Use application code with `EngineHostControlChannel` plus
   `hosting.client_realm_api.begin_client_key_authentication()` and
   `complete_client_key_authentication()` if your application has its own secure
@@ -270,7 +284,9 @@ process and can make stopped-daemon offline reads work until the token expires.
 
 `List local sessions`
 : Reads saved sessions directly from local control state. This may include stale
-or expired entries after pruning rules run.
+or expired entries after pruning rules run. Normal remote-capable consumers
+should validate a token they already hold with `auth-validate-session`; session
+listing is metadata-only and does not return bearer tokens.
 
 `Revoke local session`
 : Shows a numbered list of saved local sessions, then mutates local control
