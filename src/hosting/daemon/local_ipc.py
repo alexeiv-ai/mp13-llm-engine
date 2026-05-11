@@ -2277,6 +2277,10 @@ class EngineHostDaemon:
                 session_token=payload.get("session_token"),
                 presented_ssh_binding=dict(payload.get("_ssh_session_binding") or {}),
             )
+        if cmd == "hosting-setup-status":
+            return svc.hosting_setup_summary()
+        if cmd == "hosting-secure-state-status":
+            return svc.hosting_secure_state_status()
         if cmd == "auth-list-keys":
             return svc.auth_list_keys()
         if cmd == "auth-list-sessions":

@@ -276,6 +276,8 @@ class AuthMixin:
             "get-control-config",
             "set-control-config",
             "auth-status",
+            "hosting-setup-status",
+            "hosting-secure-state-status",
             "auth-list-keys",
             "auth-list-sessions",
             "list-live-consumers",
@@ -375,6 +377,8 @@ class AuthMixin:
                 "get-control-config",
                 "get-lifecycle-policy-effective",
                 "auth-status",
+                "hosting-setup-status",
+                "hosting-secure-state-status",
             }
         if r == ROLE_WORKER_USER:
             return {
@@ -523,6 +527,8 @@ class AuthMixin:
                 "get-control-config",
                 "get-lifecycle-policy-effective",
                 "auth-status",
+                "hosting-setup-status",
+                "hosting-secure-state-status",
             }
         return set()
 

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ..secure_state import secure_state_status
 from .constants import LIFECYCLE_PROFILE_DETACHED
 
 
@@ -240,6 +241,69 @@ class StateMixin:
             "runtime_state": self.hosting_root / "state" / "runtime_state.json",
             "auth_audit": self.hosting_root / "audit" / "auth_audit.json",
             "claim_audit": self.hosting_root / "audit" / "claim_audit.json",
+        }
+
+    def hosting_secure_state_status(self) -> Dict[str, Any]:
+        layout = self._control_layout()
+        bootstrap_root = self.hosting_root / "bootstrap"
+        files = {
+            "access_control": layout["access_control"],
+            "keys": layout["keys"],
+            "sessions": layout["sessions"],
+            "challenges": layout["challenges"],
+            "runtime_state": layout["runtime_state"],
+            "auth_audit": layout["auth_audit"],
+            "claim_audit": layout["claim_audit"],
+            "bootstrap_state": bootstrap_root / "bootstrap_state.json",
+            "client_key_map": bootstrap_root / "client_key_map.json",
+        }
+        statuses = {name: secure_state_status(path) for name, path in files.items()}
+        encrypted_count = sum(1 for row in statuses.values() if bool(row.get("encrypted")))
+        locked_count = sum(1 for row in statuses.values() if bool(row.get("locked")))
+        plaintext_count = sum(1 for row in statuses.values() if str(row.get("state") or "") == "plaintext")
+        return {
+            "status": "ok",
+            "hosting_root": str(self.hosting_root),
+            "encryption_enabled": False,
+            "daemon_secure_state_read_enabled": False,
+            "startup_env_names": ["MP13_SECURE_STATE_KEY", "MP13_HOSTING_SECURE_STATE_KEY"],
+            "files": statuses,
+            "summary": {
+                "encrypted_count": encrypted_count,
+                "locked_count": locked_count,
+                "plaintext_count": plaintext_count,
+                "missing_count": sum(1 for row in statuses.values() if str(row.get("state") or "") == "missing"),
+            },
+        }
+
+    def hosting_setup_summary(self) -> Dict[str, Any]:
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        auth = dict(cfg.get("auth") or {})
+        keys = dict(auth.get("keys") or {})
+        admin_key_ids = sorted(
+            str(key_id).strip()
+            for key_id, meta in keys.items()
+            if str(key_id).strip() and str((meta or {}).get("role") or "").strip().lower() == "admin"
+        )
+        access_profile = dict(cfg.get("access_profile") or {})
+        return {
+            "status": "ok",
+            "hosting_root": str(self.hosting_root),
+            "configured": bool((self.hosting_root / "access_control.json").exists() or keys),
+            "connectivity_mode": str(access_profile.get("connectivity_mode") or "local_only"),
+            "endpoint_mode_default": str(cfg.get("endpoint_mode_default") or "exclusive"),
+            "lifecycle_profile": self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
+            "lifecycle_policy": self._normalize_lifecycle_policy(
+                self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
+                dict(cfg.get("lifecycle_policy") or {}),
+            ),
+            "require_auth": bool(cfg.get("require_auth", False)),
+            "admin_key_count": len(admin_key_ids),
+            "admin_key_ids": admin_key_ids,
+            "keys_count": len(keys),
+            "sessions_count": len(dict(auth.get("sessions") or {})),
+            "secure_state": self.hosting_secure_state_status(),
         }
 
     def _read_control(self) -> Dict[str, Any]:

@@ -32,6 +32,8 @@ class CoreMixin:
             "auth_session_adopt": True,
             "auth_session_list": True,
             "auth_audit_list": True,
+            "hosting_setup_status_v1": True,
+            "secure_state_status_v1": True,
         }
 
     @staticmethod

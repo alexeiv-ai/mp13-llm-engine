@@ -144,6 +144,22 @@ expected key id. For SSH targets, the channel supplies the current SSH binding
 so callers can verify the token is valid for this connection before adopting or
 reusing it.
 
+## Hosting Status Commands
+
+`hosting-setup-status`
+: Returns sanitized hosting setup metadata, including configured mode, auth
+posture, lifecycle policy, key/session counts, and secure-state summary. Use
+this instead of having GUI/backend integrations read hosting-owned files such as
+`access_control.json`, `bootstrap_state.json`, or `client_key_map.json`
+directly.
+
+`hosting-secure-state-status`
+: Returns metadata-only secure-state status for hosting-owned files. It reports
+missing/plaintext/encrypted/locked state and the documented startup env names,
+but it does not decrypt or return file contents. Current daemon-owned encrypted
+state reads are intentionally disabled until daemon startup key propagation is
+wired.
+
 ## Remote Authentication Model
 
 Remote control uses two separate credentials. They are easy to confuse, but they

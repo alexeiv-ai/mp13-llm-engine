@@ -128,6 +128,12 @@ EXAMPLES_BY_COMMAND = {
     "auth-status": [
         "python -m hosting.engine_host_cli auth-status",
     ],
+    "hosting-setup-status": [
+        "python -m hosting.engine_host_cli hosting-setup-status",
+    ],
+    "hosting-secure-state-status": [
+        "python -m hosting.engine_host_cli hosting-secure-state-status",
+    ],
     "list-live-consumers": [
         "python -m hosting.engine_host_cli list-live-consumers --session-token <control_token>",
     ],
@@ -797,6 +803,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "get-control-config",
         "set-control-config",
         "auth-status",
+        "hosting-setup-status",
+        "hosting-secure-state-status",
         "auth-list-keys",
         "auth-list-sessions",
         "list-live-consumers",
@@ -1687,6 +1695,12 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "auth-status":
             _print_ok(svc.auth_status())
+            return 0
+        if cmd == "hosting-setup-status":
+            _print_ok(svc.hosting_setup_summary())
+            return 0
+        if cmd == "hosting-secure-state-status":
+            _print_ok(svc.hosting_secure_state_status())
             return 0
         if cmd == "auth-list-keys":
             _print_ok(svc.auth_list_keys())

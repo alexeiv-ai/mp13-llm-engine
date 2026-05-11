@@ -15,10 +15,11 @@ Entrypoints:
 The script is designed for both first-time setup before daemon startup and reconfiguration/inspection of an existing hosting installation.
 
 Stable integration APIs:
-1. `hosting.hosting_setup_api` exposes host-local setup planning, apply, inspect, and reset. It is the backend integration contract for local bootstrap/materialization.
+1. `hosting.hosting_setup_api` exposes host-local setup planning, apply, inspect, sanitized status, and reset. It is the backend integration contract for local bootstrap/materialization.
 2. `hosting.client_realm_api` exposes client-realm key list/generate/import and copy/paste handoff helpers.
 3. `hosting.transport_bootstrap_api` exposes local transport bundle/profile artifact operations. `install_authorized_transport_key` also registers the transport public key in local hosting RBAC by default; pass `register_rbac=False` only for file-only maintenance.
 4. `hosting.transport_admin_setup_api` exposes explicit dry-run/elevated SSH service/firewall setup planning and execution.
+5. `hosting.secure_state` exposes importable JSON secure-state helpers for GUI/backend-owned stores: plaintext/encrypted read/write, envelope detection, fail-closed errors, status metadata, and encrypt/decrypt/rotate APIs.
 
 Backends must not parse human CLI output. `hosting_config_cli` is an operator adapter; programmatic integrations should call the API modules above.
 
@@ -112,6 +113,8 @@ API gating:
 2. `reset_local_hosting_setup` requires `confirm_reset=True`.
 3. Transport admin setup is dry-run by default; execution requires `execute=True` and uses platform elevation.
 4. Remote backend workflows may generate/import local artifacts and instructions, but they do not apply setup to a remote daemon through a daemon API.
+5. `get_local_hosting_setup_status` is the host-local replacement for direct GUI/backend reads of hosting-owned setup files.
+6. Running daemons expose equivalent metadata through `hosting-setup-status` and `hosting-secure-state-status`.
 
 Reset semantics:
 1. `Reset to unconfigured` is available from the main menu when active hosting access files or keys exist.
@@ -200,6 +203,12 @@ Client realm directory:
 `<default_engine_config_dir>/hosting_client/<realm>/`
 
 Client realm may contain private-key secret records and transport profiles used by the hosting consumer side.
+
+Secure-state ownership:
+1. GUI/backend-owned stores may use `hosting.secure_state` now for encrypted JSON custody.
+2. Hosting-owned files remain owned by hosting and are not encrypted by GUI code.
+3. GUI/backend integrations should request sanitized hosting setup/status through `hosting.hosting_setup_api.get_local_hosting_setup_status`, `EngineHostService.hosting_setup_summary`, or daemon commands instead of reading `access_control.json`, `bootstrap/bootstrap_state.json`, or `bootstrap/client_key_map.json` directly.
+4. The documented secure-state key environment names are `MP13_SECURE_STATE_KEY` and `MP13_HOSTING_SECURE_STATE_KEY`. Daemon-owned encrypted reads are not enabled until daemon startup key propagation and fail-start semantics are implemented.
 
 ## 6. Key Handling
 

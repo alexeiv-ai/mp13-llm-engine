@@ -132,6 +132,40 @@ def inspect_local_hosting_setup(request: LocalHostingSetupRequest | Dict[str, An
     }
 
 
+def get_local_hosting_setup_status(request: LocalHostingSetupRequest | Dict[str, Any] | None = None) -> Dict[str, Any]:
+    data = _data(request)
+    _require_host_local(data)
+    args = _args(data)
+    paths = _cli._resolve_paths(args, create_dirs=False)
+    from .service.host_service import EngineHostService
+
+    svc = EngineHostService(
+        control_state_file=paths["control_state_path"],
+    )
+    summary = _cli._summarize_existing_config(
+        control_state_path=paths["control_state_path"],
+        access_file=paths["access_file"],
+        keys_file=paths["keys_file"],
+    )
+    probe = _cli._probe_current_files(
+        control_state_path=paths["control_state_path"],
+        access_file=paths["access_file"],
+        keys_file=paths["keys_file"],
+        mappings_file=paths["mappings_file"],
+        bootstrap_state_file=paths["bootstrap_state_file"],
+        audit_file=paths["audit_file"],
+    )
+    return {
+        "status": "ok",
+        "host_local": True,
+        "hosting_root": str(paths["hosting_root"]),
+        "setup_summary": summary,
+        "setup_state": _cli._classify_config_state(summary, probe),
+        "probe": probe,
+        "hosting_api_summary": svc.hosting_setup_summary(),
+    }
+
+
 def reset_local_hosting_setup(request: LocalHostingSetupRequest | Dict[str, Any]) -> Dict[str, Any]:
     data = _data(request)
     _require_host_local(data)
@@ -147,5 +181,6 @@ __all__ = [
     "plan_local_hosting_setup",
     "apply_local_hosting_setup",
     "inspect_local_hosting_setup",
+    "get_local_hosting_setup_status",
     "reset_local_hosting_setup",
 ]

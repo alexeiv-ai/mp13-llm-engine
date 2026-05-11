@@ -233,6 +233,18 @@ Key metadata expectations:
 2. Audit every key create/update/revoke/handoff event.
 3. Optional tamper-warning checksum chain (best effort, not a local-compromise prevention guarantee).
 
+### 4.4 Secure-state ownership boundary
+
+1. GUI/backend-owned stores may use `hosting.secure_state` for JSON secure-state custody. The helper API supports plaintext/encrypted JSON read/write, envelope detection, fail-closed errors, status metadata, and encrypt/decrypt/rotate operations.
+2. Hosting-owned files remain owned by hosting. GUI/backend code must not encrypt or rewrite hosting-owned files such as `access_control.json`, `bootstrap/bootstrap_state.json`, or `bootstrap/client_key_map.json`.
+3. Hosting exposes metadata-only replacements for direct file reads:
+   - in-process: `EngineHostService.hosting_setup_summary()`
+   - in-process: `EngineHostService.hosting_secure_state_status()`
+   - host-local setup API: `hosting.hosting_setup_api.get_local_hosting_setup_status(...)`
+   - daemon/CLI commands: `hosting-setup-status` and `hosting-secure-state-status`
+4. The secure-state startup env names are `MP13_SECURE_STATE_KEY` and `MP13_HOSTING_SECURE_STATE_KEY`.
+5. Daemon-owned encrypted-state reads are not enabled yet. The daemon reports plaintext/encrypted/locked status, but fail-start-on-missing-key semantics must wait until daemon startup env propagation is implemented.
+
 ## 5. Endpoint Access Modes and Ownership
 
 ### 5.1 Effective endpoint mode

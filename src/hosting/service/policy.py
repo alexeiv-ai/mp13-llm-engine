@@ -81,6 +81,8 @@ class PolicyMixin:
             "set-control-config",
             "auth-upsert-key",
             "auth-status",
+            "hosting-setup-status",
+            "hosting-secure-state-status",
             "auth-revoke-key",
             "auth-list-keys",
             "auth-list-sessions",
