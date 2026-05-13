@@ -36,6 +36,27 @@ def test_resolve_model_path_from_config_value_uses_models_root(tmp_path: Path) -
     assert resolved == str(model_dir.resolve())
 
 
+def test_resolve_model_path_from_config_value_does_not_use_process_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = _make_service(tmp_path)
+    cfg_path = tmp_path / "backend" / "configs" / "granite-2b.json"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("{}", encoding="utf-8")
+    unrelated_cwd = tmp_path / "unrelated"
+    unrelated_cwd.mkdir()
+    svc._resolve_json_config_path = lambda _config_path: cfg_path  # type: ignore[method-assign]
+
+    monkeypatch.chdir(unrelated_cwd)
+    monkeypatch.setattr(EngineHostService, "_service_project_root", staticmethod(lambda: None))
+
+    resolved = svc._resolve_model_path_from_config_value(
+        "./local-model",
+        config_path="granite-2b",
+        cfg={},
+    )
+
+    assert resolved == str((cfg_path.parent / "local-model").resolve())
+
+
 def _install_ipc_http_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     def _stub(
         self,

@@ -362,6 +362,11 @@ class EnginesMixin:
     def _check_module_available(self, python: str, module_name: str) -> Tuple[bool, str]:
         """
         Check whether engine runtime symbols are importable by *python*.
+
+        This is a heavy diagnostic check, not a spawn preflight. Importing the
+        engine runtime can import torch and other large dependencies; normal
+        connect/spawn paths use _check_module_discoverable and rely on worker
+        startup/readiness to surface true runtime import failures.
         """
         from ..engine_discovery import is_engine_available
         # We assume module_name is "mp13_engine" which is the only one used here
@@ -381,11 +386,11 @@ class EnginesMixin:
 
     def _build_engine_spawn_spec(self, *, engine_id: str, config_path: str, model_path: str) -> Dict[str, Any]:
         python = self._engine_python_executable()
-        ok, err_detail = self._check_module_available(python, "mp13_engine")
+        ok, err_detail = self._check_module_discoverable(python, "mp13_engine")
         if not ok:
             return {
                 "error": (
-                    f"mp13_engine is not available in Python '{python}': {err_detail}. "
+                    f"mp13_engine is not discoverable in Python '{python}': {err_detail}. "
                     "Set MP13_ENGINE_PYTHON to a Python that has mp13_engine installed."
                 ),
                 "error_kind": "engine_not_available",

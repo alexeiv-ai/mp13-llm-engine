@@ -279,7 +279,12 @@ class ConfigMixin:
 
         cfg = self._merge_default_and_selected_config(config_path)
         selected_path = self._resolve_json_config_path(config_path)
-        _resolved_cfg, resolver = resolve_config_paths(cfg, config_path=selected_path)
+        _resolved_cfg, resolver = resolve_config_paths(
+            cfg,
+            cwd=selected_path.parent,
+            config_path=selected_path,
+            project_root=self._service_project_root(),
+        )
         models_root = resolver.category_roots.get("models") or selected_path.parent
         results: List[Dict[str, Any]] = []
         if not models_root.exists():
@@ -300,6 +305,17 @@ class ConfigMixin:
         if not raw:
             return ""
         selected_path = self._resolve_json_config_path(config_path)
-        _resolved_cfg, resolver = resolve_config_paths(cfg, config_path=selected_path)
+        _resolved_cfg, resolver = resolve_config_paths(
+            cfg,
+            cwd=selected_path.parent,
+            config_path=selected_path,
+            project_root=self._service_project_root(),
+        )
         resolved = resolver.resolve(raw, category="models", allow_remote_id=False)
         return str(resolved or raw)
+
+    @staticmethod
+    def _service_project_root() -> Optional[Path]:
+        from mp13_engine.mp13_config_paths import detect_project_root
+
+        return detect_project_root(Path(__file__).resolve())

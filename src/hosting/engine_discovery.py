@@ -74,6 +74,12 @@ def is_engine_discoverable(python_executable: Optional[str] = None) -> Tuple[boo
 def is_engine_available(python_executable: Optional[str] = None) -> Tuple[bool, str]:
     """
     Strict check whether engine runtime symbols are actually importable.
+
+    This intentionally performs a heavy runtime import and can transitively load
+    ML dependencies such as torch. Do not use it for daemon hot paths or spawn
+    preflight; use is_engine_discoverable there and let worker startup be the
+    authoritative runtime check. This is still useful for explicit diagnostics
+    and setup validation where proving MP13Engine imports is the requested work.
     
     If python_executable is not provided, it respects the MP13_ENGINE_PYTHON
     environment variable, falling back to sys.executable.
@@ -114,5 +120,7 @@ def is_engine_available(python_executable: Optional[str] = None) -> Tuple[bool, 
         return False, last_line
     except FileNotFoundError:
         return False, f"Python executable not found: {target_python}"
+    except subprocess.TimeoutExpired:
+        return False, "strict import timed out after 30 seconds"
     except Exception as exc:
         return False, str(exc)

@@ -253,6 +253,32 @@ def test_connect_from_config_reuses_reachable_worker_for_same_model(tmp_path: Pa
     assert len(spawned) == 1
 
 
+def test_build_engine_spawn_spec_uses_lightweight_module_discovery(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    discoverable_calls = []
+
+    def _discoverable(_python: str, _module: str):
+        discoverable_calls.append((_python, _module))
+        return True, ""
+
+    def _fail_if_called(_python: str, _module: str):
+        raise AssertionError("spawn preflight must not perform a heavy engine import")
+
+    monkeypatch.setattr(EngineHostService, "_engine_python_executable", lambda self: "python")
+    monkeypatch.setattr(EngineHostService, "_check_module_discoverable", staticmethod(_discoverable))
+    monkeypatch.setattr(EngineHostService, "_check_module_available", staticmethod(_fail_if_called))
+    monkeypatch.setattr(EngineHostService, "_allocate_ipc_address", lambda self, _engine_id: ("AF_PIPE", r"\\.\pipe\mp13-test"))
+
+    spec = svc._build_engine_spawn_spec(engine_id="worker1", config_path="default", model_path="C:/models/foo")
+
+    assert discoverable_calls == [("python", "mp13_engine")]
+    assert "error" not in spec
+    assert spec["command"][:2] == ["python", "-m"]
+
+
 def test_connect_from_config_force_new_worker_bypasses_reuse(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")
