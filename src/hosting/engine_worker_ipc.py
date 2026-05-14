@@ -20,6 +20,7 @@ import os
 import queue
 import secrets
 import socket
+import sys
 import threading
 import time
 import traceback
@@ -156,6 +157,8 @@ async def _rpc_call(method: str, params: Dict[str, Any], *, engine_id: str = "")
             "model_management": True,
             "limits": lim,
         }
+    if m in {"worker.resources", "worker.resource-status"}:
+        return _worker_resource_status()
     if m.startswith("model."):
         return await _model_rpc_call(m, p)
     out = await _run_tool(m, p, engine_id=engine_id)
@@ -228,6 +231,106 @@ async def _model_rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]
                     _config_bindings.pop(key, None)
         return {"status": "ok", "result": {"status": "unloaded", "model_instance_id": model_instance_id}}
     return {"status": "error", "message": "unsupported_model_method"}
+
+
+def _worker_resource_status() -> Dict[str, Any]:
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is None:
+        return {
+            "status": "ok",
+            "result": {
+                "status": "pending",
+                "message": "torch_module_not_loaded",
+                "data": {
+                    "pid": os.getpid(),
+                    "gpu_vram_pending": True,
+                    "gpu_vram_source": "worker_torch_module_pending",
+                },
+            },
+        }
+    cuda = getattr(torch_mod, "cuda", None)
+    if cuda is None:
+        return {
+            "status": "ok",
+            "result": {
+                "status": "pending",
+                "message": "torch_cuda_unavailable",
+                "data": {
+                    "pid": os.getpid(),
+                    "gpu_vram_pending": True,
+                    "gpu_vram_source": "worker_torch_cuda_pending",
+                },
+            },
+        }
+    try:
+        available = bool(cuda.is_available())
+    except Exception as exc:
+        return {
+            "status": "ok",
+            "result": {
+                "status": "pending",
+                "message": f"torch_cuda_status_error:{exc}",
+                "data": {
+                    "pid": os.getpid(),
+                    "gpu_vram_pending": True,
+                    "gpu_vram_source": "worker_torch_cuda_pending",
+                },
+            },
+        }
+    if not available:
+        return {
+            "status": "ok",
+            "result": {
+                "status": "ok",
+                "message": "cuda_not_available",
+                "data": {
+                    "pid": os.getpid(),
+                    "gpu_info": [],
+                    "current_gpu_mem_allocated_mb": 0.0,
+                    "current_gpu_mem_reserved_mb": 0.0,
+                    "gpu_vram_source": "worker_torch_cuda",
+                },
+            },
+        }
+    try:
+        count = int(cuda.device_count())
+    except Exception:
+        count = 0
+    devices = []
+    allocated_mb = 0.0
+    reserved_mb = 0.0
+    for idx in range(max(0, count)):
+        try:
+            alloc = float(cuda.memory_allocated(idx)) / (1024.0 * 1024.0)
+        except Exception:
+            alloc = 0.0
+        try:
+            reserved = float(cuda.memory_reserved(idx)) / (1024.0 * 1024.0)
+        except Exception:
+            reserved = 0.0
+        allocated_mb += alloc
+        reserved_mb += reserved
+        devices.append(
+            {
+                "device_id": idx,
+                "memory_allocated_mb": round(alloc, 1),
+                "memory_reserved_mb": round(reserved, 1),
+            }
+        )
+    return {
+        "status": "ok",
+        "result": {
+            "status": "success",
+            "message": "Worker resources retrieved.",
+            "data": {
+                "pid": os.getpid(),
+                "gpu_info": devices,
+                "current_gpu_mem_allocated_mb": round(allocated_mb, 1),
+                "current_gpu_mem_reserved_mb": round(reserved_mb, 1),
+                "gpu_vram_source": "worker_torch_cuda",
+            },
+        },
+    }
 
 
 class _StreamSession:
@@ -391,6 +494,9 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
     lim = _limits()
     return {
         "status": "ok",
+        "pid": os.getpid(),
+        "executable": sys.executable,
+        "prefix": sys.prefix,
         "protocol_version": PROTOCOL_VERSION,
         "contract": _contract_name(),
         "sync_rpc": True,

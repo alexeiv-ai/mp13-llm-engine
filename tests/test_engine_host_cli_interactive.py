@@ -291,10 +291,44 @@ def test_worker_status_summary_uses_daemon_resource_summary(monkeypatch: pytest.
 def test_resource_formatters_show_na_for_unknown_values() -> None:
     assert interactive._format_percent_or_na(None) == "N/A"
     assert interactive._format_mb_or_na(None) == "N/A"
+    assert interactive._format_gb_from_mb_or_na(None) == "N/A"
+    assert interactive._format_gb_from_mb_or_na(5120.0) == "5.0GB"
     assert interactive._resource_bits({"cpu_percent": None, "memory_mb": None, "gpu_vram_mb": None}) == [
         "cpu=N/A",
-        "mem=N/A",
+        "rss=N/A",
         "vram=N/A",
+    ]
+    assert interactive._resource_bits({"gpu_vram_mb": None, "gpu_vram_pending": True}) == ["vram=pending"]
+    assert interactive._resource_bits({"gpu_vram_mb": 5120.0}) == ["vram=5.0GB"]
+
+
+def test_python_runtime_rows_show_daemon_and_engine_python() -> None:
+    rows = interactive._python_runtime_rows(
+        {
+            "daemon_python_executable": "C:/daemon/python.exe",
+            "engine_python_executable": "C:/engine/python.exe",
+            "mp13_engine_python_env": "C:/engine/python.exe",
+        }
+    )
+
+    assert rows == [
+        ("Daemon Python", "C:/daemon/python.exe"),
+        ("Engine Python", "C:/engine/python.exe (MP13_ENGINE_PYTHON=C:/engine/python.exe)"),
+    ]
+
+
+def test_python_runtime_rows_show_engine_python_default_source() -> None:
+    rows = interactive._python_runtime_rows(
+        {
+            "daemon_python_executable": "C:/daemon/python.exe",
+            "engine_python_executable": "C:/daemon/python.exe",
+            "mp13_engine_python_env": None,
+        }
+    )
+
+    assert rows == [
+        ("Daemon Python", "C:/daemon/python.exe"),
+        ("Engine Python", "C:/daemon/python.exe (MP13_ENGINE_PYTHON unset; using daemon Python)"),
     ]
 
 

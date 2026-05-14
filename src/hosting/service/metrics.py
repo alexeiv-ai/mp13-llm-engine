@@ -190,6 +190,7 @@ class MetricsMixin:
             "pid": target,
             "cpu_percent": None,
             "memory_mb": None,
+            "memory_kind": None,
             "gpu_vram_mb": None,
             "gpu_allocated_mb": None,
             "gpu_devices": [],
@@ -303,6 +304,7 @@ class MetricsMixin:
                 return {
                     "cpu_percent": cpu,
                     "memory_mb": memory_mb,
+                    "memory_kind": "working_set",
                     "process_resource_source": "win32",
                 }
             finally:
@@ -332,6 +334,7 @@ class MetricsMixin:
             return {
                 "cpu_percent": cpu,
                 "memory_mb": memory_mb,
+                "memory_kind": "rss",
                 "process_resource_source": "procfs",
             }
         except Exception:
@@ -343,7 +346,7 @@ class MetricsMixin:
                 prune_stale=False,
                 include_progress=False,
                 include_reachability=True,
-                reachability_timeout_seconds=0.25,
+                reachability_timeout_seconds=0.75,
             )
             rows = [dict(row or {}) for row in list(discovered or []) if isinstance(row, dict)]
         except Exception:
@@ -360,7 +363,7 @@ class MetricsMixin:
             seen.add(pid)
             snap = self._process_resource_snapshot(pid)
             worker_resources = dict(row.get("process_resources") or {})
-            for key in ("gpu_vram_mb", "gpu_allocated_mb", "gpu_devices", "gpu_vram_source"):
+            for key in ("gpu_vram_mb", "gpu_allocated_mb", "gpu_devices", "gpu_vram_source", "gpu_vram_pending"):
                 if worker_resources.get(key) not in (None, "", []):
                     snap[key] = worker_resources.get(key)
             snap["engine_id"] = str(row.get("engine_id") or "")
@@ -372,12 +375,20 @@ class MetricsMixin:
     def _resource_summary_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         known_cpu = [float(row.get("cpu_percent") or 0.0) for row in rows if row.get("cpu_percent") is not None]
         known_memory = [float(row.get("memory_mb") or 0.0) for row in rows if row.get("memory_mb") is not None]
+        known_vram = [float(row.get("gpu_vram_mb") or 0.0) for row in rows if row.get("gpu_vram_mb") is not None]
+        known_allocated = [
+            float(row.get("gpu_allocated_mb") or 0.0)
+            for row in rows
+            if row.get("gpu_allocated_mb") is not None
+        ]
+        pending_vram = any(bool(row.get("gpu_vram_pending")) for row in rows)
         return {
             "workers_count": len(rows),
             "worker_cpu_percent": round(sum(known_cpu), 1) if known_cpu else None,
             "worker_memory_mb": round(sum(known_memory), 1) if known_memory else None,
-            "worker_gpu_vram_mb": round(sum(float(row.get("gpu_vram_mb") or 0.0) for row in rows), 1),
-            "worker_gpu_allocated_mb": round(sum(float(row.get("gpu_allocated_mb") or 0.0) for row in rows), 1),
+            "worker_gpu_vram_mb": round(sum(known_vram), 1) if known_vram else None,
+            "worker_gpu_allocated_mb": round(sum(known_allocated), 1) if known_allocated else None,
+            "worker_gpu_vram_pending": pending_vram and not known_vram,
         }
 
     def get_host_metrics(self, session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -391,6 +402,13 @@ class MetricsMixin:
         snapshot["engines_state_file"] = str(self.engines_state_file)
         snapshot["control_state_file"] = str(self.control_state_file)
         snapshot["hosting_root"] = str(self.hosting_root)
+        snapshot["daemon_python_executable"] = sys.executable
+        snapshot["engine_python_executable"] = (
+            self._engine_python_executable()
+            if hasattr(self, "_engine_python_executable")
+            else os.environ.get("MP13_ENGINE_PYTHON", "").strip() or sys.executable
+        )
+        snapshot["mp13_engine_python_env"] = os.environ.get("MP13_ENGINE_PYTHON", "").strip() or None
         snapshot["timestamp"] = time.time()
         worker_rows = self._registered_worker_resource_rows()
         snapshot["worker_processes"] = worker_rows

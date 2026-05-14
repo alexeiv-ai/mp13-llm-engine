@@ -184,7 +184,7 @@ def test_discover_running_adds_worker_reported_gpu_resources(
     )
 
     def _fake_ipc_call(*, reg, payload, timeout_seconds):
-        assert payload["method"] == "get-engine-status"
+        assert payload["method"] == "worker.resources"
         return {
             "status": "ok",
             "result": {
@@ -212,6 +212,289 @@ def test_discover_running_adds_worker_reported_gpu_resources(
     assert resources["gpu_vram_source"] == "worker_torch_cuda"
 
 
+def test_discover_running_uses_worker_ipc_reported_pid_for_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=111,
+        command=["C:/venv/Scripts/python.exe", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {
+            "reachable": True,
+            "transport": "ipc",
+            "probe": "hello",
+            "worker_pid": 222,
+            "worker_executable": "C:/Python/Python312/python.exe",
+            "worker_prefix": "C:/venv",
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda pid: {"pid": pid, "cpu_percent": 1.0, "memory_mb": float(pid), "gpu_vram_mb": None},
+    )
+    monkeypatch.setattr(svc, "_query_worker_reported_resources", lambda _item: {})
+
+    row = svc.discover_running()[0]
+
+    assert row["pid"] == 222
+    assert row["launcher_pid"] == 111
+    assert row["pid_identity"]["reason"] == "worker_ipc_reported_pid"
+    assert row["process_resources"]["pid"] == 222
+    assert row["process_resources"]["memory_mb"] == 222.0
+
+
+def test_resource_summary_keeps_unknown_gpu_vram_as_none() -> None:
+    summary = EngineHostService._resource_summary_from_rows(
+        [
+            {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None},
+            {"pid": 456, "cpu_percent": None, "memory_mb": None},
+        ]
+    )
+
+    assert summary["worker_gpu_vram_mb"] is None
+    assert summary["worker_gpu_allocated_mb"] is None
+
+
+def test_resource_summary_reports_pending_gpu_vram() -> None:
+    summary = EngineHostService._resource_summary_from_rows(
+        [
+            {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None, "gpu_vram_pending": True},
+        ]
+    )
+
+    assert summary["worker_gpu_vram_mb"] is None
+    assert summary["worker_gpu_vram_pending"] is True
+
+
+def test_host_metrics_reports_daemon_and_engine_python(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    monkeypatch.setenv("MP13_ENGINE_PYTHON", "C:/engine/python.exe")
+    monkeypatch.setattr(svc, "_registered_worker_resource_rows", lambda: [])
+
+    metrics = svc.get_host_metrics()
+
+    assert metrics["daemon_python_executable"]
+    assert metrics["engine_python_executable"] == "C:/engine/python.exe"
+    assert metrics["mp13_engine_python_env"] == "C:/engine/python.exe"
+
+
+def test_discover_running_uses_worker_state_gpu_memory_when_detailed_gpu_info_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=123,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {"reachable": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda _pid: {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None},
+    )
+
+    def _fake_ipc_call(*, reg, payload, timeout_seconds):
+        assert payload["method"] == "worker.resources"
+        return {
+            "status": "ok",
+            "result": {
+                "data": {
+                    "gpu_info": "CUDA details unavailable",
+                    "current_gpu_mem_allocated_gb": 4.75,
+                    "current_gpu_mem_reserved_gb": 5.0,
+                }
+            },
+        }
+
+    monkeypatch.setattr(svc, "_ipc_call", _fake_ipc_call)
+
+    resources = dict(svc.discover_running()[0]["process_resources"])
+
+    assert resources["gpu_vram_mb"] == 5120.0
+    assert resources["gpu_allocated_mb"] == 4864.0
+    assert resources["gpu_vram_source"] == "worker_state_gpu_memory"
+
+
+def test_discover_running_accepts_worker_state_gpu_memory_mb(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=123,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {"reachable": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda _pid: {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None},
+    )
+
+    def _fake_ipc_call(*, reg, payload, timeout_seconds):
+        assert payload["method"] == "worker.resources"
+        return {
+            "status": "ok",
+            "result": {
+                "data": {
+                    "gpu_info": "CUDA details unavailable",
+                    "current_gpu_mem_allocated_mb": 4864.0,
+                    "current_gpu_mem_reserved_mb": 5120.0,
+                }
+            },
+        }
+
+    monkeypatch.setattr(svc, "_ipc_call", _fake_ipc_call)
+
+    resources = dict(svc.discover_running()[0]["process_resources"])
+
+    assert resources["gpu_vram_mb"] == 5120.0
+    assert resources["gpu_allocated_mb"] == 4864.0
+    assert resources["gpu_vram_source"] == "worker_state_gpu_memory"
+
+
+def test_discover_running_marks_gpu_resource_probe_pending_until_next_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=123,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {"reachable": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda _pid: {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None},
+    )
+    calls: list[float] = []
+
+    def _fake_ipc_call(*, reg, payload, timeout_seconds):
+        assert payload["method"] == "worker.resources"
+        calls.append(float(timeout_seconds))
+        if len(calls) == 1:
+            raise TimeoutError("status probe timed out")
+        return {
+            "status": "ok",
+            "result": {
+                "data": {
+                    "gpu_info": [
+                        {
+                            "device_id": 0,
+                            "memory_allocated_gb": 1.0,
+                            "memory_reserved_gb": 2.0,
+                        }
+                    ]
+                }
+            },
+        }
+
+    monkeypatch.setattr(svc, "_ipc_call", _fake_ipc_call)
+
+    first = svc.discover_running()[0]
+    first_resources = dict(first["process_resources"])
+
+    assert calls == [1.0]
+    assert first_resources["gpu_vram_mb"] is None
+    assert first_resources["gpu_vram_pending"] is True
+    assert first["worker_resource_probe"]["status"] == "pending"
+    assert first["worker_resource_probe"]["method"] == "worker.resources"
+
+    second = svc.discover_running()[0]
+    resources = dict(second["process_resources"])
+
+    assert calls == [1.0, 1.0]
+    assert resources["gpu_vram_mb"] == 2048.0
+    assert second["worker_resource_probe"]["status"] == "ok"
+
+
+def test_discover_running_marks_worker_resources_pending_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=123,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {"reachable": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda _pid: {"pid": 123, "cpu_percent": 1.0, "memory_mb": 2.0, "gpu_vram_mb": None},
+    )
+
+    def _fake_ipc_call(*, reg, payload, timeout_seconds):
+        assert payload["method"] == "worker.resources"
+        return {
+            "status": "ok",
+            "result": {
+                "status": "pending",
+                "message": "torch_module_not_loaded",
+                "data": {"gpu_vram_pending": True},
+            },
+        }
+
+    monkeypatch.setattr(svc, "_ipc_call", _fake_ipc_call)
+
+    row = svc.discover_running()[0]
+    resources = dict(row["process_resources"])
+
+    assert resources["gpu_vram_pending"] is True
+    assert row["worker_resource_probe"] == {
+        "status": "pending",
+        "method": "worker.resources",
+        "message": "torch_module_not_loaded",
+    }
+
+
 def test_discover_running_prunes_registration_when_pid_was_reused(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -231,6 +514,40 @@ def test_discover_running_prunes_registration_when_pid_was_reused(
 
     assert svc.discover_running() == []
     assert svc._read_engines() == []
+
+
+def test_discover_running_keeps_starting_model_with_missing_ipc_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="loading-model",
+        pid=1700,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    rows = svc._read_engines()
+    rows[0]["spawned_at"] = time.time() - 120.0
+    svc._write_engines(rows)
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {
+            "reachable": False,
+            "transport": "ipc",
+            "probe": "hello",
+            "error": "worker IPC endpoint is unavailable for engine 'loading-model' at 'pipe'; worker process may not be running",
+        },
+    )
+
+    row = svc.discover_running()[0]
+
+    assert row["state"] == "spawning"
+    assert row["alive"] is True
+    assert svc.get_registration("loading-model") is not None
 
 
 def test_discover_running_prunes_old_registration_with_missing_ipc_endpoint(

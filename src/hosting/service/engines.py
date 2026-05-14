@@ -998,6 +998,9 @@ class EnginesMixin:
                 "checked_at": checked_at,
                 "transport": "ipc",
                 "probe": "hello",
+                "worker_pid": int(out.get("pid") or 0) or None,
+                "worker_executable": str(out.get("executable") or "").strip() or None,
+                "worker_prefix": str(out.get("prefix") or "").strip() or None,
             }
         except Exception as exc:
             return {
@@ -1018,8 +1021,21 @@ class EnginesMixin:
         if not alive:
             return "stopped"
         if include_reachability and not bool(item.get("reachable", False)):
+            reachability = dict(item.get("reachability") or {})
+            if (
+                EnginesMixin._reachability_indicates_missing_ipc_endpoint(reachability)
+                and float(item.get("uptime_seconds") or 0.0) <= EnginesMixin._registration_startup_grace_seconds(item)
+            ):
+                return "spawning"
             return "unreachable"
         return "running"
+
+    @staticmethod
+    def _registration_startup_grace_seconds(item: Dict[str, Any]) -> float:
+        kind = EnginesMixin._describe_registration_kind(item)
+        if "model" in kind:
+            return 15.0 * 60.0
+        return 30.0
 
     @staticmethod
     def _describe_registration_kind(item: Dict[str, Any]) -> str:
@@ -1060,43 +1076,122 @@ class EnginesMixin:
                 reg=item,
                 payload={
                     "kind": "rpc_call",
-                    "method": "get-engine-status",
+                    "method": "worker.resources",
                     "params": {},
                     "engine_id": str(item.get("engine_id") or ""),
                 },
                 timeout_seconds=1.0,
             )
-        except Exception:
-            return {}
+        except Exception as exc:
+            item["worker_resource_probe"] = {
+                "status": "pending",
+                "method": "worker.resources",
+                "error": str(exc),
+            }
+            return {"gpu_vram_pending": True, "gpu_vram_source": "worker_status_pending"}
         if str(out.get("status") or "").strip().lower() != "ok":
-            return {}
+            item["worker_resource_probe"] = {
+                "status": "pending",
+                "method": "worker.resources",
+                "response_status": str(out.get("status") or ""),
+                "message": str(out.get("message") or ""),
+            }
+            return {"gpu_vram_pending": True, "gpu_vram_source": "worker_status_pending"}
         result = dict(out.get("result") or {})
+        result_status = str(result.get("status") or "").strip().lower()
+        if result_status == "pending":
+            item["worker_resource_probe"] = {
+                "status": "pending",
+                "method": "worker.resources",
+                "message": str(result.get("message") or ""),
+            }
+            return {"gpu_vram_pending": True, "gpu_vram_source": "worker_status_pending"}
+        if result_status not in {"", "success", "ok"}:
+            item["worker_resource_probe"] = {
+                "status": "pending",
+                "method": "worker.resources",
+                "response_status": str(result.get("status") or ""),
+                "message": str(result.get("message") or ""),
+            }
+            return {"gpu_vram_pending": True, "gpu_vram_source": "worker_status_pending"}
         data = result.get("data") if isinstance(result.get("data"), dict) else result
-        gpu_info = (data or {}).get("gpu_info") if isinstance(data, dict) else None
-        if not isinstance(gpu_info, list):
-            return {}
+        if not isinstance(data, dict):
+            item["worker_resource_probe"] = {
+                "status": "pending",
+                "method": "worker.resources",
+                "message": "response_data_not_dict",
+            }
+            return {"gpu_vram_pending": True, "gpu_vram_source": "worker_status_pending"}
+        gpu_info = data.get("gpu_info")
         reserved_mb = 0.0
         allocated_mb = 0.0
         devices: List[str] = []
-        for row in gpu_info:
-            if not isinstance(row, dict):
-                continue
-            device_id = row.get("device_id")
-            if device_id is not None:
-                devices.append(f"cuda:{device_id}")
+        if isinstance(gpu_info, list):
+            for row in gpu_info:
+                if not isinstance(row, dict):
+                    continue
+                device_id = row.get("device_id")
+                if device_id is not None:
+                    devices.append(f"cuda:{device_id}")
+                row_reserved_mb = 0.0
+                row_allocated_mb = 0.0
+                try:
+                    row_reserved_mb = float(row.get("memory_reserved_gb") or 0.0) * 1024.0
+                except Exception:
+                    row_reserved_mb = 0.0
+                if row_reserved_mb <= 0.0:
+                    try:
+                        row_reserved_mb = float(row.get("memory_reserved_mb") or 0.0)
+                    except Exception:
+                        row_reserved_mb = 0.0
+                try:
+                    row_allocated_mb = float(row.get("memory_allocated_gb") or 0.0) * 1024.0
+                except Exception:
+                    row_allocated_mb = 0.0
+                if row_allocated_mb <= 0.0:
+                    try:
+                        row_allocated_mb = float(row.get("memory_allocated_mb") or 0.0)
+                    except Exception:
+                        row_allocated_mb = 0.0
+                reserved_mb += row_reserved_mb
+                allocated_mb += row_allocated_mb
+
+        if reserved_mb <= 0.0:
             try:
-                reserved_mb += float(row.get("memory_reserved_gb") or 0.0) * 1024.0
+                reserved_mb = float(data.get("current_gpu_mem_reserved_gb") or 0.0) * 1024.0
             except Exception:
-                pass
+                reserved_mb = 0.0
+        if reserved_mb <= 0.0:
             try:
-                allocated_mb += float(row.get("memory_allocated_gb") or 0.0) * 1024.0
+                reserved_mb = float(data.get("current_gpu_mem_reserved_mb") or 0.0)
             except Exception:
-                pass
+                reserved_mb = 0.0
+        if allocated_mb <= 0.0:
+            try:
+                allocated_mb = float(data.get("current_gpu_mem_allocated_gb") or 0.0) * 1024.0
+            except Exception:
+                allocated_mb = 0.0
+        if allocated_mb <= 0.0:
+            try:
+                allocated_mb = float(data.get("current_gpu_mem_allocated_mb") or 0.0)
+            except Exception:
+                allocated_mb = 0.0
+        if reserved_mb <= 0.0 and allocated_mb <= 0.0 and not devices:
+            item["worker_resource_probe"] = {
+                "status": "no_gpu_memory",
+                "method": "worker.resources",
+                "gpu_info_type": type(gpu_info).__name__,
+            }
+            return {}
+        item["worker_resource_probe"] = {
+            "status": "ok",
+            "method": "worker.resources",
+        }
         return {
             "gpu_vram_mb": round(reserved_mb, 1),
             "gpu_allocated_mb": round(allocated_mb, 1),
             "gpu_devices": devices,
-            "gpu_vram_source": "worker_torch_cuda",
+            "gpu_vram_source": "worker_torch_cuda" if isinstance(gpu_info, list) else "worker_state_gpu_memory",
         }
 
     def _prune_old_stopped_worker_logs(self, *, max_age_seconds: float = 3 * 24 * 60 * 60) -> None:
@@ -1175,6 +1270,19 @@ class EnginesMixin:
                 item["reachable"] = bool(reachability.get("reachable", False))
                 item["reachability"] = reachability
                 if item["reachable"]:
+                    worker_pid = int(reachability.get("worker_pid") or 0)
+                    if worker_pid > 0 and worker_pid != pid:
+                        item["launcher_pid"] = pid
+                        item["pid"] = worker_pid
+                        item["pid_identity"] = {
+                            "matches": True,
+                            "expected_executable": str(reachability.get("worker_executable") or ""),
+                            "actual_executable": str(reachability.get("worker_executable") or ""),
+                            "reason": "worker_ipc_reported_pid",
+                            "launcher_pid": pid,
+                        }
+                        pid = worker_pid
+                        item["process_resources"] = self._process_resource_snapshot(pid)
                     reachable_count += 1
                     worker_resources = self._query_worker_reported_resources(item)
                     if worker_resources:
@@ -1182,7 +1290,7 @@ class EnginesMixin:
                         merged_resources.update(worker_resources)
                         item["process_resources"] = merged_resources
                 elif (
-                    age_seconds > 30.0
+                    age_seconds > self._registration_startup_grace_seconds(item)
                     and self._reachability_indicates_missing_ipc_endpoint(reachability)
                 ):
                     item["stale_reason"] = "worker_ipc_endpoint_unavailable"
@@ -1419,6 +1527,12 @@ class EnginesMixin:
             self.remove_registration(eid)
             return {"status": "already_stopped", "engine_id": eid, "pid": pid, "alive": False}
         termination = terminate_process_tree(pid, timeout_seconds=timeout_seconds)
+        try:
+            from ..sandbox.launcher import close_worker_job
+
+            job_close = close_worker_job(pid)
+        except Exception as exc:
+            job_close = {"pid": pid, "job_object": False, "closed": False, "error": str(exc)}
         alive = self._pid_alive(pid)
         if not alive:
             self.remove_registration(eid)
@@ -1429,6 +1543,7 @@ class EnginesMixin:
             "pid": pid,
             "alive": alive,
             "termination": termination,
+            "job_close": job_close,
         }
 
     def unload_model(self, engine_id: str, *, timeout_seconds: float = 30.0, shutdown_all: bool = False) -> Dict[str, Any]:

@@ -97,6 +97,7 @@ def _raise_interactive_api_error(exc: Exception) -> None:
     if (
         "session_token_required" in msg
         or "missing_or_invalid_session_token" in msg
+        or "auth_failed" in msg
         or "invalid_session" in msg
         or "session_expired" in msg
     ):
@@ -189,6 +190,7 @@ def _worker_status_summary(
         "worker_cpu_percent": summary.get("worker_cpu_percent"),
         "worker_memory_mb": summary.get("worker_memory_mb"),
         "worker_gpu_vram_mb": summary.get("worker_gpu_vram_mb"),
+        "worker_gpu_vram_pending": bool(summary.get("worker_gpu_vram_pending")),
     }
 
 
@@ -210,15 +212,46 @@ def _format_mb_or_na(value: Any) -> str:
         return "N/A"
 
 
+def _format_gb_from_mb_or_na(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value) / 1024.0:.1f}GB"
+    except Exception:
+        return "N/A"
+
+
+def _format_gb_from_mb_or_pending(value: Any, *, pending: bool = False) -> str:
+    if value is None and pending:
+        return "pending"
+    return _format_gb_from_mb_or_na(value)
+
+
+def _python_runtime_rows(metrics: Optional[Dict[str, Any]]) -> list[tuple[str, str]]:
+    data = dict(metrics or {})
+    daemon_python = str(data.get("daemon_python_executable") or "").strip()
+    engine_python = str(data.get("engine_python_executable") or "").strip()
+    env_python = str(data.get("mp13_engine_python_env") or "").strip()
+    rows: list[tuple[str, str]] = []
+    if daemon_python:
+        rows.append(("Daemon Python", _c("muted", daemon_python)))
+    if engine_python:
+        source = f"MP13_ENGINE_PYTHON={env_python}" if env_python else "MP13_ENGINE_PYTHON unset; using daemon Python"
+        rows.append(("Engine Python", _c("muted", f"{engine_python} ({source})")))
+    elif env_python:
+        rows.append(("Engine Python", _c("muted", f"unresolved (MP13_ENGINE_PYTHON={env_python})")))
+    return rows
+
+
 def _resource_bits(resources: Dict[str, Any]) -> list[str]:
     res = dict(resources or {})
     bits: list[str] = []
     if "cpu_percent" in res:
         bits.append(f"cpu={_format_percent_or_na(res.get('cpu_percent'))}")
     if "memory_mb" in res:
-        bits.append(f"mem={_format_mb_or_na(res.get('memory_mb'))}")
+        bits.append(f"rss={_format_mb_or_na(res.get('memory_mb'))}")
     if "gpu_vram_mb" in res:
-        bits.append(f"vram={_format_mb_or_na(res.get('gpu_vram_mb'))}")
+        bits.append(f"vram={_format_gb_from_mb_or_pending(res.get('gpu_vram_mb'), pending=bool(res.get('gpu_vram_pending')))}")
     return bits
 
 
@@ -501,6 +534,9 @@ def _offline_local_read_with_auth(
         if not _offline_read_unavailable(exc):
             raise
         _print_offline_auth_required()
+        token = _local_authenticate(args)
+        if token:
+            return _offline_local_invoke(args, cmd, payload, session_token=token), token
         return None, session_token
 
 
@@ -1226,6 +1262,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                 auth_value = daemon_status.get("require_auth") if "require_auth" in daemon_status else auth_status.get("require_auth")
                 caller_key = auth_status.get("caller_key_id")
                 caller_role = auth_status.get("caller_role")
+                python_runtime_rows: list[tuple[str, str]] = []
                 
                 # Print a more informative summary if daemon is running
                 if daemon_up:
@@ -1236,6 +1273,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     try:
                         res = _api_invoke(args, "host-metrics", {}, session_token=session_token)
                         session_token = _active_session_token(args, session_token)
+                        python_runtime_rows = _python_runtime_rows(res if isinstance(res, dict) else None)
                         if not pid and res.get("pid"):
                             status_parts.append(f"PID: {res.get('pid')}")
                         if "require_auth" in res and auth_value is None:
@@ -1251,6 +1289,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         worker_cpu = worker_status.get("worker_cpu_percent")
                         worker_mem = worker_status.get("worker_memory_mb")
                         worker_vram = worker_status.get("worker_gpu_vram_mb")
+                        worker_vram_pending = bool(worker_status.get("worker_gpu_vram_pending"))
                         
                         if caller_key and caller_role:
                             status_parts.append(f"Auth: {caller_key} ({caller_role})")
@@ -1260,8 +1299,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                             status_parts.extend([
                                 f"Workers: {workers}",
                                 f"Worker CPU: {_format_percent_or_na(worker_cpu)}",
-                                f"Worker Mem: {_format_mb_or_na(worker_mem)}",
-                                f"Worker VRAM: {_format_mb_or_na(worker_vram)}",
+                                f"Worker RSS: {_format_mb_or_na(worker_mem)}",
+                                f"Worker VRAM: {_format_gb_from_mb_or_pending(worker_vram, pending=worker_vram_pending)}",
                             ])
                     except PermissionError as pe:
                         if caller_key and caller_role:
@@ -1285,14 +1324,12 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
 
                 print()
                 _print_title("Engine Host Interactive Control")
-                _kv_rows([("Daemon", status_c)], min_width = 6)
+                rows = [("Daemon", status_c)]
+                rows.extend(python_runtime_rows)
+                _kv_rows(rows, min_width = 6)
                 
                 lifecycle_label = "Restart remote daemon" if target_mode == "ssh" else ("Start daemon" if not daemon_up else "Stop daemon")
                 opts: Dict[str, tuple[str, str]] = {}
-                if daemon_up and bool(auth_value):
-                    auth_label = "Re-authenticate / switch identity" if (caller_key or session_token) else "Authenticate"
-                    auth_hint = f"{caller_key} ({caller_role})" if caller_key and caller_role else ""
-                    opts["auth"] = (auth_label, auth_hint)
                 opts.update({
                     "l": ("List loaded engines and sandboxes", ""),
                     "o": ("Load engine from config", ""),
@@ -1305,6 +1342,10 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     "s": (lifecycle_label, ""),
                     "r": ("Local recovery/auth tools", "" if target_mode != "ssh" else "local only"),
                 })
+                if daemon_up and bool(auth_value):
+                    auth_label = "Re-authenticate / switch identity" if (caller_key or session_token) else "Authenticate"
+                    auth_hint = f"{caller_key} ({caller_role})" if caller_key and caller_role else ""
+                    opts["auth"] = (auth_label, auth_hint)
                 choice = _prompt_menu("Main Menu", opts, "refresh", allow_changes=False, enter_hint="refresh")
                 if choice == "q":
                     return 0

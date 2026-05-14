@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import socket
+import sys
 import threading
 import traceback
 from multiprocessing.connection import Client, Listener
@@ -411,6 +412,9 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
     }
     return {
         "status": "ok",
+        "pid": os.getpid(),
+        "executable": sys.executable,
+        "prefix": sys.prefix,
         "protocol_version": PROTOCOL_VERSION,
         "contract": _contract_name(),
         "sync_rpc": True,

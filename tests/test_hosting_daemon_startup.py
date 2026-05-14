@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -67,3 +68,36 @@ def test_daemon_tcp_control_listener_is_not_supported_even_with_remote_roles(tmp
     )
 
     assert daemon._should_enable_tcp() is False  # noqa: SLF001
+
+
+def test_daemon_startup_recovery_stops_foreign_owner_registrations(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    daemon = EngineHostDaemon(
+        port=0,
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "control.json",
+    )
+    daemon.svc.register_spawned(
+        engine_id="foreign-worker",
+        pid=12345,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+    )
+    rows = daemon.svc._read_engines()  # noqa: SLF001
+    rows[0]["owner_host_pid"] = os.getpid() + 1000
+    daemon.svc._write_engines(rows)  # noqa: SLF001
+    calls: list[tuple[str, float]] = []
+
+    def _fake_shutdown(engine_id: str, *, timeout_seconds: float = 8.0) -> dict[str, object]:
+        calls.append((engine_id, timeout_seconds))
+        return {"status": "stopped", "engine_id": engine_id, "alive": False}
+
+    monkeypatch.setattr(daemon.svc, "shutdown", _fake_shutdown)
+
+    report = daemon._execute_startup_worker_recovery()  # noqa: SLF001
+
+    assert report["foreign_attempted"] == 1
+    assert report["foreign_stopped"] == 1
+    assert calls == [("foreign-worker", 3.0)]

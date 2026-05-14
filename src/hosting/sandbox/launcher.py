@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 from .._process_utils import hidden_subprocess_kwargs
 from .policy import WorkerSandboxPolicy
 
+_NORMAL_JOB_HANDLES: Dict[int, int] = {}
+
 
 @dataclass
 class WorkerLaunchRequest:
@@ -47,18 +49,59 @@ def _normal_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:
         )
     finally:
         log_fp.close()
+    runtime: Dict[str, Any] = {
+        "platform": "windows" if os.name == "nt" else "posix",
+        "mode": "plain_subprocess",
+        "sandbox_enabled": bool(req.sandbox_policy.enabled),
+        "inherit_parent_handles": bool(req.sandbox_policy.process.inherit_parent_handles),
+        "close_fds": not req.sandbox_policy.process.inherit_parent_handles,
+    }
+    if os.name == "nt":
+        runtime.update(_attach_windows_kill_on_close_job(proc))
     return WorkerLaunchResult(
         pid=int(proc.pid),
         command=list(req.command),
         persisted_env=dict(req.env),
-        runtime={
-            "platform": "windows" if os.name == "nt" else "posix",
-            "mode": "plain_subprocess",
-            "sandbox_enabled": bool(req.sandbox_policy.enabled),
-            "inherit_parent_handles": bool(req.sandbox_policy.process.inherit_parent_handles),
-            "close_fds": not req.sandbox_policy.process.inherit_parent_handles,
-        },
+        runtime=runtime,
     )
+
+
+def _attach_windows_kill_on_close_job(proc: subprocess.Popen[Any]) -> Dict[str, Any]:
+    try:
+        from ctypes import wintypes
+
+        from .windows import _create_job_object, kernel32
+
+        process_handle = getattr(proc, "_handle", None)
+        if not process_handle:
+            return {"job_object": False, "job_object_error": "missing_process_handle"}
+        hjob = _create_job_object()
+        if not kernel32.AssignProcessToJobObject(hjob, wintypes.HANDLE(int(process_handle))):
+            err = getattr(__import__("ctypes"), "get_last_error")()
+            kernel32.CloseHandle(hjob)
+            return {"job_object": False, "job_object_error": f"AssignProcessToJobObject failed with WinError {err}"}
+        _NORMAL_JOB_HANDLES[int(proc.pid)] = int(hjob)
+        return {"job_object": True, "job_object_mode": "kill_on_close"}
+    except Exception as exc:
+        return {"job_object": False, "job_object_error": str(exc)}
+
+
+def close_worker_job(pid: int) -> Dict[str, Any]:
+    if os.name != "nt":
+        return {"pid": int(pid or 0), "job_object": False, "closed": False, "reason": "not_windows"}
+    target = int(pid or 0)
+    handle_value = _NORMAL_JOB_HANDLES.pop(target, None)
+    if not handle_value:
+        return {"pid": target, "job_object": False, "closed": False, "reason": "not_found"}
+    try:
+        from ctypes import wintypes
+
+        from .windows import kernel32
+
+        ok = bool(kernel32.CloseHandle(wintypes.HANDLE(int(handle_value))))
+        return {"pid": target, "job_object": True, "closed": ok}
+    except Exception as exc:
+        return {"pid": target, "job_object": True, "closed": False, "error": str(exc)}
 
 
 def launch_worker_process(req: WorkerLaunchRequest) -> WorkerLaunchResult:

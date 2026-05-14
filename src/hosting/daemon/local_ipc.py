@@ -782,6 +782,66 @@ class EngineHostDaemon:
         self._last_shutdown_checkpoints = report
         return dict(report)
 
+    def _execute_startup_worker_recovery(self) -> Dict[str, Any]:
+        current_pid = os.getpid()
+        report: Dict[str, Any] = {
+            "status": "ok",
+            "current_host_pid": current_pid,
+            "registrations_before": 0,
+            "foreign_attempted": 0,
+            "foreign_stopped": 0,
+            "foreign_failed": 0,
+            "results": [],
+            "error": None,
+        }
+        try:
+            rows = self.svc.discover_running(
+                prune_stale=False,
+                include_progress=False,
+                include_reachability=False,
+            )
+            registrations = list(rows or []) if isinstance(rows, list) else []
+            report["registrations_before"] = len(registrations)
+            for row in registrations:
+                reg = dict(row or {})
+                owner_pid = int(reg.get("owner_host_pid") or 0)
+                engine_id = str(reg.get("engine_id") or "").strip()
+                if not engine_id or owner_pid <= 0 or owner_pid == current_pid:
+                    continue
+                report["foreign_attempted"] = int(report.get("foreign_attempted") or 0) + 1
+                try:
+                    out = self.svc.shutdown(engine_id, timeout_seconds=3.0)
+                    status = str((out or {}).get("status") or "").strip()
+                    ok = status in {"stopped", "already_stopped", "not_found", "invalid_pid"}
+                    report["foreign_stopped" if ok else "foreign_failed"] = int(
+                        report.get("foreign_stopped" if ok else "foreign_failed") or 0
+                    ) + 1
+                    report["results"].append(
+                        {
+                            "engine_id": engine_id,
+                            "owner_host_pid": owner_pid,
+                            "status": status,
+                            "ok": ok,
+                            "pid": int(reg.get("pid") or 0),
+                        }
+                    )
+                except Exception as exc:
+                    report["foreign_failed"] = int(report.get("foreign_failed") or 0) + 1
+                    report["results"].append(
+                        {
+                            "engine_id": engine_id,
+                            "owner_host_pid": owner_pid,
+                            "status": "exception",
+                            "ok": False,
+                            "error": str(exc),
+                            "pid": int(reg.get("pid") or 0),
+                        }
+                    )
+        except Exception as exc:
+            report["status"] = "failed"
+            report["error"] = str(exc)
+        return report
+
     def _track_actor_connected(self, actor_id: str) -> None:
         aid = str(actor_id or "").strip()
         if not aid:
@@ -1384,6 +1444,14 @@ class EngineHostDaemon:
                     raise RuntimeError(
                         f"Engine host daemon PID is alive but local control is not reachable for pid file {self.pid_file.path}: {exc}"
                     ) from exc
+            startup_recovery = self._execute_startup_worker_recovery()
+            if int(startup_recovery.get("foreign_attempted") or 0):
+                logger.warning(
+                    "Startup worker recovery stopped registrations from previous daemon owners: attempted=%s stopped=%s failed=%s",
+                    startup_recovery.get("foreign_attempted"),
+                    startup_recovery.get("foreign_stopped"),
+                    startup_recovery.get("foreign_failed"),
+                )
             self._start_local_control_listener()
             if enable_tcp:
                 self._server = await asyncio.start_server(
