@@ -253,6 +253,51 @@ def test_discover_running_uses_worker_ipc_reported_pid_for_resources(
     assert row["process_resources"]["memory_mb"] == 222.0
 
 
+def test_discover_running_recovers_worker_pid_when_launcher_pid_exited(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="model1",
+        pid=111,
+        command=["C:/venv/Scripts/python.exe", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_ipc_family="AF_PIPE",
+        worker_ipc_address=r"\\.\pipe\mp13-worker-model1",
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda pid: int(pid) == 222)
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {
+            "reachable": True,
+            "transport": "ipc",
+            "probe": "hello",
+            "worker_pid": 222,
+            "worker_executable": "C:/Python/Python312/python.exe",
+            "worker_prefix": "C:/venv",
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda pid: {"pid": int(pid), "cpu_percent": 1.0, "memory_mb": float(pid), "gpu_vram_mb": None},
+    )
+    monkeypatch.setattr(svc, "_query_worker_reported_resources", lambda _item: {})
+
+    row = svc.discover_running()[0]
+    persisted = svc._read_engines()[0]  # noqa: SLF001
+
+    assert row["alive"] is True
+    assert row["reachable"] is True
+    assert row["pid"] == 222
+    assert row["launcher_pid"] == 111
+    assert persisted["worker_pid"] == 222
+    assert persisted["worker_executable"] == "C:/Python/Python312/python.exe"
+
+
 def test_resource_summary_keeps_unknown_gpu_vram_as_none() -> None:
     summary = EngineHostService._resource_summary_from_rows(
         [
@@ -624,6 +669,69 @@ def test_discover_running_uses_ready_worker_pid_for_resources(
     assert row["launcher_pid"] == 1700
     assert row["process_resources"]["memory_mb"] == 1882.6
     assert row["state"] == "unreachable"
+
+
+def test_discover_running_validates_ready_worker_pid_against_worker_executable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="ready-model",
+        pid=1700,
+        command=["C:/venv/Scripts/python.exe", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    rows = svc._read_engines()
+    rows[0]["worker_pid"] = 2700
+    rows[0]["worker_executable"] = "C:/Python/Python312/python.exe"
+    rows[0]["worker_ready_at"] = time.time()
+    svc._write_engines(rows)
+    monkeypatch.setattr(svc, "_pid_alive", lambda pid: int(pid) in {1700, 2700})
+    monkeypatch.setattr(svc, "_process_image_path", lambda pid: "C:/Python/Python312/python.exe" if int(pid) == 2700 else "")
+    monkeypatch.setattr(svc, "_process_resource_snapshot", lambda pid: {"pid": int(pid), "memory_mb": float(pid)})
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {
+            "reachable": False,
+            "transport": "ipc",
+            "probe": "hello",
+            "error": "worker IPC endpoint is unavailable for engine 'ready-model' at 'pipe'; worker process may not be running",
+        },
+    )
+
+    row = svc.discover_running()[0]
+
+    assert row["pid"] == 2700
+    assert row["launcher_pid"] == 1700
+    assert row["pid_identity"]["matches"] is True
+    assert row["pid_identity"]["expected_executable"] == "C:/Python/Python312/python.exe"
+    assert row["state"] == "unreachable"
+
+
+def test_discover_running_prunes_ready_worker_pid_when_worker_executable_mismatches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="ready-model",
+        pid=1700,
+        command=["C:/venv/Scripts/python.exe", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    rows = svc._read_engines()
+    rows[0]["worker_pid"] = 2700
+    rows[0]["worker_executable"] = "C:/Python/Python312/python.exe"
+    rows[0]["worker_ready_at"] = time.time()
+    svc._write_engines(rows)
+    monkeypatch.setattr(svc, "_pid_alive", lambda pid: int(pid) in {1700, 2700})
+    monkeypatch.setattr(svc, "_process_image_path", lambda pid: "C:/Other/python.exe" if int(pid) == 2700 else "")
+
+    assert svc.discover_running() == []
 
 
 def test_discover_running_prunes_old_registration_with_missing_ipc_endpoint(

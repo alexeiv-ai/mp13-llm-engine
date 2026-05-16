@@ -94,6 +94,21 @@ class EnginesMixin:
             return ""
 
     def _registration_pid_matches_command(self, item: Dict[str, Any], pid: int) -> Dict[str, Any]:
+        worker_pid = int(item.get("worker_pid") or 0)
+        worker_expected = str(item.get("worker_executable") or "").strip()
+        if worker_pid > 0 and int(pid or 0) == worker_pid and worker_expected:
+            actual = self._process_image_path(pid)
+            if not actual:
+                return {"matches": True, "expected_executable": worker_expected}
+            expected_norm = os.path.normcase(os.path.abspath(worker_expected))
+            actual_norm = os.path.normcase(os.path.abspath(actual))
+            matches = expected_norm == actual_norm
+            return {
+                "matches": matches,
+                "expected_executable": worker_expected,
+                "actual_executable": actual,
+                "reason": None if matches else "worker_pid_reused_by_different_process",
+            }
         command = list(item.get("command") or [])
         expected = str(command[0] if command else "").strip()
         if not expected:
@@ -118,6 +133,13 @@ class EnginesMixin:
     def _reachability_indicates_missing_ipc_endpoint(reachability: Dict[str, Any]) -> bool:
         error = str((reachability or {}).get("error") or "").strip().lower()
         return "worker ipc endpoint is unavailable" in error
+
+    @staticmethod
+    def _registration_has_ipc_endpoint(item: Dict[str, Any]) -> bool:
+        transport = str((item or {}).get("worker_transport") or "ipc").strip().lower()
+        family = str((item or {}).get("worker_ipc_family") or "").strip()
+        address = str((item or {}).get("worker_ipc_address") or "").strip()
+        return transport == "ipc" and bool(family and address)
 
     def _worker_id_for_model(self, model_path: str) -> str:
         stem = self._safe_config_name(Path(str(model_path or "model")).name or "model")
@@ -1325,7 +1347,10 @@ class EnginesMixin:
             resource_pid = int(item.get("pid") or 0)
             item["process_resources"] = self._process_resource_snapshot(resource_pid)
             item["reachable"] = False
-            if alive and include_reachability:
+            should_probe_reachability = bool(include_reachability) and (
+                alive or self._registration_has_ipc_endpoint(item)
+            )
+            if should_probe_reachability:
                 reachability = self._probe_registration_reachability(
                     item,
                     timeout_seconds=reachability_timeout_seconds,
@@ -1333,6 +1358,9 @@ class EnginesMixin:
                 item["reachable"] = bool(reachability.get("reachable", False))
                 item["reachability"] = reachability
                 if item["reachable"]:
+                    alive = True
+                    item["alive"] = True
+                    item.pop("stale_reason", None)
                     worker_pid = int(reachability.get("worker_pid") or 0)
                     if worker_pid > 0 and worker_pid != pid:
                         item["launcher_pid"] = pid
@@ -1347,6 +1375,17 @@ class EnginesMixin:
                         }
                         pid = worker_pid
                         item["process_resources"] = self._process_resource_snapshot(pid)
+                        self._record_worker_ready_identity(
+                            item,
+                            {
+                                "ready_at": time.time(),
+                                "worker": {
+                                    "pid": worker_pid,
+                                    "executable": str(reachability.get("worker_executable") or ""),
+                                    "prefix": str(reachability.get("worker_prefix") or ""),
+                                },
+                            },
+                        )
                     reachable_count += 1
                     worker_resources = self._query_worker_reported_resources(item)
                     if worker_resources:
@@ -1354,6 +1393,8 @@ class EnginesMixin:
                         merged_resources.update(worker_resources)
                         item["process_resources"] = merged_resources
                 elif (
+                    alive
+                    and
                     age_seconds > self._registration_startup_grace_seconds(item)
                     and self._reachability_indicates_missing_ipc_endpoint(reachability)
                 ):

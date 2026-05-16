@@ -367,6 +367,21 @@ class EngineHostDaemon:
                 "worker_ipc_family",
                 "worker_profile_class",
             ],
+            "unload-model": [
+                "engine_id",
+                "shutdown_all",
+            ],
+            "shutdown": [
+                "engine_id",
+            ],
+            "remove-registration": [
+                "engine_id",
+            ],
+            "prune-stale-registration": [
+                "engine_ids",
+                "reason",
+                "trigger_command",
+            ],
         }.get(cmd, [])
         return {key: p.get(key) for key in allowed if key in p}
 
@@ -423,10 +438,72 @@ class EngineHostDaemon:
     @staticmethod
     def _operation_target_engine_id(command: str, payload: Dict[str, Any]) -> Optional[str]:
         cmd = str(command or "").strip()
-        if cmd not in {"connect-from-config", "spawn"}:
+        if cmd not in {"connect-from-config", "spawn", "unload-model", "shutdown", "remove-registration"}:
             return None
         engine_id = str((payload or {}).get("engine_id") or "").strip()
         return engine_id or None
+
+    def _engine_registry_by_id(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            return {
+                str((row or {}).get("engine_id") or "").strip(): dict(row or {})
+                for row in list(self.svc._read_engines() or [])
+                if isinstance(row, dict) and str((row or {}).get("engine_id") or "").strip()
+            }
+        except Exception:
+            return {}
+
+    def _record_synchronous_operation(
+        self,
+        *,
+        command: str,
+        payload: Dict[str, Any],
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        error_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        op = dict(self._create_operation(command=command, payload=payload))
+        now = time.time()
+        result_status = str((result or {}).get("status") or "").strip().lower() if isinstance(result, dict) else ""
+        failed = bool(error) or result_status in {"failed", "error"}
+        failure_message = str(
+            error
+            or ((result or {}).get("message") if isinstance(result, dict) else "")
+            or ((result or {}).get("reason") if isinstance(result, dict) else "")
+            or "Operation failed"
+        )
+        events = list(op.get("progress_events") or [])
+        events.append(self._operation_event("running", "running", "Operation started"))
+        if failed:
+            events.append(self._operation_event("failed", "failed", failure_message))
+        else:
+            events.append(self._operation_event("completed", "completed", "Operation completed"))
+        if isinstance(result, dict):
+            result_engine_id = str(result.get("engine_id") or result.get("worker_id") or result.get("model_instance_id") or "").strip()
+            if result_engine_id:
+                op["target_engine_id"] = result_engine_id
+        op.update(
+            {
+                "status": "failed" if failed else "completed",
+                "stage": "failed" if failed else "completed",
+                "done": True,
+                "started_at": now,
+                "completed_at": now,
+                "updated_at": now,
+                "result": dict(result or {}) if isinstance(result, dict) else result,
+                "error": failure_message if failed else None,
+                "error_code": str(
+                    error_code
+                    or ((result or {}).get("reason") if isinstance(result, dict) else "")
+                    or "operation_failed"
+                )
+                if failed
+                else None,
+                "progress_events": events,
+            }
+        )
+        self._replace_operation(op)
+        return self._operation_public_snapshot(op)
 
     @staticmethod
     def _log_size(path: Path) -> int:
@@ -1824,6 +1901,8 @@ class EngineHostDaemon:
             )
             return {"seq": seq, "ok": True, "result": result}
 
+        service_call_started = False
+        registry_before: Dict[str, Dict[str, Any]] = {}
         try:
             payload = self._inject_runtime_endpoint_mode(cmd, payload)
             self.svc.authorize_command(cmd, payload)
@@ -1842,6 +1921,9 @@ class EngineHostDaemon:
                     "error_details": dict(acl.get("error_details") or {}),
                 }
             payload = dict(acl.get("payload") or payload)
+            if cmd in {"discover-running", "shutdown", "remove-registration"}:
+                registry_before = self._engine_registry_by_id()
+            service_call_started = True
             result = await asyncio.to_thread(self._call_service, cmd, payload)
             if isinstance(result, dict) and str(result.get("status") or "").strip().lower() == "denied":
                 return {
@@ -1852,6 +1934,35 @@ class EngineHostDaemon:
                     "error_details": dict(result.get("details") or {}),
                     "result": result,
                 }
+            if cmd == "unload-model":
+                self._record_synchronous_operation(
+                    command=cmd,
+                    payload=payload,
+                    result=dict(result or {}) if isinstance(result, dict) else {"result": result},
+                )
+            elif cmd == "shutdown" and isinstance(result, dict) and str(result.get("status") or "") in {"stopped", "already_stopped", "invalid_pid"}:
+                self._record_synchronous_operation(command=cmd, payload=payload, result=dict(result or {}))
+            elif cmd == "remove-registration" and isinstance(result, dict) and bool(result.get("removed", False)):
+                self._record_synchronous_operation(command=cmd, payload=payload, result=dict(result or {}))
+            elif cmd == "discover-running" and bool(payload.get("prune_stale", True)):
+                registry_after = self._engine_registry_by_id()
+                removed_ids = sorted(set(registry_before) - set(registry_after))
+                if removed_ids:
+                    removed = [registry_before[eid] for eid in removed_ids if eid in registry_before]
+                    self._record_synchronous_operation(
+                        command="prune-stale-registration",
+                        payload={
+                            "engine_ids": removed_ids,
+                            "reason": "discover_running_prune_stale",
+                            "trigger_command": "discover-running",
+                        },
+                        result={
+                            "status": "pruned",
+                            "reason": "discover_running_prune_stale",
+                            "pruned_engine_ids": removed_ids,
+                            "pruned_registrations": removed,
+                        },
+                    )
             return {"seq": seq, "ok": True, "result": result}
         except PermissionError as exc:
             code = str(exc or "").strip() or "auth_failed"
@@ -1863,6 +1974,13 @@ class EngineHostDaemon:
                 "error_details": {"reason": code},
             }
         except Exception as exc:
+            if cmd == "unload-model" and service_call_started:
+                self._record_synchronous_operation(
+                    command=cmd,
+                    payload=payload,
+                    error=str(exc),
+                    error_code="operation_failed",
+                )
             if hasattr(exc, "to_error_payload"):
                 payload = dict(getattr(exc, "to_error_payload")() or {})
                 return {

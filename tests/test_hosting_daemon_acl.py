@@ -914,6 +914,83 @@ def test_daemon_operation_status_survives_memory_reload(tmp_path: Path) -> None:
     assert (tmp_path / "state" / "operation_audit.jsonl").exists()
 
 
+def test_daemon_unload_model_records_completed_operation(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+
+    def _unload_call_service(cmd: str, payload: dict) -> dict:
+        assert cmd == "unload-model"
+        assert payload["engine_id"] == "model-binding"
+        return {
+            "status": "unloaded",
+            "engine_id": "model-binding",
+            "worker_id": "worker-1",
+            "model_instance_id": "model-1",
+            "config_binding_id": "model-binding",
+            "removed_binding": True,
+            "worker_still_running": True,
+            "remaining_model_count": 1,
+        }
+
+    daemon._call_service = _unload_call_service  # type: ignore[method-assign]
+
+    out = _dispatch(
+        daemon,
+        seq=1,
+        cmd="unload-model",
+        payload={"engine_id": "model-binding"},
+    )
+
+    assert out["ok"] is True
+    operations = json.loads((tmp_path / "state" / "operations.json").read_text(encoding="utf-8"))
+    op = dict(operations["operations"][0])
+    assert op["command"] == "unload-model"
+    assert op["status"] == "completed"
+    assert op["target_engine_id"] == "model-binding"
+    assert op["payload_hint"] == {"engine_id": "model-binding"}
+    assert op["result"]["removed_binding"] is True
+    audit_rows = [
+        json.loads(line)
+        for line in (tmp_path / "state" / "operation_audit.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["event"] for row in audit_rows] == ["created", "updated"]
+    assert audit_rows[-1]["operation"]["command"] == "unload-model"
+    assert audit_rows[-1]["operation"]["status"] == "completed"
+
+
+def test_daemon_discover_prune_records_operation(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc._write_engines([  # noqa: SLF001
+        {
+            "engine_id": "model-stale",
+            "worker_id": "model-stale",
+            "model_instance_id": "model-stale",
+            "pid": 99999999,
+            "command": ["python", "-m", "hosting.engine_worker_ipc"],
+            "spawned_at": time.time() - 3600,
+            "loaded_models": [{"model_instance_id": "model-stale"}],
+            "config_bindings": [{"engine_id": "binding-stale", "model_instance_id": "model-stale"}],
+        }
+    ])
+
+    out = _dispatch(
+        daemon,
+        seq=1,
+        cmd="discover-running",
+        payload={},
+    )
+
+    assert out["ok"] is True
+    assert out["result"] == []
+    operations = json.loads((tmp_path / "state" / "operations.json").read_text(encoding="utf-8"))
+    op = dict(operations["operations"][0])
+    assert op["command"] == "prune-stale-registration"
+    assert op["status"] == "completed"
+    assert op["payload_hint"]["engine_ids"] == ["model-stale"]
+    assert op["result"]["pruned_engine_ids"] == ["model-stale"]
+    assert op["result"]["pruned_registrations"][0]["engine_id"] == "model-stale"
+
+
 def test_daemon_operation_cancel_marks_running_task_canceled(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
 
