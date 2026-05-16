@@ -550,6 +550,82 @@ def test_discover_running_keeps_starting_model_with_missing_ipc_endpoint(
     assert svc.get_registration("loading-model") is not None
 
 
+def test_discover_running_retries_transient_missing_ipc_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="ready-model",
+        pid=1700,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    monkeypatch.setattr(svc, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(svc, "_process_resource_snapshot", lambda _pid: {})
+    calls = {"count": 0}
+
+    def _flaky_ipc_call(*, reg, payload, timeout_seconds):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError(
+                "worker IPC endpoint is unavailable for engine 'ready-model' at 'pipe'; worker process may not be running"
+            )
+        return {"status": "ok", "pid": 1700, "executable": "python", "prefix": "venv"}
+
+    monkeypatch.setattr(svc, "_ipc_call", _flaky_ipc_call)
+    monkeypatch.setattr(svc, "_query_worker_reported_resources", lambda _item: {})
+
+    row = svc.discover_running(reachability_timeout_seconds=0.35)[0]
+
+    assert calls["count"] == 2
+    assert row["reachable"] is True
+    assert row["state"] == "running"
+    assert row["reachability"]["attempts"] == 2
+
+
+def test_discover_running_uses_ready_worker_pid_for_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    svc = _make_service(tmp_path)
+    svc.register_spawned(
+        engine_id="ready-model",
+        pid=1700,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        env={"MP13_MODEL_PATH": "C:/models/demo"},
+        worker_profile_class="model",
+    )
+    rows = svc._read_engines()
+    rows[0]["worker_pid"] = 2700
+    rows[0]["worker_ready_at"] = time.time()
+    svc._write_engines(rows)
+    monkeypatch.setattr(svc, "_pid_alive", lambda pid: int(pid) in {1700, 2700})
+    monkeypatch.setattr(
+        svc,
+        "_process_resource_snapshot",
+        lambda pid: {"memory_mb": 1882.6} if int(pid) == 2700 else {"memory_mb": 4.1},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_probe_registration_reachability",
+        lambda _item, *, timeout_seconds=0.35: {
+            "reachable": False,
+            "transport": "ipc",
+            "probe": "hello",
+            "error": "worker IPC endpoint is unavailable for engine 'ready-model' at 'pipe'; worker process may not be running",
+        },
+    )
+
+    row = svc.discover_running()[0]
+
+    assert row["pid"] == 2700
+    assert row["launcher_pid"] == 1700
+    assert row["process_resources"]["memory_mb"] == 1882.6
+    assert row["state"] == "unreachable"
+
+
 def test_discover_running_prunes_old_registration_with_missing_ipc_endpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

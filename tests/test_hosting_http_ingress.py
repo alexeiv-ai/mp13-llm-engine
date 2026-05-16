@@ -103,6 +103,7 @@ def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> No
         pid_file=pid_file,
         engines_state_file=engines_state,
         control_state_file=control_state,
+        service=svc,
     )
     t = threading.Thread(target=daemon.run, daemon=True)
     t.start()
@@ -211,6 +212,7 @@ def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeyp
         pid_file=pid_file,
         engines_state_file=engines_state,
         control_state_file=control_state,
+        service=svc,
     )
     t = threading.Thread(target=daemon.run, daemon=True)
     t.start()

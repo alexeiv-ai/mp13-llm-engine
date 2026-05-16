@@ -166,6 +166,8 @@ def _reachability_summary(info: Dict[str, Any]) -> Optional[str]:
     error = str(reachability.get("error") or "").strip()
     if error:
         if "worker IPC endpoint is unavailable" in error:
+            if str(info.get("state") or "").strip().lower() == "spawning":
+                return "Worker is still starting; its IPC endpoint is not available yet."
             return "IPC endpoint unavailable; worker exited, failed to start its IPC server, or this is a stale PID registration."
         return error
     if bool(info.get("alive", False)):

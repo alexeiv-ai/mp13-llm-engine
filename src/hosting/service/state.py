@@ -1,4 +1,4 @@
-"""File-backed state helpers for the engine host service."""
+"""State helpers for the engine host service."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,12 @@ from .constants import LIFECYCLE_PROFILE_DETACHED
 
 
 class StateMixin:
+    def _ensure_engine_runtime_state(self) -> None:
+        if hasattr(self, "_runtime_engines"):
+            return
+        self._runtime_engines_lock = threading.RLock()
+        self._runtime_engines: List[Dict[str, Any]] = []
+
     def _read_json(self, path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
         if not path.exists():
             return dict(default)
@@ -29,21 +35,22 @@ class StateMixin:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _read_engines(self) -> List[Dict[str, Any]]:
-        data = self._read_json(self.engines_state_file, {"version": 1, "engines": []})
-        rows = data.get("engines")
-        if not isinstance(rows, list):
-            return []
-        return [self._normalize_engine_registration(dict(row or {})) for row in rows if isinstance(row, dict)]
+        self._ensure_engine_runtime_state()
+        with self._runtime_engines_lock:
+            return [
+                self._normalize_engine_registration(dict(row or {}))
+                for row in list(self._runtime_engines or [])
+                if isinstance(row, dict)
+            ]
 
     def _write_engines(self, rows: List[Dict[str, Any]]) -> None:
-        self._write_json(
-            self.engines_state_file,
-            {
-                "version": 2,
-                "updated_at": time.time(),
-                "engines": [self._normalize_engine_registration(dict(row or {})) for row in list(rows or [])],
-            },
-        )
+        self._ensure_engine_runtime_state()
+        with self._runtime_engines_lock:
+            self._runtime_engines = [
+                self._normalize_engine_registration(dict(row or {}))
+                for row in list(rows or [])
+                if isinstance(row, dict)
+            ]
 
     @staticmethod
     def _registration_binding_id(engine_id: str, config_path: str) -> str:

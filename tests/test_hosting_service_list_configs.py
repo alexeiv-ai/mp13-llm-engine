@@ -156,7 +156,12 @@ def test_connect_from_config_waits_for_model_worker_rpc_ready(tmp_path: Path, mo
 
     def _fake_wait(self, reg, *, timeout_seconds=600.0, poll_interval_seconds=0.5):
         ready_calls.append((dict(reg), timeout_seconds, poll_interval_seconds))
-        return {"status": "ok", "attempts": 3, "ready_at": 123.0, "worker": {"status": "ok"}}
+        return {
+            "status": "ok",
+            "attempts": 3,
+            "ready_at": 123.0,
+            "worker": {"status": "ok", "pid": 5678, "executable": "python", "prefix": "venv"},
+        }
 
     monkeypatch.setattr(EngineHostService, "_wait_for_worker_rpc_ready", _fake_wait)
 
@@ -167,6 +172,10 @@ def test_connect_from_config_waits_for_model_worker_rpc_ready(tmp_path: Path, mo
     assert ready_calls
     assert ready_calls[0][1] == 12
     assert dict(out.get("worker_ready") or {})["attempts"] == 3
+    managed = dict(out.get("managed_engine") or {})
+    assert managed.get("pid") == 1234
+    assert managed.get("launcher_pid") == 1234
+    assert managed.get("worker_pid") == 5678
     events = list(out.get("progress_events") or [])
     assert any(
         str(x.get("stage") or "") == "connect.worker_ready" and str(x.get("status") or "") == "completed"

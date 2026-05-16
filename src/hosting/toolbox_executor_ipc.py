@@ -65,10 +65,23 @@ def _host_service():
         if spec is not None
         else str(os.environ.get("MP13_HOSTING_CONTROL_STATE_FILE") or "").strip()
     )
-    return EngineHostService(
+    svc = EngineHostService(
         engines_state_file=Path(engines_state_file).expanduser().resolve() if engines_state_file else None,
         control_state_file=Path(control_state_file).expanduser().resolve() if control_state_file else None,
     )
+    if spec is not None and str(spec.worker_id or "").strip() and callable(getattr(svc, "register_spawned", None)):
+        svc.register_spawned(
+            engine_id=str(spec.worker_id).strip(),
+            pid=os.getpid(),
+            command=[sys.executable, "-m", "hosting.toolbox_executor_ipc"],
+            env={
+                "MP13_TOOLBOX_EXECUTOR_ENGINE_ID": str(spec.worker_id).strip(),
+                "MP13_TOOLBOX_WORKER_SPEC_PATH": str(os.environ.get("MP13_TOOLBOX_WORKER_SPEC_PATH") or "").strip(),
+            },
+            executor_kind="toolbox_executor",
+            sandbox_policy=dict(spec.policy or {}),
+        )
+    return svc
 
 
 def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

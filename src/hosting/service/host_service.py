@@ -33,7 +33,7 @@ from .toolbox_runtime import ToolboxRuntimeMixin
 
 
 class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxRuntimeMixin):
-    """File-backed engine host service for terminal-command control."""
+    """Engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
     _toolbox_lock_guard = threading.Lock()
@@ -53,6 +53,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         else:
             self.hosting_root = raw_control.resolve()
             self.control_state_file = self.hosting_root / "access_control.json"
+        self._runtime_engines_lock = threading.RLock()
+        self._runtime_engines: list[Dict[str, Any]] = []
         self._ensure_metrics_initialized()
 
 

@@ -265,6 +265,23 @@ def test_reachability_summary_explains_unavailable_ipc() -> None:
     assert "stale PID" in note
 
 
+def test_reachability_summary_treats_spawning_ipc_as_startup() -> None:
+    note = interactive._reachability_summary(
+        {
+            "state": "spawning",
+            "alive": True,
+            "reachable": False,
+            "reachability": {
+                "error": "worker IPC endpoint is unavailable for engine 'model1' at 'pipe'; worker process may not be running"
+            },
+        }
+    )
+
+    assert note is not None
+    assert "still starting" in note
+    assert "stale PID" not in note
+
+
 def test_worker_status_summary_uses_daemon_resource_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
     monkeypatch.setattr(

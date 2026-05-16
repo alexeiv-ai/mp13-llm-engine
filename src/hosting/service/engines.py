@@ -359,6 +359,39 @@ class EnginesMixin:
             self._write_engines(rows)
         return updated
 
+    def _record_worker_ready_identity(self, rec: Dict[str, Any], ready: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        worker = dict((ready or {}).get("worker") or {}) if isinstance((ready or {}).get("worker"), dict) else {}
+        worker_pid = int(worker.get("pid") or 0)
+        if worker_pid <= 0:
+            return dict(rec or {})
+        eid = str((rec or {}).get("engine_id") or "").strip()
+        if not eid:
+            return dict(rec or {})
+        updated = dict(rec or {})
+        launcher_pid = int(updated.get("pid") or 0)
+        if launcher_pid > 0 and launcher_pid != worker_pid:
+            updated["launcher_pid"] = launcher_pid
+        updated["worker_pid"] = worker_pid
+        executable = str(worker.get("executable") or "").strip()
+        prefix = str(worker.get("prefix") or "").strip()
+        if executable:
+            updated["worker_executable"] = executable
+        if prefix:
+            updated["worker_prefix"] = prefix
+        updated["worker_ready_at"] = float((ready or {}).get("ready_at") or time.time())
+        rows = []
+        replaced = False
+        for row in self._read_engines():
+            current = dict(row or {})
+            if str(current.get("engine_id") or "") == eid:
+                rows.append(updated)
+                replaced = True
+            else:
+                rows.append(current)
+        if replaced:
+            self._write_engines(rows)
+        return updated
+
     def _check_module_available(self, python: str, module_name: str) -> Tuple[bool, str]:
         """
         Check whether engine runtime symbols are importable by *python*.
@@ -859,6 +892,7 @@ class EnginesMixin:
                         dict(rec),
                         timeout_seconds=float(cfg.get("worker_ready_timeout_seconds") or 600.0),
                     )
+                    rec = self._record_worker_ready_identity(dict(rec), ready)
                     progress_events.append(
                         self._progress_event(
                             "connect.worker_ready",
@@ -987,29 +1021,48 @@ class EnginesMixin:
                 "probe": "unsupported_transport",
                 "error": "reachability_probe_not_supported",
             }
+        deadline = checked_at + max(0.1, float(timeout_seconds or 0.35))
+        last_error = ""
+        attempts = 0
         try:
-            out = self._ipc_call(
-                reg=item,
-                payload={"kind": "hello", "engine_id": str(item.get("engine_id") or "")},
-                timeout_seconds=max(0.1, float(timeout_seconds or 0.35)),
-            )
-            return {
-                "reachable": str(out.get("status") or "").strip().lower() == "ok",
-                "checked_at": checked_at,
-                "transport": "ipc",
-                "probe": "hello",
-                "worker_pid": int(out.get("pid") or 0) or None,
-                "worker_executable": str(out.get("executable") or "").strip() or None,
-                "worker_prefix": str(out.get("prefix") or "").strip() or None,
-            }
+            while True:
+                attempts += 1
+                remaining = max(0.0, deadline - time.time())
+                if remaining <= 0.0 and attempts > 1:
+                    break
+                try:
+                    out = self._ipc_call(
+                        reg=item,
+                        payload={"kind": "hello", "engine_id": str(item.get("engine_id") or "")},
+                        timeout_seconds=max(0.1, remaining if remaining > 0 else float(timeout_seconds or 0.35)),
+                    )
+                    return {
+                        "reachable": str(out.get("status") or "").strip().lower() == "ok",
+                        "checked_at": checked_at,
+                        "transport": "ipc",
+                        "probe": "hello",
+                        "attempts": attempts,
+                        "worker_pid": int(out.get("pid") or 0) or None,
+                        "worker_executable": str(out.get("executable") or "").strip() or None,
+                        "worker_prefix": str(out.get("prefix") or "").strip() or None,
+                    }
+                except Exception as exc:
+                    last_error = str(exc)
+                    if not self._reachability_indicates_missing_ipc_endpoint({"error": last_error}):
+                        break
+                    if time.time() >= deadline:
+                        break
+                    time.sleep(min(0.05, max(0.0, deadline - time.time())))
         except Exception as exc:
-            return {
-                "reachable": False,
-                "checked_at": checked_at,
-                "transport": "ipc",
-                "probe": "hello",
-                "error": str(exc),
-            }
+            last_error = str(exc)
+        return {
+            "reachable": False,
+            "checked_at": checked_at,
+            "transport": "ipc",
+            "probe": "hello",
+            "attempts": attempts,
+            "error": last_error,
+        }
 
     @staticmethod
     def _describe_registration_state(
@@ -1024,6 +1077,7 @@ class EnginesMixin:
             reachability = dict(item.get("reachability") or {})
             if (
                 EnginesMixin._reachability_indicates_missing_ipc_endpoint(reachability)
+                and float(item.get("worker_ready_at") or 0.0) <= 0.0
                 and float(item.get("uptime_seconds") or 0.0) <= EnginesMixin._registration_startup_grace_seconds(item)
             ):
                 return "spawning"
@@ -1250,17 +1304,26 @@ class EnginesMixin:
         for row in rows:
             item = dict(row)
             pid = int(item.get("pid") or 0)
+            worker_pid = int(item.get("worker_pid") or 0)
             age_seconds = max(0.0, now - float(item.get("spawned_at") or now))
             alive = self._pid_alive(pid)
+            worker_alive = worker_pid > 0 and self._pid_alive(worker_pid)
+            if worker_alive:
+                alive = True
             if alive:
-                identity = self._registration_pid_matches_command(item, pid)
+                identity_pid = worker_pid if worker_alive else pid
+                identity = self._registration_pid_matches_command(item, identity_pid)
                 if identity:
                     item["pid_identity"] = identity
                 if not bool(identity.get("matches", True)):
                     alive = False
             item["alive"] = alive
             item["uptime_seconds"] = max(0.0, now - float(item.get("spawned_at") or now))
-            item["process_resources"] = self._process_resource_snapshot(pid)
+            if worker_alive and worker_pid != pid:
+                item["launcher_pid"] = pid
+                item["pid"] = worker_pid
+            resource_pid = int(item.get("pid") or 0)
+            item["process_resources"] = self._process_resource_snapshot(resource_pid)
             item["reachable"] = False
             if alive and include_reachability:
                 reachability = self._probe_registration_reachability(
@@ -1274,6 +1337,7 @@ class EnginesMixin:
                     if worker_pid > 0 and worker_pid != pid:
                         item["launcher_pid"] = pid
                         item["pid"] = worker_pid
+                        item["worker_pid"] = worker_pid
                         item["pid_identity"] = {
                             "matches": True,
                             "expected_executable": str(reachability.get("worker_executable") or ""),
@@ -1447,6 +1511,7 @@ class EnginesMixin:
         if "--ipc-address" not in base_cmd:
             base_cmd.extend(["--ipc-address", ipc_address])
         merged_env = dict(os.environ) | {str(k): str(v) for k, v in dict(env or {}).items()}
+        normalized_sandbox = WorkerSandboxPolicy.from_mapping(sandbox_policy)
         merged_env["MP13_ENGINE_HOST_TOKEN"] = auth_token
         merged_env["MP13_ENGINE_HOST_TOKEN_HEADER"] = auth_header
         merged_env["MP13_ENGINE_TRANSPORT"] = "ipc"
@@ -1454,11 +1519,29 @@ class EnginesMixin:
         merged_env["MP13_WORKER_IPC_ADDRESS"] = ipc_address
         if str(executor_kind or "").strip() == "toolbox_executor":
             merged_env["MP13_TOOLBOX_EXECUTOR_ENGINE_ID"] = eid
-            merged_env["MP13_HOSTING_ENGINES_STATE_FILE"] = str(self.engines_state_file)
             merged_env["MP13_HOSTING_CONTROL_STATE_FILE"] = str(self.control_state_file)
+            if not str(merged_env.get("MP13_TOOLBOX_WORKER_SPEC_PATH") or "").strip():
+                manifest_path = str(merged_env.get("MP13_TOOLBOX_MANIFEST_PATH") or "").strip()
+                if manifest_path:
+                    from ..toolbox.bundle_models import ToolboxWorkerStartupSpec
+
+                    spec_dir = (self.hosting_root / "state" / "toolbox_worker_specs").expanduser().resolve()
+                    spec_dir.mkdir(parents=True, exist_ok=True)
+                    spec_path = spec_dir / f"{self._safe_config_name(eid)}-{secrets.token_hex(6)}.json"
+                    ToolboxWorkerStartupSpec(
+                        worker_id=eid,
+                        sandbox_id=eid,
+                        toolbox_revision=str(dict(bundle or {}).get("bundle_revision") or ""),
+                        manifest_path=manifest_path,
+                        scratch_root=str((self.hosting_root / "toolbox_scratch" / eid).expanduser().resolve()),
+                        control_state_file=str(self.control_state_file),
+                        ipc_family=ipc_family,
+                        ipc_address=ipc_address,
+                        policy=normalized_sandbox.to_dict(),
+                    ).write_json(spec_path)
+                    merged_env["MP13_TOOLBOX_WORKER_SPEC_PATH"] = str(spec_path)
         log_path = self._engine_log_path(str(engine_id or ""))
         self._prune_old_stopped_worker_logs()
-        normalized_sandbox = WorkerSandboxPolicy.from_mapping(sandbox_policy)
         launched = self._launch_worker_process(
             WorkerLaunchRequest(
                 engine_id=eid,
@@ -1481,8 +1564,8 @@ class EnginesMixin:
         if str(executor_kind or "").strip() == "toolbox_executor":
             for key in [
                 "MP13_TOOLBOX_EXECUTOR_ENGINE_ID",
-                "MP13_HOSTING_ENGINES_STATE_FILE",
                 "MP13_HOSTING_CONTROL_STATE_FILE",
+                "MP13_TOOLBOX_WORKER_SPEC_PATH",
             ]:
                 persisted_env[key] = str(launched.persisted_env.get(key) or merged_env.get(key) or "")
         return self.register_spawned(
@@ -1519,18 +1602,26 @@ class EnginesMixin:
         if not entry:
             return {"status": "not_found", "engine_id": str(engine_id), "alive": False}
         pid = int(entry.get("pid") or 0)
+        launcher_pid = int(entry.get("launcher_pid") or 0)
+        worker_pid = int(entry.get("worker_pid") or 0)
         eid = str(entry.get("engine_id") or engine_id)
+        if pid <= 0:
+            pid = worker_pid
         if pid <= 0:
             self.remove_registration(eid)
             return {"status": "invalid_pid", "engine_id": eid, "alive": False}
         if not self._pid_alive(pid):
-            self.remove_registration(eid)
-            return {"status": "already_stopped", "engine_id": eid, "pid": pid, "alive": False}
+            if worker_pid > 0 and worker_pid != pid and self._pid_alive(worker_pid):
+                pid = worker_pid
+            else:
+                self.remove_registration(eid)
+                return {"status": "already_stopped", "engine_id": eid, "pid": pid, "alive": False}
         termination = terminate_process_tree(pid, timeout_seconds=timeout_seconds)
         try:
             from ..sandbox.launcher import close_worker_job
 
-            job_close = close_worker_job(pid)
+            job_pid = launcher_pid if launcher_pid > 0 else pid
+            job_close = close_worker_job(job_pid)
         except Exception as exc:
             job_close = {"pid": pid, "job_object": False, "closed": False, "error": str(exc)}
         alive = self._pid_alive(pid)

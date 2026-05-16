@@ -645,24 +645,16 @@ def test_connect_operation_status_reports_log_weight_progress(tmp_path: Path) ->
         "Loading weights:  74%|#######4  | 268/362 [00:03<00:01]\n",
         encoding="utf-8",
     )
-    daemon.svc.engines_state_file.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "engines": [
-                    {
-                        "engine_id": "model-granite",
-                        "model_instance_id": "model-granite",
-                        "canonical_model_path": str((tmp_path / "granite").resolve()),
-                        "canonical_config_path": str((tmp_path / "config.json").resolve()),
-                        "log_path": str(log_path),
-                        "spawned_at": time.time(),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    daemon.svc._write_engines([  # noqa: SLF001
+        {
+            "engine_id": "model-granite",
+            "model_instance_id": "model-granite",
+            "canonical_model_path": str((tmp_path / "granite").resolve()),
+            "canonical_config_path": str((tmp_path / "config.json").resolve()),
+            "log_path": str(log_path),
+            "spawned_at": time.time(),
+        }
+    ])
     op = daemon._create_operation(  # noqa: SLF001
         command="connect-from-config",
         payload={"config_path": str(tmp_path / "config.json"), "model_path": str(tmp_path / "granite")},
@@ -693,24 +685,16 @@ def test_connect_operation_status_reports_checkpoint_shard_progress(tmp_path: Pa
         "Loading checkpoint shards:  42%|####2     | 5/12 [00:03<00:04]\n",
         encoding="utf-8",
     )
-    daemon.svc.engines_state_file.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "engines": [
-                    {
-                        "engine_id": "model-granite",
-                        "model_instance_id": "model-granite",
-                        "canonical_model_path": str((tmp_path / "granite").resolve()),
-                        "canonical_config_path": str((tmp_path / "config.json").resolve()),
-                        "log_path": str(log_path),
-                        "spawned_at": time.time(),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    daemon.svc._write_engines([  # noqa: SLF001
+        {
+            "engine_id": "model-granite",
+            "model_instance_id": "model-granite",
+            "canonical_model_path": str((tmp_path / "granite").resolve()),
+            "canonical_config_path": str((tmp_path / "config.json").resolve()),
+            "log_path": str(log_path),
+            "spawned_at": time.time(),
+        }
+    ])
     op = daemon._create_operation(  # noqa: SLF001
         command="connect-from-config",
         payload={"config_path": str(tmp_path / "config.json"), "model_path": str(tmp_path / "granite")},
@@ -743,24 +727,16 @@ def test_connect_operation_progress_resolves_relative_model_hint(tmp_path: Path)
     )
     log_path.write_text("Loading weights:  38%|###8      | 138/362 [00:12<00:20]\n", encoding="utf-8")
     daemon.svc._resolve_json_config_path = lambda _config_path: cfg_path  # type: ignore[method-assign]
-    daemon.svc.engines_state_file.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "engines": [
-                    {
-                        "engine_id": "model-granite",
-                        "model_instance_id": "model-granite",
-                        "canonical_model_path": str(model_dir.resolve()),
-                        "canonical_config_path": str(cfg_path.resolve()),
-                        "log_path": str(log_path),
-                        "spawned_at": time.time(),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    daemon.svc._write_engines([  # noqa: SLF001
+        {
+            "engine_id": "model-granite",
+            "model_instance_id": "model-granite",
+            "canonical_model_path": str(model_dir.resolve()),
+            "canonical_config_path": str(cfg_path.resolve()),
+            "log_path": str(log_path),
+            "spawned_at": time.time(),
+        }
+    ])
     op = daemon._create_operation(  # noqa: SLF001
         command="connect-from-config",
         payload={"config_path": "granite-2b", "model_path": "granite-3.3-2b-instruct"},
@@ -853,24 +829,16 @@ def test_connect_operation_status_reports_worker_log_error(tmp_path: Path) -> No
         "  File \"engine.py\", line 1, in load\n",
         encoding="utf-8",
     )
-    daemon.svc.engines_state_file.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "engines": [
-                    {
-                        "engine_id": "model-demo",
-                        "model_instance_id": "model-demo",
-                        "canonical_model_path": str((tmp_path / "demo").resolve()),
-                        "canonical_config_path": str((tmp_path / "config.json").resolve()),
-                        "log_path": str(log_path),
-                        "spawned_at": time.time(),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    daemon.svc._write_engines([  # noqa: SLF001
+        {
+            "engine_id": "model-demo",
+            "model_instance_id": "model-demo",
+            "canonical_model_path": str((tmp_path / "demo").resolve()),
+            "canonical_config_path": str((tmp_path / "config.json").resolve()),
+            "log_path": str(log_path),
+            "spawned_at": time.time(),
+        }
+    ])
     op = daemon._create_operation(  # noqa: SLF001
         command="connect-from-config",
         payload={"config_path": str(tmp_path / "config.json"), "model_path": str(tmp_path / "demo")},

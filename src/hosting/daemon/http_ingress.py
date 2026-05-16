@@ -41,11 +41,12 @@ class EngineHostHttpIngressDaemon:
         pid_file: Optional[Path] = None,
         engines_state_file: Optional[Path] = None,
         control_state_file: Optional[Path] = None,
+        service: Optional[EngineHostService] = None,
     ):
         self.port = int(port or DEFAULT_HTTP_INGRESS_PORT)
         self.pid_file = DaemonPidFile(pid_file or _default_http_pid_file())
         self.shutdown_token = secrets.token_urlsafe(24)
-        self.svc = EngineHostService(
+        self.svc = service or EngineHostService(
             engines_state_file=engines_state_file,
             control_state_file=control_state_file,
         )
