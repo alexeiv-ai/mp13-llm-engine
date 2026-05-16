@@ -2107,6 +2107,40 @@ class ChatContext:
         root_cursor = self._create_root_cursor()
         self._register_cursor(root_cursor, alias="main", make_active=True, scope=self._default_scope)
 
+    @classmethod
+    def create_conversation_context(
+        cls,
+        *,
+        session: EngineSession,
+        toolbox: Optional[Toolbox] = None,
+        title: Optional[str] = None,
+        engine_config: Optional[Dict[str, Any]] = None,
+        engine_warnings: Optional[List[str]] = None,
+        parser_profile: Optional[ParserProfile] = None,
+        inference_defaults: Optional[InferenceParams] = None,
+        initial_params: Optional[Dict[str, Any]] = None,
+        backend_model_binding: Optional[Dict[str, Any]] = None,
+        request_overrides: Optional[InferenceParams] = None,
+    ) -> "ChatContext":
+        """Create a new conversation root and wrap it in a ChatContext."""
+        chat_session = session.add_conversation(
+            engine_config=copy.deepcopy(engine_config or {}),
+            engine_warnings=list(engine_warnings or []),
+            parser_profile=copy.deepcopy(parser_profile) if parser_profile is not None else None,
+            inference_defaults=copy.deepcopy(inference_defaults) if inference_defaults is not None else None,
+            initial_params=copy.deepcopy(initial_params or {}),
+            title=title,
+        )
+        if isinstance(backend_model_binding, dict) and backend_model_binding:
+            binding = {str(k): copy.deepcopy(v) for k, v in backend_model_binding.items() if str(k)}
+            chat_session.engine_config["backend_model_binding"] = binding
+        return cls(
+            session=session,
+            chat_session=chat_session,
+            toolbox=toolbox or chat_session.toolbox,
+            request_overrides=request_overrides,
+        )
+
     @property
     def toolbox(self) -> Optional[Toolbox]:
         if self.toolbox_ref:
