@@ -821,6 +821,39 @@ def test_auth_validate_session_reports_binding_and_identity() -> None:
         assert mismatch["reason"] == "key_id_mismatch"
 
 
+def test_auth_renew_session_extends_valid_session() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="admin",
+            key_secret="admin-secret",
+            role="admin",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="admin",
+            key_secret="admin-secret",
+            scope="control",
+            ttl_seconds=60,
+        )
+        token = str(session.get("token") or "")
+        assert token
+
+        before = svc.auth_validate_session(token=token, scope="control")
+        renewed = svc.auth_renew_session(token=token, scope="control", ttl_seconds=3600)
+        after = svc.auth_validate_session(token=token, scope="control")
+
+        assert renewed["status"] == "ok"
+        assert renewed["ttl_seconds"] == 3600
+        assert after["valid"] is True
+        assert float(after["expires_at"]) > float(before["expires_at"])
+        svc.authorize_command("auth-renew-session", {"session_token": token})
+
+
 def test_auth_validate_session_checks_remote_ssh_binding() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)

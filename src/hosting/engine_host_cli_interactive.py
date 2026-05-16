@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, List
@@ -24,6 +25,8 @@ from .engine_host_channel import EngineHostControlChannel
 from .transport_bootstrap import _protect_windows_private_key_path
 
 _TOKEN_UNSET = object()
+_SESSION_RENEW_CHECK_INTERVAL_SECONDS = 30
+_SESSION_RENEW_MIN_TTL_SECONDS = 180
 
 
 def _arg_value(args: argparse.Namespace, name: str, default: Any = None) -> Any:
@@ -127,12 +130,195 @@ def _auth_api_invoke(args: argparse.Namespace, cmd: str, payload: dict) -> Any:
 
 
 def _active_session_token(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    if bool(getattr(args, "_interactive_session_token_invalid", False)):
+        setattr(args, "_interactive_session_token_invalid", False)
+        _control_channel(args, session_token=None)
+        return None
+    worker_token = str(getattr(args, "_interactive_session_token", "") or "").strip()
+    if worker_token:
+        session_token = worker_token
     channel = _control_channel(args)
     get_token = getattr(channel, "get_session_token", None)
     if not callable(get_token):
         return session_token
     current = get_token()
     return current if current else session_token
+
+
+def _set_interactive_session_token(args: argparse.Namespace, token: Optional[str]) -> Optional[str]:
+    tok = str(token or "").strip() or None
+    setattr(args, "_interactive_session_token", tok or "")
+    setattr(args, "_interactive_session_token_invalid", False)
+    _control_channel(args, session_token=tok)
+    return tok
+
+
+def _background_session_renew_loop(args: argparse.Namespace, stop_event: threading.Event) -> None:
+    channel = EngineHostControlChannel(_control_channel_settings(args))
+    last_stopped_notice = 0.0
+    while not stop_event.wait(_SESSION_RENEW_CHECK_INTERVAL_SECONDS):
+        token = str(getattr(args, "_interactive_session_token", "") or "").strip()
+        if not token:
+            continue
+        channel.set_session_token(token)
+        try:
+            status = channel.get_daemon_status()
+            daemon_up = bool(dict(status or {}).get("alive") or dict(status or {}).get("reachable"))
+        except Exception:
+            daemon_up = False
+        if not daemon_up:
+            now = time.time()
+            setattr(args, "_interactive_daemon_stopped_notice", True)
+            if now - last_stopped_notice >= 60:
+                last_stopped_notice = now
+                print()
+                print(_c("warn", "Daemon is stopped; automatic auth refresh is paused. Press Enter to refresh the main menu."))
+            continue
+        try:
+            validation = channel.invoke_control_command(
+                "auth-validate-session",
+                {"token": token, "scope": "control"},
+            )
+        except Exception:
+            continue
+        data = dict(validation or {})
+        if not bool(data.get("valid", False)):
+            reason = str(data.get("reason") or "").strip()
+            if reason in {
+                "missing_or_invalid_session_token",
+                "session_revoked",
+                "session_expired",
+                "invalid_session",
+                "expired_token",
+            }:
+                setattr(args, "_interactive_session_token", "")
+                setattr(args, "_interactive_session_token_invalid", True)
+                channel.set_session_token(None)
+            continue
+        try:
+            ttl_remaining = int(data.get("ttl_remaining_seconds"))
+        except Exception:
+            continue
+        if ttl_remaining > _SESSION_RENEW_MIN_TTL_SECONDS:
+            continue
+        try:
+            try:
+                configured_ttl = int(_control_channel_settings(args).get("engine_host_session_ttl_seconds") or 900)
+            except Exception:
+                configured_ttl = 900
+            renewed = channel.invoke_control_command(
+                "auth-renew-session",
+                {
+                    "token": token,
+                    "scope": "control",
+                    "ttl_seconds": configured_ttl,
+                },
+            )
+            if renewed:
+                setattr(args, "_interactive_daemon_stopped_notice", False)
+        except Exception:
+            continue
+
+
+def _ensure_session_renewer(args: argparse.Namespace) -> None:
+    thread = getattr(args, "_interactive_session_renew_thread", None)
+    if isinstance(thread, threading.Thread) and thread.is_alive():
+        return
+    stop_event = threading.Event()
+    setattr(args, "_interactive_session_renew_stop", stop_event)
+    thread = threading.Thread(
+        target=_background_session_renew_loop,
+        args=(args, stop_event),
+        name="engine-host-interactive-session-renew",
+        daemon=True,
+    )
+    setattr(args, "_interactive_session_renew_thread", thread)
+    thread.start()
+
+
+def _stop_session_renewer(args: argparse.Namespace) -> None:
+    stop_event = getattr(args, "_interactive_session_renew_stop", None)
+    if isinstance(stop_event, threading.Event):
+        stop_event.set()
+    thread = getattr(args, "_interactive_session_renew_thread", None)
+    if isinstance(thread, threading.Thread) and thread.is_alive():
+        thread.join(timeout=1.0)
+
+
+def _renew_session_token_if_needed(
+    args: argparse.Namespace,
+    session_token: Optional[str],
+    *,
+    daemon_up: bool,
+) -> Optional[str]:
+    if not session_token or not daemon_up:
+        return session_token
+    now = time.time()
+    last_check = float(getattr(args, "_interactive_session_renew_checked_at", 0.0) or 0.0)
+    if now - last_check < _SESSION_RENEW_CHECK_INTERVAL_SECONDS:
+        return session_token
+    setattr(args, "_interactive_session_renew_checked_at", now)
+
+    try:
+        validation = _api_invoke(
+            args,
+            "auth-validate-session",
+            {"token": session_token, "scope": "control"},
+            session_token=session_token,
+        )
+    except Exception:
+        return session_token
+    data = dict(validation or {})
+    if not bool(data.get("valid", False)):
+        reason = str(data.get("reason") or "").strip()
+        if reason in {
+            "missing_or_invalid_session_token",
+            "session_revoked",
+            "session_expired",
+            "invalid_session",
+            "expired_token",
+        }:
+            _control_channel(args, session_token=None)
+            return None
+        return session_token
+
+    ttl_remaining = data.get("ttl_remaining_seconds")
+    try:
+        ttl_remaining_int = int(ttl_remaining) if ttl_remaining is not None else None
+    except Exception:
+        ttl_remaining_int = None
+    if ttl_remaining_int is None or ttl_remaining_int > _SESSION_RENEW_MIN_TTL_SECONDS:
+        return session_token
+
+    try:
+        _default_key_id, _configured_secret, configured_ttl = _configured_auth_defaults(args)
+        renewed = _api_invoke(
+            args,
+            "auth-renew-session",
+            {
+                "token": session_token,
+                "scope": "control",
+                "ttl_seconds": configured_ttl,
+            },
+            session_token=session_token,
+        )
+        expires_at = float(dict(renewed or {}).get("expires_at") or 0.0)
+        set_meta = getattr(_control_channel(args, session_token=session_token), "_set_session_token_meta", None)
+        if callable(set_meta):
+            set_meta(
+                {
+                    "auth_method": str(dict(renewed or {}).get("auth_method") or data.get("auth_method") or ""),
+                    "key_id": str(dict(renewed or {}).get("key_id") or data.get("key_id") or ""),
+                    "scope": str(dict(renewed or {}).get("scope") or data.get("scope") or "control"),
+                    "expires_at": expires_at,
+                    "ssh_binding": dict(dict(renewed or {}).get("ssh_binding") or data.get("ssh_binding") or {}),
+                }
+            )
+        return session_token
+    except PermissionError:
+        return session_token
+    except Exception:
+        return session_token
 
 
 def _session_identity_from_list(res: Dict[str, Any], session_token: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -951,10 +1137,10 @@ def _authenticate_interactive(args: argparse.Namespace) -> Optional[str]:
         return _obtain_session_token(args)
 
     opts = {
-        "shared": ("Shared key password", "local only"),
         "key": ("Admin private key challenge", ""),
+        "shared": ("Shared key password", "local only"),
     }
-    choice = _prompt_menu("Authenticate", opts, "shared", allow_back=True, allow_changes=False, enter_hint="shared")
+    choice = _prompt_menu("Authenticate", opts, "key", allow_back=True, allow_changes=False, enter_hint="key")
     if choice in ("b", "back"):
         return None
     if choice == "shared":
@@ -1199,7 +1385,8 @@ def _local_recovery_menu(args: argparse.Namespace, session_token: Optional[str])
         elif choice == "u":
             token = _local_authenticate(args)
             if token:
-                session_token = token
+                session_token = _set_interactive_session_token(args, token)
+                _ensure_session_renewer(args)
         elif choice == "s":
             _list_local_sessions(args)
         elif choice == "r":
@@ -1210,13 +1397,13 @@ def _local_recovery_menu(args: argparse.Namespace, session_token: Optional[str])
             _revoke_local_key(args)
         elif choice == "z":
             _clear_local_auth_keys_sessions(args)
-            session_token = None
+            session_token = _set_interactive_session_token(args, None)
         elif choice == "f":
             _force_stop_local_daemon(args)
-            session_token = None
+            session_token = _set_interactive_session_token(args, None)
         elif choice == "n":
             _force_restart_local_daemon(args)
-            session_token = None
+            session_token = _set_interactive_session_token(args, None)
         elif choice == "d":
             _start_daemon(args)
 
@@ -1244,6 +1431,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
     try:
         while True:
             try:
+                session_token = _active_session_token(args, session_token)
                 target_mode = _target_mode(args)
                 daemon_status: Dict[str, Any] = {}
                 if target_mode == "ssh":
@@ -1259,6 +1447,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         daemon_up = bool(daemon_status.get("alive") or daemon_status.get("reachable"))
                     except Exception:
                         daemon_up = False
+                session_token = _renew_session_token_if_needed(args, session_token, daemon_up=daemon_up)
                 status_c = _c("good", "Running") if daemon_up else _c("muted", "Stopped")
                 auth_status = daemon_status.get("auth_status") or {}
                 auth_value = daemon_status.get("require_auth") if "require_auth" in daemon_status else auth_status.get("require_auth")
@@ -1321,6 +1510,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                 else:
                     if caller_key and caller_role:
                         status_c += f" (Auth: {caller_key} ({caller_role}))"
+                    elif session_token:
+                        status_c += " (Auth refresh paused; daemon stopped)"
                     elif auth_value is not None:
                         status_c += f" (Auth: {'required' if bool(auth_value) else 'not required'})"
 
@@ -1358,7 +1549,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     if choice == "auth":
                         token = _authenticate_interactive(args)
                         if token:
-                            session_token = token
+                            session_token = _set_interactive_session_token(args, token)
+                            _ensure_session_renewer(args)
                             print(_c("good", "Please try your command now that you are authenticated."))
                             time.sleep(1)
                     elif choice == "l":
@@ -1406,6 +1598,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                 print(f"\n{_c('bad', 'Error:')} {exc}")
                 time.sleep(1)
     finally:
+        _stop_session_renewer(args)
         if session_token:
             try:
                 _api_invoke(args, "auth-revoke-session", {"token": session_token}, session_token=session_token)

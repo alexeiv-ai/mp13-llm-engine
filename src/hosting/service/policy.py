@@ -43,8 +43,9 @@ class PolicyMixin:
         if c in {"auth-begin-challenge", "auth-complete-challenge"}:
             # Challenge issuance/completion perform their own key-based verification.
             return
-        if c in {"auth-validate-session"}:
-            # Validation authenticates by proving possession of the token being checked.
+        if c in {"auth-validate-session", "auth-renew-session"}:
+            # Validation/renewal authenticate by proving possession of the token
+            # being checked.
             return
         token = self._extract_session_token(payload)
         if not token:
@@ -90,6 +91,7 @@ class PolicyMixin:
             "auth-list-issued-tokens",
             "auth-audit-list",
             "auth-validate-session",
+            "auth-renew-session",
             "auth-revoke-session",
             "host-metrics",
             "op-start",

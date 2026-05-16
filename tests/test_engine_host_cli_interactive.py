@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -86,6 +88,35 @@ def test_interactive_api_invoke_maps_auth_failed(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(PermissionError, match="session_token_required"):
         interactive._api_invoke(args, "auth-failed", {})
+
+
+def test_background_session_renewer_extends_token_while_menu_can_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    renewed = threading.Event()
+
+    class RenewChannel(_FakeChannel):
+        def invoke_control_command(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+            self.invocations.append((command, dict(payload), self.session_token))
+            if command == "auth-validate-session":
+                return {"valid": True, "ttl_remaining_seconds": 10, "scope": "control"}
+            if command == "auth-renew-session":
+                renewed.set()
+                return {"status": "ok", "expires_at": time.time() + 900, "scope": "control"}
+            return {}
+
+    _FakeChannel.instances.clear()
+    monkeypatch.setattr(interactive, "EngineHostControlChannel", RenewChannel)
+    monkeypatch.setattr(interactive, "_SESSION_RENEW_CHECK_INTERVAL_SECONDS", 0.01)
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    interactive._set_interactive_session_token(args, "tok-1")
+
+    interactive._ensure_session_renewer(args)
+    try:
+        assert renewed.wait(1.0)
+    finally:
+        interactive._stop_session_renewer(args)
+
+    worker = next(inst for inst in _FakeChannel.instances if inst.invocations)
+    assert ("auth-renew-session", {"token": "tok-1", "scope": "control", "ttl_seconds": 900}, "tok-1") in worker.invocations
 
 
 def test_metrics_auth_error_does_not_print_daemon_error(

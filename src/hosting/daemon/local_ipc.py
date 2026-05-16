@@ -2389,6 +2389,13 @@ class EngineHostDaemon:
                 check_ssh_binding=bool(payload.get("check_ssh_binding", True)),
                 presented_ssh_binding=dict(payload.get("_ssh_session_binding") or payload.get("ssh_binding") or {}),
             )
+        if cmd == "auth-renew-session":
+            return svc.auth_renew_session(
+                token=str(payload.get("token") or payload.get("session_token") or ""),
+                scope=str(payload.get("scope") or "control"),
+                ttl_seconds=int(payload.get("ttl_seconds") or 900),
+                presented_ssh_binding=dict(payload.get("_ssh_session_binding") or payload.get("ssh_binding") or {}),
+            )
         if cmd == "auth-upsert-key":
             return svc.auth_upsert_key(
                 key_id=str(payload.get("key_id") or ""),

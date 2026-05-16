@@ -284,6 +284,7 @@ class AuthMixin:
             "auth-list-issued-tokens",
             "auth-audit-list",
             "auth-validate-session",
+            "auth-renew-session",
             "auth-upsert-key",
             "auth-revoke-key",
             "auth-issue-session",
@@ -840,6 +841,64 @@ class AuthMixin:
             "allowed_engines": list(session.get("allowed_engines") or []),
             "ssh_bound": bool(dict(session.get("ssh_binding") or {})),
             "ssh_binding": dict(session.get("ssh_binding") or {}),
+        }
+
+    def auth_renew_session(
+        self,
+        *,
+        token: str,
+        scope: str = "control",
+        ttl_seconds: int = 900,
+        presented_ssh_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        tok = str(token or "").strip()
+        if not tok:
+            raise ValueError("token is required")
+        scope_norm = str(scope or "control").strip().lower() or "control"
+        if scope_norm not in {"control", "config", "traffic"}:
+            raise ValueError("scope must be 'control', 'config', or 'traffic'")
+
+        control = self._read_control()
+        cfg = dict(control.get("control_config") or {})
+        if not bool(cfg.get("require_auth", False)):
+            raise PermissionError("require_auth_disabled_disallows_session_commands")
+        auth = dict(cfg.get("auth") or {})
+        self._prune_expired_sessions(auth)
+
+        session = self._validate_session(
+            control,
+            tok,
+            required_scope=scope_norm,
+            presented_ssh_binding=dict(presented_ssh_binding or {}),
+        )
+
+        sessions = dict(auth.get("sessions") or {})
+        current = dict(sessions.get(tok) or session or {})
+        if not current:
+            raise PermissionError("missing_or_invalid_session_token")
+        now = time.time()
+        ttl = max(60, min(int(ttl_seconds or 900), 24 * 3600))
+        expires_at = now + ttl
+        current["expires_at"] = expires_at
+        current["renewed_at"] = now
+        sessions[tok] = current
+        auth["sessions"] = sessions
+        cfg["auth"] = auth
+        control["control_config"] = cfg
+        self._write_control(control)
+        return {
+            "status": "ok",
+            "token_preview": self._token_preview(tok),
+            "key_id": str(current.get("key_id") or ""),
+            "role": str(current.get("role") or ""),
+            "auth_method": str(current.get("auth_method") or ""),
+            "scope": str(current.get("scope") or ""),
+            "expires_at": expires_at,
+            "ttl_seconds": ttl,
+            "ttl_remaining_seconds": ttl,
+            "renewed_at": now,
+            "ssh_bound": bool(dict(current.get("ssh_binding") or {})),
+            "ssh_binding": dict(current.get("ssh_binding") or {}),
         }
 
     def auth_list_issued_tokens(
