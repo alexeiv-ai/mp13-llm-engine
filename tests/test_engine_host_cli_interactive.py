@@ -119,6 +119,35 @@ def test_background_session_renewer_extends_token_while_menu_can_block(monkeypat
     assert ("auth-renew-session", {"token": "tok-1", "scope": "control", "ttl_seconds": 900}, "tok-1") in worker.invocations
 
 
+def test_background_session_renewer_pauses_quietly_when_daemon_stops(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class StoppedChannel(_FakeChannel):
+        def get_daemon_status(self) -> Dict[str, Any]:
+            return {"alive": False, "reachable": False}
+
+    _FakeChannel.instances.clear()
+    monkeypatch.setattr(interactive, "EngineHostControlChannel", StoppedChannel)
+    monkeypatch.setattr(interactive, "_SESSION_RENEW_CHECK_INTERVAL_SECONDS", 0.01)
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    interactive._set_interactive_session_token(args, "tok-1")
+
+    interactive._ensure_session_renewer(args)
+    try:
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            thread = getattr(args, "_interactive_session_renew_thread", None)
+            if isinstance(thread, threading.Thread) and not thread.is_alive():
+                break
+            time.sleep(0.01)
+    finally:
+        interactive._stop_session_renewer(args)
+
+    assert getattr(args, "_interactive_daemon_stopped_notice") is True
+    assert "automatic auth refresh is paused" not in capsys.readouterr().out
+
+
 def test_metrics_auth_error_does_not_print_daemon_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

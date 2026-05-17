@@ -155,7 +155,6 @@ def _set_interactive_session_token(args: argparse.Namespace, token: Optional[str
 
 def _background_session_renew_loop(args: argparse.Namespace, stop_event: threading.Event) -> None:
     channel = EngineHostControlChannel(_control_channel_settings(args))
-    last_stopped_notice = 0.0
     while not stop_event.wait(_SESSION_RENEW_CHECK_INTERVAL_SECONDS):
         token = str(getattr(args, "_interactive_session_token", "") or "").strip()
         if not token:
@@ -167,13 +166,8 @@ def _background_session_renew_loop(args: argparse.Namespace, stop_event: threadi
         except Exception:
             daemon_up = False
         if not daemon_up:
-            now = time.time()
             setattr(args, "_interactive_daemon_stopped_notice", True)
-            if now - last_stopped_notice >= 60:
-                last_stopped_notice = now
-                print()
-                print(_c("warn", "Daemon is stopped; automatic auth refresh is paused. Press Enter to refresh the main menu."))
-            continue
+            return
         try:
             validation = channel.invoke_control_command(
                 "auth-validate-session",
@@ -1447,6 +1441,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         daemon_up = bool(daemon_status.get("alive") or daemon_status.get("reachable"))
                     except Exception:
                         daemon_up = False
+                if session_token and daemon_up:
+                    _ensure_session_renewer(args)
                 session_token = _renew_session_token_if_needed(args, session_token, daemon_up=daemon_up)
                 status_c = _c("good", "Running") if daemon_up else _c("muted", "Stopped")
                 auth_status = daemon_status.get("auth_status") or {}
@@ -1574,8 +1570,11 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                             _start_daemon(args)
                         elif daemon_up:
                             _stop_daemon(args)
+                            _stop_session_renewer(args)
                         else:
                             _start_daemon(args)
+                            if session_token:
+                                _ensure_session_renewer(args)
                     elif choice == "r":
                         session_token = _local_recovery_menu(args, session_token)
                 except PermissionError as pe:
