@@ -198,6 +198,133 @@ class ToolboxEnvironmentManager:
             return env_python
         return fallback_python
 
+    def workflow_python_helper_environment_spec(
+        self,
+        *,
+        policy: Optional[Dict[str, Any]] = None,
+        environment_name: str = "workflow-python-helper",
+    ) -> ToolboxEnvironmentSpec:
+        policy_row = dict(policy or {})
+        env_name = str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper"
+        package_pins = {
+            str(key or "").strip(): str(value or "").strip()
+            for key, value in dict(policy_row.get("package_pins") or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        pinned_packages = [
+            f"{name}=={version}"
+            for name, version in sorted(package_pins.items())
+        ]
+        required_imports = self._unique_names(policy_row.get("import_allowlist") or [])
+        env_desc = self.normalize_environment_description(
+            {
+                "name": env_name,
+                "extra_packages": pinned_packages,
+                "allow_online_install": False,
+            },
+            name=env_name,
+        )
+        env_desc_hash = self.environment_description_hash(env_desc, name=env_name)
+        dependency_lock_hash = (
+            self._fingerprint_payload({"package_pins": package_pins})[:16]
+            if package_pins
+            else None
+        )
+        venv_lock_hash = dependency_lock_hash or self._fingerprint_payload(
+            {
+                "sandbox_kind": "workflow_python_helper",
+                "required_imports": required_imports,
+            }
+        )[:16]
+        venv_key = self._fingerprint_payload(
+            {
+                "toolbox_runtime_hash": "workflow-python-helper-v1",
+                "environment_name": env_name,
+                "environment_description_hash": env_desc_hash,
+                "required_imports": required_imports,
+                "dependency_lock_hash": dependency_lock_hash,
+                "venv_lock_hash": venv_lock_hash,
+            }
+        )[:16]
+        venv_root = (self.environments_root / venv_key).resolve()
+        return ToolboxEnvironmentSpec(
+            venv_key=venv_key,
+            venv_path=str(venv_root),
+            python_executable=str(self.python_executable_path(venv_root)),
+            environment_name=env_name,
+            environment_description_hash=env_desc_hash,
+            venv_lock_hash=venv_lock_hash,
+            toolbox_runtime_hash="workflow-python-helper-v1",
+            intrinsics_profile_id="workflow_python_helper",
+            required_imports=required_imports,
+            dependency_lock_hash=dependency_lock_hash,
+        )
+
+    def realize_workflow_python_helper_environment(
+        self,
+        *,
+        policy: Optional[Dict[str, Any]] = None,
+        package_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        package_source_digest: Optional[str] = None,
+        helper_source_sha256: Optional[str] = None,
+        helper_source_path: Optional[str] = None,
+        fallback_python_executable: Optional[str] = None,
+        environment_name: str = "workflow-python-helper",
+    ) -> Dict[str, Any]:
+        spec = self.workflow_python_helper_environment_spec(
+            policy=policy,
+            environment_name=environment_name,
+        )
+        policy_row = dict(policy or {})
+        package_pins = {
+            str(key or "").strip(): str(value or "").strip()
+            for key, value in dict(policy_row.get("package_pins") or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        pinned_packages = [
+            f"{name}=={version}"
+            for name, version in sorted(package_pins.items())
+        ]
+        env_desc = {
+            "name": spec.environment_name,
+            "extra_packages": pinned_packages,
+            "effective_extra_packages": pinned_packages,
+            "allow_online_install": False,
+            "effective_allow_online_install": False,
+            "lineage": [spec.environment_name],
+        }
+        metadata = self.realize_environment(
+            spec,
+            environment_description=env_desc,
+            required_packages=pinned_packages,
+            missing_packages=[],
+            toolbox_id=str(package_id or "").strip() or "workflow_python_helper",
+            sandbox_profile_id=str(workflow_id or "").strip() or "workflow_python_helper",
+            tool_keys=[str(helper_source_path or helper_source_sha256 or "").strip()],
+        )
+        runtime_python = self.runtime_python_executable(
+            spec,
+            fallback_python_executable=fallback_python_executable,
+        )
+        metadata["workflow_python_helper"] = {
+            "package_id": str(package_id or "").strip() or None,
+            "workflow_id": str(workflow_id or "").strip() or None,
+            "package_source_digest": str(package_source_digest or "").strip() or None,
+            "helper_source_sha256": str(helper_source_sha256 or "").strip() or None,
+            "helper_source_path": str(helper_source_path or "").strip() or None,
+            "environment_name": spec.environment_name,
+        }
+        metadata["runtime_python_executable"] = runtime_python
+        metadata["runtime_python_source"] = (
+            "fallback"
+            if str(runtime_python or "").strip() == str(fallback_python_executable or "").strip()
+            else "venv"
+        )
+        metadata_path = Path(spec.venv_path).expanduser().resolve() / "environment.json"
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
     @staticmethod
     def _unique_names(items: Sequence[Any]) -> List[str]:
         out: List[str] = []

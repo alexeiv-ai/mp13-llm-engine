@@ -1589,6 +1589,37 @@ def test_toolbox_environment_runtime_python_uses_venv_after_verified_install() -
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_toolbox_environment_manager_realizes_workflow_python_helper_environment() -> None:
+    root = _scratch_dir("env-workflow-python-helper-")
+    try:
+        manager = ToolboxEnvironmentManager(root)
+        metadata = manager.realize_workflow_python_helper_environment(
+            policy={
+                "sandbox_kind": "workflow_python_helper",
+                "import_allowlist": ["json"],
+                "package_pins": {},
+            },
+            package_id="pkg-demo",
+            workflow_id="config/demo",
+            package_source_digest="digest-demo",
+            helper_source_sha256="a" * 64,
+            helper_source_path="dynamic/helpers/demo.py",
+            fallback_python_executable="python-fallback",
+        )
+
+        env_path = Path(str(metadata.get("venv_path") or "")).expanduser().resolve()
+        assert (env_path / "pyvenv.cfg").exists()
+        assert metadata["toolbox_runtime_hash"] == "workflow-python-helper-v1"
+        assert metadata["intrinsics_profile_id"] == "workflow_python_helper"
+        assert metadata["required_imports"] == ["json"]
+        assert metadata["runtime_python_executable"] == "python-fallback"
+        assert metadata["runtime_python_source"] == "fallback"
+        assert metadata["workflow_python_helper"]["package_id"] == "pkg-demo"
+        assert metadata["workflow_python_helper"]["workflow_id"] == "config/demo"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_toolbox_environment_manager_resolves_environment_inheritance() -> None:
     resolved = ToolboxEnvironmentManager.resolve_environment_description(
         {

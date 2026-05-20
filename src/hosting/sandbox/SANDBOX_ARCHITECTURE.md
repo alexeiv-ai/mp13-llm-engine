@@ -206,6 +206,8 @@ Current location:
 
 1. `<hosting_root>/toolbox_venvs/<venv_key>`
 
+Workflow Python helpers use the same realized-environment lifecycle through the `workflow-python-helper-v1` runtime hash. They derive a reusable helper venv from the helper sandbox policy, realize metadata under `toolbox_venvs`, and use the backend Python fallback until install execution and receipt verification are both recorded as ok.
+
 Current identity inputs:
 
 1. toolbox runtime hash
