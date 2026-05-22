@@ -16,7 +16,7 @@ from .bundle_models import (
 )
 from .callbacks import HostedToolCallbackContext
 from .cancellation import is_canceled_tool_error, should_resubmit_canceled_tool_call
-from .environment import ToolboxEnvironmentManager
+from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
 from .execution import ToolboxExecutionHarness
 from .hosted_ref import HostedToolBoxRef, PendingHostedToolboxRef, SandboxedToolboxFacade
 from .manifest import load_toolbox_from_manifest
@@ -37,6 +37,7 @@ __all__ = [
     "ToolboxWorkerStartupSpec",
     "ToolboxEnvironmentSpec",
     "ToolboxEnvironmentManager",
+    "RuntimeEnvironmentManager",
     "StagedToolboxBundle",
     "ToolboxBundleStager",
     "ToolboxSandboxOrchestrator",

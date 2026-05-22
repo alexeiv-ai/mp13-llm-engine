@@ -6158,6 +6158,44 @@ def test_toolbox_gc_reconciles_stale_registrations_and_artifacts() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_toolbox_gc_preserves_referenced_runtime_envs_and_removes_stale_runtime_envs() -> None:
+    root = Path(".tmp_runtime_env_gc").resolve()
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        svc = EngineHostService(
+            engines_state_file=root / "managed_engines.json",
+            control_state_file=root / "access_control.json",
+        )
+        keep_env = (root / "runtime_envs" / "keep-runtime-env").resolve()
+        stale_env = (root / "runtime_envs" / "stale-runtime-env").resolve()
+        keep_env.mkdir(parents=True, exist_ok=True)
+        stale_env.mkdir(parents=True, exist_ok=True)
+
+        svc.register_spawned(
+            engine_id="workflow-helper-keep",
+            pid=1111,
+            command=["python", "-m", "hosting.workflow_js_helper_ipc"],
+            worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
+            worker_ipc_address=str(root / "helper.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-helper-keep",
+            executor_kind="workflow_js_helper",
+            environment={
+                "venv_key": "keep-runtime-env",
+                "venv_path": str(keep_env),
+                "environment_root_kind": "runtime_envs",
+                "environment_consumer_kind": "workflow_js_helper",
+            },
+        )
+
+        removed = svc._cleanup_unused_toolbox_environments({"version": 1, "toolboxes": {}})
+
+        assert "stale-runtime-env" in removed
+        assert keep_env.exists()
+        assert not stale_env.exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_toolbox_references_reports_referenced_and_stale_artifacts() -> None:
     root = Path(".tmp_toolbox_refs").resolve()
     shutil.rmtree(root, ignore_errors=True)

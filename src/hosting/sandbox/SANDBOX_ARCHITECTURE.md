@@ -11,6 +11,7 @@ Current worker families:
 
 1. toolbox executors, described in [TOOLBOX_WORKER.md](TOOLBOX_WORKER.md)
 2. generic/model workers, described in [GENERIC_WORKER.md](GENERIC_WORKER.md)
+3. workflow helper workers, described in [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md)
 
 The host remains the trust boundary and lifecycle authority. Workers are separate processes that expose RPC over hosting IPC; the host decides what process is launched, what sandbox policy is attached to the registration, and what brokered callbacks are allowed.
 
@@ -37,6 +38,7 @@ Primary implementation files:
 7. [worker_http.py](worker_http.py): transport-agnostic worker-side HTTP client
 8. [../service/sandbox_api.py](../service/sandbox_api.py): host service methods exposed to callback paths
 9. [../service/engines.py](../service/engines.py): spawn, registration, shutdown, and broker lookup integration
+10. [../service/workflow_helpers.py](../service/workflow_helpers.py): workflow helper spawn convenience API
 
 ## Shared API
 
@@ -75,6 +77,26 @@ The policy object is deliberately pragmatic: it records platform support status 
 4. `runtime` diagnostics
 
 On Windows with `policy.enabled=True`, the launcher calls `launch_restricted_worker(...)`. Otherwise it uses a normal subprocess. Normal Windows launches still attach a kill-on-close job object where possible.
+
+### Runtime Environments
+
+Host-managed Python runtime environments now have a shared model even though toolbox APIs still expose toolbox-oriented wrapper names.
+
+Current roots:
+
+1. `<hosting_root>/toolbox_venvs/<venv_key>` for existing toolbox executor environments
+2. `<hosting_root>/runtime_envs/<venv_key>` for new non-toolbox runtime environments
+
+Compatibility rule:
+
+1. existing `toolbox_venvs` entries remain readable
+2. toolbox executor environments continue to use `toolbox_venvs`
+3. new workflow helper environments use `runtime_envs`
+4. entries are not eagerly copied between roots
+
+Runtime environment metadata includes `environment_root_kind` and `environment_consumer_kind` so review, GC, and dependent projects do not need to infer semantics from directory names.
+
+Runtime Python selection uses a bootstrap/preverified interpreter only while a dependency-bearing environment is not verified. A no-package/no-op environment can activate its realized venv immediately. A dependency-bearing environment switches to its realized venv only after install execution and install receipt verification are both recorded as `ok`.
 
 ### Brokered Filesystem
 
@@ -148,4 +170,3 @@ The persisted engine registration is the host's lookup point for sandbox behavio
 4. Brokered filesystem is path-root based and does not replace OS ACLs.
 5. Brokered HTTP supports simple fetch semantics, not streaming or a general browser/network stack.
 6. Sandbox policy is attached to worker registrations; per-request narrowing is owned by higher-level toolbox scope/constraint APIs.
-

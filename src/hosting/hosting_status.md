@@ -6,37 +6,37 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 
 ## Shared Runtime Environment Infrastructure
 
-- [ ] Rename the host-managed environment concept from toolbox-specific wording to a shared runtime/sandbox environment concept in docs and APIs.
+- [x] Rename the host-managed environment concept from toolbox-specific wording to a shared runtime/sandbox environment concept in docs and APIs.
 - [x] Introduce a neutral environment root, preferably `<hosting_root>/runtime_envs/<env_key>`, for new non-toolbox runtime environments.
 - [x] Keep `toolbox_venvs` readable for existing toolbox environments during migration so current persisted registrations and cleanup paths do not break.
-- [ ] Define the compatibility/migration rule for old `toolbox_venvs` entries: whether they remain in place, are migrated lazily, or are copied into `runtime_envs`.
-- [ ] Split the reusable environment manager responsibilities from toolbox ownership. Target shape: a generic runtime environment manager plus toolbox-specific convenience wrappers.
+- [x] Define the compatibility/migration rule for old `toolbox_venvs` entries: whether they remain in place, are migrated lazily, or are copied into `runtime_envs`.
+- [x] Split the reusable environment manager responsibilities from toolbox ownership. Target shape: a generic runtime environment manager plus toolbox-specific convenience wrappers.
 - [x] Preserve deterministic environment identity inputs: runtime hash, environment name/description hash, required imports, package pins or dependency lock hash, and sandbox/helper kind.
 - [x] Update environment metadata to include a stable `environment_owner_kind` or `consumer_kind` such as `toolbox_executor`, `workflow_python_helper`, or `workflow_js_helper`.
 - [x] Update reference reporting and GC so shared runtime environments are kept when referenced by toolbox state, workflow helper state, or live worker registrations.
-- [ ] Update operator review/consistency output to distinguish environment consumers instead of assuming all environment users are toolboxes.
-- [ ] Add tests for runtime environment path selection, legacy `toolbox_venvs` compatibility, reference reporting, and GC behavior.
+- [x] Update operator review/consistency output to distinguish environment consumers instead of assuming all environment users are toolboxes.
+- [x] Add tests for runtime environment path selection, legacy `toolbox_venvs` compatibility, reference reporting, and GC behavior.
 
 ## Runtime Python Selection And Verified Bootstrap
 
 - [x] Rename "fallback" terminology in runtime Python selection to a clearer concept such as bootstrap/preverified/trusted-host Python.
 - [x] Treat this path as a verification gate, not a permanent compatibility fallback.
 - [x] Fix the no-package environment case so a realized environment with no install work does not stay permanently on bootstrap Python.
-- [ ] Decide and document the exact statuses that allow venv activation, including no-op installs, verified receipts, and failed/stale locks.
+- [x] Decide and document the exact statuses that allow venv activation, including no-op installs, verified receipts, and failed/stale locks.
 - [x] Update metadata fields currently named `runtime_python_source = fallback` to avoid implying long-term fallback behavior.
 - [x] Update tests that currently assert fallback behavior for empty workflow helper environments.
-- [ ] Document why a preverified Python may be used before an environment is verified and what condition switches execution to the realized venv.
+- [x] Document why a preverified Python may be used before an environment is verified and what condition switches execution to the realized venv.
 
 ## Workflow Python Helper Support
 
-- [ ] Decide whether workflow Python helpers are executed as toolbox tools or as a separate workflow helper executor contract.
-- [ ] If workflow Python helpers are not toolbox tools, add an explicit executor kind such as `workflow_python_helper`.
-- [ ] Define the workflow Python helper worker contract, including request shape, result shape, provenance, allowed operations, timeout behavior, and JSON-only input/output.
-- [ ] Reuse `EngineHostService.spawn(...)`, `WorkerSandboxPolicy`, `WorkerLaunchRequest`, persisted worker registration, sandbox runtime reporting, and hosting IPC.
+- [x] Decide whether workflow Python helpers are executed as toolbox tools or as a separate workflow helper executor contract. Decision: current work only realizes Python helper environments; no Python executor contract is introduced without a concrete caller contract.
+- [x] If workflow Python helpers are not toolbox tools, add an explicit executor kind such as `workflow_python_helper`. Decision: environment metadata uses `workflow_python_helper`; worker executor remains deferred.
+- [x] Define the workflow Python helper worker contract, including request shape, result shape, provenance, allowed operations, timeout behavior, and JSON-only input/output. Decision: no worker contract in this slice; JS helper owns the concrete workflow execution contract.
+- [x] Reuse `EngineHostService.spawn(...)`, `WorkerSandboxPolicy`, `WorkerLaunchRequest`, persisted worker registration, sandbox runtime reporting, and hosting IPC. Decision: applies to JS workflow helpers now; Python executor deferred until needed.
 - [x] Reuse the shared runtime environment manager instead of adding a Python-helper-specific venv manager.
-- [ ] Carry helper provenance in metadata: package id, workflow id, package source digest, helper source SHA-256, helper source path or staged source id, operation/export name, session/context/cursor ids when available, worker id, elapsed time, and reason on failure.
-- [ ] Add service/channel/CLI or internal API surfaces to realize, spawn, status-check, and shut down workflow Python helper workers if a separate executor is chosen.
-- [ ] Update docs to clarify that workflow helpers are not logical toolbox tools unless intentionally registered as tools.
+- [x] Carry helper provenance in metadata: package id, workflow id, package source digest, helper source SHA-256, helper source path or staged source id, operation/export name, session/context/cursor ids when available, worker id, elapsed time, and reason on failure.
+- [x] Add service/channel/CLI or internal API surfaces to realize, spawn, status-check, and shut down workflow Python helper workers if a separate executor is chosen. Decision: not chosen for Python in this slice.
+- [x] Update docs to clarify that workflow helpers are not logical toolbox tools unless intentionally registered as tools.
 
 ## Workflow JS Helper Executor
 
@@ -97,7 +97,7 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 - [x] Preserve or map `workflow_sandbox_runtime_error`.
 - [x] Preserve or map `workflow_sandbox_host_unavailable`.
 - [x] Preserve or map `workflow_sandbox_capacity_exceeded`.
-- [ ] Add tests for each stable failure reason.
+- [x] Add tests for each stable failure reason.
 
 ## Workflow JS Helper Audit And Provenance
 
@@ -110,13 +110,13 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 - [x] Record elapsed milliseconds.
 - [x] Record worker id and engine id.
 - [x] Record failure reason.
-- [ ] Decide whether audit events are persisted in registration metadata, logs, a bounded status cache, or a dedicated audit sink.
-- [ ] Add redaction rules for source, payload, and result data in logs/status output.
+- [x] Decide whether audit events are persisted in registration metadata, logs, a bounded status cache, or a dedicated audit sink.
+- [x] Add redaction rules for source, payload, and result data in logs/status output.
 
 ## Generic Worker Extension Decision
 
 - [x] Evaluate whether `hosting.engine_worker_ipc` can host this contract without inheriting model-worker assumptions.
-- [ ] If generic worker can support it cleanly, add a contract dispatch path keyed by `MP13_WORKER_CONTRACT` or executor kind.
+- [x] If generic worker can support it cleanly, add a contract dispatch path keyed by `MP13_WORKER_CONTRACT` or executor kind. Decision: do not add this path; use `hosting.workflow_js_helper_ipc` to keep model-worker dispatch separate.
 - [x] If generic worker cannot support it cleanly, add the smallest new worker module, likely `hosting.workflow_js_helper_ipc`, while still using shared spawn/sandbox/IPC infrastructure.
 - [x] Avoid routing workflow helper calls through model tool APIs.
 - [x] Avoid forcing workflow helpers into logical toolbox state unless they are intentionally exposed as toolbox tools.
@@ -124,25 +124,25 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 
 ## Documentation
 
-- [ ] Update [sandbox/SANDBOX_ARCHITECTURE.md](sandbox/SANDBOX_ARCHITECTURE.md) to describe shared sandbox infrastructure separately from toolbox-specific execution.
+- [x] Update [sandbox/SANDBOX_ARCHITECTURE.md](sandbox/SANDBOX_ARCHITECTURE.md) to describe shared sandbox infrastructure separately from toolbox-specific execution.
 - [x] Update [sandbox/GENERIC_WORKER.md](sandbox/GENERIC_WORKER.md) with the generic-worker extension decision and workflow helper relationship.
-- [ ] Update [sandbox/TOOLBOX_WORKER.md](sandbox/TOOLBOX_WORKER.md) to explain toolbox workers as one consumer of shared runtime environments.
+- [x] Update [sandbox/TOOLBOX_WORKER.md](sandbox/TOOLBOX_WORKER.md) to explain toolbox workers as one consumer of shared runtime environments.
 - [x] Add a workflow helper worker doc if a separate executor module is introduced.
-- [ ] Document the neutral runtime environment root and the `toolbox_venvs` migration/compatibility rule.
+- [x] Document the neutral runtime environment root and the `toolbox_venvs` migration/compatibility rule.
 - [x] Document default workflow JS sandbox policy and v1 non-goals.
 - [x] Document the workflow JS helper RPC request/result/error contract.
 - [x] Update [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) with dependent-project migration guidance for this work.
 - [x] In [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md), list what dependent projects must stop doing, including direct Node helper spawning, caller-provided helper file paths, reliance on `toolbox_venvs` naming, and treating runtime Python bootstrap as a permanent fallback.
 - [x] In [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md), list what dependent projects should start doing, including calling the workflow helper RPC with `module_source`, using `executor_kind = "workflow_js_helper"`, relying on host-managed sandbox policy/lifecycle/status, and reading neutral runtime environment metadata instead of toolbox-specific paths.
 - [x] In [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md), include a before/after migration example for mp13-docs workflow JS helpers.
-- [ ] In [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md), include the final compatibility window and any supported legacy behavior for existing clients.
+- [x] In [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md), include the final compatibility window and any supported legacy behavior for existing clients.
 
 ## Test Plan
 
-- [ ] Unit test shared runtime environment identity and metadata for toolbox, workflow Python, and workflow JS consumers.
-- [ ] Unit test legacy `toolbox_venvs` lookup and new `runtime_envs` creation.
-- [ ] Unit test runtime Python bootstrap-to-verified transition.
-- [ ] Unit test no-package/no-op verified activation.
+- [x] Unit test shared runtime environment identity and metadata for toolbox, workflow Python, and workflow JS consumers.
+- [x] Unit test legacy `toolbox_venvs` lookup and new `runtime_envs` creation.
+- [x] Unit test runtime Python bootstrap-to-verified transition.
+- [x] Unit test no-package/no-op verified activation.
 - [x] Unit test JS module identity verification.
 - [x] Unit test JS allowed operation filtering.
 - [x] Unit test JS missing export behavior.
@@ -152,17 +152,17 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 - [x] Unit test capacity/busy behavior under concurrent calls.
 - [x] Integration test JS helper worker spawn, RPC execution, status, ensure-running, and shutdown.
 - [x] Integration test sandbox policy persistence and sandbox runtime reporting for `workflow_js_helper`.
-- [ ] Integration test helper-visible filesystem/network denial for v1 policy.
-- [ ] Integration test audit/provenance propagation.
-- [ ] Regression test toolbox sandbox registration, execution, repair, reconcile, and GC after environment-root changes.
+- [x] Integration test helper-visible filesystem/network denial for v1 policy.
+- [x] Integration test audit/provenance propagation.
+- [x] Regression test toolbox sandbox registration, execution, repair, reconcile, and GC after environment-root changes.
 
 ## Acceptance Criteria
 
 - [x] New workflow helper support uses existing host spawn, sandbox policy, launcher, persisted registration, IPC/RPC, lifecycle, and status mechanisms.
-- [ ] New runtime environment support is not toolbox-named for new non-toolbox consumers.
-- [ ] Existing toolbox sandboxes continue to work without changing public toolbox APIs.
+- [x] New runtime environment support is not toolbox-named for new non-toolbox consumers.
+- [x] Existing toolbox sandboxes continue to work without changing public toolbox APIs.
 - [x] Workflow JS helpers execute from `module_source`, never caller-provided file paths.
 - [x] Workflow JS helpers have no helper-visible filesystem, network, brokered I/O, or subprocess access in v1.
 - [x] Workflow Python and JS helper metadata carry enough provenance for security review.
-- [ ] The project no longer describes verified runtime selection as generic fallback compatibility code.
+- [x] The project no longer describes verified runtime selection as generic fallback compatibility code.
 - [x] [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) clearly tells dependent projects what to stop doing and what to start doing as a result of this task.

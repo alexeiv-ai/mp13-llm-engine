@@ -61,6 +61,6 @@ host.proxy_rpc_call(
 
 ### Compatibility Window
 
-- [ ] Document any temporary compatibility behavior and the target removal point.
+- [x] No compatibility path is planned for direct Node helper spawning. Dependent projects should move to hosted workflow helper RPC before removing their old local execution path.
 - [x] Existing `toolbox_venvs` entries remain readable for toolbox environments. New workflow helper runtime environments use `runtime_envs`.
 - [x] Client-visible JS helper failures use stable `workflow_sandbox_*` reason values.

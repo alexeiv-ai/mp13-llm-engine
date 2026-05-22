@@ -17,6 +17,8 @@ V1 includes a JavaScript helper executor:
 
 The worker is not a logical toolbox and does not participate in toolbox tool routing.
 
+Python workflow helper support currently covers realized runtime environment metadata through `workflow_python_helper`. This slice does not define a separate Python worker execution contract; add one only when a concrete caller contract exists.
+
 ## Host Lifecycle
 
 Callers should use `EngineHostService.spawn_workflow_js_helper(...)` or spawn the same command through the existing host/channel spawn surfaces.
@@ -149,3 +151,5 @@ Stable failure reasons include:
 1. The worker uses a bounded serialized call lane by default.
 2. Memory limit reporting is best-effort and currently reports unavailable enforcement.
 3. V1 is for short helper calls only, not long-running jobs or general Node app hosting.
+4. Audit/provenance is returned in the per-call result. There is no persistent audit sink yet.
+5. Logs and status output should not include raw helper source, payload, or result data unless a future explicit audit sink adds redaction controls.

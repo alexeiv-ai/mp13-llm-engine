@@ -193,13 +193,23 @@ Sandbox policy remains the hard outer boundary. Scope constraints narrow a call 
 
 ## Environment And Rollout
 
-Toolbox environments are host-managed venv roots under:
+Toolbox environments are one consumer of the shared host-managed runtime environment model.
+
+Existing toolbox executor environments remain under:
 
 ```text
 <hosting_root>/toolbox_venvs/<venv_key>
 ```
 
-Environment identity is based on toolbox runtime hash, intrinsic dependency profile, required imports, environment description identity, and optional dependency-lock identity. Workers use the active project interpreter until install execution and receipt verification are both recorded as ok; then the realized venv Python can be used.
+New non-toolbox runtime environments use:
+
+```text
+<hosting_root>/runtime_envs/<venv_key>
+```
+
+Environment identity is based on runtime hash, consumer kind, intrinsic dependency profile where applicable, required imports, environment description identity, and optional dependency-lock identity. Metadata includes `environment_root_kind` and `environment_consumer_kind`.
+
+Workers use a bootstrap/preverified Python only while a dependency-bearing environment has not been verified. No-package/no-op environments can activate the realized venv immediately. Dependency-bearing environments switch to the realized venv after install execution and receipt verification are both recorded as ok.
 
 Rollout is intentionally simple:
 
@@ -225,4 +235,3 @@ Repair/reconcile rebuild from persisted logical toolbox state and serialize per 
 3. Rollout has no percentage cutover or soak window.
 4. Static sandbox policy is not mutated for per-request approvals; use scope constraints.
 5. Environment locking is usable but not a fully mature package-management platform.
-

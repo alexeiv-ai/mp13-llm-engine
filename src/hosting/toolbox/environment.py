@@ -1086,3 +1086,11 @@ class ToolboxEnvironmentManager:
         environment_description: Optional[Dict[str, Any]] = None,
     ) -> ToolboxEnvironmentSpec:
         return self.ensure_environment(self.environment_spec_for_bundle(staged, environment_description=environment_description))
+
+
+class RuntimeEnvironmentManager(ToolboxEnvironmentManager):
+    """Shared runtime environment manager.
+
+    `ToolboxEnvironmentManager` remains as the compatibility name for existing
+    toolbox callers. New non-toolbox consumers should prefer this neutral name.
+    """

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from types import SimpleNamespace
+import subprocess
 
 import hosting.workflow_js_helper_ipc as worker
 
@@ -112,6 +113,103 @@ def test_workflow_js_helper_maps_missing_export(monkeypatch) -> None:
     result = out["result"]
     assert result["ok"] is False
     assert result["reason"] == "workflow_sandbox_export_not_found"
+
+
+def test_workflow_js_helper_maps_timeout(monkeypatch) -> None:
+    source = "export function condition(input) { return true; }"
+
+    def fake_run(_command, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="node", timeout=1)
+
+    monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_timeout"
+
+
+def test_workflow_js_helper_maps_output_limit(monkeypatch) -> None:
+    source = "export function condition(input) { return 'too much'; }"
+
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=b'{"data":"abcdef"}', stderr=b"")
+
+    monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    out = asyncio.run(
+        worker._handle_rpc_call(
+            {
+                "method": "execute_workflow_js_helper",
+                "params": _request(source, limits={"timeout_ms": 5000, "output_limit_bytes": 4}),
+            }
+        )
+    )
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_output_limit_exceeded"
+
+
+def test_workflow_js_helper_maps_invalid_json_output(monkeypatch) -> None:
+    source = "export function condition(input) { return true; }"
+
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=b"not-json", stderr=b"")
+
+    monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_invalid_json_output"
+
+
+def test_workflow_js_helper_maps_runtime_error(monkeypatch) -> None:
+    source = "export function condition(input) { throw new Error('boom'); }"
+
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(returncode=1, stdout=b"", stderr=b"boom")
+
+    monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_runtime_error"
+
+
+def test_workflow_js_helper_maps_host_unavailable(monkeypatch) -> None:
+    source = "export function condition(input) { return true; }"
+
+    def fake_run(_command, **_kwargs):
+        raise FileNotFoundError("node missing")
+
+    monkeypatch.setattr(worker, "_node_version", lambda: None)
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_host_unavailable"
+
+
+def test_workflow_js_helper_maps_invalid_result_shape_for_non_json_payload() -> None:
+    source = "export function condition(input) { return true; }"
+    out = asyncio.run(
+        worker._handle_rpc_call(
+            {
+                "method": "execute_workflow_js_helper",
+                "params": _request(source, payload=object()),
+            }
+        )
+    )
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_invalid_result_shape"
 
 
 def test_workflow_js_helper_reports_capacity_exceeded() -> None:
