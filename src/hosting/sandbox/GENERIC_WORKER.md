@@ -9,6 +9,8 @@ Generic workers are hosted engine/model workers launched as separate processes a
 
 They share the sandbox launch and broker foundation, but they are not staged toolbox executors. They do not load toolbox manifests and do not have logical-toolbox routing.
 
+Workflow helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). The JS helper worker uses `worker_profile_class="generic"` and `executor_kind="workflow_js_helper"`, but it does not use the model-oriented `hosting.engine_worker_ipc` contract.
+
 ## Main Implementation
 
 Primary files:
@@ -89,6 +91,27 @@ Current limit environment variables:
 
 The CLI/channel exposes these through `proxy-rpc-open`, `proxy-rpc-recv`, `proxy-rpc-send`, and `proxy-rpc-close`.
 
+## Workflow Helper Relationship
+
+The workflow JS helper worker intentionally stays outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch.
+
+The shared pieces are:
+
+1. `EngineHostService.spawn(...)`
+2. persisted worker registration
+3. `WorkerSandboxPolicy`
+4. `WorkerLaunchRequest`
+5. sandbox runtime reporting
+6. hosting IPC/RPC
+7. lifecycle APIs such as status, ensure-running, and shutdown
+
+The specialized pieces are:
+
+1. worker module `hosting.workflow_js_helper_ipc`
+2. executor kind `workflow_js_helper`
+3. execution contract `hosting.workflow_helper.worker.v1`
+4. RPC method `execute_workflow_js_helper`
+
 ## HTTP Compatibility API
 
 `http_request` is a compatibility shim, not the preferred new integration API.
@@ -158,4 +181,3 @@ Stream cancellation is request-scoped from the protocol perspective: `stream_sen
 3. POSIX launch is currently a plain subprocess even when sandbox metadata is present.
 4. HTTP compatibility routes are intentionally narrow.
 5. Brokered I/O is available through host APIs but not automatically surfaced as rich injected execution context like toolbox tools get.
-

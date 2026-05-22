@@ -30,9 +30,10 @@ from .sandbox_api import SandboxApiMixin
 from .state import StateMixin
 from .toolbox_env import ToolboxEnvironmentMixin
 from .toolbox_runtime import ToolboxRuntimeMixin
+from .workflow_helpers import WorkflowHelperMixin
 
 
-class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxRuntimeMixin):
+class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxRuntimeMixin, WorkflowHelperMixin):
     """Engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
