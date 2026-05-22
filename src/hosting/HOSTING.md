@@ -8,6 +8,8 @@ The `hosting` module provides the control-plane and guarded traffic bridge for m
 
 - **[Hosting Access Design](HOSTING_ACCESS.md)**: If you are building a GUI, hosting consumer backend, or integration that consumes the hosting APIs, start with Section 11, `Hosting Consumer Integration Contract`.
 - **[Hosting Configuration Script](HOSTING_CONFIG_SCRIPT.md)**: Specification for the user-facing setup and reconfiguration script (`hosting_config`).
+- **[Sandbox Architecture](sandbox/SANDBOX_ARCHITECTURE.md)**: Shared sandbox policy, launch, and broker foundation for hosted workers.
+- **[Toolbox Worker](sandbox/TOOLBOX_WORKER.md)** and **[Generic Worker](sandbox/GENERIC_WORKER.md)**: Worker-specific sandbox and IPC contracts.
 
 ---
 
@@ -26,6 +28,8 @@ Hosting acts as a control-plane plus a guarded traffic bridge.
 
 ### Process Model
 Workers run as separate processes. The host does not expose worker private keys and does not require worker ports to be publicly forwarded. Worker traffic is proxied through hosting control/traffic commands and the worker IPC layer; the daemon control plane is reached through local IPC metadata discovered from the daemon PID file.
+
+Worker sandboxing is layered under this process model. The shared sandbox layer normalizes policy, launches workers, persists sandbox runtime metadata, and brokers filesystem/HTTP access where configured. Generic/model workers and sandboxed toolbox executors share that foundation but expose different worker contracts; see the sandbox docs linked above for the split.
 
 ### The Daemons
 The architecture relies on separate daemons to isolate concerns:
@@ -260,5 +264,6 @@ held by the client/channel before reusing or adopting it.
 
 - **IPC Transport Only**: Worker transport is local IPC only. There is no host-managed remote worker transport.
 - **HTTP Bridge**: `proxy-request` serves as a compatibility bridge for HTTP-like engine routes over IPC. New generic worker integrations should prefer `proxy-rpc-*` for sync/async RPC.
+- **Sandbox Boundary**: The implemented sandbox foundation is strongest through host-brokered filesystem/HTTP APIs and Windows restricted-token/low-integrity launch. POSIX workers currently launch as plain subprocesses; direct network policy is not an OS-level filter.
 - **Metrics Scope**: Metrics are per-process runtime and are not persisted across daemon restarts.
 - **Bootstrap Credentials**: Local-only shared-secret bootstrap requires `engine_host_key_id` + `engine_host_key_secret` or a pre-issued `engine_host_session_token`. SSH relay and remote-capable profiles require public-key challenge/transport setup instead of shared-secret session issuance.
