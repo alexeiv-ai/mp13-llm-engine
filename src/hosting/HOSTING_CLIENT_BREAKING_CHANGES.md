@@ -82,6 +82,13 @@ Authorization boundary:
 - `execute_workflow_js_helper` is reached through the normal traffic proxy path. A `model_user` session may execute it only when scoped to the registered workflow helper `engine_id`.
 - Generic worker proxy remains blocked for `model_user` and `model_user_with_model_control` unless the registered worker is the specialized `executor_kind = "workflow_js_helper"` lane.
 
+Toolbox sandbox authorization boundary:
+
+- `diagnostic_user` is observe-only for hosted toolbox state: describe, gate status, references, consistency, review snapshot, environment list, logs, metrics, and read/stat sandbox filesystem inspection.
+- `diagnostic_user` cannot execute, cancel, repair, reconcile, register/unregister toolboxes, mutate toolbox environments, run environment install phases, write sandbox files, create sandbox directories, or broker sandbox HTTP.
+- `worker_user` and above can manage hosted toolbox definitions, registrations, repairs/reconciliation, and toolbox environment resolve/apply/realize/install flows.
+- Normal end users should use approved hosted tools through the backend service. They do not need direct hosting toolbox mutation authority.
+
 ### Compatibility Window
 
 - [x] No compatibility path is planned for direct Node helper spawning. Dependent projects should move to hosted workflow helper RPC before removing their old local execution path.

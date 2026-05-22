@@ -65,6 +65,109 @@ def test_diagnostic_user_denied_spawn_with_insufficient_role() -> None:
             svc.authorize_command("spawn", {"session_token": token})
 
 
+def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="diag",
+            key_secret="diag-secret",
+            role="diagnostic_user",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="diag",
+            key_secret="diag-secret",
+            scope="control",
+        )
+        token = str(session.get("token") or "")
+        assert token
+
+        for cmd in [
+            "toolbox-describe",
+            "toolbox-gate",
+            "toolbox-references",
+            "toolbox-consistency",
+            "toolbox-review-snapshot",
+            "toolbox-environment-list",
+            "sandbox-fs-list",
+            "sandbox-fs-read-text",
+            "sandbox-fs-stat",
+        ]:
+            svc.authorize_command(cmd, {"session_token": token})
+
+        for cmd in [
+            "toolbox-execute",
+            "toolbox-cancel",
+            "toolbox-gc",
+            "toolbox-repair",
+            "toolbox-reconcile",
+            "toolbox-register-auto",
+            "toolbox-unregister-auto",
+            "toolbox-register-intrinsics",
+            "toolbox-unregister-intrinsics",
+            "toolbox-register-manual",
+            "toolbox-unregister-manual",
+            "toolbox-environment-upsert",
+            "toolbox-environment-clone",
+            "toolbox-environment-resolve",
+            "toolbox-environment-apply",
+            "toolbox-environment-realize",
+            "toolbox-environment-sync",
+            "toolbox-environment-prepare-install",
+            "toolbox-environment-lock-install",
+            "toolbox-environment-resolve-install-lock",
+            "toolbox-environment-verify-install-lock",
+            "toolbox-environment-verify-install-receipt",
+            "toolbox-environment-execute-install",
+            "sandbox-fs-write-text",
+            "sandbox-fs-mkdir",
+            "sandbox-http-fetch",
+        ]:
+            with pytest.raises(PermissionError, match="insufficient_role"):
+                svc.authorize_command(cmd, {"session_token": token})
+
+
+def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="worker",
+            key_secret="worker-secret",
+            role="worker_user",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="worker",
+            key_secret="worker-secret",
+            scope="control",
+        )
+        token = str(session.get("token") or "")
+        assert token
+
+        for cmd in [
+            "toolbox-register-auto",
+            "toolbox-register-manual",
+            "toolbox-repair",
+            "toolbox-reconcile",
+            "toolbox-environment-upsert",
+            "toolbox-environment-resolve",
+            "toolbox-environment-apply",
+            "toolbox-environment-realize",
+            "toolbox-environment-prepare-install",
+            "toolbox-environment-lock-install",
+            "toolbox-environment-execute-install",
+        ]:
+            svc.authorize_command(cmd, {"session_token": token})
+
+
 def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_helper_spawn() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
