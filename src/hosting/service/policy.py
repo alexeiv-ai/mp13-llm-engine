@@ -55,6 +55,7 @@ class PolicyMixin:
         if c in {
             "discover-running",
             "spawn",
+            "spawn-workflow-js-helper",
             "get-registration",
             "shutdown",
             "ensure-running",

@@ -59,6 +59,19 @@ host.proxy_rpc_call(
 )
 ```
 
+Channel clients can use the public wrapper instead of private `_invoke(...)`:
+
+```python
+channel.spawn_workflow_js_helper(engine_id="workflow-js-helper")
+channel.proxy_rpc_call(
+    engine_id="workflow-js-helper",
+    method="execute_workflow_js_helper",
+    params={...},
+)
+```
+
+The daemon and CLI spawn paths preserve `worker_profile_class`, so clients do not need to compensate for generic-worker metadata loss.
+
 ### Compatibility Window
 
 - [x] No compatibility path is planned for direct Node helper spawning. Dependent projects should move to hosted workflow helper RPC before removing their old local execution path.

@@ -221,6 +221,7 @@ class AuthMixin:
         all_non_bootstrap = {
             "discover-running",
             "spawn",
+            "spawn-workflow-js-helper",
             "get-registration",
             "shutdown",
             "ensure-running",
@@ -319,6 +320,7 @@ class AuthMixin:
             return {
                 "discover-running",
                 "spawn",
+                "spawn-workflow-js-helper",
                 "get-registration",
                 "shutdown",
                 "ensure-running",

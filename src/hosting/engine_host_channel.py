@@ -1429,7 +1429,15 @@ class EngineHostControlChannel:
         res = self._invoke("get-registration", {"engine_id": str(engine_id)})
         return dict(res or {}) if isinstance(res, dict) else None
 
-    def spawn_process(self, *, engine_id: str, command: List[str], cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def spawn_process(
+        self,
+        *,
+        engine_id: str,
+        command: List[str],
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+        worker_profile_class: Optional[str] = None,
+    ) -> Dict[str, Any]:
         res = self._invoke(
             "spawn",
             {
@@ -1437,6 +1445,26 @@ class EngineHostControlChannel:
                 "command": [str(x) for x in list(command or [])],
                 "cwd": str(cwd) if cwd else None,
                 "env": dict(env or {}),
+                "worker_profile_class": str(worker_profile_class or "").strip() or None,
+            },
+        )
+        return dict(res or {})
+
+    def spawn_workflow_js_helper(
+        self,
+        *,
+        engine_id: str = "workflow-js-helper",
+        node_executable: Optional[str] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "spawn-workflow-js-helper",
+            {
+                "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
+                "node_executable": str(node_executable or "").strip() or None,
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
             },
         )
         return dict(res or {})

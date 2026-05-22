@@ -763,6 +763,7 @@ def _build_parser() -> argparse.ArgumentParser:
     for name in [
         "discover-running",
         "spawn",
+        "spawn-workflow-js-helper",
         "get-registration",
         "shutdown",
         "ensure-running",
@@ -1068,12 +1069,23 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     command=list(payload.get("command") or []),
                     cwd=payload.get("cwd"),
                     env=dict(payload.get("env") or {}),
+                    worker_profile_class=payload.get("worker_profile_class"),
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}),
                     executor_kind=payload.get("executor_kind"),
                     bundle=dict(payload.get("bundle") or {}),
                     environment=dict(payload.get("environment") or {}),
                     tool_access=dict(payload.get("tool_access") or {}),
                     capabilities=dict(payload.get("capabilities") or {}),
+                )
+            )
+            return 0
+        if cmd == "spawn-workflow-js-helper":
+            _print_ok(
+                svc.spawn_workflow_js_helper(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
+                    node_executable=payload.get("node_executable"),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
                 )
             )
             return 0

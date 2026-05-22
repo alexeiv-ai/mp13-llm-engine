@@ -6,6 +6,7 @@ import shutil
 
 import pytest
 from hosting.service.host_service import EngineHostService
+from hosting.daemon.local_ipc import EngineHostDaemon
 
 
 def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
@@ -45,6 +46,64 @@ def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monk
         "subprocess": False,
     }
     assert seen["capabilities"]["workflow_js_helper"] is True
+
+
+def test_daemon_spawn_preserves_worker_profile_class() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def spawn(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return {"status": "ok", "worker_profile_class": kwargs.get("worker_profile_class")}
+
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+
+    out = daemon._call_service(
+        "spawn",
+        {
+            "engine_id": "worker-demo",
+            "command": ["python", "-m", "hosting.engine_worker_ipc"],
+            "worker_profile_class": "generic",
+        },
+    )
+
+    assert out["worker_profile_class"] == "generic"
+    assert fake.kwargs["worker_profile_class"] == "generic"
+
+
+def test_daemon_dispatches_spawn_workflow_js_helper() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def spawn_workflow_js_helper(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return {"status": "ok", "executor_kind": "workflow_js_helper"}
+
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+
+    out = daemon._call_service(
+        "spawn-workflow-js-helper",
+        {
+            "engine_id": "wf-js",
+            "node_executable": "node-demo",
+            "worker_profile_class": "generic",
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        },
+    )
+
+    assert out["executor_kind"] == "workflow_js_helper"
+    assert fake.kwargs == {
+        "engine_id": "wf-js",
+        "node_executable": "node-demo",
+        "worker_profile_class": "generic",
+        "sandbox_policy": {"sandbox": {"enabled": True}},
+    }
 
 
 def test_workflow_js_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:

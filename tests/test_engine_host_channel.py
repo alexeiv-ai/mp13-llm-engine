@@ -920,6 +920,32 @@ def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
     ]
 
 
+def test_workflow_js_helper_channel_method_forwards_expected_payload() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.spawn_workflow_js_helper(
+        engine_id="wf-js",
+        node_executable="node-demo",
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
+    )
+
+    assert fake.calls == [
+        (
+            "spawn-workflow-js-helper",
+            {
+                "engine_id": "wf-js",
+                "node_executable": "node-demo",
+                "sandbox_policy": {"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
+                "worker_profile_class": "generic",
+                "session_token": "tok-123",
+            },
+        )
+    ]
+
+
 def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     custom_pid_file = Path("X:/tmp/custom_host.pid")
     captured: Dict[str, Any] = {}

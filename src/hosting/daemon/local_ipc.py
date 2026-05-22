@@ -438,7 +438,7 @@ class EngineHostDaemon:
     @staticmethod
     def _operation_target_engine_id(command: str, payload: Dict[str, Any]) -> Optional[str]:
         cmd = str(command or "").strip()
-        if cmd not in {"connect-from-config", "spawn", "unload-model", "shutdown", "remove-registration"}:
+        if cmd not in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "unload-model", "shutdown", "remove-registration"}:
             return None
         engine_id = str((payload or {}).get("engine_id") or "").strip()
         return engine_id or None
@@ -1300,7 +1300,7 @@ class EngineHostDaemon:
     def _operation_cancel_teardown(self, op: Dict[str, Any]) -> Dict[str, Any]:
         engine_id = str((op or {}).get("target_engine_id") or "").strip()
         command = str((op or {}).get("command") or "").strip()
-        if command not in {"connect-from-config", "spawn"}:
+        if command not in {"connect-from-config", "spawn", "spawn-workflow-js-helper"}:
             return {"attempted": False, "status": "not_applicable", "engine_id": engine_id or None}
         if not engine_id:
             return {"attempted": False, "status": "target_engine_id_unknown", "engine_id": None}
@@ -1375,7 +1375,7 @@ class EngineHostDaemon:
             task = self._operation_tasks_by_id.get(op_id)
         command = str(op.get("command") or "").strip()
         active_task = bool(task is not None and not task.done())
-        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn"})
+        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn", "spawn-workflow-js-helper"})
         task_cancel_requested = bool(active_task and not wait_for_service_result)
         if task_cancel_requested:
             task.cancel()
@@ -2014,12 +2014,20 @@ class EngineHostDaemon:
                 command=list(payload.get("command") or []),
                 cwd=payload.get("cwd"),
                 env=dict(payload.get("env") or {}),
+                worker_profile_class=payload.get("worker_profile_class"),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}),
                 executor_kind=payload.get("executor_kind"),
                 bundle=dict(payload.get("bundle") or {}),
                 environment=dict(payload.get("environment") or {}),
                 tool_access=dict(payload.get("tool_access") or {}),
                 capabilities=dict(payload.get("capabilities") or {}),
+            )
+        if cmd == "spawn-workflow-js-helper":
+            return svc.spawn_workflow_js_helper(
+                engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
+                node_executable=payload.get("node_executable"),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
             )
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
