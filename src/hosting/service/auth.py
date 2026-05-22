@@ -386,7 +386,7 @@ class AuthMixin:
         if r == ROLE_WORKER_USER:
             return {
                 "discover-running",
-                "spawn",
+                "spawn-workflow-js-helper",
                 "get-registration",
                 "shutdown",
                 "ensure-running",

@@ -82,8 +82,13 @@ class ConfigMixin:
         if not isinstance(reg, dict):
             return
         profile = self._normalize_worker_profile_class(str(reg.get("worker_profile_class") or ""))
+        executor_kind = str(reg.get("executor_kind") or "").strip().lower()
         r = str(role or "").strip().lower()
-        if profile == "generic" and r in {ROLE_MODEL_USER, ROLE_MODEL_USER_WITH_MODEL_CONTROL}:
+        if (
+            profile == "generic"
+            and executor_kind != "workflow_js_helper"
+            and r in {ROLE_MODEL_USER, ROLE_MODEL_USER_WITH_MODEL_CONTROL}
+        ):
             raise PermissionError("insufficient_role")
 
     @staticmethod

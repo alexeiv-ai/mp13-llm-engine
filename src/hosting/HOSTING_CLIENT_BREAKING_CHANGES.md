@@ -17,6 +17,7 @@ When the workflow helper sandbox work is complete, this section must capture the
 - [x] Stop depending on `toolbox_venvs` as the semantic location for non-toolbox runtime environments.
 - [x] Stop treating runtime Python bootstrap/preverified execution as a permanent fallback path.
 - [x] Stop routing workflow helper execution through logical toolbox state unless the helper is intentionally exposed as a toolbox tool.
+- [x] Stop using raw hosting `spawn` for workflow/helper runtimes unless the caller has config-editor/admin authority for arbitrary process launch.
 
 ### Start Doing
 
@@ -28,6 +29,8 @@ When the workflow helper sandbox work is complete, this section must capture the
 - [x] Rely on `WorkerSandboxPolicy`, persisted registration, sandbox runtime, lifecycle/status/shutdown, and ensure-running semantics from hosting.
 - [x] Read neutral runtime environment metadata instead of inferring behavior from toolbox-specific directory names.
 - [x] Preserve package/workflow/session/context provenance in helper requests.
+- [x] Use `spawn_workflow_js_helper(...)` for the narrow JS-helper worker lane; `worker_user` may introduce this helper, while raw process spawn is restricted to `config_editor` and `admin`.
+- [x] Execute approved workflow helper calls through `proxy_rpc_call(..., method="execute_workflow_js_helper", ...)` with a traffic-scoped session for the helper `engine_id`.
 
 ### Before And After Example
 
@@ -71,6 +74,13 @@ channel.proxy_rpc_call(
 ```
 
 The daemon and CLI spawn paths preserve `worker_profile_class`, so clients do not need to compensate for generic-worker metadata loss.
+
+Authorization boundary:
+
+- Raw `spawn` is for arbitrary process launch and requires `config_editor` or `admin`.
+- `spawn_workflow_js_helper(...)` is the constrained JS-helper introduction path and is available to `worker_user`, `config_editor`, and `admin`.
+- `execute_workflow_js_helper` is reached through the normal traffic proxy path. A `model_user` session may execute it only when scoped to the registered workflow helper `engine_id`.
+- Generic worker proxy remains blocked for `model_user` and `model_user_with_model_control` unless the registered worker is the specialized `executor_kind = "workflow_js_helper"` lane.
 
 ### Compatibility Window
 

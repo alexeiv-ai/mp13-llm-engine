@@ -278,7 +278,6 @@ class PolicyMixin:
                 can_use_generic_worker = role in {
                     ROLE_ADMIN,
                     ROLE_CONFIG_EDITOR,
-                    ROLE_WORKER_USER,
                 }
                 if worker_class == "generic" and not can_use_generic_worker:
                     self._metrics_auth_denied("insufficient_role")

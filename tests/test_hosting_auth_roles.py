@@ -65,6 +65,55 @@ def test_diagnostic_user_denied_spawn_with_insufficient_role() -> None:
             svc.authorize_command("spawn", {"session_token": token})
 
 
+def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_helper_spawn() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="worker",
+            key_secret="worker-secret",
+            role="worker_user",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="worker",
+            key_secret="worker-secret",
+            scope="control",
+        )
+        token = str(session.get("token") or "")
+        assert token
+        with pytest.raises(PermissionError, match="insufficient_role"):
+            svc.authorize_command("spawn", {"session_token": token})
+        svc.authorize_command("spawn-workflow-js-helper", {"session_token": token})
+
+
+def test_config_editor_allowed_raw_spawn() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="editor",
+            key_secret="editor-secret",
+            role="config_editor",
+            auth_method="shared_secret",
+            allowed_engines=["*"],
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="editor",
+            key_secret="editor-secret",
+            scope="control",
+        )
+        token = str(session.get("token") or "")
+        assert token
+        svc.authorize_command("spawn", {"session_token": token})
+
+
 def test_require_auth_false_rejected_for_non_local_profile() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
@@ -528,7 +577,7 @@ def test_model_user_cannot_connect_generic_worker_profile() -> None:
             svc._merge_default_and_selected_config = original_merge  # type: ignore[method-assign]  # noqa: SLF001
 
 
-def test_worker_user_can_connect_generic_worker_profile() -> None:
+def test_worker_user_cannot_connect_generic_worker_profile() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
         original_merge = svc._merge_default_and_selected_config  # noqa: SLF001
@@ -551,6 +600,45 @@ def test_worker_user_can_connect_generic_worker_profile() -> None:
             key_secret="worker-secret",
             scope="traffic",
             engine_ids=["*"],
+        )
+        token = str(session.get("token") or "")
+        assert token
+        try:
+            with pytest.raises(PermissionError, match="insufficient_role"):
+                svc.authorize_command(
+                    "connect-from-config",
+                    {
+                        "session_token": token,
+                        "config_path": "generic_worker",
+                    },
+                )
+        finally:
+            svc._merge_default_and_selected_config = original_merge  # type: ignore[method-assign]  # noqa: SLF001
+
+
+def test_config_editor_can_connect_generic_worker_profile() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        original_merge = svc._merge_default_and_selected_config  # noqa: SLF001
+        svc._merge_default_and_selected_config = lambda _config_path: {  # type: ignore[method-assign]  # noqa: SLF001
+            "worker_kind": "generic",
+            "worker_command": ["python", "-c", "print('generic')"],
+        }
+        svc.auth_upsert_key(
+            key_id="editor",
+            key_secret="editor-secret",
+            role="config_editor",
+            auth_method="shared_secret",
+            allowed_engines=["*"],
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = svc.auth_issue_session(
+            key_id="editor",
+            key_secret="editor-secret",
+            scope="traffic",
         )
         token = str(session.get("token") or "")
         assert token
@@ -596,6 +684,38 @@ def test_model_user_denied_proxy_to_generic_registered_engine() -> None:
                 "proxy-request",
                 {"session_token": token, "engine_id": "generic1"},
             )
+
+
+def test_model_user_allowed_proxy_to_workflow_js_helper_engine() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.register_spawned(
+            engine_id="workflow-js-helper",
+            pid=12345,
+            command=["python", "-m", "hosting.workflow_js_helper_ipc"],
+            worker_profile_class="generic",
+            executor_kind="workflow_js_helper",
+        )
+        svc.auth_upsert_key(
+            key_id="model",
+            key_secret="model-secret",
+            role="model_user",
+            auth_method="shared_secret",
+            allowed_engines=["workflow-js-helper"],
+        )
+        svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
+        session = svc.auth_issue_session(
+            key_id="model",
+            key_secret="model-secret",
+            scope="traffic",
+            engine_ids=["workflow-js-helper"],
+        )
+        token = str(session.get("token") or "")
+        assert token
+        svc.authorize_command(
+            "proxy-rpc-call",
+            {"session_token": token, "engine_id": "workflow-js-helper"},
+        )
 
 
 def test_worker_user_allowed_proxy_to_generic_registered_engine() -> None:
