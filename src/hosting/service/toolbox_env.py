@@ -1091,7 +1091,10 @@ class ToolboxEnvironmentMixin:
         toolboxes = dict(payload.get("toolboxes") or {})
         referenced_keys: set[str] = set()
         referenced_paths: set[str] = set()
-        env_root = (self.hosting_root / "toolbox_venvs").resolve()
+        env_roots = [
+            (self.hosting_root / "toolbox_venvs").resolve(),
+            (self.hosting_root / "runtime_envs").resolve(),
+        ]
         for toolbox_row in toolboxes.values():
             profiles = dict(dict(toolbox_row or {}).get("profiles") or {})
             for profile_row in profiles.values():
@@ -1106,25 +1109,45 @@ class ToolboxEnvironmentMixin:
                     resolved = Path(raw_path).expanduser().resolve()
                 except Exception:
                     continue
+                for env_root in env_roots:
+                    try:
+                        if resolved == env_root or env_root in resolved.parents:
+                            referenced_paths.add(str(resolved))
+                    except Exception:
+                        continue
+        for reg in self._read_engines():
+            environment = dict(dict(reg or {}).get("environment") or {})
+            venv_key = str(environment.get("venv_key") or "").strip()
+            if venv_key:
+                referenced_keys.add(venv_key)
+            raw_path = str(environment.get("venv_path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                resolved = Path(raw_path).expanduser().resolve()
+            except Exception:
+                continue
+            for env_root in env_roots:
                 try:
                     if resolved == env_root or env_root in resolved.parents:
                         referenced_paths.add(str(resolved))
                 except Exception:
                     continue
         removed: List[str] = []
-        if not env_root.exists():
-            return removed
-        for child in env_root.iterdir():
-            if not child.is_dir():
+        for env_root in env_roots:
+            if not env_root.exists():
                 continue
-            try:
-                resolved_child = str(child.expanduser().resolve())
-            except Exception:
-                resolved_child = ""
-            if child.name in referenced_keys or (resolved_child and resolved_child in referenced_paths):
-                continue
-            shutil.rmtree(child, ignore_errors=True)
-            removed.append(child.name)
+            for child in env_root.iterdir():
+                if not child.is_dir():
+                    continue
+                try:
+                    resolved_child = str(child.expanduser().resolve())
+                except Exception:
+                    resolved_child = ""
+                if child.name in referenced_keys or (resolved_child and resolved_child in referenced_paths):
+                    continue
+                shutil.rmtree(child, ignore_errors=True)
+                removed.append(child.name)
         return removed
 
     def _toolbox_reference_report(
@@ -1141,7 +1164,10 @@ class ToolboxEnvironmentMixin:
         referenced_env_roots: set[str] = set()
         referenced_env_key_reasons: Dict[str, List[Dict[str, Any]]] = {}
         referenced_env_root_reasons: Dict[str, List[Dict[str, Any]]] = {}
-        env_root = (self.hosting_root / "toolbox_venvs").resolve()
+        env_roots = [
+            (self.hosting_root / "toolbox_venvs").resolve(),
+            (self.hosting_root / "runtime_envs").resolve(),
+        ]
         profiles_by_toolbox: Dict[str, Any] = {}
         for toolbox_id, raw_toolbox in toolboxes.items():
             toolbox_row = dict(raw_toolbox or {})
@@ -1167,8 +1193,10 @@ class ToolboxEnvironmentMixin:
                     except Exception:
                         resolved_env_path = None
                     if resolved_env_path is not None:
-                        try:
-                            if resolved_env_path == env_root or env_root in resolved_env_path.parents:
+                        for env_root in env_roots:
+                            try:
+                                if not (resolved_env_path == env_root or env_root in resolved_env_path.parents):
+                                    continue
                                 env_root_value = str(resolved_env_path)
                                 referenced_env_roots.add(env_root_value)
                                 referenced_env_root_reasons.setdefault(env_root_value, []).append(
@@ -1179,8 +1207,8 @@ class ToolboxEnvironmentMixin:
                                         "venv_key": venv_key or None,
                                     }
                                 )
-                        except Exception:
-                            pass
+                            except Exception:
+                                pass
                 out_profiles[str(profile_id)] = {
                     "engine_id": str(profile_row.get("engine_id") or "").strip() or None,
                     "bundle_revision": str(profile_row.get("bundle_revision") or "").strip() or None,
@@ -1250,7 +1278,9 @@ class ToolboxEnvironmentMixin:
                 ):
                     stale_bundle_roots.append(child.name)
         stale_environment_keys: List[str] = []
-        if env_root.exists():
+        for env_root in env_roots:
+            if not env_root.exists():
+                continue
             for child in env_root.iterdir():
                 if not child.is_dir():
                     continue

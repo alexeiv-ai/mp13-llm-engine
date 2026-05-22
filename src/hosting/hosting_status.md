@@ -7,24 +7,24 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 ## Shared Runtime Environment Infrastructure
 
 - [ ] Rename the host-managed environment concept from toolbox-specific wording to a shared runtime/sandbox environment concept in docs and APIs.
-- [ ] Introduce a neutral environment root, preferably `<hosting_root>/runtime_envs/<env_key>`, for new non-toolbox runtime environments.
-- [ ] Keep `toolbox_venvs` readable for existing toolbox environments during migration so current persisted registrations and cleanup paths do not break.
+- [x] Introduce a neutral environment root, preferably `<hosting_root>/runtime_envs/<env_key>`, for new non-toolbox runtime environments.
+- [x] Keep `toolbox_venvs` readable for existing toolbox environments during migration so current persisted registrations and cleanup paths do not break.
 - [ ] Define the compatibility/migration rule for old `toolbox_venvs` entries: whether they remain in place, are migrated lazily, or are copied into `runtime_envs`.
 - [ ] Split the reusable environment manager responsibilities from toolbox ownership. Target shape: a generic runtime environment manager plus toolbox-specific convenience wrappers.
-- [ ] Preserve deterministic environment identity inputs: runtime hash, environment name/description hash, required imports, package pins or dependency lock hash, and sandbox/helper kind.
-- [ ] Update environment metadata to include a stable `environment_owner_kind` or `consumer_kind` such as `toolbox_executor`, `workflow_python_helper`, or `workflow_js_helper`.
-- [ ] Update reference reporting and GC so shared runtime environments are kept when referenced by toolbox state, workflow helper state, or live worker registrations.
+- [x] Preserve deterministic environment identity inputs: runtime hash, environment name/description hash, required imports, package pins or dependency lock hash, and sandbox/helper kind.
+- [x] Update environment metadata to include a stable `environment_owner_kind` or `consumer_kind` such as `toolbox_executor`, `workflow_python_helper`, or `workflow_js_helper`.
+- [x] Update reference reporting and GC so shared runtime environments are kept when referenced by toolbox state, workflow helper state, or live worker registrations.
 - [ ] Update operator review/consistency output to distinguish environment consumers instead of assuming all environment users are toolboxes.
 - [ ] Add tests for runtime environment path selection, legacy `toolbox_venvs` compatibility, reference reporting, and GC behavior.
 
 ## Runtime Python Selection And Verified Bootstrap
 
-- [ ] Rename "fallback" terminology in runtime Python selection to a clearer concept such as bootstrap/preverified/trusted-host Python.
-- [ ] Treat this path as a verification gate, not a permanent compatibility fallback.
-- [ ] Fix the no-package environment case so a realized environment with no install work does not stay permanently on bootstrap Python.
+- [x] Rename "fallback" terminology in runtime Python selection to a clearer concept such as bootstrap/preverified/trusted-host Python.
+- [x] Treat this path as a verification gate, not a permanent compatibility fallback.
+- [x] Fix the no-package environment case so a realized environment with no install work does not stay permanently on bootstrap Python.
 - [ ] Decide and document the exact statuses that allow venv activation, including no-op installs, verified receipts, and failed/stale locks.
-- [ ] Update metadata fields currently named `runtime_python_source = fallback` to avoid implying long-term fallback behavior.
-- [ ] Update tests that currently assert fallback behavior for empty workflow helper environments.
+- [x] Update metadata fields currently named `runtime_python_source = fallback` to avoid implying long-term fallback behavior.
+- [x] Update tests that currently assert fallback behavior for empty workflow helper environments.
 - [ ] Document why a preverified Python may be used before an environment is verified and what condition switches execution to the realized venv.
 
 ## Workflow Python Helper Support
@@ -33,7 +33,7 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 - [ ] If workflow Python helpers are not toolbox tools, add an explicit executor kind such as `workflow_python_helper`.
 - [ ] Define the workflow Python helper worker contract, including request shape, result shape, provenance, allowed operations, timeout behavior, and JSON-only input/output.
 - [ ] Reuse `EngineHostService.spawn(...)`, `WorkerSandboxPolicy`, `WorkerLaunchRequest`, persisted worker registration, sandbox runtime reporting, and hosting IPC.
-- [ ] Reuse the shared runtime environment manager instead of adding a Python-helper-specific venv manager.
+- [x] Reuse the shared runtime environment manager instead of adding a Python-helper-specific venv manager.
 - [ ] Carry helper provenance in metadata: package id, workflow id, package source digest, helper source SHA-256, helper source path or staged source id, operation/export name, session/context/cursor ids when available, worker id, elapsed time, and reason on failure.
 - [ ] Add service/channel/CLI or internal API surfaces to realize, spawn, status-check, and shut down workflow Python helper workers if a separate executor is chosen.
 - [ ] Update docs to clarify that workflow helpers are not logical toolbox tools unless intentionally registered as tools.

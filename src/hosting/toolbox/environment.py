@@ -17,7 +17,22 @@ from .bundle_models import SandboxProfileSpec, ToolboxEnvironmentSpec
 class ToolboxEnvironmentManager:
     def __init__(self, hosting_root: Path):
         self.hosting_root = Path(hosting_root).expanduser().resolve()
-        self.environments_root = (self.hosting_root / "toolbox_venvs").resolve()
+        self.toolbox_environments_root = (self.hosting_root / "toolbox_venvs").resolve()
+        self.runtime_environments_root = (self.hosting_root / "runtime_envs").resolve()
+        self.environments_root = self.toolbox_environments_root
+
+    def environment_root(self, *, root_kind: Optional[str] = None, consumer_kind: Optional[str] = None) -> Path:
+        kind = str(root_kind or "").strip()
+        consumer = str(consumer_kind or "").strip()
+        if kind == "runtime_envs" or consumer in {"workflow_python_helper", "workflow_js_helper"}:
+            return self.runtime_environments_root
+        return self.toolbox_environments_root
+
+    def environment_root_for_spec(self, spec: ToolboxEnvironmentSpec) -> Path:
+        return self.environment_root(
+            root_kind=getattr(spec, "environment_root_kind", None),
+            consumer_kind=getattr(spec, "environment_consumer_kind", None),
+        )
 
     @staticmethod
     def normalize_environment_description(
@@ -135,7 +150,7 @@ class ToolboxEnvironmentManager:
                 "dependency_lock_hash": dependency_lock_hash,
             }
         )[:16]
-        venv_root = (self.environments_root / venv_key).resolve()
+        venv_root = (self.environment_root(consumer_kind="toolbox_executor") / venv_key).resolve()
         venv_path = str(venv_root)
         venv_lock_hash = dependency_lock_hash or self._fingerprint_payload(
             {
@@ -154,6 +169,8 @@ class ToolboxEnvironmentManager:
             intrinsics_profile_id=intrinsics_profile_id,
             required_imports=required_imports,
             dependency_lock_hash=dependency_lock_hash,
+            environment_root_kind="toolbox_venvs",
+            environment_consumer_kind="toolbox_executor",
         )
 
     @staticmethod
@@ -181,22 +198,26 @@ class ToolboxEnvironmentManager:
         self,
         spec: ToolboxEnvironmentSpec,
         *,
+        bootstrap_python_executable: Optional[str] = None,
         fallback_python_executable: Optional[str] = None,
     ) -> str:
         ensured = self.ensure_environment(spec)
         env_root = Path(ensured.venv_path).expanduser().resolve()
         env_python = str(ensured.python_executable or self.python_executable_path(env_root)).strip()
-        fallback_python = str(fallback_python_executable or "").strip()
-        if not fallback_python:
+        bootstrap_python = str(bootstrap_python_executable or fallback_python_executable or "").strip()
+        if not bootstrap_python:
             return env_python
         metadata = self.read_environment_metadata(ensured)
         install_execution_status = str(dict(metadata.get("install_execution") or {}).get("status") or "").strip().lower()
         receipt_verification_status = str(
             dict(metadata.get("install_receipt_verification") or {}).get("status") or ""
         ).strip().lower()
+        planned_packages = self._unique_names(dict(metadata.get("realization") or {}).get("planned_packages") or [])
+        if not planned_packages:
+            return env_python
         if install_execution_status == "ok" and receipt_verification_status == "ok":
             return env_python
-        return fallback_python
+        return bootstrap_python
 
     def workflow_python_helper_environment_spec(
         self,
@@ -246,7 +267,7 @@ class ToolboxEnvironmentManager:
                 "venv_lock_hash": venv_lock_hash,
             }
         )[:16]
-        venv_root = (self.environments_root / venv_key).resolve()
+        venv_root = (self.environment_root(consumer_kind="workflow_python_helper") / venv_key).resolve()
         return ToolboxEnvironmentSpec(
             venv_key=venv_key,
             venv_path=str(venv_root),
@@ -258,6 +279,8 @@ class ToolboxEnvironmentManager:
             intrinsics_profile_id="workflow_python_helper",
             required_imports=required_imports,
             dependency_lock_hash=dependency_lock_hash,
+            environment_root_kind="runtime_envs",
+            environment_consumer_kind="workflow_python_helper",
         )
 
     def realize_workflow_python_helper_environment(
@@ -269,6 +292,7 @@ class ToolboxEnvironmentManager:
         package_source_digest: Optional[str] = None,
         helper_source_sha256: Optional[str] = None,
         helper_source_path: Optional[str] = None,
+        bootstrap_python_executable: Optional[str] = None,
         fallback_python_executable: Optional[str] = None,
         environment_name: str = "workflow-python-helper",
     ) -> Dict[str, Any]:
@@ -305,6 +329,7 @@ class ToolboxEnvironmentManager:
         )
         runtime_python = self.runtime_python_executable(
             spec,
+            bootstrap_python_executable=bootstrap_python_executable,
             fallback_python_executable=fallback_python_executable,
         )
         metadata["workflow_python_helper"] = {
@@ -316,11 +341,13 @@ class ToolboxEnvironmentManager:
             "environment_name": spec.environment_name,
         }
         metadata["runtime_python_executable"] = runtime_python
-        metadata["runtime_python_source"] = (
-            "fallback"
-            if str(runtime_python or "").strip() == str(fallback_python_executable or "").strip()
-            else "venv"
-        )
+        bootstrap_python = str(bootstrap_python_executable or fallback_python_executable or "").strip()
+        metadata["runtime_python_source"] = "bootstrap" if str(runtime_python or "").strip() == bootstrap_python else "venv"
+        metadata["runtime_python_selection"] = {
+            "mode": metadata["runtime_python_source"],
+            "bootstrap_python_executable": bootstrap_python or None,
+            "verified_environment_required": bool(pinned_packages),
+        }
         metadata_path = Path(spec.venv_path).expanduser().resolve() / "environment.json"
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return metadata
@@ -437,7 +464,7 @@ class ToolboxEnvironmentManager:
             ),
             "lineage": [str(item or "").strip() for item in list(effective_desc_input.get("lineage") or []) if str(item or "").strip()],
         }
-        required = self._unique_names(required_packages or ensured.required_imports)
+        required = self._unique_names(ensured.required_imports if required_packages is None else required_packages)
         missing = self._unique_names(missing_packages or [])
         planned = self._unique_names(list(effective_desc["effective_extra_packages"]) + list(required))
         provenance_payload = {

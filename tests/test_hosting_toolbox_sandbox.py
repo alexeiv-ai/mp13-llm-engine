@@ -1474,6 +1474,7 @@ def test_toolbox_environment_manager_derives_stable_environment_identity() -> No
         assert spec.intrinsics_profile_id == "symbolic_math"
         assert spec.required_imports == ["requests", "numpy"]
         assert spec.venv_path.endswith(spec.venv_key)
+        assert "toolbox_venvs" in spec.venv_path.replace("\\", "/")
         assert spec.python_executable
         assert staged.registration_environment(spec)["venv_key"] == spec.venv_key
     finally:
@@ -1540,8 +1541,8 @@ def test_toolbox_environment_manager_reuses_environment_for_same_profile() -> No
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_toolbox_environment_runtime_python_uses_fallback_until_verified_install() -> None:
-    root = _scratch_dir("env-runtime-python-fallback-")
+def test_toolbox_environment_runtime_python_uses_venv_when_no_packages_are_planned() -> None:
+    root = _scratch_dir("env-runtime-python-noop-")
     try:
         stager = ToolboxBundleStager(root)
         staged = stager.stage_bundle(
@@ -1554,11 +1555,44 @@ def test_toolbox_environment_runtime_python_uses_fallback_until_verified_install
         manager = ToolboxEnvironmentManager(root)
         spec = manager.ensure_for_bundle(staged)
 
-        chosen = manager.runtime_python_executable(spec, fallback_python_executable="python-fallback")
+        chosen = manager.runtime_python_executable(spec, bootstrap_python_executable="python-bootstrap")
 
-        assert chosen == "python-fallback"
+        assert Path(chosen).resolve() == Path(spec.python_executable).resolve()
         metadata = json.loads((Path(spec.venv_path) / "environment.json").read_text(encoding="utf-8"))
         assert metadata["python_executable"] == spec.python_executable
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_toolbox_environment_runtime_python_uses_bootstrap_until_dependency_install_verified() -> None:
+    root = _scratch_dir("env-runtime-python-bootstrap-")
+    try:
+        stager = ToolboxBundleStager(root)
+        staged = stager.stage_bundle(
+            ToolboxBundleSpec(
+                bundle_id="bundle-runtime-python-bootstrap",
+                sandbox_profile=SandboxProfileSpec(required_imports=["requests"]),
+                files=[ToolboxBundleFile(relative_path="demo_tools.py", content="def hello(name='x'):\n    return {'name': name}\n")],
+                tools=[ToolboxBundleTool(definition=_tool_definition("hello_tool"), entrypoint="demo_tools:hello")],
+            )
+        )
+        manager = ToolboxEnvironmentManager(root)
+        spec = manager.ensure_for_bundle(staged)
+        manager.realize_environment(
+            spec,
+            environment_description={
+                "name": "base",
+                "extra_packages": ["requests"],
+                "effective_extra_packages": ["requests"],
+                "allow_online_install": False,
+                "effective_allow_online_install": False,
+            },
+            required_packages=["requests"],
+        )
+
+        chosen = manager.runtime_python_executable(spec, bootstrap_python_executable="python-bootstrap")
+
+        assert chosen == "python-bootstrap"
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1582,7 +1616,7 @@ def test_toolbox_environment_runtime_python_uses_venv_after_verified_install() -
         metadata["install_receipt_verification"] = {"status": "ok"}
         (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        chosen = manager.runtime_python_executable(spec, fallback_python_executable="python-fallback")
+        chosen = manager.runtime_python_executable(spec, bootstrap_python_executable="python-bootstrap")
 
         assert Path(chosen).resolve() == Path(spec.python_executable).resolve()
     finally:
@@ -1604,16 +1638,18 @@ def test_toolbox_environment_manager_realizes_workflow_python_helper_environment
             package_source_digest="digest-demo",
             helper_source_sha256="a" * 64,
             helper_source_path="dynamic/helpers/demo.py",
-            fallback_python_executable="python-fallback",
+            bootstrap_python_executable="python-bootstrap",
         )
 
         env_path = Path(str(metadata.get("venv_path") or "")).expanduser().resolve()
         assert (env_path / "pyvenv.cfg").exists()
+        assert "runtime_envs" in str(env_path).replace("\\", "/")
         assert metadata["toolbox_runtime_hash"] == "workflow-python-helper-v1"
         assert metadata["intrinsics_profile_id"] == "workflow_python_helper"
         assert metadata["required_imports"] == ["json"]
-        assert metadata["runtime_python_executable"] == "python-fallback"
-        assert metadata["runtime_python_source"] == "fallback"
+        assert Path(metadata["runtime_python_executable"]).resolve() == env_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        assert metadata["runtime_python_source"] == "venv"
+        assert metadata["runtime_python_selection"]["mode"] == "venv"
         assert metadata["workflow_python_helper"]["package_id"] == "pkg-demo"
         assert metadata["workflow_python_helper"]["workflow_id"] == "config/demo"
     finally:
