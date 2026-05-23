@@ -1471,6 +1471,23 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_js_helper_resources(self, *, engine_id: str = "workflow-js-helper") -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-helper-resources",
+            {"engine_id": str(engine_id or "").strip() or "workflow-js-helper"},
+        )
+        return dict(res or {})
+
+    def set_workflow_js_helper_capacity(self, *, engine_id: str = "workflow-js-helper", capacity: int) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-helper-set-capacity",
+            {
+                "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
+                "capacity": max(1, min(int(capacity or 1), 256)),
+            },
+        )
+        return dict(res or {})
+
     def shutdown_managed(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         res = self._invoke("shutdown", {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds)})
         return dict(res or {})

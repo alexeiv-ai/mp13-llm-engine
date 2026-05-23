@@ -434,6 +434,13 @@ def _resource_bits(resources: Dict[str, Any]) -> list[str]:
         bits.append(f"rss={_format_mb_or_na(res.get('memory_mb'))}")
     if "gpu_vram_mb" in res:
         bits.append(f"vram={_format_gb_from_mb_or_pending(res.get('gpu_vram_mb'), pending=bool(res.get('gpu_vram_pending')))}")
+    if "workflow_js_node_process_count" in res:
+        bits.append(
+            "js_nodes="
+            f"{int(res.get('workflow_js_active_node_process_count') or 0)}/"
+            f"{int(res.get('workflow_js_node_process_count') or 0)}/"
+            f"{int(res.get('workflow_js_capacity') or 0)}"
+        )
     return bits
 
 
@@ -775,6 +782,13 @@ def _operator_resource_kind(info: Dict[str, Any]) -> str:
     )
     if is_toolbox:
         return "tools sandbox" if sandbox_enabled else "tools worker"
+    is_workflow_js_helper = (
+        executor_kind == "workflow_js_helper"
+        or "hosting.workflow_js_helper_ipc" in command_text
+        or "MP13_WORKFLOW_HELPER_WORKER_ID" in env
+    )
+    if is_workflow_js_helper:
+        return "workflow js sandbox" if sandbox_enabled else "workflow js worker"
     is_model = (
         worker_class == "model"
         or "MP13_MODEL_PATH" in env
@@ -1523,6 +1537,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     "l": ("List loaded engines and sandboxes", ""),
                     "o": ("Load engine from config", ""),
                     "d": ("Engine/Sandbox details", ""),
+                    "j": ("Manage workflow JS helpers", ""),
                     "m": ("Print daemon metrics", ""),
                     "t": ("Test loaded model prompt", ""),
                     "c": ("List live consumers", ""),
@@ -1555,6 +1570,8 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                         session_token = _load_engine(args, session_token)
                     elif choice == "d":
                         session_token = _engine_details(args, session_token)
+                    elif choice == "j":
+                        session_token = _manage_workflow_js_helpers(args, session_token)
                     elif choice == "m":
                         session_token = _show_metrics(args, session_token)
                     elif choice == "t":
@@ -1826,6 +1843,21 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
             _kv_rows([
                 ("Resources", ", ".join(resource_bits)),
             ])
+        js_resources = dict(info.get("process_resources") or {})
+        if "workflow_js_node_process_count" in js_resources:
+            pids = [str(x) for x in list(js_resources.get("workflow_js_node_pids") or []) if str(x or "").strip()]
+            _kv_rows([
+                ("JS Capacity", js_resources.get("workflow_js_capacity")),
+                ("JS Active Calls", js_resources.get("workflow_js_active_calls")),
+                ("JS Available Slots", js_resources.get("workflow_js_available_slots")),
+                ("JS Node Processes", (
+                    f"active={js_resources.get('workflow_js_active_node_process_count')}, "
+                    f"idle={js_resources.get('workflow_js_idle_node_process_count')}, "
+                    f"total={js_resources.get('workflow_js_node_process_count')}"
+                )),
+                ("JS Node PIDs", ", ".join(pids) if pids else "<none>"),
+                ("JS Max Requests/Node", js_resources.get("workflow_js_max_requests_per_node")),
+            ])
         reachability_note = _reachability_summary(info)
         if reachability_note:
             print()
@@ -1843,6 +1875,76 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
         for k, v in info.items():
             if k not in ("state", "kind", "pid", "sandbox_policy"):
                 print(f"  {k}: {v}")
+        return session_token
+    except PermissionError:
+        raise
+    except Exception as e:
+        print(_c('bad', f"Error: {e}"))
+        raise e
+
+
+def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    _print_block("Workflow JS Helpers")
+    try:
+        if _can_use_offline_local_fallback(args, session_token=session_token):
+            print(_c('warn', "  Daemon is stopped. Workflow helper management requires a running daemon."))
+            return session_token
+        res = _api_invoke(args, "discover-running", {}, session_token=session_token)
+        session_token = _active_session_token(args, session_token)
+        engines = _get_engines_dict(res)
+        helpers = {
+            eid: info
+            for eid, info in engines.items()
+            if str(dict(info or {}).get("executor_kind") or "").strip() == "workflow_js_helper"
+        }
+        if not helpers:
+            print("  No workflow JS helper workers are loaded.")
+            return session_token
+        opts = {}
+        for eid, info in helpers.items():
+            resources = dict(dict(info or {}).get("process_resources") or {})
+            cap = resources.get("workflow_js_capacity")
+            active = resources.get("workflow_js_active_node_process_count")
+            total = resources.get("workflow_js_node_process_count")
+            hint = f"capacity={cap} active_nodes={active} total_nodes={total}" if cap is not None else ""
+            opts[eid] = (f"Manage {eid}", hint)
+        choice = _prompt_menu("Select Workflow JS Helper", opts, "b", allow_back=True, allow_changes=False)
+        if choice in ("b", "back"):
+            return session_token
+        info = helpers[choice]
+        resources = dict(dict(info or {}).get("process_resources") or {})
+        _kv_rows([
+            ("Engine ID", choice),
+            ("Capacity", resources.get("workflow_js_capacity")),
+            ("Active Calls", resources.get("workflow_js_active_calls")),
+            ("Available Slots", resources.get("workflow_js_available_slots")),
+            ("Node Processes", (
+                f"active={resources.get('workflow_js_active_node_process_count')}, "
+                f"idle={resources.get('workflow_js_idle_node_process_count')}, "
+                f"total={resources.get('workflow_js_node_process_count')}"
+            )),
+            ("Node PIDs", ", ".join(str(x) for x in list(resources.get("workflow_js_node_pids") or [])) or "<none>"),
+        ])
+        raw = input("New capacity [leave blank to keep]: ").strip()
+        if not raw:
+            return session_token
+        try:
+            capacity = max(1, min(int(raw), 256))
+        except Exception:
+            print(_c("bad", "Capacity must be an integer from 1 to 256."))
+            return session_token
+        out = _api_invoke(
+            args,
+            "workflow-js-helper-set-capacity",
+            {
+                "engine_id": choice,
+                "capacity": capacity,
+            },
+            session_token=session_token,
+        )
+        session_token = _active_session_token(args, session_token)
+        result = dict(out or {})
+        print(_c("good", f"Workflow JS helper capacity is now {result.get('capacity', capacity)}."))
         return session_token
     except PermissionError:
         raise

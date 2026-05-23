@@ -764,6 +764,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "discover-running",
         "spawn",
         "spawn-workflow-js-helper",
+        "workflow-js-helper-resources",
+        "workflow-js-helper-set-capacity",
         "get-registration",
         "shutdown",
         "ensure-running",
@@ -1087,6 +1089,21 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     capacity=int(payload.get("capacity") or 1),
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                     worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-helper-resources":
+            _print_ok(
+                svc.workflow_js_helper_resources(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-helper-set-capacity":
+            _print_ok(
+                svc.set_workflow_js_helper_capacity(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
+                    capacity=int(payload.get("capacity") or 1),
                 )
             )
             return 0

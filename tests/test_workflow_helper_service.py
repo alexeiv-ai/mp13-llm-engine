@@ -110,6 +110,34 @@ def test_daemon_dispatches_spawn_workflow_js_helper() -> None:
     }
 
 
+def test_daemon_dispatches_workflow_js_helper_resources_and_capacity() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def workflow_js_helper_resources(self, **kwargs):
+            self.calls.append(("resources", dict(kwargs)))
+            return {"status": "ok", "capacity": 2}
+
+        def set_workflow_js_helper_capacity(self, **kwargs):
+            self.calls.append(("set_capacity", dict(kwargs)))
+            return {"status": "ok", "capacity": kwargs["capacity"]}
+
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+
+    resources = daemon._call_service("workflow-js-helper-resources", {"engine_id": "wf-js"})
+    resized = daemon._call_service("workflow-js-helper-set-capacity", {"engine_id": "wf-js", "capacity": 6})
+
+    assert resources["capacity"] == 2
+    assert resized["capacity"] == 6
+    assert fake.calls == [
+        ("resources", {"engine_id": "wf-js"}),
+        ("set_capacity", {"engine_id": "wf-js", "capacity": 6}),
+    ]
+
+
 def test_workflow_js_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:
     node = shutil.which("node")
     if not node:

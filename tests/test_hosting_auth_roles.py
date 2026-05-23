@@ -93,6 +93,7 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             "toolbox-consistency",
             "toolbox-review-snapshot",
             "toolbox-environment-list",
+            "workflow-js-helper-resources",
             "sandbox-fs-list",
             "sandbox-fs-read-text",
             "sandbox-fs-stat",
@@ -126,6 +127,7 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             "sandbox-fs-write-text",
             "sandbox-fs-mkdir",
             "sandbox-http-fetch",
+            "workflow-js-helper-set-capacity",
         ]:
             with pytest.raises(PermissionError, match="insufficient_role"):
                 svc.authorize_command(cmd, {"session_token": token})
@@ -164,6 +166,7 @@ def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
             "toolbox-environment-prepare-install",
             "toolbox-environment-lock-install",
             "toolbox-environment-execute-install",
+            "workflow-js-helper-set-capacity",
         ]:
             svc.authorize_command(cmd, {"session_token": token})
 

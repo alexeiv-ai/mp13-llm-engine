@@ -2030,6 +2030,13 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
             )
+        if cmd == "workflow-js-helper-resources":
+            return svc.workflow_js_helper_resources(engine_id=str(payload.get("engine_id") or "workflow-js-helper"))
+        if cmd == "workflow-js-helper-set-capacity":
+            return svc.set_workflow_js_helper_capacity(
+                engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
+                capacity=int(payload.get("capacity") or 1),
+            )
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
         if cmd == "shutdown":

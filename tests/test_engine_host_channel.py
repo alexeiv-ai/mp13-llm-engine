@@ -948,6 +948,34 @@ def test_workflow_js_helper_channel_method_forwards_expected_payload() -> None:
     ]
 
 
+def test_workflow_js_helper_channel_resources_and_capacity_use_proxy_rpc() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.workflow_js_helper_resources(engine_id="wf-js")
+    ch.set_workflow_js_helper_capacity(engine_id="wf-js", capacity=7)
+
+    assert fake.calls == [
+        (
+            "workflow-js-helper-resources",
+            {
+                "engine_id": "wf-js",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-helper-set-capacity",
+            {
+                "engine_id": "wf-js",
+                "capacity": 7,
+                "session_token": "tok-123",
+            },
+        ),
+    ]
+
+
 def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     custom_pid_file = Path("X:/tmp/custom_host.pid")
     captured: Dict[str, Any] = {}

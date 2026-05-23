@@ -65,3 +65,21 @@ class WorkflowHelperMixin:
                 "capacity": call_capacity,
             },
         )
+
+    def workflow_js_helper_resources(self, *, engine_id: str = "workflow-js-helper") -> Dict[str, Any]:
+        out = self.proxy_rpc_call(
+            engine_id=str(engine_id or "").strip() or "workflow-js-helper",
+            method="worker.resources",
+            params={},
+            timeout_seconds=10.0,
+        )
+        return dict(out.get("result") or out or {})
+
+    def set_workflow_js_helper_capacity(self, *, engine_id: str = "workflow-js-helper", capacity: int) -> Dict[str, Any]:
+        out = self.proxy_rpc_call(
+            engine_id=str(engine_id or "").strip() or "workflow-js-helper",
+            method="workflow_js_helper.set_capacity",
+            params={"capacity": max(1, min(int(capacity or 1), 256))},
+            timeout_seconds=10.0,
+        )
+        return dict(out.get("result") or out or {})

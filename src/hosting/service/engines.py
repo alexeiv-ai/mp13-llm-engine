@@ -1130,6 +1130,14 @@ class EnginesMixin:
         if is_toolbox:
             return "tools sandbox" if sandbox.enabled else "tools worker"
 
+        is_workflow_js_helper = (
+            executor_kind == "workflow_js_helper"
+            or "hosting.workflow_js_helper_ipc" in command_text
+            or "MP13_WORKFLOW_HELPER_WORKER_ID" in env
+        )
+        if is_workflow_js_helper:
+            return "workflow js sandbox" if sandbox.enabled else "workflow js worker"
+
         is_model = (
             worker_class == "model"
             or "MP13_MODEL_PATH" in env
@@ -1145,6 +1153,59 @@ class EnginesMixin:
 
     def _query_worker_reported_resources(self, item: Dict[str, Any]) -> Dict[str, Any]:
         kind = self._describe_registration_kind(item)
+        executor_kind = str(item.get("executor_kind") or "").strip()
+        if executor_kind == "workflow_js_helper":
+            try:
+                out = self._ipc_call(
+                    reg=item,
+                    payload={
+                        "kind": "rpc_call",
+                        "method": "worker.resources",
+                        "params": {},
+                        "engine_id": str(item.get("engine_id") or ""),
+                    },
+                    timeout_seconds=1.0,
+                )
+            except Exception as exc:
+                item["worker_resource_probe"] = {
+                    "status": "pending",
+                    "method": "worker.resources",
+                    "error": str(exc),
+                }
+                return {"workflow_js_helper_pending": True, "workflow_js_helper_source": "worker_status_pending"}
+            if str(out.get("status") or "").strip().lower() != "ok":
+                item["worker_resource_probe"] = {
+                    "status": "pending",
+                    "method": "worker.resources",
+                    "response_status": str(out.get("status") or ""),
+                    "message": str(out.get("message") or ""),
+                }
+                return {"workflow_js_helper_pending": True, "workflow_js_helper_source": "worker_status_pending"}
+            result = dict(out.get("result") or {})
+            if str(result.get("status") or "").strip().lower() not in {"", "ok", "success"}:
+                item["worker_resource_probe"] = {
+                    "status": "pending",
+                    "method": "worker.resources",
+                    "response_status": str(result.get("status") or ""),
+                }
+                return {"workflow_js_helper_pending": True, "workflow_js_helper_source": "worker_status_pending"}
+            pool = dict(result.get("node_pool") or {})
+            item["worker_resource_probe"] = {"status": "ok", "method": "worker.resources"}
+            return {
+                "workflow_js_capacity": int(result.get("capacity") or pool.get("capacity") or 0),
+                "workflow_js_active_calls": int(result.get("active_calls") or 0),
+                "workflow_js_available_slots": int(result.get("available_slots") or 0),
+                "workflow_js_node_process_count": int(pool.get("node_process_count") or 0),
+                "workflow_js_active_node_process_count": int(pool.get("active_node_process_count") or 0),
+                "workflow_js_idle_node_process_count": int(pool.get("idle_node_process_count") or 0),
+                "workflow_js_node_pids": [
+                    int(dict(row or {}).get("pid") or 0)
+                    for row in list(pool.get("node_processes") or [])
+                    if int(dict(row or {}).get("pid") or 0) > 0
+                ],
+                "workflow_js_max_requests_per_node": int(pool.get("max_requests_per_node") or 0),
+                "workflow_js_helper_source": "worker_node_pool",
+            }
         if "model" not in kind:
             return {}
         try:

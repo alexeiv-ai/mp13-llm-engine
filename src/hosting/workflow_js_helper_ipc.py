@@ -35,7 +35,49 @@ ALLOWED_OPERATIONS = {
 }
 _CALL_CAPACITY = max(1, int(str(os.environ.get("MP13_WORKFLOW_JS_HELPER_CAPACITY") or "1").strip() or "1"))
 _MAX_REQUESTS_PER_NODE = max(1, int(str(os.environ.get("MP13_WORKFLOW_JS_HELPER_MAX_REQUESTS_PER_NODE") or "256").strip() or "256"))
-_call_slots = threading.BoundedSemaphore(_CALL_CAPACITY)
+
+
+class _ResizableCapacityGate:
+    def __init__(self, capacity: int) -> None:
+        self._capacity = max(1, int(capacity or 1))
+        self._active = 0
+        self._lock = threading.Lock()
+
+    def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        while True:
+            with self._lock:
+                if self._active < self._capacity:
+                    self._active += 1
+                    return True
+            if not blocking:
+                return False
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
+    def release(self) -> None:
+        with self._lock:
+            self._active = max(0, self._active - 1)
+
+    def set_capacity(self, capacity: int) -> int:
+        value = max(1, min(int(capacity or 1), 256))
+        with self._lock:
+            self._capacity = value
+            return self._capacity
+
+    def stats(self) -> Dict[str, int]:
+        with self._lock:
+            active = int(self._active)
+            capacity = int(self._capacity)
+        return {
+            "capacity": capacity,
+            "active_calls": active,
+            "available_slots": max(0, capacity - active),
+        }
+
+
+_call_slots = _ResizableCapacityGate(_CALL_CAPACITY)
 
 
 def _contract_name() -> str:
@@ -72,6 +114,7 @@ def _node_version() -> Optional[str]:
 
 
 def _runtime(reason: Optional[str] = None) -> Dict[str, Any]:
+    gate_stats = _call_slots.stats()
     out = {
         "worker_id": _worker_id(),
         "engine_id": _worker_id(),
@@ -79,7 +122,8 @@ def _runtime(reason: Optional[str] = None) -> Dict[str, Any]:
         "node_version": _node_version(),
         "sandbox_profile": SANDBOX_PROFILE,
         "contract": _contract_name(),
-        "capacity": _CALL_CAPACITY,
+        "capacity": int(gate_stats["capacity"]),
+        "active_calls": int(gate_stats["active_calls"]),
         "max_requests_per_node": _MAX_REQUESTS_PER_NODE,
     }
     if reason:
@@ -206,6 +250,7 @@ class _HotNodeRuntime:
         self._responses: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._lock = threading.Lock()
         self._request_count = 0
+        self._busy = False
         self._proc = subprocess.Popen(  # noqa: S603
             [_node_executable(), str(self._worker_path)],
             cwd=str(self._tmp_path),
@@ -237,6 +282,16 @@ class _HotNodeRuntime:
     def alive(self) -> bool:
         return self._proc.poll() is None
 
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "pid": int(self._proc.pid or 0),
+            "alive": self.alive(),
+            "busy": bool(self._busy),
+            "request_count": int(self._request_count),
+            "max_requests": int(_MAX_REQUESTS_PER_NODE),
+            "reusable": self.reusable(),
+        }
+
     def execute(
         self,
         *,
@@ -259,26 +314,30 @@ class _HotNodeRuntime:
         }
         deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
         with self._lock:
+            self._busy = True
             try:
-                assert self._proc.stdin is not None
-                self._proc.stdin.write(json.dumps(row, ensure_ascii=False) + "\n")
-                self._proc.stdin.flush()
-            except Exception as exc:
-                raise RuntimeError(f"node_runtime_write_failed:{exc}") from exc
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    self.close(kill=True)
-                    raise TimeoutError("workflow_sandbox_timeout")
                 try:
-                    response = self._responses.get(timeout=min(remaining, 0.25))
-                except queue.Empty:
-                    if not self.alive():
-                        raise RuntimeError("node_runtime_exited")
-                    continue
-                if str(response.get("request_id") or "") in {"", request_id}:
-                    self._request_count += 1
-                    return response
+                    assert self._proc.stdin is not None
+                    self._proc.stdin.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    self._proc.stdin.flush()
+                except Exception as exc:
+                    raise RuntimeError(f"node_runtime_write_failed:{exc}") from exc
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.close(kill=True)
+                        raise TimeoutError("workflow_sandbox_timeout")
+                    try:
+                        response = self._responses.get(timeout=min(remaining, 0.25))
+                    except queue.Empty:
+                        if not self.alive():
+                            raise RuntimeError("node_runtime_exited")
+                        continue
+                    if str(response.get("request_id") or "") in {"", request_id}:
+                        self._request_count += 1
+                        return response
+            finally:
+                self._busy = False
 
     def reusable(self) -> bool:
         return self.alive() and self._request_count < _MAX_REQUESTS_PER_NODE
@@ -346,6 +405,38 @@ class _HotNodeRuntimePool:
                     pass
                 self._all = [item for item in self._all if item is not rt]
 
+    def set_capacity(self, capacity: int) -> int:
+        value = max(1, min(int(capacity or 1), 256))
+        with self._lock:
+            self.capacity = value
+            idle: list[_HotNodeRuntime] = []
+            for rt in self._idle:
+                if len(self._all) <= value:
+                    idle.append(rt)
+                else:
+                    rt.close(kill=False)
+                    self._all = [item for item in self._all if item is not rt]
+            self._idle = idle
+            return self.capacity
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            self._prune_locked()
+            nodes = [rt.snapshot() for rt in self._all]
+            capacity = int(self.capacity)
+        active = len([row for row in nodes if bool(row.get("busy"))])
+        alive = len([row for row in nodes if bool(row.get("alive"))])
+        idle = max(0, alive - active)
+        return {
+            "status": "ok",
+            "capacity": capacity,
+            "node_process_count": alive,
+            "active_node_process_count": active,
+            "idle_node_process_count": idle,
+            "node_processes": nodes,
+            "max_requests_per_node": int(_MAX_REQUESTS_PER_NODE),
+        }
+
     def execute(self, req: Dict[str, Any], *, export_name: str, payload_json: str, timeout_ms: int, output_limit_bytes: int) -> Dict[str, Any]:
         rt = self._checkout()
         reusable = True
@@ -382,6 +473,30 @@ class _HotNodeRuntimePool:
 
 
 _NODE_POOL = _HotNodeRuntimePool(_CALL_CAPACITY)
+
+
+def _worker_resources() -> Dict[str, Any]:
+    pool = _NODE_POOL.stats()
+    gate = _call_slots.stats()
+    return {
+        "status": "ok",
+        "executor_kind": "workflow_js_helper",
+        "worker_id": _worker_id(),
+        "engine_id": _worker_id(),
+        "node_executable": _node_executable(),
+        "node_version": _node_version(),
+        "sandbox_profile": SANDBOX_PROFILE,
+        "capacity": int(gate["capacity"]),
+        "active_calls": int(gate["active_calls"]),
+        "available_slots": int(gate["available_slots"]),
+        "node_pool": pool,
+    }
+
+
+def _set_capacity(value: int) -> Dict[str, Any]:
+    capacity = _call_slots.set_capacity(value)
+    _NODE_POOL.set_capacity(capacity)
+    return _worker_resources()
 
 
 def _execute_node(req: Dict[str, Any], *, started_at: float) -> Dict[str, Any]:
@@ -465,7 +580,8 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
             "node_executable": _node_executable(),
             "node_version": _node_version(),
             "sandbox_profile": SANDBOX_PROFILE,
-            "capacity": _CALL_CAPACITY,
+            "capacity": int(_call_slots.stats()["capacity"]),
+            "active_calls": int(_call_slots.stats()["active_calls"]),
             "max_requests_per_node": _MAX_REQUESTS_PER_NODE,
         },
     }
@@ -476,6 +592,11 @@ async def _handle_rpc_call(payload: Dict[str, Any]) -> Dict[str, Any]:
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     if method in {"rpc.describe", "describe", "capabilities"}:
         return await _handle_hello(payload)
+    if method in {"worker.resources", "workflow_js_helper.resources"}:
+        return {"status": "ok", "result": _worker_resources()}
+    if method in {"workflow_js_helper.set_capacity", "worker.set_capacity"}:
+        value = int(dict(params or {}).get("capacity") or 1)
+        return {"status": "ok", "result": _set_capacity(value)}
     if method != "execute_workflow_js_helper":
         return {"status": "error", "message": "unsupported_method"}
     result = await _execute_workflow_js_helper(dict(params or {}))

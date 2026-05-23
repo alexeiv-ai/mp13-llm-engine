@@ -58,6 +58,10 @@ Each Node child defaults to a maximum of 256 requests before recycling. Recyclin
 
 Toolbox sandboxes add another layer: the client-side harness can route calls across a pool of toolbox executor registrations and uses async gather/round-robin routing. JS helper v1 does not need a toolbox-style registry/pool for correctness because helper calls are source-in, JSON-out, and isolated per call. If throughput requires it later, the same pattern can be added by registering multiple `executor_kind = "workflow_js_helper"` workers and routing by capacity/busy state.
 
+Live pool state is available through `workflow-js-helper-resources` or `EngineHostControlChannel.workflow_js_helper_resources(...)`. The response reports capacity, active calls, available slots, Node process counts, Node process ids, and per-node request counts.
+
+Capacity can be changed for a loaded worker through `workflow-js-helper-set-capacity` or `EngineHostControlChannel.set_workflow_js_helper_capacity(...)`. Increasing capacity allows the worker to create more hot Node children on demand. Decreasing capacity prevents new children above the new limit and retires idle excess children; active calls are allowed to finish.
+
 ## Default JS Sandbox Policy
 
 The default v1 policy is:

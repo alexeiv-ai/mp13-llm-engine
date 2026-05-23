@@ -263,3 +263,38 @@ def test_hot_node_runtime_pool_reuses_then_recycles(monkeypatch) -> None:
 
     assert pool.execute(req, export_name="condition", payload_json="{}", timeout_ms=1000, output_limit_bytes=1000)["ok"] is True
     assert len(created) == 2
+
+
+def test_workflow_js_helper_resources_and_capacity_resize(monkeypatch) -> None:
+    class FakePool:
+        def __init__(self) -> None:
+            self.capacity = 1
+
+        def stats(self):
+            return {
+                "status": "ok",
+                "capacity": self.capacity,
+                "node_process_count": 1,
+                "active_node_process_count": 0,
+                "idle_node_process_count": 1,
+                "node_processes": [{"pid": 1234, "alive": True, "busy": False, "request_count": 2}],
+                "max_requests_per_node": 256,
+            }
+
+        def set_capacity(self, capacity):
+            self.capacity = int(capacity)
+            return self.capacity
+
+    fake_pool = FakePool()
+    monkeypatch.setattr(worker, "_NODE_POOL", fake_pool)
+
+    try:
+        out = asyncio.run(worker._handle_rpc_call({"method": "workflow_js_helper.set_capacity", "params": {"capacity": 3}}))
+        result = out["result"]
+
+        assert result["status"] == "ok"
+        assert result["capacity"] == 3
+        assert result["node_pool"]["capacity"] == 3
+        assert result["node_pool"]["node_processes"][0]["pid"] == 1234
+    finally:
+        worker._call_slots.set_capacity(1)
