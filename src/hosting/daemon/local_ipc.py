@@ -2037,6 +2037,11 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
                 capacity=int(payload.get("capacity") or 1),
             )
+        if cmd == "workflow-js-helper-cancel-request":
+            return svc.cancel_workflow_js_helper_request(
+                engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
+                request_id=str(payload.get("request_id") or ""),
+            )
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
         if cmd == "shutdown":

@@ -441,6 +441,10 @@ def _resource_bits(resources: Dict[str, Any]) -> list[str]:
             f"{int(res.get('workflow_js_node_process_count') or 0)}/"
             f"{int(res.get('workflow_js_capacity') or 0)}"
         )
+    if res.get("workflow_js_node_cpu_percent") is not None:
+        bits.append(f"js_cpu={_format_percent_or_na(res.get('workflow_js_node_cpu_percent'))}")
+    if res.get("workflow_js_node_memory_mb") is not None:
+        bits.append(f"js_rss={_format_mb_or_na(res.get('workflow_js_node_memory_mb'))}")
     return bits
 
 
@@ -1856,8 +1860,30 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
                     f"total={js_resources.get('workflow_js_node_process_count')}"
                 )),
                 ("JS Node PIDs", ", ".join(pids) if pids else "<none>"),
+                ("JS Active Requests", ", ".join(str(x) for x in list(js_resources.get("workflow_js_active_request_ids") or [])) or "<none>"),
+                ("JS Node CPU", _format_percent_or_na(js_resources.get("workflow_js_node_cpu_percent"))),
+                ("JS Node RSS", _format_mb_or_na(js_resources.get("workflow_js_node_memory_mb"))),
                 ("JS Max Requests/Node", js_resources.get("workflow_js_max_requests_per_node")),
             ])
+            node_rows = [dict(row or {}) for row in list(js_resources.get("workflow_js_node_processes") or []) if isinstance(row, dict)]
+            if node_rows:
+                print()
+                print("JS Node Pool:")
+                for node in node_rows:
+                    metrics = dict(node.get("resources") or {})
+                    bits = [
+                        f"pid={node.get('pid')}",
+                        f"busy={'yes' if bool(node.get('busy')) else 'no'}",
+                        f"requests={node.get('request_count')}",
+                    ]
+                    active_request_id = str(node.get("active_request_id") or "").strip()
+                    if active_request_id:
+                        bits.append(f"request={active_request_id}")
+                    if metrics.get("cpu_percent") is not None:
+                        bits.append(f"cpu={_format_percent_or_na(metrics.get('cpu_percent'))}")
+                    if metrics.get("memory_mb") is not None:
+                        bits.append(f"rss={_format_mb_or_na(metrics.get('memory_mb'))}")
+                    print(f"  - {', '.join(bits)}")
         reachability_note = _reachability_summary(info)
         if reachability_note:
             print()
@@ -1911,40 +1937,118 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
         choice = _prompt_menu("Select Workflow JS Helper", opts, "b", allow_back=True, allow_changes=False)
         if choice in ("b", "back"):
             return session_token
-        info = helpers[choice]
-        resources = dict(dict(info or {}).get("process_resources") or {})
-        _kv_rows([
-            ("Engine ID", choice),
-            ("Capacity", resources.get("workflow_js_capacity")),
-            ("Active Calls", resources.get("workflow_js_active_calls")),
-            ("Available Slots", resources.get("workflow_js_available_slots")),
-            ("Node Processes", (
-                f"active={resources.get('workflow_js_active_node_process_count')}, "
-                f"idle={resources.get('workflow_js_idle_node_process_count')}, "
-                f"total={resources.get('workflow_js_node_process_count')}"
-            )),
-            ("Node PIDs", ", ".join(str(x) for x in list(resources.get("workflow_js_node_pids") or [])) or "<none>"),
-        ])
-        raw = input("New capacity [leave blank to keep]: ").strip()
-        if not raw:
-            return session_token
-        try:
-            capacity = max(1, min(int(raw), 256))
-        except Exception:
-            print(_c("bad", "Capacity must be an integer from 1 to 256."))
-            return session_token
-        out = _api_invoke(
-            args,
-            "workflow-js-helper-set-capacity",
-            {
-                "engine_id": choice,
-                "capacity": capacity,
-            },
-            session_token=session_token,
-        )
-        session_token = _active_session_token(args, session_token)
-        result = dict(out or {})
-        print(_c("good", f"Workflow JS helper capacity is now {result.get('capacity', capacity)}."))
+        while True:
+            resources = dict(
+                _api_invoke(
+                    args,
+                    "workflow-js-helper-resources",
+                    {"engine_id": choice},
+                    session_token=session_token,
+                )
+                or {}
+            )
+            session_token = _active_session_token(args, session_token)
+            pool = dict(resources.get("node_pool") or {})
+            node_rows = [dict(row or {}) for row in list(pool.get("node_processes") or []) if isinstance(row, dict)]
+            active_request_ids = [
+                str(row.get("active_request_id") or "").strip()
+                for row in node_rows
+                if str(row.get("active_request_id") or "").strip()
+            ]
+            if not active_request_ids:
+                active_request_ids = [
+                    str(x or "").strip()
+                    for x in list(pool.get("active_request_ids") or [])
+                    if str(x or "").strip()
+                ]
+            _kv_rows([
+                ("Engine ID", choice),
+                ("Capacity", resources.get("capacity") or pool.get("capacity")),
+                ("Active Calls", resources.get("active_calls")),
+                ("Available Slots", resources.get("available_slots")),
+                ("Node Processes", (
+                    f"active={pool.get('active_node_process_count')}, "
+                    f"idle={pool.get('idle_node_process_count')}, "
+                    f"total={pool.get('node_process_count')}"
+                )),
+                ("Node CPU", _format_percent_or_na(pool.get("node_cpu_percent") if pool.get("node_cpu_percent") is not None else resources.get("node_cpu_percent"))),
+                ("Node RSS", _format_mb_or_na(pool.get("node_memory_mb") if pool.get("node_memory_mb") is not None else resources.get("node_memory_mb"))),
+                ("Active Requests", ", ".join(active_request_ids) or "<none>"),
+            ])
+            if node_rows:
+                print()
+                print("Node Pool:")
+                for node in node_rows:
+                    metrics = dict(node.get("resources") or {})
+                    bits = [
+                        f"pid={node.get('pid')}",
+                        f"busy={'yes' if bool(node.get('busy')) else 'no'}",
+                        f"requests={node.get('request_count')}",
+                    ]
+                    active_request_id = str(node.get("active_request_id") or "").strip()
+                    if active_request_id:
+                        bits.append(f"request={active_request_id}")
+                    if metrics.get("cpu_percent") is not None:
+                        bits.append(f"cpu={_format_percent_or_na(metrics.get('cpu_percent'))}")
+                    if metrics.get("memory_mb") is not None:
+                        bits.append(f"rss={_format_mb_or_na(metrics.get('memory_mb'))}")
+                    print(f"  - {', '.join(bits)}")
+            action_opts = {
+                "s": ("Set capacity", ""),
+                "r": ("Refresh", ""),
+            }
+            if active_request_ids:
+                action_opts["c"] = ("Cancel request", "Kill the Node child currently running a request")
+            action = _prompt_menu("Workflow JS Helper Action", action_opts, "b", allow_back=True, allow_changes=False)
+            if action in ("b", "back"):
+                return session_token
+            if action == "r":
+                continue
+            if action == "s":
+                raw = input("New capacity [leave blank to keep]: ").strip()
+                if not raw:
+                    continue
+                try:
+                    capacity = max(1, min(int(raw), 256))
+                except Exception:
+                    print(_c("bad", "Capacity must be an integer from 1 to 256."))
+                    continue
+                out = _api_invoke(
+                    args,
+                    "workflow-js-helper-set-capacity",
+                    {
+                        "engine_id": choice,
+                        "capacity": capacity,
+                    },
+                    session_token=session_token,
+                )
+                session_token = _active_session_token(args, session_token)
+                result = dict(out or {})
+                print(_c("good", f"Workflow JS helper capacity is now {result.get('capacity', capacity)}."))
+                continue
+            if action == "c":
+                default_request = active_request_ids[0] if active_request_ids else ""
+                prompt = f"Request id to cancel [{default_request}]: " if default_request else "Request id to cancel: "
+                request_id = input(prompt).strip() or default_request
+                if not request_id:
+                    print(_c("bad", "Request id is required."))
+                    continue
+                out = _api_invoke(
+                    args,
+                    "workflow-js-helper-cancel-request",
+                    {
+                        "engine_id": choice,
+                        "request_id": request_id,
+                    },
+                    session_token=session_token,
+                )
+                session_token = _active_session_token(args, session_token)
+                result = dict(out or {})
+                if bool(result.get("canceled")):
+                    print(_c("good", f"Canceled workflow JS helper request {request_id}."))
+                else:
+                    print(_c("warn", f"Request was not active: {request_id} ({result.get('reason') or 'not_found'})."))
+                continue
         return session_token
     except PermissionError:
         raise

@@ -1190,6 +1190,24 @@ class EnginesMixin:
                 }
                 return {"workflow_js_helper_pending": True, "workflow_js_helper_source": "worker_status_pending"}
             pool = dict(result.get("node_pool") or {})
+            node_rows: List[Dict[str, Any]] = []
+            total_cpu = 0.0
+            total_mem = 0.0
+            known_cpu = False
+            known_mem = False
+            for raw_node in list(pool.get("node_processes") or []):
+                node = dict(raw_node or {})
+                pid = int(node.get("pid") or 0)
+                if pid > 0:
+                    metrics = self._process_resource_snapshot(pid)
+                    if metrics.get("cpu_percent") is not None:
+                        known_cpu = True
+                        total_cpu += float(metrics.get("cpu_percent") or 0.0)
+                    if metrics.get("memory_mb") is not None:
+                        known_mem = True
+                        total_mem += float(metrics.get("memory_mb") or 0.0)
+                    node["resources"] = dict(metrics or {})
+                node_rows.append(node)
             item["worker_resource_probe"] = {"status": "ok", "method": "worker.resources"}
             return {
                 "workflow_js_capacity": int(result.get("capacity") or pool.get("capacity") or 0),
@@ -1198,11 +1216,19 @@ class EnginesMixin:
                 "workflow_js_node_process_count": int(pool.get("node_process_count") or 0),
                 "workflow_js_active_node_process_count": int(pool.get("active_node_process_count") or 0),
                 "workflow_js_idle_node_process_count": int(pool.get("idle_node_process_count") or 0),
+                "workflow_js_node_cpu_percent": round(total_cpu, 1) if known_cpu else None,
+                "workflow_js_node_memory_mb": round(total_mem, 1) if known_mem else None,
                 "workflow_js_node_pids": [
                     int(dict(row or {}).get("pid") or 0)
-                    for row in list(pool.get("node_processes") or [])
+                    for row in node_rows
                     if int(dict(row or {}).get("pid") or 0) > 0
                 ],
+                "workflow_js_active_request_ids": [
+                    str(dict(row or {}).get("active_request_id") or "").strip()
+                    for row in node_rows
+                    if str(dict(row or {}).get("active_request_id") or "").strip()
+                ],
+                "workflow_js_node_processes": node_rows,
                 "workflow_js_max_requests_per_node": int(pool.get("max_requests_per_node") or 0),
                 "workflow_js_helper_source": "worker_node_pool",
             }

@@ -50,6 +50,9 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 - [x] Persist `sandbox_policy`, `sandbox_runtime`, command, environment, worker id, IPC family/address, auth token metadata, and capabilities as existing workers do.
 - [x] Expose status/diagnostics through existing worker registration/runtime status surfaces.
 - [x] Report workflow JS helper availability, Node executable path, Node version, worker id, engine id, sandbox profile, launch mode, platform sandbox status, and current capacity/busy state when available.
+- [x] Report hot Node pool details for workflow JS helpers, including active request ids and per-child CPU/RSS when available.
+- [x] Add public control API and CLI coverage for resizing a loaded workflow JS helper worker.
+- [x] Add public control API and CLI coverage for canceling a specific active workflow JS helper request.
 - [x] Add ensure-running/shutdown/status behavior using existing worker lifecycle APIs.
 
 ## Workflow JS Helper RPC Contract
@@ -91,6 +94,7 @@ This file tracks planned hosting/sandbox work as checkbox items. Check items onl
 - [x] Preserve or map `workflow_sandbox_operation_not_allowed`.
 - [x] Preserve or map `workflow_sandbox_export_not_found`.
 - [x] Preserve or map `workflow_sandbox_timeout`.
+- [x] Preserve or map `workflow_sandbox_canceled`.
 - [x] Preserve or map `workflow_sandbox_output_limit_exceeded`.
 - [x] Preserve or map `workflow_sandbox_invalid_json_output`.
 - [x] Preserve or map `workflow_sandbox_invalid_result_shape`.

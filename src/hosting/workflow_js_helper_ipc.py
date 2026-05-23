@@ -80,6 +80,10 @@ class _ResizableCapacityGate:
 _call_slots = _ResizableCapacityGate(_CALL_CAPACITY)
 
 
+class _WorkflowJsHelperRequestCanceled(Exception):
+    pass
+
+
 def _contract_name() -> str:
     return str(os.environ.get("MP13_WORKER_CONTRACT") or EXECUTION_CONTRACT).strip() or EXECUTION_CONTRACT
 
@@ -154,6 +158,7 @@ def _audit_from_request(req: Dict[str, Any]) -> Dict[str, Any]:
         "workflow_id": str(req.get("workflow_id") or "").strip() or None,
         "package_source_digest": str(req.get("package_source_digest") or "").strip() or None,
         "module_sha256": str(req.get("module_sha256") or "").strip() or None,
+        "request_id": str(req.get("request_id") or "").strip() or None,
         "operation": str(req.get("operation") or "").strip() or None,
         "export_name": str(req.get("export_name") or "").strip() or None,
         "session_id": str(provenance.get("session_id") or "").strip() or None,
@@ -251,6 +256,8 @@ class _HotNodeRuntime:
         self._lock = threading.Lock()
         self._request_count = 0
         self._busy = False
+        self._active_request_id = ""
+        self._canceled_request_ids: set[str] = set()
         self._proc = subprocess.Popen(  # noqa: S603
             [_node_executable(), str(self._worker_path)],
             cwd=str(self._tmp_path),
@@ -287,6 +294,7 @@ class _HotNodeRuntime:
             "pid": int(self._proc.pid or 0),
             "alive": self.alive(),
             "busy": bool(self._busy),
+            "active_request_id": str(self._active_request_id or "") or None,
             "request_count": int(self._request_count),
             "max_requests": int(_MAX_REQUESTS_PER_NODE),
             "reusable": self.reusable(),
@@ -315,6 +323,7 @@ class _HotNodeRuntime:
         deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
         with self._lock:
             self._busy = True
+            self._active_request_id = request_id
             try:
                 try:
                     assert self._proc.stdin is not None
@@ -331,13 +340,20 @@ class _HotNodeRuntime:
                         response = self._responses.get(timeout=min(remaining, 0.25))
                     except queue.Empty:
                         if not self.alive():
+                            if request_id in self._canceled_request_ids:
+                                self._canceled_request_ids.discard(request_id)
+                                raise _WorkflowJsHelperRequestCanceled("workflow_sandbox_canceled")
                             raise RuntimeError("node_runtime_exited")
                         continue
                     if str(response.get("request_id") or "") in {"", request_id}:
+                        if request_id in self._canceled_request_ids:
+                            self._canceled_request_ids.discard(request_id)
+                            raise _WorkflowJsHelperRequestCanceled("workflow_sandbox_canceled")
                         self._request_count += 1
                         return response
             finally:
                 self._busy = False
+                self._active_request_id = ""
 
     def reusable(self) -> bool:
         return self.alive() and self._request_count < _MAX_REQUESTS_PER_NODE
@@ -362,6 +378,16 @@ class _HotNodeRuntime:
             self._tmp.cleanup()
         except Exception:
             pass
+
+    def cancel(self, request_id: str) -> bool:
+        rid = str(request_id or "").strip()
+        if not rid:
+            return False
+        if str(self._active_request_id or "") != rid:
+            return False
+        self._canceled_request_ids.add(rid)
+        self.close(kill=True)
+        return True
 
 
 class _HotNodeRuntimePool:
@@ -440,9 +466,10 @@ class _HotNodeRuntimePool:
     def execute(self, req: Dict[str, Any], *, export_name: str, payload_json: str, timeout_ms: int, output_limit_bytes: int) -> Dict[str, Any]:
         rt = self._checkout()
         reusable = True
+        request_id = str(req.get("request_id") or "").strip() or uuid.uuid4().hex
         try:
             return rt.execute(
-                request_id=uuid.uuid4().hex,
+                request_id=request_id,
                 module_source=str(req.get("module_source") or ""),
                 export_name=export_name,
                 payload_json=payload_json,
@@ -450,6 +477,9 @@ class _HotNodeRuntimePool:
                 output_limit_bytes=output_limit_bytes,
             )
         except TimeoutError:
+            reusable = False
+            raise
+        except _WorkflowJsHelperRequestCanceled:
             reusable = False
             raise
         except Exception:
@@ -470,6 +500,20 @@ class _HotNodeRuntimePool:
             self._all = []
         for rt in runtimes:
             rt.close(kill=True)
+
+    def cancel_request(self, request_id: str) -> Dict[str, Any]:
+        rid = str(request_id or "").strip()
+        if not rid:
+            return {"status": "error", "reason": "request_id_required", "canceled": False}
+        with self._lock:
+            runtimes = list(self._all)
+        for rt in runtimes:
+            if rt.cancel(rid):
+                with self._lock:
+                    self._idle = [item for item in self._idle if item is not rt]
+                    self._all = [item for item in self._all if item is not rt]
+                return {"status": "ok", "request_id": rid, "canceled": True, "reason": "canceled"}
+        return {"status": "ok", "request_id": rid, "canceled": False, "reason": "request_not_found"}
 
 
 _NODE_POOL = _HotNodeRuntimePool(_CALL_CAPACITY)
@@ -497,6 +541,10 @@ def _set_capacity(value: int) -> Dict[str, Any]:
     capacity = _call_slots.set_capacity(value)
     _NODE_POOL.set_capacity(capacity)
     return _worker_resources()
+
+
+def _cancel_request(request_id: str) -> Dict[str, Any]:
+    return _NODE_POOL.cancel_request(request_id)
 
 
 def _execute_node(req: Dict[str, Any], *, started_at: float) -> Dict[str, Any]:
@@ -532,6 +580,8 @@ def _execute_node(req: Dict[str, Any], *, started_at: float) -> Dict[str, Any]:
         )
     except TimeoutError:
         return _failure("workflow_sandbox_timeout", detail={"timeout_ms": timeout_ms}, started_at=started_at)
+    except _WorkflowJsHelperRequestCanceled:
+        return _failure("workflow_sandbox_canceled", detail={"request_id": str(req.get("request_id") or "").strip() or None}, started_at=started_at)
     except FileNotFoundError as exc:
         return _failure("workflow_sandbox_host_unavailable", detail={"message": str(exc)}, started_at=started_at)
     except Exception as exc:
@@ -574,7 +624,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
         "executor_kind": "workflow_js_helper",
         "sync_rpc": True,
         "async_rpc": False,
-        "cancellation": False,
+        "cancellation": True,
         "workflow_js_helper": {
             "available": bool(shutil.which(_node_executable()) or Path(_node_executable()).exists()),
             "node_executable": _node_executable(),
@@ -583,6 +633,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
             "capacity": int(_call_slots.stats()["capacity"]),
             "active_calls": int(_call_slots.stats()["active_calls"]),
             "max_requests_per_node": _MAX_REQUESTS_PER_NODE,
+            "cancel_request": True,
         },
     }
 
@@ -597,6 +648,8 @@ async def _handle_rpc_call(payload: Dict[str, Any]) -> Dict[str, Any]:
     if method in {"workflow_js_helper.set_capacity", "worker.set_capacity"}:
         value = int(dict(params or {}).get("capacity") or 1)
         return {"status": "ok", "result": _set_capacity(value)}
+    if method in {"workflow_js_helper.cancel_request", "worker.cancel_request"}:
+        return {"status": "ok", "result": _cancel_request(str(dict(params or {}).get("request_id") or ""))}
     if method != "execute_workflow_js_helper":
         return {"status": "error", "message": "unsupported_method"}
     result = await _execute_workflow_js_helper(dict(params or {}))

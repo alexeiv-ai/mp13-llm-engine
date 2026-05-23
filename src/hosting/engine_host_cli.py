@@ -766,6 +766,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "spawn-workflow-js-helper",
         "workflow-js-helper-resources",
         "workflow-js-helper-set-capacity",
+        "workflow-js-helper-cancel-request",
         "get-registration",
         "shutdown",
         "ensure-running",
@@ -1104,6 +1105,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.set_workflow_js_helper_capacity(
                     engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
                     capacity=int(payload.get("capacity") or 1),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-helper-cancel-request":
+            _print_ok(
+                svc.cancel_workflow_js_helper_request(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
+                    request_id=str(payload.get("request_id") or ""),
                 )
             )
             return 0

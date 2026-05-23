@@ -956,6 +956,7 @@ def test_workflow_js_helper_channel_resources_and_capacity_use_proxy_rpc() -> No
 
     ch.workflow_js_helper_resources(engine_id="wf-js")
     ch.set_workflow_js_helper_capacity(engine_id="wf-js", capacity=7)
+    ch.cancel_workflow_js_helper_request(engine_id="wf-js", request_id="req-789")
 
     assert fake.calls == [
         (
@@ -970,6 +971,14 @@ def test_workflow_js_helper_channel_resources_and_capacity_use_proxy_rpc() -> No
             {
                 "engine_id": "wf-js",
                 "capacity": 7,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-helper-cancel-request",
+            {
+                "engine_id": "wf-js",
+                "request_id": "req-789",
                 "session_token": "tok-123",
             },
         ),

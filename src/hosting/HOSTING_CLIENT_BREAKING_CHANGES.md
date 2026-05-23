@@ -29,8 +29,12 @@ When the workflow helper sandbox work is complete, this section must capture the
 - [x] Rely on `WorkerSandboxPolicy`, persisted registration, sandbox runtime, lifecycle/status/shutdown, and ensure-running semantics from hosting.
 - [x] Read neutral runtime environment metadata instead of inferring behavior from toolbox-specific directory names.
 - [x] Preserve package/workflow/session/context provenance in helper requests.
+- [x] Include a stable client `request_id` on JS helper calls when the caller wants cancellation or status correlation.
 - [x] Use `spawn_workflow_js_helper(...)` for the narrow JS-helper worker lane; `worker_user` may introduce this helper, while raw process spawn is restricted to `config_editor` and `admin`.
 - [x] Execute approved workflow helper calls through `proxy_rpc_call(..., method="execute_workflow_js_helper", ...)` with a traffic-scoped session for the helper `engine_id`.
+- [x] Use `workflow_js_helper_resources(...)` to inspect loaded worker capacity, active request ids, Node child PIDs, and per-child CPU/RSS when available.
+- [x] Use `set_workflow_js_helper_capacity(...)` to resize a loaded JS helper worker; capacity is the maximum number of hot Node child processes owned under that worker id.
+- [x] Use `cancel_workflow_js_helper_request(...)` to terminate a specific stuck helper request. This kills the Node child running that request and reports `workflow_sandbox_canceled` to the execute caller.
 
 ### Before And After Example
 
@@ -53,6 +57,7 @@ host.proxy_rpc_call(
         "package_id": package_id,
         "workflow_id": workflow_id,
         "package_source_digest": package_source_digest,
+        "request_id": request_id,
         "export_name": "condition",
         "operation": "condition",
         "payload": payload,
@@ -71,6 +76,9 @@ channel.proxy_rpc_call(
     method="execute_workflow_js_helper",
     params={...},
 )
+resources = channel.workflow_js_helper_resources(engine_id="workflow-js-helper")
+channel.set_workflow_js_helper_capacity(engine_id="workflow-js-helper", capacity=4)
+channel.cancel_workflow_js_helper_request(engine_id="workflow-js-helper", request_id=request_id)
 ```
 
 The daemon and CLI spawn paths preserve `worker_profile_class`, so clients do not need to compensate for generic-worker metadata loss.
@@ -80,6 +88,8 @@ Authorization boundary:
 - Raw `spawn` is for arbitrary process launch and requires `config_editor` or `admin`.
 - `spawn_workflow_js_helper(...)` is the constrained JS-helper introduction path and is available to `worker_user`, `config_editor`, and `admin`.
 - `execute_workflow_js_helper` is reached through the normal traffic proxy path. A `model_user` session may execute it only when scoped to the registered workflow helper `engine_id`.
+- `workflow_js_helper_resources` is a read/observe control command and is available to `diagnostic_user` and above.
+- `set_workflow_js_helper_capacity` and `cancel_workflow_js_helper_request` mutate runtime state and require `worker_user`, `config_editor`, or `admin`.
 - Generic worker proxy remains blocked for `model_user` and `model_user_with_model_control` unless the registered worker is the specialized `executor_kind = "workflow_js_helper"` lane.
 
 Toolbox sandbox authorization boundary:

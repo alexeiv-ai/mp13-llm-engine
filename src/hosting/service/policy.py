@@ -58,6 +58,7 @@ class PolicyMixin:
             "spawn-workflow-js-helper",
             "workflow-js-helper-resources",
             "workflow-js-helper-set-capacity",
+            "workflow-js-helper-cancel-request",
             "get-registration",
             "shutdown",
             "ensure-running",

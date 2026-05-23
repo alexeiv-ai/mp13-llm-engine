@@ -123,19 +123,70 @@ def test_daemon_dispatches_workflow_js_helper_resources_and_capacity() -> None:
             self.calls.append(("set_capacity", dict(kwargs)))
             return {"status": "ok", "capacity": kwargs["capacity"]}
 
+        def cancel_workflow_js_helper_request(self, **kwargs):
+            self.calls.append(("cancel", dict(kwargs)))
+            return {"status": "ok", "request_id": kwargs["request_id"], "canceled": True}
+
     fake = FakeService()
     daemon = EngineHostDaemon.__new__(EngineHostDaemon)
     daemon.svc = fake
 
     resources = daemon._call_service("workflow-js-helper-resources", {"engine_id": "wf-js"})
     resized = daemon._call_service("workflow-js-helper-set-capacity", {"engine_id": "wf-js", "capacity": 6})
+    canceled = daemon._call_service("workflow-js-helper-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})
 
     assert resources["capacity"] == 2
     assert resized["capacity"] == 6
+    assert canceled["canceled"] is True
     assert fake.calls == [
         ("resources", {"engine_id": "wf-js"}),
         ("set_capacity", {"engine_id": "wf-js", "capacity": 6}),
+        ("cancel", {"engine_id": "wf-js", "request_id": "req-1"}),
     ]
+
+
+def test_workflow_js_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    def fake_proxy_rpc_call(**kwargs):
+        assert kwargs["engine_id"] == "wf-js"
+        assert kwargs["method"] == "worker.resources"
+        return {
+            "result": {
+                "status": "ok",
+                "capacity": 2,
+                "active_calls": 1,
+                "node_pool": {
+                    "capacity": 2,
+                    "node_process_count": 1,
+                    "active_node_process_count": 1,
+                    "idle_node_process_count": 0,
+                    "node_processes": [
+                        {
+                            "pid": 4321,
+                            "alive": True,
+                            "busy": True,
+                            "active_request_id": "req-live",
+                            "request_count": 3,
+                        }
+                    ],
+                },
+            }
+        }
+
+    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
+    monkeypatch.setattr(svc, "_process_resource_snapshot", lambda pid: {"pid": pid, "cpu_percent": 12.5, "memory_mb": 64.0})
+
+    out = svc.workflow_js_helper_resources(engine_id="wf-js")
+
+    pool = out["node_pool"]
+    assert pool["active_request_ids"] == ["req-live"]
+    assert pool["node_cpu_percent"] == 12.5
+    assert pool["node_memory_mb"] == 64.0
+    assert pool["node_processes"][0]["resources"]["pid"] == 4321
 
 
 def test_workflow_js_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:

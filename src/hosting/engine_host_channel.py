@@ -1488,6 +1488,16 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def cancel_workflow_js_helper_request(self, *, engine_id: str = "workflow-js-helper", request_id: str) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-helper-cancel-request",
+            {
+                "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def shutdown_managed(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         res = self._invoke("shutdown", {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds)})
         return dict(res or {})

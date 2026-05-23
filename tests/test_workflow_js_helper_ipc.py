@@ -33,12 +33,17 @@ class _FakeNodePool:
         self.response = dict(response or {"ok": True, "result_json": '{"ok":true}'})
         self.exc = exc
         self.calls = []
+        self.cancel_calls = []
 
     def execute(self, req, **kwargs):
         self.calls.append({"req": dict(req or {}), **dict(kwargs or {})})
         if self.exc is not None:
             raise self.exc
         return dict(self.response)
+
+    def cancel_request(self, request_id):
+        self.cancel_calls.append(str(request_id or ""))
+        return {"status": "ok", "request_id": str(request_id or ""), "canceled": True, "reason": "canceled"}
 
 
 def test_workflow_js_helper_rejects_invalid_module_identity() -> None:
@@ -84,7 +89,7 @@ def test_workflow_js_helper_executes_named_export(monkeypatch) -> None:
         worker._handle_rpc_call(
             {
                 "method": "execute_workflow_js_helper",
-                "params": _request(source),
+                "params": _request(source, request_id="req-123"),
             }
         )
     )
@@ -96,6 +101,8 @@ def test_workflow_js_helper_executes_named_export(monkeypatch) -> None:
     assert result["audit"]["package_id"] == "pkg-demo"
     assert result["audit"]["workflow_id"] == "config/demo"
     assert result["audit"]["session_id"] == "session-1"
+    assert result["audit"]["request_id"] == "req-123"
+    assert fake_pool.calls[0]["req"]["request_id"] == "req-123"
     assert fake_pool.calls[0]["export_name"] == "condition"
 
 
@@ -133,6 +140,26 @@ def test_workflow_js_helper_maps_timeout(monkeypatch) -> None:
 
     assert out["result"]["ok"] is False
     assert out["result"]["reason"] == "workflow_sandbox_timeout"
+
+
+def test_workflow_js_helper_maps_canceled_request(monkeypatch) -> None:
+    source = "export function condition(input) { return true; }"
+
+    monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
+    monkeypatch.setattr(worker, "_NODE_POOL", _FakeNodePool(exc=worker._WorkflowJsHelperRequestCanceled("canceled")))
+
+    out = asyncio.run(
+        worker._handle_rpc_call(
+            {
+                "method": "execute_workflow_js_helper",
+                "params": _request(source, request_id="req-cancel"),
+            }
+        )
+    )
+
+    assert out["result"]["ok"] is False
+    assert out["result"]["reason"] == "workflow_sandbox_canceled"
+    assert out["result"]["detail"]["request_id"] == "req-cancel"
 
 
 def test_workflow_js_helper_maps_output_limit(monkeypatch) -> None:
@@ -277,7 +304,7 @@ def test_workflow_js_helper_resources_and_capacity_resize(monkeypatch) -> None:
                 "node_process_count": 1,
                 "active_node_process_count": 0,
                 "idle_node_process_count": 1,
-                "node_processes": [{"pid": 1234, "alive": True, "busy": False, "request_count": 2}],
+                "node_processes": [{"pid": 1234, "alive": True, "busy": False, "active_request_id": None, "request_count": 2}],
                 "max_requests_per_node": 256,
             }
 
@@ -298,3 +325,29 @@ def test_workflow_js_helper_resources_and_capacity_resize(monkeypatch) -> None:
         assert result["node_pool"]["node_processes"][0]["pid"] == 1234
     finally:
         worker._call_slots.set_capacity(1)
+
+
+def test_workflow_js_helper_cancel_request_rpc(monkeypatch) -> None:
+    fake_pool = _FakeNodePool()
+    monkeypatch.setattr(worker, "_NODE_POOL", fake_pool)
+
+    out = asyncio.run(
+        worker._handle_rpc_call(
+            {
+                "method": "workflow_js_helper.cancel_request",
+                "params": {"request_id": "req-456"},
+            }
+        )
+    )
+
+    assert out["status"] == "ok"
+    assert out["result"]["canceled"] is True
+    assert out["result"]["request_id"] == "req-456"
+    assert fake_pool.cancel_calls == ["req-456"]
+
+
+def test_workflow_js_helper_hello_reports_cancellation_support() -> None:
+    out = asyncio.run(worker._handle_rpc_call({"method": "rpc.describe", "params": {}}))
+
+    assert out["cancellation"] is True
+    assert out["workflow_js_helper"]["cancel_request"] is True

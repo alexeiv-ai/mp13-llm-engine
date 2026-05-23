@@ -73,13 +73,63 @@ class WorkflowHelperMixin:
             params={},
             timeout_seconds=10.0,
         )
-        return dict(out.get("result") or out or {})
+        return self._enrich_workflow_js_helper_resources(dict(out.get("result") or out or {}))
+
+    def _enrich_workflow_js_helper_resources(self, resources: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(resources or {})
+        pool = dict(result.get("node_pool") or {})
+        nodes = []
+        total_cpu = 0.0
+        total_mem = 0.0
+        known_cpu = False
+        known_mem = False
+        snapshot_fn = getattr(self, "_process_resource_snapshot", None)
+        for raw_node in list(pool.get("node_processes") or []):
+            node = dict(raw_node or {})
+            pid = int(node.get("pid") or 0)
+            if pid > 0 and callable(snapshot_fn):
+                try:
+                    metrics = dict(snapshot_fn(pid) or {})
+                except Exception:
+                    metrics = {}
+                if metrics.get("cpu_percent") is not None:
+                    known_cpu = True
+                    total_cpu += float(metrics.get("cpu_percent") or 0.0)
+                if metrics.get("memory_mb") is not None:
+                    known_mem = True
+                    total_mem += float(metrics.get("memory_mb") or 0.0)
+                node["resources"] = metrics
+            nodes.append(node)
+        if nodes:
+            pool["node_processes"] = nodes
+            pool["active_request_ids"] = [
+                str(dict(row or {}).get("active_request_id") or "").strip()
+                for row in nodes
+                if str(dict(row or {}).get("active_request_id") or "").strip()
+            ]
+        if known_cpu:
+            pool["node_cpu_percent"] = round(total_cpu, 1)
+            result["node_cpu_percent"] = round(total_cpu, 1)
+        if known_mem:
+            pool["node_memory_mb"] = round(total_mem, 1)
+            result["node_memory_mb"] = round(total_mem, 1)
+        result["node_pool"] = pool
+        return result
 
     def set_workflow_js_helper_capacity(self, *, engine_id: str = "workflow-js-helper", capacity: int) -> Dict[str, Any]:
         out = self.proxy_rpc_call(
             engine_id=str(engine_id or "").strip() or "workflow-js-helper",
             method="workflow_js_helper.set_capacity",
             params={"capacity": max(1, min(int(capacity or 1), 256))},
+            timeout_seconds=10.0,
+        )
+        return self._enrich_workflow_js_helper_resources(dict(out.get("result") or out or {}))
+
+    def cancel_workflow_js_helper_request(self, *, engine_id: str = "workflow-js-helper", request_id: str) -> Dict[str, Any]:
+        out = self.proxy_rpc_call(
+            engine_id=str(engine_id or "").strip() or "workflow-js-helper",
+            method="workflow_js_helper.cancel_request",
+            params={"request_id": str(request_id or "").strip()},
             timeout_seconds=10.0,
         )
         return dict(out.get("result") or out or {})
