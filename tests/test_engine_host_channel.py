@@ -985,6 +985,71 @@ def test_workflow_js_helper_channel_resources_and_capacity_use_proxy_rpc() -> No
     ]
 
 
+def test_workflow_python_helper_channel_method_forwards_expected_payload() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.spawn_workflow_python_helper(
+        engine_id="wf-py",
+        python_executable="python-demo",
+        capacity=5,
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
+    )
+
+    assert fake.calls == [
+        (
+            "spawn-workflow-python-helper",
+            {
+                "engine_id": "wf-py",
+                "python_executable": "python-demo",
+                "capacity": 5,
+                "sandbox_policy": {"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
+                "worker_profile_class": "generic",
+                "session_token": "tok-123",
+            },
+        )
+    ]
+
+
+def test_workflow_python_helper_channel_resources_and_capacity_use_proxy_rpc() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.workflow_python_helper_resources(engine_id="wf-py")
+    ch.set_workflow_python_helper_capacity(engine_id="wf-py", capacity=7)
+    ch.cancel_workflow_python_helper_request(engine_id="wf-py", request_id="req-789")
+
+    assert fake.calls == [
+        (
+            "workflow-python-helper-resources",
+            {
+                "engine_id": "wf-py",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-helper-set-capacity",
+            {
+                "engine_id": "wf-py",
+                "capacity": 7,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-helper-cancel-request",
+            {
+                "engine_id": "wf-py",
+                "request_id": "req-789",
+                "session_token": "tok-123",
+            },
+        ),
+    ]
+
+
 def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     custom_pid_file = Path("X:/tmp/custom_host.pid")
     captured: Dict[str, Any] = {}

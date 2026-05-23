@@ -6,11 +6,11 @@ This document is intentionally reset for the workflow Python helper executor wor
 
 ## Draft Reply To Dependent Project
 
-Status: planned, not implemented yet.
+Status: implemented for the hosted Python helper worker lane, public service/channel/CLI commands, traffic RPC execution, cancellation, capacity control, auth boundaries, and normalized helper pool resources.
 
 We agree with the request. The previous hosting docs deferred a Python helper executor because there was no concrete caller contract at the time. Your new contract supplies that missing requirement, so the right next step is to add a dedicated hosted `workflow_python_helper` lane rather than continuing backend-owned local `subprocess.run(...)` execution.
 
-The planned shape is:
+The implemented shape is:
 
 - `spawn_workflow_python_helper(engine_id="workflow-python-helper")`
 - `execute_workflow_python_helper` over hosting IPC/RPC
@@ -25,28 +25,24 @@ We will also add generic helper pool aliases to JS helper resources while preser
 
 ## Stop Doing
 
-To be completed after implementation.
-
-- [ ] Stop running workflow Python helpers locally with backend `subprocess.run(...)`.
-- [ ] Stop generating local runner files as the execution boundary for approved workflow Python helpers.
-- [ ] Stop passing caller-provided Python file paths as executable inputs to hosting.
-- [ ] Stop treating Python helper execution as generic Python execution.
-- [ ] Stop routing workflow Python helpers through toolbox state unless they are intentionally exposed as toolbox tools.
+- [x] Stop running workflow Python helpers locally with backend `subprocess.run(...)`.
+- [x] Stop generating local runner files as the execution boundary for approved workflow Python helpers.
+- [x] Stop passing caller-provided Python file paths as executable inputs to hosting.
+- [x] Stop treating Python helper execution as generic Python execution.
+- [x] Stop routing workflow Python helpers through toolbox state unless they are intentionally exposed as toolbox tools.
 
 ## Start Doing
 
-To be completed after implementation.
-
-- [ ] Spawn or discover workers registered with `executor_kind = "workflow_python_helper"`.
-- [ ] Execute approved Python helpers with `proxy_rpc_call(..., method="execute_workflow_python_helper", ...)`.
-- [ ] Send `module_source` plus `module_sha256`.
-- [ ] Treat `source_path` as provenance only.
-- [ ] Include stable `request_id` when cancellation or status correlation is needed.
-- [ ] Send `python.import_allowlist`, `python.package_pins`, and `python.environment_name` when a realized runtime environment is needed.
-- [ ] Use `workflow_python_helper_resources(...)` to inspect capacity, active request ids, process counts, PIDs, and metrics.
-- [ ] Use `set_workflow_python_helper_capacity(...)` to resize a loaded helper worker.
-- [ ] Use `cancel_workflow_python_helper_request(...)` to terminate a specific stuck request.
-- [ ] Use the normalized `pool` resource shape for both JS and Python helper controls.
+- [x] Spawn or discover workers registered with `executor_kind = "workflow_python_helper"`.
+- [x] Execute approved Python helpers with `proxy_rpc_call(..., method="execute_workflow_python_helper", ...)`.
+- [x] Send `module_source` plus `module_sha256`.
+- [x] Treat `source_path` as provenance only.
+- [x] Include stable `request_id` when cancellation or status correlation is needed.
+- [x] Send `python.import_allowlist`, `python.package_pins`, and `python.environment_name` with helper requests.
+- [x] Use `workflow_python_helper_resources(...)` to inspect capacity, active request ids, process counts, PIDs, and metrics.
+- [x] Use `set_workflow_python_helper_capacity(...)` to resize a loaded helper worker.
+- [x] Use `cancel_workflow_python_helper_request(...)` to terminate a specific stuck request.
+- [x] Use the normalized `pool` resource shape for both JS and Python helper controls.
 
 ## Planned Python Example
 
@@ -115,20 +111,16 @@ channel.cancel_workflow_python_helper_request(engine_id="workflow-python-helper"
 
 ## Authorization Boundary
 
-To be verified after implementation.
-
-- [ ] `workflow_python_helper_resources`: `diagnostic_user` and above.
-- [ ] `spawn_workflow_python_helper`: `worker_user`, `config_editor`, and `admin`.
-- [ ] `set_workflow_python_helper_capacity`: `worker_user`, `config_editor`, and `admin`.
-- [ ] `cancel_workflow_python_helper_request`: `worker_user`, `config_editor`, and `admin`.
-- [ ] `execute_workflow_python_helper`: traffic-scoped proxy for the registered helper `engine_id`.
-- [ ] Raw generic `spawn`: still `config_editor` and `admin` only.
+- [x] `workflow_python_helper_resources`: `diagnostic_user` and above.
+- [x] `spawn_workflow_python_helper`: `worker_user`, `config_editor`, and `admin`.
+- [x] `set_workflow_python_helper_capacity`: `worker_user`, `config_editor`, and `admin`.
+- [x] `cancel_workflow_python_helper_request`: `worker_user`, `config_editor`, and `admin`.
+- [x] `execute_workflow_python_helper`: traffic-scoped proxy for the registered helper `engine_id`.
+- [x] Raw generic `spawn`: still `config_editor` and `admin` only.
 
 ## Compatibility Window
 
-To be completed after implementation.
-
-- [ ] Document whether backend local Python helper execution should be removed immediately or kept behind a short migration flag.
-- [ ] Document stable Python helper `workflow_sandbox_*` failure reasons.
-- [ ] Document any platform-specific limits for memory enforcement and child process metrics.
-- [ ] Document JS helper resource compatibility fields that remain available after normalized `pool` aliases are added.
+- [x] Backend local Python helper execution should be removed in favor of the hosted lane. Keep a short migration flag only if dependent rollout requires rollback.
+- [x] Stable Python helper `workflow_sandbox_*` failure reasons match the JS helper set unless a future Python-specific reason is explicitly documented.
+- [x] Memory limit enforcement is reported per call; current implementation reports best-effort unavailable when the runtime cannot enforce it.
+- [x] JS helper resource compatibility fields such as `node_pool`, `workflow_js_node_process_count`, and `workflow_js_node_pids` remain available after normalized `pool` aliases are added.

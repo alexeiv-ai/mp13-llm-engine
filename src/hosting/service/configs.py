@@ -86,7 +86,7 @@ class ConfigMixin:
         r = str(role or "").strip().lower()
         if (
             profile == "generic"
-            and executor_kind != "workflow_js_helper"
+            and executor_kind not in {"workflow_js_helper", "workflow_python_helper"}
             and r in {ROLE_MODEL_USER, ROLE_MODEL_USER_WITH_MODEL_CONTROL}
         ):
             raise PermissionError("insufficient_role")

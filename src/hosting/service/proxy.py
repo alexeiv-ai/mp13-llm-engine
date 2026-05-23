@@ -7,6 +7,7 @@ import os
 import posixpath
 import re
 import secrets
+import sys
 import tempfile
 import time
 from multiprocessing.connection import Client as MPClient
@@ -345,14 +346,56 @@ class ProxyMixin:
             raise ValueError("method is required")
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         worker_engine_id = self._route_model_instance_id(reg, eid)
+        rpc_params = dict(params or {})
+        if str(reg.get("executor_kind") or "").strip() == "workflow_python_helper" and meth == "execute_workflow_python_helper":
+            rpc_params = self._prepare_workflow_python_helper_runtime_params(reg=reg, params=rpc_params)
         out = self._ipc_call(
             reg=reg,
-            payload={"kind": "rpc_call", "engine_id": worker_engine_id, "method": meth, "params": dict(params or {})},
+            payload={"kind": "rpc_call", "engine_id": worker_engine_id, "method": meth, "params": rpc_params},
             timeout_seconds=timeout_seconds,
         )
         if str(out.get("status") or "").strip().lower() == "error":
             raise RuntimeError(str(out.get("message") or "rpc_call_failed"))
         return dict(out or {})
+
+    def _prepare_workflow_python_helper_runtime_params(self, *, reg: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(params or {})
+        python_req = dict(out.get("python") or {})
+        package_pins = dict(python_req.get("package_pins") or {})
+        import_allowlist = list(python_req.get("import_allowlist") or [])
+        environment_name = str(python_req.get("environment_name") or "workflow-python-helper").strip() or "workflow-python-helper"
+        if not package_pins and not import_allowlist:
+            python_req.setdefault("environment_name", environment_name)
+            python_req.setdefault("python_executable", str(dict(reg.get("env") or {}).get("MP13_WORKFLOW_PYTHON") or sys.executable))
+            python_req.setdefault("python_source", "worker")
+            out["python"] = python_req
+            return out
+        from ..toolbox.environment import RuntimeEnvironmentManager
+
+        manager = RuntimeEnvironmentManager(self.hosting_root)
+        metadata = manager.realize_workflow_python_helper_environment(
+            policy={
+                "import_allowlist": import_allowlist,
+                "package_pins": package_pins,
+            },
+            package_id=str(out.get("package_id") or "").strip() or None,
+            workflow_id=str(out.get("workflow_id") or "").strip() or None,
+            package_source_digest=str(out.get("package_source_digest") or "").strip() or None,
+            helper_source_sha256=str(out.get("module_sha256") or "").strip() or None,
+            helper_source_path=str(out.get("source_path") or "").strip() or None,
+            bootstrap_python_executable=str(dict(reg.get("env") or {}).get("MP13_WORKFLOW_PYTHON") or sys.executable),
+            environment_name=environment_name,
+        )
+        python_req["environment_name"] = environment_name
+        python_req["python_executable"] = str(metadata.get("runtime_python_executable") or python_req.get("python_executable") or sys.executable)
+        python_req["python_source"] = str(metadata.get("runtime_python_source") or "runtime_env")
+        python_req["runtime_environment"] = {
+            "venv_key": str(metadata.get("venv_key") or "").strip() or None,
+            "venv_path": str(metadata.get("venv_path") or "").strip() or None,
+            "runtime_python_selection": dict(metadata.get("runtime_python_selection") or {}),
+        }
+        out["python"] = python_req
+        return out
 
     def proxy_rpc_open(
         self,

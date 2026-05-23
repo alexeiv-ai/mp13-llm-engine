@@ -13,6 +13,13 @@ Current worker families:
 2. generic/model workers, described in [GENERIC_WORKER.md](GENERIC_WORKER.md)
 3. workflow helper workers, described in [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md)
 
+Workflow helper workers use the same launch, registration, policy, and runtime
+metadata foundation, but expose `hosting.workflow_helper.worker.v1` instead of
+the model-worker contract. JS and Python helpers report a normalized helper
+`pool` shape with process counts, active request ids, per-process state, and
+sampled process resources. JS helpers retain their Node-specific compatibility
+fields.
+
 The host remains the trust boundary and lifecycle authority. Workers are separate processes that expose RPC over hosting IPC; the host decides what process is launched, what sandbox policy is attached to the registration, and what brokered callbacks are allowed.
 
 ## Shared Runtime Model

@@ -7,31 +7,37 @@ Scope: workflow helper worker contracts that reuse hosting worker, sandbox, life
 
 Workflow helper workers execute short, dynamic workflow helper code through the hosting worker model instead of letting dependent projects spawn runtimes directly.
 
-V1 includes a JavaScript helper executor:
+V1 includes JavaScript and Python helper executors:
 
 1. worker module: `hosting.workflow_js_helper_ipc`
 2. executor kind: `workflow_js_helper`
 3. worker profile class: `generic`
 4. execution contract: `hosting.workflow_helper.worker.v1`
 5. sandbox profile: `workflow_js_helper_v1`
+6. worker module: `hosting.workflow_python_helper_ipc`
+7. executor kind: `workflow_python_helper`
+8. worker profile class: `generic`
+9. execution contract: `hosting.workflow_helper.worker.v1`
+10. sandbox profile: `workflow_python_helper_v1`
 
 The worker is not a logical toolbox and does not participate in toolbox tool routing.
 
-Python workflow helper support currently covers realized runtime environment metadata through `workflow_python_helper`. This slice does not define a separate Python worker execution contract; add one only when a concrete caller contract exists.
+Python helper requests accept `python.import_allowlist`, `python.package_pins`, and `python.environment_name` for shared runtime environment intent. The default environment name is `workflow-python-helper`.
 
 ## Host Lifecycle
 
-Callers should use `EngineHostService.spawn_workflow_js_helper(...)` or `EngineHostControlChannel.spawn_workflow_js_helper(...)`. Do not use raw `spawn` for workflow helpers; raw process launch is a higher-trust host operation.
+Callers should use `EngineHostService.spawn_workflow_js_helper(...)`, `EngineHostService.spawn_workflow_python_helper(...)`, or the matching `EngineHostControlChannel` methods. Do not use raw `spawn` for workflow helpers; raw process launch is a higher-trust host operation.
 
 The convenience API uses:
 
 ```text
 python -m hosting.workflow_js_helper_ipc
+python -m hosting.workflow_python_helper_ipc
 ```
 
 and persists a normal worker registration with:
 
-1. `executor_kind = "workflow_js_helper"`
+1. `executor_kind = "workflow_js_helper"` or `executor_kind = "workflow_python_helper"`
 2. `worker_profile_class = "generic"`
 3. `sandbox_policy`
 4. `sandbox_runtime`
@@ -58,11 +64,11 @@ Each Node child defaults to a maximum of 256 requests before recycling. Recyclin
 
 Toolbox sandboxes add another layer: the client-side harness can route calls across a pool of toolbox executor registrations and uses async gather/round-robin routing. JS helper v1 does not need a toolbox-style registry/pool for correctness because helper calls are source-in, JSON-out, and isolated per call. If throughput requires it later, the same pattern can be added by registering multiple `executor_kind = "workflow_js_helper"` workers and routing by capacity/busy state.
 
-Live pool state is available through `workflow-js-helper-resources` or `EngineHostControlChannel.workflow_js_helper_resources(...)`. The response reports capacity, active calls, available slots, Node process counts, Node process ids, active request ids, per-node request counts, and per-node CPU/RSS when the host can sample the child process.
+Live pool state is available through `workflow-js-helper-resources`, `workflow-python-helper-resources`, or the matching channel methods. The response reports capacity, active calls, available slots, process counts, process ids, active request ids, per-process request counts, and per-process CPU/RSS when the host can sample the child process. JS responses keep `node_pool`, `workflow_js_node_process_count`, and related compatibility fields while also exposing the normalized `pool` shape.
 
 Capacity can be changed for a loaded worker through `workflow-js-helper-set-capacity` or `EngineHostControlChannel.set_workflow_js_helper_capacity(...)`. Increasing capacity allows the worker to create more hot Node children on demand. Decreasing capacity prevents new children above the new limit and retires idle excess children; active calls are allowed to finish.
 
-Specific active requests can be canceled through `workflow-js-helper-cancel-request` or `EngineHostControlChannel.cancel_workflow_js_helper_request(...)`. Callers should provide `request_id` in `execute_workflow_js_helper` when they need this control. Cancellation kills the Node child that owns that request and removes it from the pool; the worker creates a fresh hot Node child later if capacity requires it.
+Specific active requests can be canceled through `workflow-js-helper-cancel-request`, `workflow-python-helper-cancel-request`, or the matching channel methods. Callers should provide `request_id` in helper execution calls when they need this control. Cancellation kills the child process that owns that request and removes it from the pool; the worker creates a fresh hot child later if capacity requires it.
 
 ## Default JS Sandbox Policy
 
@@ -125,6 +131,25 @@ Allowed operations:
 7. `shape_payload`
 
 Input and output are JSON only.
+
+## Python RPC Contract
+
+Call method:
+
+```text
+execute_workflow_python_helper
+```
+
+Request fields match the JS helper contract and add:
+
+1. `source_path`: provenance only; the worker never executes caller-provided file paths
+2. `python.import_allowlist`: declared helper import intent
+3. `python.package_pins`: deterministic dependency intent
+4. `python.environment_name`: runtime environment identity, defaulting to `workflow-python-helper`
+
+The public contract accepts `module_source`, not an executable path. The worker verifies `sha256(module_source) == module_sha256`, executes only the requested function name, requires JSON input/output, applies per-call timeout/output limits, and reports memory limit enforcement as best-effort unavailable when the platform/runtime does not enforce it.
+
+Allowed operations are the same as JS: `default`, `condition`, `evaluate_condition`, `routing_hint`, `route_hint`, `payload`, and `shape_payload`.
 
 ## Result Contract
 

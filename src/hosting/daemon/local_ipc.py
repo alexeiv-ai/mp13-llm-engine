@@ -438,7 +438,7 @@ class EngineHostDaemon:
     @staticmethod
     def _operation_target_engine_id(command: str, payload: Dict[str, Any]) -> Optional[str]:
         cmd = str(command or "").strip()
-        if cmd not in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "unload-model", "shutdown", "remove-registration"}:
+        if cmd not in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "spawn-workflow-python-helper", "unload-model", "shutdown", "remove-registration"}:
             return None
         engine_id = str((payload or {}).get("engine_id") or "").strip()
         return engine_id or None
@@ -1300,7 +1300,7 @@ class EngineHostDaemon:
     def _operation_cancel_teardown(self, op: Dict[str, Any]) -> Dict[str, Any]:
         engine_id = str((op or {}).get("target_engine_id") or "").strip()
         command = str((op or {}).get("command") or "").strip()
-        if command not in {"connect-from-config", "spawn", "spawn-workflow-js-helper"}:
+        if command not in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "spawn-workflow-python-helper"}:
             return {"attempted": False, "status": "not_applicable", "engine_id": engine_id or None}
         if not engine_id:
             return {"attempted": False, "status": "target_engine_id_unknown", "engine_id": None}
@@ -1375,7 +1375,7 @@ class EngineHostDaemon:
             task = self._operation_tasks_by_id.get(op_id)
         command = str(op.get("command") or "").strip()
         active_task = bool(task is not None and not task.done())
-        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn", "spawn-workflow-js-helper"})
+        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "spawn-workflow-python-helper"})
         task_cancel_requested = bool(active_task and not wait_for_service_result)
         if task_cancel_requested:
             task.cancel()
@@ -2030,6 +2030,14 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
             )
+        if cmd == "spawn-workflow-python-helper":
+            return svc.spawn_workflow_python_helper(
+                engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
+                python_executable=payload.get("python_executable"),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+            )
         if cmd == "workflow-js-helper-resources":
             return svc.workflow_js_helper_resources(engine_id=str(payload.get("engine_id") or "workflow-js-helper"))
         if cmd == "workflow-js-helper-set-capacity":
@@ -2040,6 +2048,18 @@ class EngineHostDaemon:
         if cmd == "workflow-js-helper-cancel-request":
             return svc.cancel_workflow_js_helper_request(
                 engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
+                request_id=str(payload.get("request_id") or ""),
+            )
+        if cmd == "workflow-python-helper-resources":
+            return svc.workflow_python_helper_resources(engine_id=str(payload.get("engine_id") or "workflow-python-helper"))
+        if cmd == "workflow-python-helper-set-capacity":
+            return svc.set_workflow_python_helper_capacity(
+                engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
+                capacity=int(payload.get("capacity") or 1),
+            )
+        if cmd == "workflow-python-helper-cancel-request":
+            return svc.cancel_workflow_python_helper_request(
+                engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
                 request_id=str(payload.get("request_id") or ""),
             )
         if cmd == "get-registration":

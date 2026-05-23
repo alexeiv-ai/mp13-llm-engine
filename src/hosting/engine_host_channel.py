@@ -1498,6 +1498,54 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def spawn_workflow_python_helper(
+        self,
+        *,
+        engine_id: str = "workflow-python-helper",
+        python_executable: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "spawn-workflow-python-helper",
+            {
+                "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
+                "python_executable": str(python_executable or "").strip() or None,
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def workflow_python_helper_resources(self, *, engine_id: str = "workflow-python-helper") -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-helper-resources",
+            {"engine_id": str(engine_id or "").strip() or "workflow-python-helper"},
+        )
+        return dict(res or {})
+
+    def set_workflow_python_helper_capacity(self, *, engine_id: str = "workflow-python-helper", capacity: int) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-helper-set-capacity",
+            {
+                "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
+                "capacity": max(1, min(int(capacity or 1), 256)),
+            },
+        )
+        return dict(res or {})
+
+    def cancel_workflow_python_helper_request(self, *, engine_id: str = "workflow-python-helper", request_id: str) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-helper-cancel-request",
+            {
+                "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def shutdown_managed(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         res = self._invoke("shutdown", {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds)})
         return dict(res or {})

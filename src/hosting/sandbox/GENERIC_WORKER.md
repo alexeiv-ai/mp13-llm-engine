@@ -9,7 +9,7 @@ Generic workers are hosted engine/model workers launched as separate processes a
 
 They share the sandbox launch and broker foundation, but they are not staged toolbox executors. They do not load toolbox manifests and do not have logical-toolbox routing.
 
-Workflow helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). The JS helper worker uses `worker_profile_class="generic"` and `executor_kind="workflow_js_helper"`, but it does not use the model-oriented `hosting.engine_worker_ipc` contract.
+Workflow helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). The JS and Python helper workers use `worker_profile_class="generic"` with `executor_kind="workflow_js_helper"` or `executor_kind="workflow_python_helper"`, but they do not use the model-oriented `hosting.engine_worker_ipc` contract.
 
 ## Main Implementation
 
@@ -93,7 +93,7 @@ The CLI/channel exposes these through `proxy-rpc-open`, `proxy-rpc-recv`, `proxy
 
 ## Workflow Helper Relationship
 
-The workflow JS helper worker intentionally stays outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch.
+The workflow JS and Python helper workers intentionally stay outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch.
 
 The shared pieces are:
 
@@ -107,10 +107,10 @@ The shared pieces are:
 
 The specialized pieces are:
 
-1. worker module `hosting.workflow_js_helper_ipc`
-2. executor kind `workflow_js_helper`
+1. worker modules `hosting.workflow_js_helper_ipc` and `hosting.workflow_python_helper_ipc`
+2. executor kinds `workflow_js_helper` and `workflow_python_helper`
 3. execution contract `hosting.workflow_helper.worker.v1`
-4. RPC method `execute_workflow_js_helper`
+4. RPC methods `execute_workflow_js_helper` and `execute_workflow_python_helper`
 
 ## HTTP Compatibility API
 

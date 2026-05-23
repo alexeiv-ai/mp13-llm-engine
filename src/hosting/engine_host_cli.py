@@ -764,9 +764,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "discover-running",
         "spawn",
         "spawn-workflow-js-helper",
+        "spawn-workflow-python-helper",
         "workflow-js-helper-resources",
         "workflow-js-helper-set-capacity",
         "workflow-js-helper-cancel-request",
+        "workflow-python-helper-resources",
+        "workflow-python-helper-set-capacity",
+        "workflow-python-helper-cancel-request",
         "get-registration",
         "shutdown",
         "ensure-running",
@@ -1093,10 +1097,44 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "spawn-workflow-python-helper":
+            _print_ok(
+                svc.spawn_workflow_python_helper(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
+                    python_executable=payload.get("python_executable"),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
         if cmd == "workflow-js-helper-resources":
             _print_ok(
                 svc.workflow_js_helper_resources(
                     engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-helper-resources":
+            _print_ok(
+                svc.workflow_python_helper_resources(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-helper-set-capacity":
+            _print_ok(
+                svc.set_workflow_python_helper_capacity(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
+                    capacity=int(payload.get("capacity") or 1),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-helper-cancel-request":
+            _print_ok(
+                svc.cancel_workflow_python_helper_request(
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
+                    request_id=str(payload.get("request_id") or ""),
                 )
             )
             return 0
