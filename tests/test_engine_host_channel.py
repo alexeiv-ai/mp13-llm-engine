@@ -929,6 +929,7 @@ def test_workflow_js_helper_channel_method_forwards_expected_payload() -> None:
     ch.spawn_workflow_js_helper(
         engine_id="wf-js",
         node_executable="node-demo",
+        capacity=5,
         sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
     )
 
@@ -938,6 +939,7 @@ def test_workflow_js_helper_channel_method_forwards_expected_payload() -> None:
             {
                 "engine_id": "wf-js",
                 "node_executable": "node-demo",
+                "capacity": 5,
                 "sandbox_policy": {"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
                 "worker_profile_class": "generic",
                 "session_token": "tok-123",

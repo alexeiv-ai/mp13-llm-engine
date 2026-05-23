@@ -30,12 +30,13 @@ def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monk
 
     monkeypatch.setattr(EngineHostService, "spawn", fake_spawn)
 
-    out = svc.spawn_workflow_js_helper(engine_id="wf-js", node_executable="node-custom")
+    out = svc.spawn_workflow_js_helper(engine_id="wf-js", node_executable="node-custom", capacity=3)
 
     assert out["engine_id"] == "wf-js"
     assert out["command"][-1] == "hosting.workflow_js_helper_ipc"
     assert out["env"]["MP13_WORKER_CONTRACT"] == "hosting.workflow_helper.worker.v1"
     assert out["env"]["MP13_WORKFLOW_JS_NODE"] == "node-custom"
+    assert out["env"]["MP13_WORKFLOW_JS_HELPER_CAPACITY"] == "3"
     assert out["worker_profile_class"] == "generic"
     assert out["executor_kind"] == "workflow_js_helper"
     assert out["sandbox_policy"]["sandbox"]["profile"] == "workflow_js_helper_v1"
@@ -46,6 +47,7 @@ def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monk
         "subprocess": False,
     }
     assert seen["capabilities"]["workflow_js_helper"] is True
+    assert seen["capabilities"]["capacity"] == 3
 
 
 def test_daemon_spawn_preserves_worker_profile_class() -> None:
@@ -92,6 +94,7 @@ def test_daemon_dispatches_spawn_workflow_js_helper() -> None:
         {
             "engine_id": "wf-js",
             "node_executable": "node-demo",
+            "capacity": 4,
             "worker_profile_class": "generic",
             "sandbox_policy": {"sandbox": {"enabled": True}},
         },
@@ -101,6 +104,7 @@ def test_daemon_dispatches_spawn_workflow_js_helper() -> None:
     assert fake.kwargs == {
         "engine_id": "wf-js",
         "node_executable": "node-demo",
+        "capacity": 4,
         "worker_profile_class": "generic",
         "sandbox_policy": {"sandbox": {"enabled": True}},
     }

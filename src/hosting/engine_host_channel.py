@@ -1455,6 +1455,7 @@ class EngineHostControlChannel:
         *,
         engine_id: str = "workflow-js-helper",
         node_executable: Optional[str] = None,
+        capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         worker_profile_class: str = "generic",
     ) -> Dict[str, Any]:
@@ -1463,6 +1464,7 @@ class EngineHostControlChannel:
             {
                 "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
                 "node_executable": str(node_executable or "").strip() or None,
+                "capacity": max(1, min(int(capacity or 1), 256)),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
                 "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
             },

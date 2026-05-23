@@ -2026,6 +2026,7 @@ class EngineHostDaemon:
             return svc.spawn_workflow_js_helper(
                 engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
                 node_executable=payload.get("node_executable"),
+                capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
             )

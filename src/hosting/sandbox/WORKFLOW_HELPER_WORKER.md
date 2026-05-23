@@ -21,7 +21,7 @@ Python workflow helper support currently covers realized runtime environment met
 
 ## Host Lifecycle
 
-Callers should use `EngineHostService.spawn_workflow_js_helper(...)` or spawn the same command through the existing host/channel spawn surfaces.
+Callers should use `EngineHostService.spawn_workflow_js_helper(...)` or `EngineHostControlChannel.spawn_workflow_js_helper(...)`. Do not use raw `spawn` for workflow helpers; raw process launch is a higher-trust host operation.
 
 The convenience API uses:
 
@@ -39,6 +39,20 @@ and persists a normal worker registration with:
 6. workflow helper capabilities
 
 Existing hosting lifecycle APIs such as status, shutdown, and ensure-running apply to this worker like other hosted workers.
+
+## Concurrency Model
+
+The JS helper follows the same bounded hosting-worker pattern as toolbox sandboxes, but with a simpler v1 topology:
+
+1. The worker IPC listener accepts multiple concurrent connections.
+2. Each RPC connection is handled on a short-lived host thread.
+3. `execute_workflow_js_helper` is guarded by `MP13_WORKFLOW_JS_HELPER_CAPACITY`.
+4. Each admitted call runs in an isolated temporary module staging directory and launches its own Node subprocess.
+5. When all call slots are in use, the worker returns `workflow_sandbox_capacity_exceeded`.
+
+`spawn_workflow_js_helper(capacity=N)` sets `MP13_WORKFLOW_JS_HELPER_CAPACITY=N` and records the capacity in worker capabilities. The default is `1`, which gives a bounded serialized lane. Increase it only for short helpers where parallel Node subprocesses are acceptable for the host.
+
+Toolbox sandboxes add another layer: the client-side harness can route calls across a pool of toolbox executor registrations and uses async gather/round-robin routing. JS helper v1 does not need a toolbox-style registry/pool for correctness because helper calls are source-in, JSON-out, and isolated per call. If throughput requires it later, the same pattern can be added by registering multiple `executor_kind = "workflow_js_helper"` workers and routing by capacity/busy state.
 
 ## Default JS Sandbox Policy
 
@@ -148,7 +162,7 @@ Stable failure reasons include:
 
 ## Current Limits
 
-1. The worker uses a bounded serialized call lane by default.
+1. The worker uses a bounded serialized call lane by default. `spawn_workflow_js_helper(capacity=N)` enables bounded in-worker parallelism.
 2. Memory limit reporting is best-effort and currently reports unavailable enforcement.
 3. V1 is for short helper calls only, not long-running jobs or general Node app hosting.
 4. Audit/provenance is returned in the per-call result. There is no persistent audit sink yet.

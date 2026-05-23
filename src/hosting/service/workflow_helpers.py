@@ -32,14 +32,17 @@ class WorkflowHelperMixin:
         *,
         engine_id: str = "workflow-js-helper",
         node_executable: Optional[str] = None,
+        capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         worker_profile_class: str = "generic",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip() or "workflow-js-helper"
+        call_capacity = max(1, min(int(capacity or 1), 256))
         env = {
             "MP13_WORKER_CONTRACT": "hosting.workflow_helper.worker.v1",
             "MP13_WORKFLOW_HELPER_WORKER_ID": eid,
             "MP13_ENGINE_ID": eid,
+            "MP13_WORKFLOW_JS_HELPER_CAPACITY": str(call_capacity),
         }
         src_root = str(Path(__file__).resolve().parents[2])
         existing_pythonpath = str(os.environ.get("PYTHONPATH") or "").strip()
@@ -59,5 +62,6 @@ class WorkflowHelperMixin:
                 "workflow_js_helper": True,
                 "execution_contract": "hosting.workflow_helper.worker.v1",
                 "sandbox_profile": "workflow_js_helper_v1",
+                "capacity": call_capacity,
             },
         )
