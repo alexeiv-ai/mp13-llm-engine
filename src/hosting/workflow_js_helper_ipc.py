@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -33,6 +34,7 @@ ALLOWED_OPERATIONS = {
     "shape_payload",
 }
 _CALL_CAPACITY = max(1, int(str(os.environ.get("MP13_WORKFLOW_JS_HELPER_CAPACITY") or "1").strip() or "1"))
+_MAX_REQUESTS_PER_NODE = max(1, int(str(os.environ.get("MP13_WORKFLOW_JS_HELPER_MAX_REQUESTS_PER_NODE") or "256").strip() or "256"))
 _call_slots = threading.BoundedSemaphore(_CALL_CAPACITY)
 
 
@@ -78,6 +80,7 @@ def _runtime(reason: Optional[str] = None) -> Dict[str, Any]:
         "sandbox_profile": SANDBOX_PROFILE,
         "contract": _contract_name(),
         "capacity": _CALL_CAPACITY,
+        "max_requests_per_node": _MAX_REQUESTS_PER_NODE,
     }
     if reason:
         out["reason"] = reason
@@ -118,28 +121,267 @@ def _audit_from_request(req: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _runner_source() -> str:
+def _node_worker_source() -> str:
     return """
-const [modulePath, exportName, payloadB64] = process.argv.slice(2);
-const payload = JSON.parse(Buffer.from(payloadB64, 'base64').toString('utf8'));
-const mod = await import(modulePath);
-if (!Object.prototype.hasOwnProperty.call(mod, exportName)) {
-  console.error(JSON.stringify({ reason: 'workflow_sandbox_export_not_found' }));
-  process.exit(21);
+import { createInterface } from 'node:readline';
+
+const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+const encoder = new TextEncoder();
+
+function send(row) {
+  originalStdoutWrite(JSON.stringify(row) + '\\n');
 }
-const fn = mod[exportName];
-if (typeof fn !== 'function') {
-  console.error(JSON.stringify({ reason: 'workflow_sandbox_export_not_found' }));
-  process.exit(21);
+
+function detailFromError(err) {
+  return { message: String((err && err.message) || err) };
 }
-const value = await fn(payload);
-try {
-  process.stdout.write(JSON.stringify(value === undefined ? null : value));
-} catch (err) {
-  console.error(JSON.stringify({ reason: 'workflow_sandbox_invalid_json_output', message: String(err && err.message || err) }));
-  process.exit(22);
+
+async function runOne(req) {
+  const requestId = String(req.request_id || '');
+  const exportName = String(req.export_name || '');
+  const sourceB64 = String(req.module_source_b64 || '');
+  const payloadJson = String(req.payload_json || 'null');
+  const outputLimitBytes = Math.max(1, Number(req.output_limit_bytes || 65536));
+  let payload;
+  try {
+    payload = JSON.parse(payloadJson);
+  } catch (err) {
+    send({ request_id: requestId, ok: false, reason: 'workflow_sandbox_invalid_result_shape', detail: detailFromError(err) });
+    return;
+  }
+  const previousStdoutWrite = process.stdout.write;
+  process.stdout.write = (...args) => {
+    try { originalStderrWrite(...args); } catch (_) {}
+    return true;
+  };
+  try {
+    const moduleUrl = `data:text/javascript;base64,${sourceB64}#${encodeURIComponent(requestId)}`;
+    const mod = await import(moduleUrl);
+    const fn = mod[exportName];
+    if (typeof fn !== 'function') {
+      send({ request_id: requestId, ok: false, reason: 'workflow_sandbox_export_not_found', detail: { export_name: exportName } });
+      return;
+    }
+    const value = await fn(payload);
+    let resultJson;
+    try {
+      resultJson = JSON.stringify(value === undefined ? null : value);
+    } catch (err) {
+      send({ request_id: requestId, ok: false, reason: 'workflow_sandbox_invalid_json_output', detail: detailFromError(err) });
+      return;
+    }
+    if (encoder.encode(resultJson || '').byteLength > outputLimitBytes) {
+      send({ request_id: requestId, ok: false, reason: 'workflow_sandbox_output_limit_exceeded', detail: { output_limit_bytes: outputLimitBytes } });
+      return;
+    }
+    send({ request_id: requestId, ok: true, result_json: resultJson });
+  } catch (err) {
+    send({ request_id: requestId, ok: false, reason: 'workflow_sandbox_runtime_error', detail: detailFromError(err) });
+  } finally {
+    process.stdout.write = previousStdoutWrite;
+  }
+}
+
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+for await (const line of rl) {
+  if (!String(line || '').trim()) {
+    continue;
+  }
+  try {
+    await runOne(JSON.parse(line));
+  } catch (err) {
+    send({ request_id: '', ok: false, reason: 'workflow_sandbox_runtime_error', detail: detailFromError(err) });
+  }
 }
 """.strip()
+
+
+class _HotNodeRuntime:
+    def __init__(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="mp13-workflow-js-node-")
+        self._tmp_path = Path(self._tmp.name)
+        self._worker_path = self._tmp_path / "worker.mjs"
+        self._worker_path.write_text(_node_worker_source(), encoding="utf-8")
+        self._responses: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        self._lock = threading.Lock()
+        self._request_count = 0
+        self._proc = subprocess.Popen(  # noqa: S603
+            [_node_executable(), str(self._worker_path)],
+            cwd=str(self._tmp_path),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+            **hidden_subprocess_kwargs(),
+        )
+        self._reader = threading.Thread(target=self._read_stdout, daemon=True, name=f"workflow-js-node-{int(self._proc.pid or 0)}")
+        self._reader.start()
+
+    def _read_stdout(self) -> None:
+        stream = self._proc.stdout
+        if stream is None:
+            return
+        while True:
+            line = stream.readline()
+            if not line:
+                break
+            try:
+                row = json.loads(line)
+                self._responses.put(dict(row or {}) if isinstance(row, dict) else {"ok": False, "reason": "workflow_sandbox_invalid_json_output"})
+            except Exception as exc:
+                self._responses.put({"ok": False, "reason": "workflow_sandbox_invalid_json_output", "detail": {"message": str(exc)}})
+
+    def alive(self) -> bool:
+        return self._proc.poll() is None
+
+    def execute(
+        self,
+        *,
+        request_id: str,
+        module_source: str,
+        export_name: str,
+        payload_json: str,
+        timeout_ms: int,
+        output_limit_bytes: int,
+    ) -> Dict[str, Any]:
+        if not self.alive():
+            raise RuntimeError("node_runtime_exited")
+        source_b64 = base64.b64encode(module_source.encode("utf-8")).decode("ascii")
+        row = {
+            "request_id": request_id,
+            "module_source_b64": source_b64,
+            "export_name": export_name,
+            "payload_json": payload_json,
+            "output_limit_bytes": int(output_limit_bytes),
+        }
+        deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
+        with self._lock:
+            try:
+                assert self._proc.stdin is not None
+                self._proc.stdin.write(json.dumps(row, ensure_ascii=False) + "\n")
+                self._proc.stdin.flush()
+            except Exception as exc:
+                raise RuntimeError(f"node_runtime_write_failed:{exc}") from exc
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.close(kill=True)
+                    raise TimeoutError("workflow_sandbox_timeout")
+                try:
+                    response = self._responses.get(timeout=min(remaining, 0.25))
+                except queue.Empty:
+                    if not self.alive():
+                        raise RuntimeError("node_runtime_exited")
+                    continue
+                if str(response.get("request_id") or "") in {"", request_id}:
+                    self._request_count += 1
+                    return response
+
+    def reusable(self) -> bool:
+        return self.alive() and self._request_count < _MAX_REQUESTS_PER_NODE
+
+    def close(self, *, kill: bool = False) -> None:
+        try:
+            if self.alive():
+                if kill:
+                    self._proc.kill()
+                else:
+                    self._proc.terminate()
+        except Exception:
+            pass
+        try:
+            self._proc.wait(timeout=1.0)
+        except Exception:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
+        try:
+            self._tmp.cleanup()
+        except Exception:
+            pass
+
+
+class _HotNodeRuntimePool:
+    def __init__(self, capacity: int) -> None:
+        self.capacity = max(1, int(capacity or 1))
+        self._lock = threading.Lock()
+        self._idle: list[_HotNodeRuntime] = []
+        self._all: list[_HotNodeRuntime] = []
+
+    def _prune_locked(self) -> None:
+        self._idle = [rt for rt in self._idle if rt.alive()]
+        alive = []
+        for rt in self._all:
+            if rt.alive():
+                alive.append(rt)
+            else:
+                rt.close(kill=True)
+        self._all = alive
+
+    def _checkout(self) -> _HotNodeRuntime:
+        with self._lock:
+            self._prune_locked()
+            while self._idle:
+                rt = self._idle.pop()
+                if rt.alive():
+                    return rt
+            if len(self._all) < self.capacity:
+                rt = _HotNodeRuntime()
+                self._all.append(rt)
+                return rt
+        raise RuntimeError("workflow_sandbox_capacity_exceeded")
+
+    def _return(self, rt: _HotNodeRuntime) -> None:
+        with self._lock:
+            if rt.reusable() and rt in self._all:
+                self._idle.append(rt)
+            else:
+                try:
+                    rt.close(kill=not rt.alive())
+                except Exception:
+                    pass
+                self._all = [item for item in self._all if item is not rt]
+
+    def execute(self, req: Dict[str, Any], *, export_name: str, payload_json: str, timeout_ms: int, output_limit_bytes: int) -> Dict[str, Any]:
+        rt = self._checkout()
+        reusable = True
+        try:
+            return rt.execute(
+                request_id=uuid.uuid4().hex,
+                module_source=str(req.get("module_source") or ""),
+                export_name=export_name,
+                payload_json=payload_json,
+                timeout_ms=timeout_ms,
+                output_limit_bytes=output_limit_bytes,
+            )
+        except TimeoutError:
+            reusable = False
+            raise
+        except Exception:
+            reusable = False
+            raise
+        finally:
+            if reusable:
+                self._return(rt)
+            else:
+                rt.close(kill=True)
+                with self._lock:
+                    self._all = [item for item in self._all if item is not rt]
+
+    def close_all(self) -> None:
+        with self._lock:
+            runtimes = list(self._all)
+            self._idle = []
+            self._all = []
+        for rt in runtimes:
+            rt.close(kill=True)
+
+
+_NODE_POOL = _HotNodeRuntimePool(_CALL_CAPACITY)
 
 
 def _execute_node(req: Dict[str, Any], *, started_at: float) -> Dict[str, Any]:
@@ -165,44 +407,29 @@ def _execute_node(req: Dict[str, Any], *, started_at: float) -> Dict[str, Any]:
         payload_json = json.dumps(payload, ensure_ascii=False)
     except Exception as exc:
         return _failure("workflow_sandbox_invalid_result_shape", detail={"message": str(exc)}, started_at=started_at)
-    payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
-    with tempfile.TemporaryDirectory(prefix="mp13-workflow-js-helper-") as tmp:
-        tmp_path = Path(tmp)
-        module_path = tmp_path / "helper.mjs"
-        runner_path = tmp_path / "runner.mjs"
-        module_path.write_text(module_source, encoding="utf-8")
-        runner_path.write_text(_runner_source(), encoding="utf-8")
-        command = [_node_executable(), str(runner_path), module_path.as_uri(), export_name, payload_b64]
-        try:
-            result = subprocess.run(  # noqa: S603
-                command,
-                cwd=str(tmp_path),
-                capture_output=True,
-                text=False,
-                timeout=timeout_ms / 1000.0,
-                check=False,
-                **hidden_subprocess_kwargs(),
-            )
-        except subprocess.TimeoutExpired:
-            return _failure("workflow_sandbox_timeout", detail={"timeout_ms": timeout_ms}, started_at=started_at)
-        except FileNotFoundError as exc:
-            return _failure("workflow_sandbox_host_unavailable", detail={"message": str(exc)}, started_at=started_at)
-        except Exception as exc:
-            return _failure("workflow_sandbox_runtime_error", detail={"message": str(exc)}, started_at=started_at)
-    stdout = bytes(result.stdout or b"")
-    stderr = bytes(result.stderr or b"")
+    try:
+        response = _NODE_POOL.execute(
+            dict(req or {}),
+            export_name=export_name,
+            payload_json=payload_json,
+            timeout_ms=timeout_ms,
+            output_limit_bytes=output_limit_bytes,
+        )
+    except TimeoutError:
+        return _failure("workflow_sandbox_timeout", detail={"timeout_ms": timeout_ms}, started_at=started_at)
+    except FileNotFoundError as exc:
+        return _failure("workflow_sandbox_host_unavailable", detail={"message": str(exc)}, started_at=started_at)
+    except Exception as exc:
+        return _failure("workflow_sandbox_runtime_error", detail={"message": str(exc)}, started_at=started_at)
+    if not bool(response.get("ok", False)):
+        reason = str(response.get("reason") or "workflow_sandbox_runtime_error")
+        detail = dict(response.get("detail") or {})
+        if reason == "workflow_sandbox_export_not_found":
+            detail.setdefault("export_name", export_name)
+        return _failure(reason, detail=detail, started_at=started_at)
+    stdout = str(response.get("result_json") or "null").encode("utf-8")
     if len(stdout) > output_limit_bytes:
         return _failure("workflow_sandbox_output_limit_exceeded", detail={"output_limit_bytes": output_limit_bytes}, started_at=started_at)
-    if int(result.returncode or 0) == 21:
-        return _failure("workflow_sandbox_export_not_found", detail={"export_name": export_name}, started_at=started_at)
-    if int(result.returncode or 0) == 22:
-        return _failure("workflow_sandbox_invalid_json_output", detail={"stderr": stderr.decode("utf-8", errors="replace")}, started_at=started_at)
-    if int(result.returncode or 0) != 0:
-        return _failure(
-            "workflow_sandbox_runtime_error",
-            detail={"returncode": int(result.returncode or 0), "stderr": stderr.decode("utf-8", errors="replace")},
-            started_at=started_at,
-        )
     try:
         parsed = json.loads(stdout.decode("utf-8") if stdout else "null")
     except Exception as exc:
@@ -239,6 +466,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
             "node_version": _node_version(),
             "sandbox_profile": SANDBOX_PROFILE,
             "capacity": _CALL_CAPACITY,
+            "max_requests_per_node": _MAX_REQUESTS_PER_NODE,
         },
     }
 
@@ -343,6 +571,7 @@ def _serve_loop(*, family: str, address: str, authkey: bytes) -> int:
         except Exception:
             pass
     finally:
+        _NODE_POOL.close_all()
         if listener is not None:
             try:
                 listener.close()

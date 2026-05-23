@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from types import SimpleNamespace
-import subprocess
 
 import hosting.workflow_js_helper_ipc as worker
 
@@ -28,6 +26,19 @@ def _request(source: str, **overrides):
     }
     payload.update(overrides)
     return payload
+
+
+class _FakeNodePool:
+    def __init__(self, response=None, exc: Exception | None = None) -> None:
+        self.response = dict(response or {"ok": True, "result_json": '{"ok":true}'})
+        self.exc = exc
+        self.calls = []
+
+    def execute(self, req, **kwargs):
+        self.calls.append({"req": dict(req or {}), **dict(kwargs or {})})
+        if self.exc is not None:
+            raise self.exc
+        return dict(self.response)
 
 
 def test_workflow_js_helper_rejects_invalid_module_identity() -> None:
@@ -65,14 +76,9 @@ def test_workflow_js_helper_rejects_disallowed_operation() -> None:
 def test_workflow_js_helper_executes_named_export(monkeypatch) -> None:
     source = "export function condition(input) { return {ok: input.value === 3}; }"
 
-    def fake_run(command, **kwargs):
-        assert command[0].lower().endswith(("node", "node.exe"))
-        assert command[2].endswith("helper.mjs")
-        assert command[3] == "condition"
-        return SimpleNamespace(returncode=0, stdout=b'{"ok":true}', stderr=b"")
-
+    fake_pool = _FakeNodePool({"ok": True, "result_json": '{"ok":true}'})
     monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(worker, "_NODE_POOL", fake_pool)
 
     out = asyncio.run(
         worker._handle_rpc_call(
@@ -90,16 +96,18 @@ def test_workflow_js_helper_executes_named_export(monkeypatch) -> None:
     assert result["audit"]["package_id"] == "pkg-demo"
     assert result["audit"]["workflow_id"] == "config/demo"
     assert result["audit"]["session_id"] == "session-1"
+    assert fake_pool.calls[0]["export_name"] == "condition"
 
 
 def test_workflow_js_helper_maps_missing_export(monkeypatch) -> None:
     source = "export function condition(input) { return true; }"
 
-    def fake_run(_command, **_kwargs):
-        return SimpleNamespace(returncode=21, stdout=b"", stderr=b'{"reason":"workflow_sandbox_export_not_found"}')
-
     monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        worker,
+        "_NODE_POOL",
+        _FakeNodePool({"ok": False, "reason": "workflow_sandbox_export_not_found", "detail": {}}),
+    )
 
     out = asyncio.run(
         worker._handle_rpc_call(
@@ -118,11 +126,8 @@ def test_workflow_js_helper_maps_missing_export(monkeypatch) -> None:
 def test_workflow_js_helper_maps_timeout(monkeypatch) -> None:
     source = "export function condition(input) { return true; }"
 
-    def fake_run(_command, **_kwargs):
-        raise subprocess.TimeoutExpired(cmd="node", timeout=1)
-
     monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(worker, "_NODE_POOL", _FakeNodePool(exc=TimeoutError("timeout")))
 
     out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
 
@@ -133,11 +138,8 @@ def test_workflow_js_helper_maps_timeout(monkeypatch) -> None:
 def test_workflow_js_helper_maps_output_limit(monkeypatch) -> None:
     source = "export function condition(input) { return 'too much'; }"
 
-    def fake_run(_command, **_kwargs):
-        return SimpleNamespace(returncode=0, stdout=b'{"data":"abcdef"}', stderr=b"")
-
     monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(worker, "_NODE_POOL", _FakeNodePool({"ok": True, "result_json": '{"data":"abcdef"}'}))
 
     out = asyncio.run(
         worker._handle_rpc_call(
@@ -155,11 +157,8 @@ def test_workflow_js_helper_maps_output_limit(monkeypatch) -> None:
 def test_workflow_js_helper_maps_invalid_json_output(monkeypatch) -> None:
     source = "export function condition(input) { return true; }"
 
-    def fake_run(_command, **_kwargs):
-        return SimpleNamespace(returncode=0, stdout=b"not-json", stderr=b"")
-
     monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(worker, "_NODE_POOL", _FakeNodePool({"ok": True, "result_json": "not-json"}))
 
     out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
 
@@ -170,11 +169,12 @@ def test_workflow_js_helper_maps_invalid_json_output(monkeypatch) -> None:
 def test_workflow_js_helper_maps_runtime_error(monkeypatch) -> None:
     source = "export function condition(input) { throw new Error('boom'); }"
 
-    def fake_run(_command, **_kwargs):
-        return SimpleNamespace(returncode=1, stdout=b"", stderr=b"boom")
-
     monkeypatch.setattr(worker, "_node_version", lambda: "v20.0.0")
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        worker,
+        "_NODE_POOL",
+        _FakeNodePool({"ok": False, "reason": "workflow_sandbox_runtime_error", "detail": {"message": "boom"}}),
+    )
 
     out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
 
@@ -185,11 +185,8 @@ def test_workflow_js_helper_maps_runtime_error(monkeypatch) -> None:
 def test_workflow_js_helper_maps_host_unavailable(monkeypatch) -> None:
     source = "export function condition(input) { return true; }"
 
-    def fake_run(_command, **_kwargs):
-        raise FileNotFoundError("node missing")
-
     monkeypatch.setattr(worker, "_node_version", lambda: None)
-    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(worker, "_NODE_POOL", _FakeNodePool(exc=FileNotFoundError("node missing")))
 
     out = asyncio.run(worker._handle_rpc_call({"method": "execute_workflow_js_helper", "params": _request(source)}))
 
@@ -231,3 +228,38 @@ def test_workflow_js_helper_reports_capacity_exceeded() -> None:
     result = out["result"]
     assert result["ok"] is False
     assert result["reason"] == "workflow_sandbox_capacity_exceeded"
+
+
+def test_hot_node_runtime_pool_reuses_then_recycles(monkeypatch) -> None:
+    created = []
+
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.closed = False
+            created.append(self)
+
+        def alive(self) -> bool:
+            return not self.closed
+
+        def reusable(self) -> bool:
+            return self.alive() and self.calls < 2
+
+        def execute(self, **_kwargs):
+            self.calls += 1
+            return {"ok": True, "result_json": "{}"}
+
+        def close(self, *, kill: bool = False) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(worker, "_HotNodeRuntime", FakeRuntime)
+    pool = worker._HotNodeRuntimePool(capacity=1)
+    req = _request("export function condition(input) { return {}; }")
+
+    assert pool.execute(req, export_name="condition", payload_json="{}", timeout_ms=1000, output_limit_bytes=1000)["ok"] is True
+    assert pool.execute(req, export_name="condition", payload_json="{}", timeout_ms=1000, output_limit_bytes=1000)["ok"] is True
+    assert len(created) == 1
+    assert created[0].closed is True
+
+    assert pool.execute(req, export_name="condition", payload_json="{}", timeout_ms=1000, output_limit_bytes=1000)["ok"] is True
+    assert len(created) == 2

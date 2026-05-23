@@ -47,10 +47,14 @@ The JS helper follows the same bounded hosting-worker pattern as toolbox sandbox
 1. The worker IPC listener accepts multiple concurrent connections.
 2. Each RPC connection is handled on a short-lived host thread.
 3. `execute_workflow_js_helper` is guarded by `MP13_WORKFLOW_JS_HELPER_CAPACITY`.
-4. Each admitted call runs in an isolated temporary module staging directory and launches its own Node subprocess.
-5. When all call slots are in use, the worker returns `workflow_sandbox_capacity_exceeded`.
+4. The Python hosting worker owns a hot pool of up to `capacity` Node child processes.
+5. Each admitted call checks out one hot Node process, imports the helper source by a per-request data URL, executes one named export, returns JSON, and puts the Node process back into the pool.
+6. Node child processes are recycled after `MP13_WORKFLOW_JS_HELPER_MAX_REQUESTS_PER_NODE` calls, and terminated when the hosting worker exits or when a call times out.
+7. When all call slots are in use, the worker returns `workflow_sandbox_capacity_exceeded`.
 
-`spawn_workflow_js_helper(capacity=N)` sets `MP13_WORKFLOW_JS_HELPER_CAPACITY=N` and records the capacity in worker capabilities. The default is `1`, which gives a bounded serialized lane. Increase it only for short helpers where parallel Node subprocesses are acceptable for the host.
+`spawn_workflow_js_helper(capacity=N)` sets `MP13_WORKFLOW_JS_HELPER_CAPACITY=N` and records the capacity in worker capabilities. The default is `1`, which gives a bounded serialized lane with one hot Node child process. Increase it only for short helpers where parallel Node child processes are acceptable for the host.
+
+Each Node child defaults to a maximum of 256 requests before recycling. Recycling bounds long-lived module-cache growth from per-request data URL imports without changing the client contract.
 
 Toolbox sandboxes add another layer: the client-side harness can route calls across a pool of toolbox executor registrations and uses async gather/round-robin routing. JS helper v1 does not need a toolbox-style registry/pool for correctness because helper calls are source-in, JSON-out, and isolated per call. If throughput requires it later, the same pattern can be added by registering multiple `executor_kind = "workflow_js_helper"` workers and routing by capacity/busy state.
 
