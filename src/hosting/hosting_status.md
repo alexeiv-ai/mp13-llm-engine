@@ -111,6 +111,7 @@ This file tracks the implementation plan for adding a hosted workflow Python hel
 - [ ] Add `EngineHostControlChannel.cancel_workflow_python_helper_request(...)`.
 - [ ] Add daemon dispatch for all new workflow Python helper commands.
 - [ ] Add non-interactive CLI commands for spawn, resources, capacity, and cancel.
+- [ ] Update non-interactive CLI help/output paths in `engine_host_cli.py` for the new workflow Python helper commands.
 - [ ] Ensure `discover-running` identifies Python helpers as workflow helper sandboxes/workers and includes process resources.
 
 ## Normalized Helper Pool Resources
@@ -159,6 +160,7 @@ This file tracks the implementation plan for adding a hosted workflow Python hel
 - [ ] Update [sandbox/GENERIC_WORKER.md](sandbox/GENERIC_WORKER.md) with the Python helper executor decision.
 - [ ] Update [sandbox/SANDBOX_ARCHITECTURE.md](sandbox/SANDBOX_ARCHITECTURE.md) if shared helper pool/resource concepts need architecture coverage.
 - [ ] Update [HOSTING.md](HOSTING.md) with the public Python helper service/channel APIs.
+- [ ] Update [ENGINE_HOST_CLI.md](ENGINE_HOST_CLI.md) with non-interactive and interactive workflow helper CLI commands.
 - [ ] Complete [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) with what dependent projects should stop and start doing after implementation.
 - [ ] Document that Python helper `source_path` is provenance only and not an execution path.
 - [ ] Document the normalized helper resource shape shared by JS and Python helpers.
