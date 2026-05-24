@@ -6,10 +6,13 @@
 # SPDX-License-Identifier: MIT
 import argparse
 import ast
+import importlib
+import importlib.metadata
 import json
 import importlib.util
 import os
 import secrets
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,6 +46,191 @@ set_nested_value = _cfg.set_nested_value
 delete_nested_value = _cfg.delete_nested_value
 get_hosting_control_state_path = _cfg.get_hosting_control_state_path
 normalize_hosting_config_selector = _cfg.normalize_hosting_config_selector
+
+
+CPU_ONLY_CONFIG_VALUES: Dict[Tuple[str, ...], Any] = {
+    ("engine_params", "base_model_dtype"): "float32",
+    ("engine_params", "quantize_bits"): "none",
+    ("engine_params", "te_fp8_inference"): False,
+    ("engine_params", "te_fp8_training"): False,
+    ("engine_params", "memory_mode"): "respect_device_map",
+    ("engine_params", "attn_implementation"): "eager",
+    ("engine_params", "device_map"): "cpu",
+    ("engine_params", "use_torch_compile"): False,
+    ("engine_params", "static_kv_cache"): False,
+    ("engine_params", "use_separate_stream"): False,
+    ("training_params", "trainer_precision"): "fp32",
+}
+
+CPU_ONLY_CONFIG_FIELDS = set(CPU_ONLY_CONFIG_VALUES)
+
+
+def _normalized_requirement_name(requirement: str) -> str:
+    raw = str(requirement or "").strip()
+    if not raw:
+        return ""
+    name = raw.split(";", 1)[0].strip()
+    for marker in ("[", " ", "<", ">", "=", "!", "~"):
+        if marker in name:
+            name = name.split(marker, 1)[0]
+    return name.strip().replace("_", "-").lower()
+
+
+def _package_dependency_status(package_name: str = "mp13-engine", dependency_name: str = "torch") -> Dict[str, Any]:
+    dependency_normalized = dependency_name.replace("_", "-").lower()
+    out: Dict[str, Any] = {
+        "package": package_name,
+        "package_installed": False,
+        "package_version": None,
+        "declares_dependency": False,
+        "dependency": dependency_name,
+        "dependency_spec_found": importlib.util.find_spec(dependency_name) is not None,
+        "installed_without_dependency": False,
+    }
+    try:
+        out["package_version"] = importlib.metadata.version(package_name)
+        out["package_installed"] = True
+        requirements = importlib.metadata.requires(package_name) or []
+    except importlib.metadata.PackageNotFoundError:
+        requirements = []
+        out["metadata_error"] = "package_not_found"
+    out["declares_dependency"] = any(
+        _normalized_requirement_name(req) == dependency_normalized
+        for req in requirements
+    )
+    out["installed_without_dependency"] = bool(
+        out["package_installed"]
+        and out["declares_dependency"]
+        and not out["dependency_spec_found"]
+    )
+    return out
+
+
+def _torch_runtime_status() -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "dependency": _package_dependency_status(),
+        "torch_imported": False,
+        "torch_import_error": None,
+        "torch_version": None,
+        "torch_cuda_version": None,
+        "cuda_available": False,
+        "cuda_device_count": 0,
+        "gpu_access": False,
+        "cuda_devices": [],
+    }
+    if not out["dependency"]["dependency_spec_found"]:
+        return out
+    try:
+        torch = importlib.import_module("torch")
+    except Exception as exc:
+        out["torch_import_error"] = f"{type(exc).__name__}: {exc}"
+        return out
+
+    out["torch_imported"] = True
+    out["torch_version"] = str(getattr(torch, "__version__", ""))
+    out["torch_cuda_version"] = str(getattr(getattr(torch, "version", None), "cuda", "") or "")
+
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return out
+    try:
+        out["cuda_available"] = bool(cuda.is_available())
+    except Exception as exc:
+        out["cuda_error"] = f"is_available: {type(exc).__name__}: {exc}"
+        return out
+    if not out["cuda_available"]:
+        return out
+
+    try:
+        count = int(cuda.device_count())
+    except Exception as exc:
+        out["cuda_error"] = f"device_count: {type(exc).__name__}: {exc}"
+        return out
+    out["cuda_device_count"] = max(0, count)
+    out["gpu_access"] = bool(out["cuda_device_count"] > 0)
+
+    devices: List[Dict[str, Any]] = []
+    for idx in range(out["cuda_device_count"]):
+        device: Dict[str, Any] = {"index": idx}
+        try:
+            device["name"] = str(cuda.get_device_name(idx))
+        except Exception as exc:
+            device["name_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            capability = cuda.get_device_capability(idx)
+            device["capability"] = f"{int(capability[0])}.{int(capability[1])}"
+        except Exception:
+            pass
+        try:
+            props = cuda.get_device_properties(idx)
+            total_memory = getattr(props, "total_memory", None)
+            if total_memory is not None:
+                device["total_memory_gb"] = round(float(total_memory) / (1024 ** 3), 2)
+        except Exception:
+            pass
+        devices.append(device)
+    out["cuda_devices"] = devices
+    return out
+
+
+def _warn(message: str) -> None:
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def _is_torch_dependency_missing(runtime_status: Dict[str, Any]) -> bool:
+    dependency = dict(runtime_status.get("dependency") or {})
+    return bool(
+        dependency.get("package_installed")
+        and dependency.get("declares_dependency")
+        and not dependency.get("dependency_spec_found")
+    )
+
+
+def _should_force_cpu_only(runtime_status: Dict[str, Any]) -> bool:
+    dependency = dict(runtime_status.get("dependency") or {})
+    if not dependency.get("dependency_spec_found"):
+        return False
+    return not bool(runtime_status.get("gpu_access"))
+
+
+def _print_torch_dependency_missing_warning() -> None:
+    _warn(
+        "mp13-engine appears to have been installed without torch dependencies. "
+        "Only the hosting component can be configured for this installation; use hosting_config.py."
+    )
+
+
+def _print_no_gpu_warning(runtime_status: Dict[str, Any]) -> None:
+    if runtime_status.get("torch_import_error"):
+        _warn(
+            "torch is installed but could not be imported, so no GPU could be detected. "
+            "GPU-dependent engine params are fixed to CPU-only safe values."
+        )
+        return
+    _warn(
+        "no GPU was detected by torch. "
+        "GPU-dependent engine params are fixed to CPU-only safe values."
+    )
+
+
+def _apply_cpu_only_config_values(config: Dict[str, Any]) -> Dict[str, Any]:
+    for path, value in CPU_ONLY_CONFIG_VALUES.items():
+        set_nested_value(config, path, value)
+    return config
+
+
+def _validate_no_cpu_only_updates(updates: List[str]) -> Optional[str]:
+    for item in updates:
+        if "=" not in item:
+            continue
+        key, _ = item.split("=", 1)
+        key_path = tuple(part.strip() for part in key.strip().split(".") if part.strip())
+        if key_path in CPU_ONLY_CONFIG_FIELDS:
+            return (
+                f"Cannot change GPU-dependent parameter '{'.'.join(key_path)}' because no GPU was detected. "
+                "It is fixed to a CPU-only safe value for this installation."
+            )
+    return None
 
 
 def _resolve_target_path(args: argparse.Namespace, *, cwd: Path) -> Path:
@@ -558,12 +746,17 @@ def _interactive_config(
     *,
     existing: dict,
     defaults: dict,
+    cpu_only: bool = False,
 ) -> Tuple[dict, Path, bool]:
     _print_intro()
     print(f"Source config path: {source_path}")
     print(f"Save config path: {save_path}")
+    if cpu_only:
+        print("GPU-dependent fields are unavailable because no GPU was detected.")
 
     config = json.loads(json.dumps(existing))
+    if cpu_only:
+        _apply_cpu_only_config_values(config)
     original = json.loads(json.dumps(existing))
     resolver = _build_path_resolver(save_path)
 
@@ -602,6 +795,8 @@ def _interactive_config(
                 is_set = _has_nested(config, field.path)
                 display = _format_value(current_value, is_set=is_set, default_value=default_value)
                 suffix = " [default]" if not is_set else ""
+                if cpu_only and field.path in CPU_ONLY_CONFIG_FIELDS:
+                    suffix += " [CPU fixed]"
                 allowed_text = f" (allowed: {', '.join(field.allowed)})" if field.allowed else ""
                 print(
                     f"{str(idx).rjust(index_width)}. {field.label.ljust(label_width)} = "
@@ -625,6 +820,13 @@ def _interactive_config(
                 continue
 
             field = fields[field_idx - 1]
+            if cpu_only and field.path in CPU_ONLY_CONFIG_FIELDS:
+                fixed_value = CPU_ONLY_CONFIG_VALUES[field.path]
+                print(
+                    f"{'.'.join(field.path)} is GPU-dependent and is fixed to "
+                    f"{_format_hint(fixed_value)} because no GPU was detected."
+                )
+                continue
             current_value = get_nested_value(config, field.path)
             default_value = get_nested_value(defaults, field.path)
             is_set = _has_nested(config, field.path)
@@ -691,6 +893,11 @@ def main() -> int:
     parser.add_argument("--print", dest="print_config", action="store_true", help="Print resolved config as JSON.")
     parser.add_argument("--print-raw", action="store_true", help="Print raw config file content without resolution.")
     parser.add_argument("--print-set", action="store_true", help="Print only keys set in the config file (no defaults).")
+    parser.add_argument(
+        "--runtime-status",
+        action="store_true",
+        help="Print package, torch dependency, and CUDA/GPU runtime status as JSON.",
+    )
     parser.add_argument("--host-control-state-file", type=str, default=None, help="Path to hosting access-control state for host auth management.")
     parser.add_argument("--host-auth-status", action="store_true", help="Print host auth status from control state.")
     parser.add_argument("--host-auth-list-keys", action="store_true", help="List host auth keys (without secrets).")
@@ -746,6 +953,18 @@ def main() -> int:
     if host_auth_rc is not None:
         return int(host_auth_rc)
 
+    if args.runtime_status:
+        print(json.dumps(_torch_runtime_status(), indent=2))
+        return 0
+
+    runtime_status = _torch_runtime_status()
+    if _is_torch_dependency_missing(runtime_status):
+        _print_torch_dependency_missing_warning()
+        return 1
+    cpu_only = _should_force_cpu_only(runtime_status)
+    if cpu_only:
+        _print_no_gpu_warning(runtime_status)
+
     cwd = Path.cwd()
     target_path = _resolve_target_path(args, cwd=cwd)
     default_path = get_default_config_path()
@@ -762,6 +981,9 @@ def main() -> int:
         base_path = resolve_config_path(args.diff, cwd=cwd, default_config_path=default_path)
         base_config = _load_config_or_default(base_path, default_path=default_path, defaults=_build_template_config())
         target_config = load_json_config(target_path) or {}
+        if cpu_only:
+            _apply_cpu_only_config_values(base_config)
+            _apply_cpu_only_config_values(target_config)
         if base_path == default_path:
             diff = strip_defaults(target_config, base_config)
         else:
@@ -774,6 +996,8 @@ def main() -> int:
         base_config = _load_config_or_default(base_path, default_path=default_path, defaults=_build_template_config())
         target_config = load_json_config(target_path) or {}
         merged = deep_merge_dicts(base_config, target_config)
+        if cpu_only:
+            _apply_cpu_only_config_values(merged)
         save_json_config(merged, target_path)
         print(f"Config merged with {base_path} at {target_path}")
         return 0
@@ -787,7 +1011,14 @@ def main() -> int:
             for key in sorted(".".join(path) for path in field_map.keys()):
                 print(f"  - {key}")
             return 1
+        if cpu_only:
+            error = _validate_no_cpu_only_updates(list(updates))
+            if error:
+                print(error)
+                return 1
         config = load_json_config(target_path) or {}
+        if cpu_only:
+            _apply_cpu_only_config_values(config)
         resolver = _build_path_resolver(target_path)
         field_map = _field_spec_map()
         for item in updates:
@@ -818,6 +1049,8 @@ def main() -> int:
                 print(f"Warning: {'.'.join(key_path)}: {exc}. Skipping.")
                 continue
             set_nested_value(config, key_path, value)
+        if cpu_only:
+            _apply_cpu_only_config_values(config)
         save_json_config(config, target_path)
         print(f"Config updated at {target_path}")
         return 0
@@ -830,8 +1063,11 @@ def main() -> int:
             target_path,
             existing=existing,
             defaults=defaults,
+            cpu_only=cpu_only,
         )
         if should_save and wizard_config is not None:
+            if cpu_only:
+                _apply_cpu_only_config_values(wizard_config)
             save_json_config(wizard_config, final_path)
             resolved, _ = resolve_config_paths(wizard_config, cwd=cwd, config_path=final_path)
             _ensure_category_dirs(resolved)
@@ -850,6 +1086,8 @@ def main() -> int:
                 base_path = resolve_config_path(args.merge, cwd=cwd, default_config_path=default_path)
                 base_cfg = _load_config_or_default(base_path, default_path=default_path, defaults=defaults)
                 source_cfg = deep_merge_dicts(base_cfg, source_cfg)
+            if cpu_only:
+                _apply_cpu_only_config_values(source_cfg)
             save_json_config(source_cfg, target_path)
             resolved, _ = resolve_config_paths(source_cfg, cwd=cwd, config_path=target_path)
             _ensure_category_dirs(resolved)
@@ -860,6 +1098,8 @@ def main() -> int:
             base_path = resolve_config_path(args.merge, cwd=cwd, default_config_path=default_path)
             base_cfg = _load_config_or_default(base_path, default_path=default_path, defaults=defaults)
             template = deep_merge_dicts(base_cfg, template)
+        if cpu_only:
+            _apply_cpu_only_config_values(template)
         save_json_config(template, target_path)
         resolved, _ = resolve_config_paths(template, cwd=cwd, config_path=target_path)
         _ensure_category_dirs(resolved)
@@ -878,6 +1118,8 @@ def main() -> int:
 
     if args.print_config:
         config = load_json_config(target_path) or {}
+        if cpu_only:
+            _apply_cpu_only_config_values(config)
         resolved, _ = resolve_config_paths(
             config,
             cwd=cwd,
