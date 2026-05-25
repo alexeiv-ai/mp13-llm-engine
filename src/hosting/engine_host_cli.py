@@ -353,7 +353,6 @@ def _setup_file_logging(log_file: Optional[str]) -> None:
     if not log_file:
         return
     import logging
-    import time
     from logging.handlers import RotatingFileHandler
 
     handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
@@ -867,15 +866,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             start_daemon_background,
         )
 
-        log_file_str = _extract_str_arg(argv, "--log-file", None)
-        _setup_file_logging(log_file_str)
-
         port = _extract_int_arg(argv, "--port", DEFAULT_DAEMON_PORT)
         runtime_profile = _extract_str_arg(argv, "--runtime-profile", "foreground_terminal_bound")
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         control_state = _extract_path_arg(argv, "--control-state-file", None)
         background = "--background" in argv
+        log_file_str = _extract_str_arg(argv, "--log-file", None)
+        from .daemon.diagnostics import daemon_report_path_for_control_state, install_daemon_crash_report
+
+        crash_report_path = install_daemon_crash_report(daemon_report_path_for_control_state(control_state))
+        _setup_file_logging(log_file_str)
+        import logging
+
+        logging.info("Daemon crash report path: %s", crash_report_path)
 
         if background:
             try:
@@ -911,14 +915,19 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             start_http_ingress_background,
         )
 
-        log_file_str = _extract_str_arg(argv, "--log-file", None)
-        _setup_file_logging(log_file_str)
-
         port = _extract_int_arg(argv, "--http-port", DEFAULT_HTTP_INGRESS_PORT)
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         control_state = _extract_path_arg(argv, "--control-state-file", None)
         background = "--background" in argv
+        log_file_str = _extract_str_arg(argv, "--log-file", None)
+        from .daemon.diagnostics import daemon_report_path_for_control_state, install_daemon_crash_report
+
+        crash_report_path = install_daemon_crash_report(daemon_report_path_for_control_state(control_state))
+        _setup_file_logging(log_file_str)
+        import logging
+
+        logging.info("Daemon crash report path: %s", crash_report_path)
 
         if background:
             try:

@@ -1543,6 +1543,45 @@ def test_force_stop_daemon_stops_registered_workers_before_daemon_pid(monkeypatc
     assert ("remove_pid_file", None) in calls
 
 
+def test_stop_daemon_sends_shutdown_reason(monkeypatch, tmp_path: Path) -> None:
+    captured: Dict[str, Any] = {}
+    pid_file = tmp_path / "daemon.pid"
+
+    class _FakePidFile:
+        path = pid_file
+
+        def __init__(self, _path: Optional[str] = None):
+            return
+
+        def read(self) -> Dict[str, Any]:
+            return {"pid": 4444, "port": 19876, "shutdown_token": "tok", "started_at": 1.0}
+
+    class _FakeSocket:
+        def __init__(self, *, port: int, pid_file: Path, timeout: float, max_reconnect_attempts: int):
+            captured["port"] = port
+            captured["pid_file"] = pid_file
+
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> str:
+            captured["cmd"] = cmd
+            captured["payload"] = dict(payload or {})
+            return "shutting_down"
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeSocket)
+
+    ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(pid_file)})
+    out = ch.stop_daemon(reason="operator_test", requested_by="unit-test")
+
+    assert out == {"status": "shutdown_sent"}
+    assert captured["cmd"] == "__shutdown__"
+    assert captured["payload"]["shutdown_token"] == "tok"
+    assert captured["payload"]["shutdown_reason"] == "operator_test"
+    assert captured["payload"]["requested_by"] == "unit-test"
+
+
 def test_force_stop_daemon_kills_orphan_engine_worker_processes(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, Any]] = []
     alive = {7777: True}
@@ -1594,7 +1633,7 @@ def test_force_stop_daemon_kills_orphan_engine_worker_processes(monkeypatch, tmp
     assert calls[0][0] == "kill"
 
 
-def test_bootstrap_auto_recovers_unreachable_exclusive_daemon(monkeypatch, tmp_path: Path) -> None:
+def test_bootstrap_blocks_unreachable_exclusive_daemon_by_default(monkeypatch, tmp_path: Path) -> None:
     state = {"alive": True}
     captured: Dict[str, Any] = {}
 
@@ -1637,6 +1676,56 @@ def test_bootstrap_auto_recovers_unreachable_exclusive_daemon(monkeypatch, tmp_p
     ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(tmp_path / "daemon.pid")})
     out = ch.bootstrap_daemon(wait_ready_seconds=1.0)
 
+    assert out["blocked_by_unreachable_pid"] is True
+    assert out["auto_recovery_attempted"] is False
+    assert out["auto_recovery_allowed"] is True
+    assert out["auto_recovery_requires_explicit_request"] is True
+    assert captured.get("started") is None
+
+
+def test_bootstrap_recovers_unreachable_exclusive_daemon_when_explicit(monkeypatch, tmp_path: Path) -> None:
+    state = {"alive": True}
+    captured: Dict[str, Any] = {}
+
+    class _FakePidFile:
+        path = tmp_path / "daemon.pid"
+
+        def __init__(self, _path: Optional[str] = None):
+            return
+
+        def is_alive(self) -> bool:
+            return bool(state["alive"])
+
+        def read(self) -> Dict[str, Any]:
+            return {"pid": 4444, "port": 19876, "started_at": 1.0, "shutdown_token": "tok"}
+
+    def _fake_start_daemon_background(**kwargs: Any) -> Dict[str, Any]:
+        captured["started"] = True
+        captured["pid_file"] = kwargs.get("pid_file")
+        return {"pid": 5555, "port": 19876}
+
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.start_daemon_background", _fake_start_daemon_background)
+    monkeypatch.setattr(
+        EngineHostControlChannel,
+        "get_daemon_status",
+        lambda self: {"pid_alive": bool(state["alive"]), "reachable": False, "alive": False},
+    )
+    monkeypatch.setattr(
+        EngineHostControlChannel,
+        "_read_local_control_snapshot",
+        lambda self: {"endpoint_mode_default": "exclusive", "lifecycle_profile": "detached_user_process"},
+    )
+
+    def _fake_force_stop(self, **_kwargs: Any) -> Dict[str, Any]:
+        state["alive"] = False
+        return {"status": "ok"}
+
+    monkeypatch.setattr(EngineHostControlChannel, "force_stop_daemon", _fake_force_stop)
+
+    ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(tmp_path / "daemon.pid")})
+    out = ch.bootstrap_daemon(wait_ready_seconds=1.0, recover_unreachable=True)
+
     assert out["auto_recovery_attempted"] is True
     assert captured["started"] is True
     assert out["pid"] == 5555
@@ -1676,4 +1765,6 @@ def test_bootstrap_blocks_unreachable_shared_detached_daemon(monkeypatch, tmp_pa
 
     assert out["blocked_by_unreachable_pid"] is True
     assert out["auto_recovery_attempted"] is False
+    assert out["auto_recovery_allowed"] is False
+    assert out["auto_recovery_requires_explicit_request"] is False
     assert out["auto_recovery_policy"]["reason"] == "shared_or_detached_daemon_requires_explicit_force"

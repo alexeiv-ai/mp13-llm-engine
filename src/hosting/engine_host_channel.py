@@ -992,7 +992,7 @@ class EngineHostControlChannel:
             status["auth_status_error"] = str(exc)
         return self._finalize_daemon_status(status)
 
-    def bootstrap_daemon(self, *, wait_ready_seconds: float = 8.0) -> Dict[str, Any]:
+    def bootstrap_daemon(self, *, wait_ready_seconds: float = 8.0, recover_unreachable: bool = False) -> Dict[str, Any]:
         """Start local daemon if not already running. Returns daemon status dict."""
         from .daemon import DaemonPidFile, start_daemon_background, DEFAULT_DAEMON_PORT
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
@@ -1006,7 +1006,7 @@ class EngineHostControlChannel:
             if bool(status.get("alive") or status.get("reachable")):
                 return {"already_running": True, **status}
             recovery_policy = self._should_auto_recover_unreachable_local_daemon()
-            if bool(recovery_policy.get("auto_recover")):
+            if bool(recovery_policy.get("auto_recover")) and bool(recover_unreachable):
                 auto_recovery_attempted = True
                 auto_recovery_policy = dict(recovery_policy)
                 auto_recovery_stop = self.force_stop_daemon(stop_workers=True, stop_orphan_workers=True)
@@ -1015,6 +1015,8 @@ class EngineHostControlChannel:
                         "already_running": False,
                         "blocked_by_unreachable_pid": True,
                         "auto_recovery_attempted": True,
+                        "auto_recovery_allowed": bool(recovery_policy.get("auto_recover")),
+                        "auto_recovery_requires_explicit_request": False,
                         "auto_recovery_policy": recovery_policy,
                         "force_stop": auto_recovery_stop,
                         "error": "existing daemon PID is alive but automatic recovery did not stop it",
@@ -1025,6 +1027,8 @@ class EngineHostControlChannel:
                     "already_running": False,
                     "blocked_by_unreachable_pid": True,
                     "auto_recovery_attempted": False,
+                    "auto_recovery_allowed": bool(recovery_policy.get("auto_recover")),
+                    "auto_recovery_requires_explicit_request": bool(recovery_policy.get("auto_recover")),
                     "auto_recovery_policy": recovery_policy,
                     "error": "existing daemon PID is alive but the local control channel is not reachable",
                     **status,
@@ -1050,7 +1054,7 @@ class EngineHostControlChannel:
             **self.get_daemon_status(),
         }
 
-    def stop_daemon(self) -> Dict[str, Any]:
+    def stop_daemon(self, *, reason: str = "client_requested_shutdown", requested_by: str = "EngineHostControlChannel.stop_daemon") -> Dict[str, Any]:
         """Send graceful shutdown signal to local daemon."""
         from .daemon import DaemonPidFile
         from .engine_host_connection import LocalSocketConnection
@@ -1071,13 +1075,28 @@ class EngineHostControlChannel:
                 timeout=5.0,
                 max_reconnect_attempts=1,
             )
-            conn.invoke("__shutdown__", {"shutdown_token": token})
+            conn.invoke(
+                "__shutdown__",
+                {
+                    "shutdown_token": token,
+                    "shutdown_reason": str(reason or "client_requested_shutdown"),
+                    "requested_by": str(requested_by or "EngineHostControlChannel.stop_daemon"),
+                },
+            )
             conn.close()
             with self._connection_lock:
                 self._connection = None
             return {"status": "shutdown_sent"}
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
+
+    def _stop_daemon_with_reason(self, *, reason: str, requested_by: str) -> Dict[str, Any]:
+        try:
+            return self.stop_daemon(reason=reason, requested_by=requested_by)
+        except TypeError:
+            # Preserve compatibility with tests/embedders that monkeypatch the
+            # old no-argument stop_daemon method.
+            return self.stop_daemon()
 
     def _list_local_engine_worker_processes(self) -> List[Dict[str, Any]]:
         current_pid = os.getpid()
@@ -1233,7 +1252,10 @@ class EngineHostControlChannel:
         worker_report["stopped"] = int(worker_report.get("registered_stopped") or 0) + int(worker_report.get("orphan_stopped") or 0)
         worker_report["failed"] = int(worker_report.get("registered_failed") or 0) + int(worker_report.get("orphan_failed") or 0)
 
-        graceful = self.stop_daemon()
+        graceful = self._stop_daemon_with_reason(
+            reason="force_stop_daemon_graceful_phase",
+            requested_by="EngineHostControlChannel.force_stop_daemon",
+        )
         pid = int(info.get("pid") or 0)
         terminate_result: Dict[str, Any] = {"pid": pid, "attempted": False, "status": "not_needed"}
         if pid > 0 and pid_info.is_alive():
@@ -1290,7 +1312,10 @@ class EngineHostControlChannel:
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
         daemon_info = dict(pid_info.read() or {})
-        stop_result = self.stop_daemon()
+        stop_result = self._stop_daemon_with_reason(
+            reason="reset_hosting_access",
+            requested_by="EngineHostControlChannel.reset_hosting_access",
+        )
         pid = int(daemon_info.get("pid") or 0)
         if pid > 0 and bool(pid_info.is_alive()):
             try:

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from ..service.host_service import EngineHostService
 from .constants import DEFAULT_DAEMON_PORT
+from .diagnostics import write_daemon_report
 from .paths import _daemon_local_ipc_endpoint
 from .pidfile import DaemonPidFile
 
@@ -78,6 +79,11 @@ class EngineHostDaemon:
         self._live_connections: Dict[str, Dict[str, Any]] = {}
         self._last_shutdown_checkpoints: Dict[str, Any] = {}
         self._shutdown_stage_events: List[Dict[str, Any]] = []
+        self._shutdown_report: Dict[str, Any] = {
+            "reason": "daemon_run_exited",
+            "actor": {},
+            "details": {},
+        }
 
     def _serve_local_control_client(self, conn: Any) -> None:
         connection_id = secrets.token_urlsafe(9)
@@ -141,7 +147,13 @@ class EngineHostDaemon:
                     }
                 else:
                     fut = asyncio.run_coroutine_threadsafe(
-                        self._dispatch(raw, peer_host="127.0.0.1"),
+                        self._dispatch(
+                            raw,
+                            peer_host="127.0.0.1",
+                            peer_pid=client_pid,
+                            peer_process_info=process_info,
+                            transport="local_ipc",
+                        ),
                         loop,
                     )
                     response = fut.result(timeout=60.0)
@@ -307,7 +319,7 @@ class EngineHostDaemon:
                             )
                 except Exception:
                     pass
-                response = await self._dispatch(raw, peer_host=peer_host)
+                response = await self._dispatch(raw, peer_host=peer_host, transport="tcp")
                 writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
                 # Stop serving this client after __shutdown__ is accepted
@@ -1562,6 +1574,18 @@ class EngineHostDaemon:
                     shutdown_token=str(write_kwargs["shutdown_token"]),
                 )
             started = True
+            write_daemon_report(
+                event="daemon_started",
+                reason="daemon process started",
+                details={
+                    "runtime_profile": str(self._runtime_profile or ""),
+                    "pid_file": str(self.pid_file.path),
+                    "port": int(self.port),
+                    "local_transport": dict(self._local_transport or {}),
+                },
+                path=self.svc.hosting_root / "logs" / "daemon-crash.log",
+                overwrite=False,
+            )
             logger.info(
                 "EngineHostDaemon starting on local IPC %s:%s",
                 self._local_transport.get("family"),
@@ -1625,10 +1649,29 @@ class EngineHostDaemon:
                     logger.warning("Shutdown checkpoints failed: %s", exc)
                 self._stop_local_control_listener()
                 self.pid_file.remove()
+                shutdown_report = dict(self._shutdown_report or {})
+                write_daemon_report(
+                    event="daemon_stopped",
+                    reason=str(shutdown_report.get("reason") or "daemon_run_exited"),
+                    actor=dict(shutdown_report.get("actor") or {}),
+                    details={
+                        **dict(shutdown_report.get("details") or {}),
+                        "shutdown_checkpoints": dict(self._last_shutdown_checkpoints or {}),
+                    },
+                    path=self.svc.hosting_root / "logs" / "daemon-crash.log",
+                )
                 self._loop = None
                 logger.info("EngineHostDaemon stopped")
 
-    async def _dispatch(self, raw_line: str, *, peer_host: Optional[str] = None) -> Dict[str, Any]:
+    async def _dispatch(
+        self,
+        raw_line: str,
+        *,
+        peer_host: Optional[str] = None,
+        peer_pid: Optional[int] = None,
+        peer_process_info: Optional[Dict[str, Any]] = None,
+        transport: str = "",
+    ) -> Dict[str, Any]:
         try:
             req = json.loads(raw_line)
         except Exception:
@@ -1659,6 +1702,22 @@ class EngineHostDaemon:
                 }
             token = str(payload.get("shutdown_token") or "")
             if token and token == self.shutdown_token:
+                self._shutdown_report = {
+                    "reason": str(payload.get("shutdown_reason") or payload.get("reason") or "client_requested_shutdown"),
+                    "actor": {
+                        "requested_by": str(payload.get("requested_by") or "unknown"),
+                        "transport": str(transport or "unknown"),
+                        "peer_host": str(peer_host or "") or None,
+                        "peer_pid": int(peer_pid or 0) or None,
+                        "peer_process": dict(peer_process_info or {}),
+                    },
+                    "details": {
+                        "command": "__shutdown__",
+                        "runtime_profile": str(self._runtime_profile or ""),
+                        "pid_file": str(self.pid_file.path),
+                        "local_transport": dict(self._local_transport or {}),
+                    },
+                }
                 assert self._stop_event is not None
                 self._stop_event.set()
                 return {"seq": seq, "ok": True, "result": "shutting_down"}

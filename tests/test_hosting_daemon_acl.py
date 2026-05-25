@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from hosting.daemon import EngineHostDaemon
+from hosting.daemon.diagnostics import daemon_report_path_for_control_state, write_daemon_report
 
 
 def _make_daemon(tmp_path: Path) -> EngineHostDaemon:
@@ -1223,6 +1224,62 @@ def test_daemon_terminal_control_disabled_blocks_shutdown_token_path(tmp_path: P
     assert out["ok"] is False
     assert out["error_code"] == "terminal_control_disabled"
     assert daemon._stop_event.is_set() is False  # noqa: SLF001
+
+
+def test_daemon_shutdown_records_report_actor(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon._stop_event = asyncio.Event()  # noqa: SLF001
+    out = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            json.dumps(
+                {
+                    "seq": 1,
+                    "cmd": "__shutdown__",
+                    "payload": {
+                        "shutdown_token": daemon.shutdown_token,
+                        "shutdown_reason": "unit_test_shutdown",
+                        "requested_by": "test-suite",
+                    },
+                }
+            ),
+            peer_host="127.0.0.1",
+            peer_pid=1234,
+            peer_process_info={"pid": 1234, "name": "tester", "consumer_kind": "unit_test"},
+            transport="local_ipc",
+        )
+    )
+    assert out["ok"] is True
+    assert daemon._stop_event.is_set() is True  # noqa: SLF001
+    report = daemon._shutdown_report  # noqa: SLF001
+    assert report["reason"] == "unit_test_shutdown"
+    assert report["actor"]["requested_by"] == "test-suite"
+    assert report["actor"]["peer_pid"] == 1234
+    assert report["actor"]["peer_process"]["consumer_kind"] == "unit_test"
+
+
+def test_daemon_report_shutdown_overwrites_and_start_appends(tmp_path: Path, monkeypatch) -> None:
+    report_path = tmp_path / "daemon-crash.log"
+    monkeypatch.setattr("hosting.daemon.diagnostics._REPORT_PATH", report_path)
+    monkeypatch.setattr("hosting.daemon.diagnostics._REPORT_HANDLE", None)
+
+    write_daemon_report(event="daemon_stopped", reason="previous_shutdown")
+    write_daemon_report(event="daemon_started", reason="restart_attempt", overwrite=False)
+    text = report_path.read_text(encoding="utf-8")
+    assert "previous_shutdown" in text
+    assert "restart_attempt" in text
+
+    write_daemon_report(event="daemon_stopped", reason="latest_shutdown")
+    text = report_path.read_text(encoding="utf-8")
+    assert "latest_shutdown" in text
+    assert "previous_shutdown" not in text
+    assert "restart_attempt" not in text
+
+
+def test_daemon_report_path_uses_control_state_hosting_root(tmp_path: Path) -> None:
+    control_state = tmp_path / "custom-hosting" / "access_control.json"
+    assert daemon_report_path_for_control_state(control_state) == (control_state.parent / "logs" / "daemon-crash.log").resolve()
+    hosting_root = tmp_path / "custom-hosting-root"
+    assert daemon_report_path_for_control_state(hosting_root) == (hosting_root / "logs" / "daemon-crash.log").resolve()
 
 
 def test_daemon_terminal_control_disabled_blocks_endpoint_mode_override(tmp_path: Path) -> None:

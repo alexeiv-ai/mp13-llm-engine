@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from ..service.host_service import EngineHostService
 from .constants import DEFAULT_HTTP_INGRESS_PORT
+from .diagnostics import write_daemon_report
 from .paths import _default_http_pid_file
 from .pidfile import DaemonPidFile
 
@@ -53,6 +54,11 @@ class EngineHostHttpIngressDaemon:
         self.svc.assert_runtime_policy_safe()
         self._server: Optional[http.server.ThreadingHTTPServer] = None
         self._stop_event = threading.Event()
+        self._shutdown_report: Dict[str, Any] = {
+            "reason": "http_ingress_run_exited",
+            "actor": {},
+            "details": {},
+        }
 
     @staticmethod
     def _status_from_auth_error(error_text: str) -> int:
@@ -246,6 +252,21 @@ class EngineHostHttpIngressDaemon:
                     payload, _ = self._read_payload()
                     token = str(payload.get("shutdown_token") or "").strip()
                     if token and token == daemon.shutdown_token:
+                        daemon._shutdown_report = {
+                            "reason": str(payload.get("shutdown_reason") or payload.get("reason") or "client_requested_shutdown"),
+                            "actor": {
+                                "requested_by": str(payload.get("requested_by") or "unknown"),
+                                "transport": "http",
+                                "peer_host": str(getattr(self, "client_address", [""])[0] or "") or None,
+                                "peer_pid": None,
+                                "peer_process": {},
+                            },
+                            "details": {
+                                "command": "__shutdown__",
+                                "pid_file": str(daemon.pid_file.path),
+                                "port": int(daemon.port),
+                            },
+                        }
                         self._send_json(200, {"ok": True, "result": "shutting_down"})
                         daemon._stop_event.set()
                         if daemon._server is not None:
@@ -282,6 +303,13 @@ class EngineHostHttpIngressDaemon:
         # Capture actual port for port=0 flow.
         self.port = int(self._server.server_address[1])
         self.pid_file.write(pid=os.getpid(), port=self.port, shutdown_token=self.shutdown_token)
+        write_daemon_report(
+            event="http_ingress_daemon_started",
+            reason="http ingress daemon process started",
+            details={"pid_file": str(self.pid_file.path), "port": int(self.port)},
+            path=self.svc.hosting_root / "logs" / "daemon-crash.log",
+            overwrite=False,
+        )
         logger.info("EngineHostHttpIngressDaemon starting on 127.0.0.1:%d", self.port)
         try:
             self._server.serve_forever(poll_interval=0.2)
@@ -291,4 +319,12 @@ class EngineHostHttpIngressDaemon:
             except Exception:
                 pass
             self.pid_file.remove()
+            shutdown_report = dict(self._shutdown_report or {})
+            write_daemon_report(
+                event="http_ingress_daemon_stopped",
+                reason=str(shutdown_report.get("reason") or "http_ingress_run_exited"),
+                actor=dict(shutdown_report.get("actor") or {}),
+                details=dict(shutdown_report.get("details") or {}),
+                path=self.svc.hosting_root / "logs" / "daemon-crash.log",
+            )
             logger.info("EngineHostHttpIngressDaemon stopped")
