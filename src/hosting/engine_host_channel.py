@@ -1098,6 +1098,25 @@ class EngineHostControlChannel:
             # old no-argument stop_daemon method.
             return self.stop_daemon()
 
+    def _write_local_daemon_report(self, *, event: str, reason: str, details: Optional[Dict[str, Any]] = None) -> None:
+        try:
+            from .daemon.diagnostics import daemon_report_path_for_control_state, write_daemon_report
+
+            write_daemon_report(
+                event=event,
+                reason=reason,
+                actor={
+                    "requested_by": "EngineHostControlChannel",
+                    "transport": "local_helper",
+                    "peer_pid": os.getpid(),
+                    "peer_process": {"pid": os.getpid(), "name": Path(sys.argv[0]).name if sys.argv else None},
+                },
+                details=dict(details or {}),
+                path=daemon_report_path_for_control_state(self._local_control_state_path()),
+            )
+        except Exception:
+            logger.debug("Failed to write local daemon diagnostic report", exc_info=True)
+
     def _list_local_engine_worker_processes(self) -> List[Dict[str, Any]]:
         current_pid = os.getpid()
         rows: List[Dict[str, Any]] = []
@@ -1260,6 +1279,16 @@ class EngineHostControlChannel:
         terminate_result: Dict[str, Any] = {"pid": pid, "attempted": False, "status": "not_needed"}
         if pid > 0 and pid_info.is_alive():
             terminate_result = {"pid": pid, "attempted": True, "status": "running"}
+            self._write_local_daemon_report(
+                event="daemon_force_terminate_requested",
+                reason="force_stop_daemon_after_graceful_stop_failed",
+                details={
+                    "pid": pid,
+                    "pid_file": str(getattr(pid_info, "path", "") or ""),
+                    "graceful_stop": dict(graceful or {}),
+                    "worker_shutdown": worker_report,
+                },
+            )
             try:
                 os.kill(pid, getattr(signal, "SIGTERM", 15))
                 deadline = time.time() + max(0.1, float(wait_seconds))
@@ -1276,6 +1305,17 @@ class EngineHostControlChannel:
                 terminate_result["status"] = "error"
                 terminate_result["error"] = str(exc)
         if not pid_info.is_alive():
+            if pid > 0 and bool(terminate_result.get("attempted")):
+                self._write_local_daemon_report(
+                    event="daemon_force_terminated",
+                    reason=str(terminate_result.get("status") or "force_stop_daemon_completed"),
+                    details={
+                        "pid": pid,
+                        "pid_file": str(getattr(pid_info, "path", "") or ""),
+                        "graceful_stop": dict(graceful or {}),
+                        "daemon_terminate": dict(terminate_result or {}),
+                    },
+                )
             pid_info.remove()
         with self._connection_lock:
             if self._connection is not None:
@@ -1318,6 +1358,15 @@ class EngineHostControlChannel:
         )
         pid = int(daemon_info.get("pid") or 0)
         if pid > 0 and bool(pid_info.is_alive()):
+            self._write_local_daemon_report(
+                event="daemon_force_terminate_requested",
+                reason="reset_hosting_access_after_graceful_stop_failed",
+                details={
+                    "pid": pid,
+                    "pid_file": str(getattr(pid_info, "path", "") or ""),
+                    "graceful_stop": dict(stop_result or {}),
+                },
+            )
             try:
                 os.kill(pid, getattr(signal, "SIGTERM", 15))
             except Exception as exc:
@@ -1334,6 +1383,16 @@ class EngineHostControlChannel:
                     "pid": pid,
                 }
         if not pid_info.is_alive():
+            if pid > 0 and bool(dict(stop_result or {}).get("forced_kill_attempted")):
+                self._write_local_daemon_report(
+                    event="daemon_force_terminated",
+                    reason=str(dict(stop_result or {}).get("status") or "reset_hosting_access_terminate_completed"),
+                    details={
+                        "pid": pid,
+                        "pid_file": str(getattr(pid_info, "path", "") or ""),
+                        "daemon_stop": dict(stop_result or {}),
+                    },
+                )
             pid_info.remove()
         with self._connection_lock:
             if self._connection is not None:
