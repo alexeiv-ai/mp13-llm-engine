@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from hosting.service.host_service import EngineHostService, ToolboxRolloutError
+from hosting.sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 from hosting import toolbox_executor_ipc
 from hosting.toolbox_harness import (
     HostedToolBoxRef,
@@ -1723,6 +1724,85 @@ def test_toolbox_sandbox_orchestrator_groups_requests_by_profile() -> None:
         auto_profile_id = [pid for pid in grouped.keys() if pid != "isolated"][0]
         assert sorted([item.callable_name for item in grouped[auto_profile_id].bundle_spec.auto_tools]) == ["alpha_tool", "beta_tool"]
         assert [item.callable_name for item in grouped["isolated"].bundle_spec.auto_tools] == ["gamma_tool"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_toolbox_runtime_base_adds_shared_environment_identity() -> None:
+    root = _scratch_dir("toolbox-runtime-base-")
+    try:
+        stager = ToolboxBundleStager(root)
+        staged = stager.stage_bundle(
+            ToolboxBundleSpec(
+                bundle_id="toolbox-runtime-default",
+                toolbox_id="toolbox-runtime",
+                dependency_lock_hash="lock-a",
+                files=[ToolboxBundleFile(relative_path="demo.py", content="def demo():\n    return 1\n")],
+                auto_tools=[ToolboxBundleAutoTool(module_name="demo", callable_name="demo")],
+            )
+        )
+        env_spec = ToolboxEnvironmentManager(root).environment_spec_for_bundle(staged)
+
+        out = HostedToolboxRuntimeBase().registration_environment(
+            environment=staged.registration_environment(env_spec),
+            toolbox_id="toolbox-runtime",
+            sandbox_profile_id="default",
+            bundle_revision=str(staged.manifest.get("bundle_revision") or ""),
+            sandbox_policy={"sandbox": {"enabled": True}},
+        )
+
+        assert out["environment_key"]
+        assert out["environment_key_full"]
+        assert out["environment_root_kind"] == "toolbox_venvs"
+        assert out["environment_consumer_kind"] == "toolbox_executor"
+        assert out["environment_identity"]["runtime"]["runtime_kind"] == "toolbox_executor"
+        assert out["environment_identity"]["runtime"]["profile"] == "default"
+        assert out["environment_identity"]["dependency_lock_hash"] == "lock-a"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_toolbox_orchestrator_spawn_uses_shared_environment_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _scratch_dir("orchestrator-runtime-base-")
+    try:
+        svc = EngineHostService(
+            engines_state_file=root / "managed_engines.json",
+            control_state_file=root / "access_control.json",
+        )
+        spawned: list[dict] = []
+
+        def fake_spawn(**kwargs):
+            spawned.append(dict(kwargs))
+            return {
+                "engine_id": kwargs["engine_id"],
+                "executor_kind": kwargs["executor_kind"],
+                "environment": dict(kwargs["environment"]),
+            }
+
+        monkeypatch.setattr(svc, "spawn", fake_spawn)
+        orchestrator = ToolboxSandboxOrchestrator(
+            service=svc,
+            stager=ToolboxBundleStager(root),
+            python_executable=sys.executable,
+        )
+        assignments = orchestrator.spawn_assignments(
+            toolbox_id="toolbox-runtime-spawn",
+            requests=[
+                ToolboxAutoAssignmentRequest(
+                    files=[ToolboxBundleFile(relative_path="demo.py", content="def demo():\n    return {'ok': True}\n")],
+                    module_name="demo",
+                    callable_name="demo",
+                    sandbox_profile=SandboxProfileSpec(sandbox_policy={"sandbox": {"enabled": True}}),
+                )
+            ],
+        )
+
+        assert len(assignments) == 1
+        assert spawned[0]["executor_kind"] == "toolbox_executor"
+        env = dict(spawned[0]["environment"])
+        assert env["environment_key"]
+        assert env["environment_identity"]["runtime"]["runtime_kind"] == "toolbox_executor"
+        assert assignments[0].registration["environment"]["environment_key"] == env["environment_key"]
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

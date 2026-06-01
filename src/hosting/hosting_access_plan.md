@@ -352,11 +352,11 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 9: Toolbox Migration To Shared Base
 
-- [ ] Map toolbox worker lifecycle onto `HostedProcessSandboxBase`.
+- [x] Map toolbox worker lifecycle onto `HostedProcessSandboxBase`.
 - [ ] Keep toolbox public APIs unchanged during migration.
 - [ ] Keep toolbox staged bundle, manifest, tool routing, callbacks, gate/scope, repair/reconcile semantics unchanged.
 - [ ] Reuse `HostedPythonRuntimeBase` for toolbox environment realization where compatible.
-- [ ] Preserve existing `<hosting_root>/toolbox_venvs` behavior until a deliberate storage migration is planned.
+- [x] Preserve existing `<hosting_root>/toolbox_venvs` behavior until a deliberate storage migration is planned.
 - [ ] Add parity tests for toolbox register/execute/cancel/resources/repair/reconcile.
 - [ ] Add tests for callback relay and brokered FS/HTTP after migration.
 - [ ] Update toolbox docs and status notes.

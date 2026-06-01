@@ -70,6 +70,11 @@ are implementation layers, not public sandbox kinds:
 5. [js_runtime.py](js_runtime.py): `HostedJsRuntimeBase`, a thin Node/runtime
    identity layer for workflow JS helper compatibility. It intentionally does
    not reuse Python venv machinery.
+6. [toolbox_runtime.py](toolbox_runtime.py): `HostedToolboxRuntimeBase`, an
+   internal toolbox identity adapter. It keeps toolbox staging, tool routing,
+   callbacks, brokered I/O, and `toolbox_venvs` ownership in toolbox code while
+   adding shared `environment_key` / `environment_identity` registration
+   metadata.
 
 Concrete workflow facades currently use these layers incrementally:
 
@@ -83,6 +88,9 @@ Concrete workflow facades currently use these layers incrementally:
 3. `workflow_js(profile=helper)` exposes environment spec, ensure, resources,
    capacity, cancel, and request status through the JS runtime base and existing
    helper worker compatibility path.
+4. `toolbox_executor` registrations now include shared hosted environment
+   identity through `HostedToolboxRuntimeBase`; toolbox public APIs and
+   lifecycle semantics are otherwise unchanged.
 
 Generic/model workers remain separate. They share IPC vocabulary ideas and
 proxy commands, but their model-worker semantics do not become workflow or

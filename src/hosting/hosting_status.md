@@ -104,6 +104,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
 - [x] Existing workflow environment management is present mostly through toolbox-shaped APIs.
 - [x] Internal workflow-facing Python environment manager exists without toolbox IDs/tool keys in its API.
+- [x] Toolbox executor registrations now carry shared hosted environment identity while preserving `toolbox_venvs`.
 - [x] Existing helper response shape is narrower than planned workflow node responses.
 - [ ] Existing helper streaming support is absent.
 - [x] Interactive CLI is still helper-command oriented.
@@ -142,9 +143,10 @@ Remaining unchecked plan items are intentionally not marked complete:
      the node worker exists.
 2. Phase 9 toolbox migration:
    - toolbox public APIs remain unchanged.
-   - toolbox still needs a deliberate lifecycle mapping onto
-     `HostedProcessSandboxBase`, parity tests, callback/brokered I/O regression
-     coverage after migration, and docs/status updates.
+   - toolbox registrations now include shared `environment_key` and
+     `environment_identity` metadata through `HostedToolboxRuntimeBase`.
+   - toolbox still needs parity tests, callback/brokered I/O regression
+     coverage after deeper migration, and docs/status updates.
 3. Phase 10 cleanup/removal:
    - old Python/JS helper implementations and compatibility fields must stay
      until dependent clients migrate.

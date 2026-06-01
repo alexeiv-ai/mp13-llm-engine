@@ -28,6 +28,9 @@ Shared runtime, pool, Python environment, workflow Python facade, and CLI compat
 Update: 2026-06-01
 The refactor coverage now also includes internal process/JS runtime bases, runtime-env GC, workflow Python node stream command rollout, and auth/policy coverage:
 `tests/test_hosting_sandbox_process_base.py`, `tests/test_hosting_js_runtime_base.py`, `tests/test_hosting_python_runtime_base.py`, `tests/test_workflow_helper_service.py`, `tests/test_engine_host_channel.py`, and `tests/test_hosting_auth_roles.py`.
+Update: 2026-06-01
+Phase 9 toolbox migration has initial coverage for shared hosted environment identity on toolbox registrations while preserving `toolbox_venvs`:
+`tests/test_hosting_toolbox_sandbox.py -k "toolbox_runtime_base or orchestrator_spawn_uses_shared_environment_identity"`.
 
 ## 1. Environment
 
@@ -95,6 +98,7 @@ Current automated coverage includes:
     - `workflow_python(profile=node)` stream-open/recv/send/close rollout coverage with pending-worker events
     - environment-key pool isolation for incompatible policy/dependency identity
     - interactive CLI workflow pool view compatibility for annotated Python helper registrations
+    - initial toolbox executor registration identity mapping through `HostedToolboxRuntimeBase`
 
 ## 3. Main Test Commands
 

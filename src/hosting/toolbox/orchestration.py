@@ -14,6 +14,7 @@ from .bundle_models import (
 )
 from .environment import ToolboxEnvironmentManager
 from .staging import ToolboxBundleStager
+from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 
 
 class ToolboxSandboxOrchestrator:
@@ -28,6 +29,7 @@ class ToolboxSandboxOrchestrator:
         self.stager = stager
         self.python_executable = str(python_executable or sys.executable)
         self.environment_manager = ToolboxEnvironmentManager(self.stager.hosting_root)
+        self.runtime_base = HostedToolboxRuntimeBase()
 
     @staticmethod
     def _bundle_id(toolbox_id: str, profile: SandboxProfileSpec) -> str:
@@ -194,6 +196,13 @@ class ToolboxSandboxOrchestrator:
                 environment_spec,
                 fallback_python_executable=self.python_executable,
             )
+            registration_environment = self.runtime_base.registration_environment(
+                environment=staged.registration_environment(environment_spec),
+                toolbox_id=toolbox_id,
+                sandbox_profile_id=item.sandbox_profile.normalized_profile_id(),
+                bundle_revision=revision,
+                sandbox_policy=dict(item.sandbox_profile.sandbox_policy or {}),
+            )
             item.registration = self.service.spawn(
                 engine_id=engine_id,
                 command=staged.worker_command(
@@ -212,7 +221,7 @@ class ToolboxSandboxOrchestrator:
                 sandbox_policy=dict(item.sandbox_profile.sandbox_policy or {}),
                 executor_kind="toolbox_executor",
                 bundle=staged.registration_bundle(),
-                environment=staged.registration_environment(environment_spec),
+                environment=registration_environment,
                 tool_access=staged.registration_tool_access(),
                 capabilities=self._capabilities_for_profile(item.sandbox_profile),
             )
