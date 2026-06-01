@@ -66,6 +66,16 @@ HOSTED_STREAM_EVENT_TYPES = [
     "done",
 ]
 
+HOSTED_IPC_MESSAGE_FAMILIES = [
+    "hello",
+    "rpc_call",
+    "stream_open",
+    "stream_recv",
+    "stream_send",
+    "stream_close",
+    "shutdown",
+]
+
 
 def normalize_sandbox_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return WorkerSandboxPolicy.from_mapping(dict(policy or {})).to_dict()
@@ -380,6 +390,7 @@ __all__ = [
     "HostedRuntimeIdentity",
     "HostedStreamEvent",
     "HostedWorkerSlot",
+    "HOSTED_IPC_MESSAGE_FAMILIES",
     "HOSTED_STREAM_EVENT_TYPES",
     "hosted_cancellation_result",
     "hosted_registration_environment_metadata",

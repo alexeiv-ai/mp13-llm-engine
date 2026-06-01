@@ -8,6 +8,7 @@ from hosting.sandbox.runtime_base import (
     HostedRuntimeIdentity,
     HostedStreamEvent,
     HostedWorkerSlot,
+    HOSTED_IPC_MESSAGE_FAMILIES,
     hosted_cancellation_result,
     hosted_registration_environment_metadata,
     hosted_resource_response,
@@ -199,3 +200,15 @@ def test_shared_registration_resource_and_cancel_shapes() -> None:
     assert resources["capacity"] == 2
     assert cancel["canceled"] is True
     assert cancel["workflow_pool_cancel"] == {"status": "ok"}
+
+
+def test_base_ipc_message_family_names_are_stable() -> None:
+    assert HOSTED_IPC_MESSAGE_FAMILIES == [
+        "hello",
+        "rpc_call",
+        "stream_open",
+        "stream_recv",
+        "stream_send",
+        "stream_close",
+        "shutdown",
+    ]

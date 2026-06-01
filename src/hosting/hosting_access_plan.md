@@ -142,7 +142,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Sync, Async, And Streaming Contract
 
-- [ ] Standardize base IPC message families for new concrete sandboxes.
+- [x] Standardize base IPC message families for new concrete sandboxes.
   - `hello`
   - `rpc_call`
   - `stream_open`
