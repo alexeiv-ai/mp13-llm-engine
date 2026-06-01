@@ -1063,6 +1063,7 @@ def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) 
             "package_source_digest": "digest",
             "operation": "run",
             "payload": {},
+            "limits": {"output_limit_bytes": 3},
         },
     )
 
@@ -1092,6 +1093,7 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
             "package_source_digest": "digest",
             "operation": "run",
             "payload": {},
+            "limits": {"output_limit_bytes": 3},
         },
     )
     received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
@@ -1103,7 +1105,8 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
     closed = svc.workflow_python_stream_close(stream_id=opened["stream_id"])
 
     assert opened["status"] == "ok"
-    assert [row["type"] for row in received["events"]] == ["started", "error", "done"]
-    assert received["events"][1]["payload"]["error"]["code"] == "workflow_python_node_profile_not_implemented"
+    assert [row["type"] for row in received["events"]] == ["started", "log", "error", "done"]
+    assert received["events"][1]["payload"]["logs"]["output_limit_bytes"] == 3
+    assert received["events"][2]["payload"]["error"]["code"] == "workflow_python_node_profile_not_implemented"
     assert status["request"]["status"] == "error"
     assert closed["closed"] is True

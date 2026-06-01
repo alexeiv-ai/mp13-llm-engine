@@ -15,6 +15,7 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
     assert "module_source" in contract["request_fields"]
     assert "state_patch" in contract["response_fields"]
     assert "progress" in contract["stream_event_types"]
+    assert "log" in contract["stream_event_types"]
 
 
 def test_normalize_node_request_maps_export_and_operation() -> None:
@@ -64,6 +65,7 @@ def test_node_not_implemented_response_uses_node_envelope() -> None:
             "package_source_digest": "digest",
             "operation": "run",
             "payload": {},
+            "limits": {"output_limit_bytes": 3},
         },
     )
 
@@ -76,5 +78,7 @@ def test_node_not_implemented_response_uses_node_envelope() -> None:
     assert out["state_patch"] is None
     assert out["artifacts"] == []
     assert out["artifact_store"]["reason"] == "artifact_store_not_implemented"
+    assert out["logs"]["output_limit_bytes"] == 3
+    assert out["logs"]["stdout_truncated"] is False
     assert out["error"]["code"] == "workflow_python_node_profile_not_implemented"
     assert out["audit"]["package_id"] == "pkg"

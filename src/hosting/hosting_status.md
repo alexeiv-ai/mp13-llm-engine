@@ -135,6 +135,8 @@ Remaining unchecked plan items are intentionally not marked complete:
    - current code exposes the node contract and workflow stream commands, but
      the stream currently emits the structured pending-worker error envelope
      rather than executing node-profile workflow code.
+   - the pending-worker path now uses the shared hosted log-summary envelope
+     and emits a `log` stream event before the structured error.
    - remaining tests should cover real streamed progress, stdout/stderr
      summaries, result, structured error, timeout, cancel, and metrics once
      the node worker exists.

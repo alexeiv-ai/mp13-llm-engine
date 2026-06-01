@@ -723,6 +723,11 @@ class WorkflowHelperMixin:
             pending = self._workflow_python_node_unavailable(request={**req, "request_id": request_id}, environment_key=effective_key, engine_id=engine_id)
             base.stream_emit(
                 stream_id=str(opened.get("stream_id") or ""),
+                event_type="log",
+                payload={"logs": dict(pending.get("logs") or {})},
+            )
+            base.stream_emit(
+                stream_id=str(opened.get("stream_id") or ""),
                 event_type="error",
                 payload={"error": dict(pending.get("error") or {}), "response": pending},
             )

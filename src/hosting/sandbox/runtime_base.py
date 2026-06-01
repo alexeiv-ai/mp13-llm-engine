@@ -349,6 +349,41 @@ def hosted_cancellation_result(
     }
 
 
+def hosted_log_summary(
+    *,
+    stdout: str = "",
+    stderr: str = "",
+    max_bytes: int = 4096,
+) -> Dict[str, Any]:
+    limit = max(0, int(max_bytes or 0))
+
+    def _truncate(value: str) -> tuple[str, bool]:
+        text = str(value or "")
+        raw = text.encode("utf-8", errors="replace")
+        if limit <= 0 or len(raw) <= limit:
+            return text, False
+        clipped = raw[:limit].decode("utf-8", errors="replace")
+        return clipped, True
+
+    out_stdout, stdout_truncated = _truncate(stdout)
+    out_stderr, stderr_truncated = _truncate(stderr)
+    parts = []
+    if out_stdout:
+        parts.append(out_stdout)
+    if out_stderr:
+        parts.append(out_stderr)
+    summary, summary_truncated = _truncate("\n".join(parts))
+    return {
+        "stdout": out_stdout,
+        "stderr": out_stderr,
+        "summary": summary,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+        "summary_truncated": summary_truncated,
+        "output_limit_bytes": limit,
+    }
+
+
 @dataclass
 class HostedPoolMetrics:
     desired_capacity: int = 1
@@ -393,6 +428,7 @@ __all__ = [
     "HOSTED_IPC_MESSAGE_FAMILIES",
     "HOSTED_STREAM_EVENT_TYPES",
     "hosted_cancellation_result",
+    "hosted_log_summary",
     "hosted_registration_environment_metadata",
     "hosted_resource_response",
     "hosted_stream_cancel_message",

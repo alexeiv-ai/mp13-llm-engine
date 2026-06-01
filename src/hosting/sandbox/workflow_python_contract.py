@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+from .runtime_base import hosted_log_summary
+
 
 NODE_REQUEST_FIELDS = [
     "request_id",
@@ -52,6 +54,7 @@ def workflow_python_node_contract() -> Dict[str, Any]:
         "stream_event_types": [
             "started",
             "progress",
+            "log",
             "stdout",
             "stderr",
             "artifact",
@@ -142,7 +145,9 @@ def workflow_python_node_not_implemented_response(
             "message": "artifact refs are part of the node-profile contract, but no workflow artifact store is wired yet",
         },
         "progress": None,
-        "logs": {"stdout": "", "stderr": "", "summary": ""},
+        "logs": hosted_log_summary(
+            max_bytes=int(_dict(normalized.get("limits")).get("output_limit_bytes") or 4096)
+        ),
         "metrics": {},
         "audit": {
             "package_id": _clean(normalized.get("package_id")) or None,

@@ -10,6 +10,7 @@ from hosting.sandbox.runtime_base import (
     HostedWorkerSlot,
     HOSTED_IPC_MESSAGE_FAMILIES,
     hosted_cancellation_result,
+    hosted_log_summary,
     hosted_registration_environment_metadata,
     hosted_resource_response,
     sandbox_policy_hash,
@@ -212,3 +213,14 @@ def test_base_ipc_message_family_names_are_stable() -> None:
         "stream_close",
         "shutdown",
     ]
+
+
+def test_hosted_log_summary_truncates_each_stream() -> None:
+    out = hosted_log_summary(stdout="abcdef", stderr="xyz", max_bytes=3)
+
+    assert out["stdout"] == "abc"
+    assert out["stderr"] == "xyz"
+    assert out["summary"] == "abc"
+    assert out["stdout_truncated"] is True
+    assert out["stderr_truncated"] is False
+    assert out["summary_truncated"] is True
