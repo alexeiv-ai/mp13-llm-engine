@@ -42,9 +42,10 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
 
 - Resource/capacity/cancel:
   - Old: `workflow-python-helper-resources`, `workflow-python-helper-set-capacity`, `workflow-python-helper-cancel-request`.
-  - New: `workflow-python-resources`, `workflow-python-set-capacity`, `workflow-python-cancel-request`.
+  - New: `workflow-python-resources`, `workflow-python-set-capacity`, `workflow-python-cancel-request`, `workflow-python-request-status`.
   - Preferred selector: `environment_key`; temporary migration selector: annotated `engine_id`.
   - Compatibility behavior: old Python helper resource/capacity/cancel calls now include `environment_key`, `workflow_runtime_kind=workflow_python`, and `workflow_pool` when the helper registration has been annotated through `workflow-python-ensure` or `workflow-python-execute`.
+  - Request status returns the tracked request lifetime record for a specific `environment_key + request_id`, including `latest_progress` and `stream_event_count` once streaming/progress events are recorded.
 
 - Node-profile contract:
   - New contract path: `workflow-python-execute` with `profile=node`.
@@ -116,6 +117,7 @@ Minimal helper-profile execute payload:
 
 - [ ] Stop omitting `request_id` for cancelable or long-running work.
 - [ ] Start passing stable `request_id` for request lifetime tracking and cancellation.
+  - New status lookup: `workflow-python-request-status` with `environment_key` or annotated `engine_id` plus `request_id`.
 
 ## Planned Migration: Workflow JS
 
@@ -136,9 +138,10 @@ Minimal helper-profile execute payload:
 
 - Resource/capacity/cancel:
   - Old: `workflow-js-helper-resources`, `workflow-js-helper-set-capacity`, `workflow-js-helper-cancel-request`.
-  - New: `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-cancel-request`.
+  - New: `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-cancel-request`, `workflow-js-request-status`.
   - Preferred selector: `environment_key`; temporary migration selector: annotated `engine_id`.
   - Compatibility behavior: old JS helper resource/capacity/cancel calls now include `environment_key`, `workflow_runtime_kind=workflow_js`, and `workflow_pool` when the helper registration has been annotated through `workflow-js-ensure`.
+  - Request status returns the tracked request lifetime record for a specific `environment_key + request_id`, including `latest_progress` and `stream_event_count` once streaming/progress events are recorded.
 
 Minimal JS ensure payload:
 
@@ -174,6 +177,7 @@ Minimal JS ensure payload:
   - Timeout count.
   - Cancellation count.
   - Recent request outcomes.
+  - Latest progress snapshots through `workflow-python-request-status` and `workflow-js-request-status`.
 
 - [ ] Stop assuming capacity changes apply globally to all workflow Python helpers.
 - [ ] Start setting capacity per `environment_key`.

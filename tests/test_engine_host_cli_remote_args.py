@@ -169,6 +169,10 @@ def test_cli_local_workflow_python_capacity_and_cancel_use_facade(
             calls.append(("cancel", dict(kwargs)))
             return {"status": "ok", "request_id": kwargs.get("request_id")}
 
+        def workflow_python_request_status(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("status", dict(kwargs)))
+            return {"status": "ok", "request_id": kwargs.get("request_id")}
+
     monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
 
@@ -186,11 +190,20 @@ def test_cli_local_workflow_python_capacity_and_cancel_use_facade(
             "workflow-python-cancel-request",
         ]
     )
+    status_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}),
+            "workflow-python-request-status",
+        ]
+    )
 
     assert resize_rc == 0
     assert cancel_rc == 0
+    assert status_rc == 0
     assert ("capacity", {"profile": "helper", "environment_key": "env-demo", "engine_id": "wf-py", "capacity": 7}) in calls
     assert ("cancel", {"profile": "helper", "environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}) in calls
+    assert ("status", {"profile": "helper", "environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}) in calls
     out = capsys.readouterr().out
     assert '"capacity": 7' in out
     assert '"request_id": "req-1"' in out
@@ -221,6 +234,10 @@ def test_cli_local_workflow_js_facade_commands(
             calls.append(("cancel", dict(kwargs)))
             return {"status": "ok", "request_id": kwargs.get("request_id")}
 
+        def workflow_js_request_status(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("status", dict(kwargs)))
+            return {"status": "ok", "request_id": kwargs.get("request_id")}
+
     monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
 
@@ -245,10 +262,18 @@ def test_cli_local_workflow_js_facade_commands(
             "workflow-js-cancel-request",
         ]
     )
+    status_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}),
+            "workflow-js-request-status",
+        ]
+    )
 
     assert resources_rc == 0
     assert resize_rc == 0
     assert cancel_rc == 0
+    assert status_rc == 0
     assert (
         "resources",
         {
@@ -262,6 +287,7 @@ def test_cli_local_workflow_js_facade_commands(
     ) in calls
     assert ("capacity", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}) in calls
     assert ("cancel", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
+    assert ("status", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
     out = capsys.readouterr().out
     assert '"environment_key": "env-js"' in out
     assert '"request_id": "req-1"' in out

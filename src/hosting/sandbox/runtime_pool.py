@@ -14,6 +14,7 @@ from .runtime_base import (
     HostedPoolKey,
     HostedPoolMetrics,
     HostedRequestLifecycle,
+    HostedStreamEvent,
     HostedWorkerSlot,
 )
 
@@ -115,6 +116,25 @@ class HostedProcessPool:
     def cancel_request(self, request_id: str, *, timestamp: Optional[float] = None) -> Dict[str, object]:
         return self.finish_request(request_id, status="canceled", reason="canceled", timestamp=timestamp)
 
+    def record_stream_event(self, request_id: str, event: HostedStreamEvent | Dict[str, object]) -> Dict[str, object]:
+        rid = str(request_id or "").strip()
+        request = self.requests.get(rid)
+        if request is None:
+            return {"status": "not_found", "request_id": rid}
+        row = event.to_dict() if isinstance(event, HostedStreamEvent) else dict(event or {})
+        request.record_stream_event(row)
+        return {"status": "ok", "request": request.to_dict(), "event": row}
+
+    def request_status(self, request_id: str) -> Dict[str, object]:
+        rid = str(request_id or "").strip()
+        request = self.requests.get(rid)
+        if request is not None:
+            return {"status": "ok", "request": request.to_dict(), "source": "active"}
+        for recent in reversed(self.recent_requests):
+            if str(recent.request_id or "").strip() == rid:
+                return {"status": "ok", "request": recent.to_dict(), "source": "recent"}
+        return {"status": "not_found", "request_id": rid}
+
     def _remember_request(self, request: HostedRequestLifecycle) -> None:
         self.recent_requests.append(request)
         while len(self.recent_requests) > self.recent_limit:
@@ -160,6 +180,16 @@ class HostedProcessPoolRegistry:
 
     def get(self, pool_key: HostedPoolKey) -> Optional[HostedProcessPool]:
         return self._pools.get(pool_key.pool_id())
+
+    def request_status(self, pool_key: HostedPoolKey, request_id: str) -> Dict[str, object]:
+        pool = self.get(pool_key)
+        if pool is None:
+            return {
+                "status": "not_found",
+                "pool_id": pool_key.pool_id(),
+                "request_id": str(request_id or "").strip(),
+            }
+        return {**pool.request_status(request_id), "pool_id": pool_key.pool_id()}
 
     def resources(self) -> Dict[str, object]:
         return {

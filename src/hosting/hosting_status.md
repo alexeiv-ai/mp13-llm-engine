@@ -53,6 +53,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Marked old Python/JS helper command names as compatibility aliases in `HOSTING_CLIENT_BREAKING_CHANGES.md`; new integrations should use `workflow-python-*` and `workflow-js-*`.
 - Extended the workflow Python runtime environment wrapper to return a stable `install_status` summary for prepare/lock/verify/install/receipt operations, so workflow callers do not need to parse toolbox metadata directly.
 - Completed the tracked Phase 7 facade/alias checklist items; full old JS helper file removal remains a later cleanup phase after dependent migration.
+- Added shared pool request-status/progress snapshot plumbing and workflow-named `workflow-python-request-status` / `workflow-js-request-status` surfaces. These report request lifetime metrics plus latest progress once stream/progress events are recorded.
 
 ## Key Design Decisions So Far
 

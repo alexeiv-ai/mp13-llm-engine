@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from hosting.sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
+from hosting.sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot
 from hosting.sandbox.runtime_pool import HostedProcessPoolRegistry
 
 
@@ -88,6 +88,54 @@ def test_error_metrics_are_grouped_by_reason() -> None:
     metrics = pool.resources()["metrics"]
     assert metrics["error_count"] == 1
     assert metrics["errors_by_reason"] == {"boom": 1}
+
+
+def test_pool_records_progress_snapshot_and_request_status() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="workflow_python", environment_key="env-a")
+    pool = registry.get_or_create(key, desired_capacity=1)
+
+    pool.submit_request(_request("req-1"), factory=_factory, start_timestamp=10.0)
+    event = HostedStreamEvent(
+        type="progress",
+        request_id="req-1",
+        sequence=3,
+        timestamp=10.4,
+        payload={"progress_percent": 50, "progress_text": "Half done"},
+    )
+    recorded = pool.record_stream_event("req-1", event)
+    status = registry.request_status(key, "req-1")
+
+    assert recorded["status"] == "ok"
+    assert status["status"] == "ok"
+    assert status["source"] == "active"
+    assert status["request"]["stream_event_count"] == 1
+    assert status["request"]["latest_progress"]["payload"]["progress_percent"] == 50
+
+
+def test_request_status_checks_recent_finished_requests() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="workflow_python", environment_key="env-a")
+    pool = registry.get_or_create(key, desired_capacity=1)
+
+    pool.submit_request(_request("req-1"), factory=_factory, start_timestamp=10.0)
+    pool.record_stream_event(
+        "req-1",
+        {
+            "type": "progress",
+            "request_id": "req-1",
+            "sequence": 1,
+            "timestamp": 10.2,
+            "payload": {"progress_text": "Finishing"},
+        },
+    )
+    pool.finish_request("req-1", status="ok", timestamp=10.5)
+    status = registry.request_status(key, "req-1")
+
+    assert status["status"] == "ok"
+    assert status["source"] == "active"
+    assert status["request"]["status"] == "ok"
+    assert status["request"]["latest_progress"]["payload"]["progress_text"] == "Finishing"
 
 
 def test_registry_resources_roll_up_pools() -> None:

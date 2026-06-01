@@ -170,6 +170,8 @@ class HostedRequestLifecycle:
     reason: Optional[str] = None
     input_bytes: Optional[int] = None
     output_bytes: Optional[int] = None
+    latest_progress: Optional[Dict[str, Any]] = None
+    stream_event_count: int = 0
 
     def mark_started(self, *, timestamp: Optional[float] = None, engine_id: Optional[str] = None) -> None:
         self.started_at = float(timestamp if timestamp is not None else time.time())
@@ -181,6 +183,19 @@ class HostedRequestLifecycle:
         self.finished_at = float(timestamp if timestamp is not None else time.time())
         self.status = _clean(status) or "finished"
         self.reason = _clean(reason) or None
+
+    def record_stream_event(self, event: Dict[str, Any]) -> None:
+        row = dict(event or {})
+        self.stream_event_count += 1
+        event_type = _clean(row.get("type"))
+        if event_type == "progress":
+            payload = dict(row.get("payload") or {})
+            self.latest_progress = {
+                "type": event_type,
+                "timestamp": float(row.get("timestamp") or time.time()),
+                "sequence": max(0, int(row.get("sequence") or 0)),
+                "payload": payload,
+            }
 
     def queue_wait_ms(self) -> Optional[int]:
         if self.started_at is None:
@@ -214,6 +229,8 @@ class HostedRequestLifecycle:
             "lifetime_ms": self.lifetime_ms(),
             "input_bytes": int(self.input_bytes) if self.input_bytes is not None else None,
             "output_bytes": int(self.output_bytes) if self.output_bytes is not None else None,
+            "latest_progress": dict(self.latest_progress or {}) or None,
+            "stream_event_count": max(0, int(self.stream_event_count or 0)),
         }
 
 

@@ -1077,6 +1077,7 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     ch.workflow_python_resources(profile="helper", environment_key="env-key", engine_id="wf-py")
     ch.set_workflow_python_capacity(profile="helper", environment_key="env-key", engine_id="wf-py", capacity=6)
     ch.cancel_workflow_python_request(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
+    ch.workflow_python_request_status(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
 
     assert fake.calls == [
         (
@@ -1149,6 +1150,16 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
                 "session_token": "tok-123",
             },
         ),
+        (
+            "workflow-python-request-status",
+            {
+                "profile": "helper",
+                "environment_key": "env-key",
+                "engine_id": "wf-py",
+                "request_id": "req-1",
+                "session_token": "tok-123",
+            },
+        ),
     ]
 
 
@@ -1173,6 +1184,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
     ch.workflow_js_resources(profile="helper", environment_key="env-js", engine_id="wf-js")
     ch.set_workflow_js_capacity(profile="helper", environment_key="env-js", engine_id="wf-js", capacity=6)
     ch.cancel_workflow_js_request(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
+    ch.workflow_js_request_status(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
 
     assert fake.calls == [
         (
@@ -1224,6 +1236,16 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         ),
         (
             "workflow-js-cancel-request",
+            {
+                "profile": "helper",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "request_id": "req-1",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-request-status",
             {
                 "profile": "helper",
                 "environment_key": "env-js",

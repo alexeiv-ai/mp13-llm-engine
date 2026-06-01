@@ -2151,6 +2151,13 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 request_id=str(payload.get("request_id") or ""),
             )
+        if cmd == "workflow-js-request-status":
+            return svc.workflow_js_request_status(
+                profile=str(payload.get("profile") or "helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request_id=str(payload.get("request_id") or ""),
+            )
         if cmd == "workflow-python-helper-resources":
             return svc.workflow_python_helper_resources(engine_id=str(payload.get("engine_id") or "workflow-python-helper"))
         if cmd == "workflow-python-helper-set-capacity":
@@ -2228,6 +2235,13 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-python-cancel-request":
             return svc.cancel_workflow_python_request(
+                profile=str(payload.get("profile") or "helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request_id=str(payload.get("request_id") or ""),
+            )
+        if cmd == "workflow-python-request-status":
+            return svc.workflow_python_request_status(
                 profile=str(payload.get("profile") or "helper"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,

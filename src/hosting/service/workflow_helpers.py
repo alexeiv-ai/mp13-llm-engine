@@ -406,6 +406,21 @@ class WorkflowHelperMixin:
             out["workflow_pool_cancel"] = pool.cancel_request(request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
+    def workflow_js_request_status(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        effective_key = str(environment_key or "").strip() or self._workflow_js_registration_environment_key(engine_id)
+        if not effective_key:
+            return {"status": "not_found", "request_id": str(request_id or "").strip(), "profile": prof, "environment_key": None}
+        out = self._workflow_python_pool_registry().request_status(self._workflow_js_pool_key(effective_key), request_id)
+        return {**dict(out or {}), "profile": prof, "environment_key": effective_key}
+
     def ensure_workflow_python(
         self,
         *,
@@ -656,6 +671,23 @@ class WorkflowHelperMixin:
         if pool is not None and "workflow_pool_cancel" not in dict(out or {}):
             out["workflow_pool_cancel"] = pool.cancel_request(request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
+
+    def workflow_python_request_status(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "helper":
+            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id, request={"request_id": request_id})
+        effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
+        if not effective_key:
+            return {"status": "not_found", "request_id": str(request_id or "").strip(), "profile": prof, "environment_key": None}
+        out = self._workflow_python_pool_registry().request_status(self._workflow_python_pool_key(effective_key), request_id)
+        return {**dict(out or {}), "profile": prof, "environment_key": effective_key}
 
     @staticmethod
     def workflow_js_helper_default_sandbox_policy() -> Dict[str, Any]:

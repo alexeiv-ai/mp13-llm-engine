@@ -37,6 +37,7 @@ _WORKFLOW_PYTHON_COMMANDS = {
     "workflow-python-resources",
     "workflow-python-set-capacity",
     "workflow-python-cancel-request",
+    "workflow-python-request-status",
 }
 
 _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
@@ -44,6 +45,7 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-verify-environment",
     "workflow-python-verify-install-receipt",
     "workflow-python-resources",
+    "workflow-python-request-status",
 }
 
 _WORKFLOW_JS_COMMANDS = {
@@ -52,11 +54,13 @@ _WORKFLOW_JS_COMMANDS = {
     "workflow-js-resources",
     "workflow-js-set-capacity",
     "workflow-js-cancel-request",
+    "workflow-js-request-status",
 }
 
 _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-resources",
+    "workflow-js-request-status",
 }
 
 

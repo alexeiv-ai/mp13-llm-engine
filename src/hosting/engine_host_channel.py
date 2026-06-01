@@ -1764,6 +1764,25 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_request_status(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-request-status",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def workflow_js_environment_spec(
         self,
         *,
@@ -1864,6 +1883,25 @@ class EngineHostControlChannel:
     ) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-js-cancel-request",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
+    def workflow_js_request_status(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-request-status",
             {
                 "profile": str(profile or "helper").strip() or "helper",
                 "environment_key": str(environment_key or "").strip() or None,

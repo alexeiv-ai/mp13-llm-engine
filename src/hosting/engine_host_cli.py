@@ -772,6 +772,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-js-resources",
         "workflow-js-set-capacity",
         "workflow-js-cancel-request",
+        "workflow-js-request-status",
         "workflow-python-helper-resources",
         "workflow-python-helper-set-capacity",
         "workflow-python-helper-cancel-request",
@@ -786,6 +787,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-python-resources",
         "workflow-python-set-capacity",
         "workflow-python-cancel-request",
+        "workflow-python-request-status",
         "get-registration",
         "shutdown",
         "ensure-running",
@@ -1197,6 +1199,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "workflow-js-request-status":
+            _print_ok(
+                svc.workflow_js_request_status(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request_id=str(payload.get("request_id") or ""),
+                )
+            )
+            return 0
         if cmd == "workflow-python-helper-resources":
             _print_ok(
                 svc.workflow_python_helper_resources(
@@ -1310,6 +1322,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-python-cancel-request":
             _print_ok(
                 svc.cancel_workflow_python_request(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request_id=str(payload.get("request_id") or ""),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-request-status":
+            _print_ok(
+                svc.workflow_python_request_status(
                     profile=str(payload.get("profile") or "helper"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,

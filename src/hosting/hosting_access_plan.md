@@ -111,11 +111,11 @@ Explicitly out of scope for this epic unless separately requested:
   - Grow within capacity if needed.
   - Return a structured capacity error when saturated unless explicit queuing is added.
 
-- [ ] Add request lifetime tracking.
+- [x] Add request lifetime tracking.
   - Record `request_id`, `operation_id` where applicable, environment key, worker engine ID, profile, submitted/started/finished/canceled timestamps, status, reason, and byte counts.
   - Keep a bounded recent request ring in memory and include it in resource/metrics responses.
 
-- [ ] Add latency and concurrency metrics.
+- [x] Add latency and concurrency metrics.
   - Queue wait ms.
   - Execution latency ms.
   - Total request lifetime ms.
@@ -296,7 +296,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 - [ ] Implement async/streaming execution for node profile.
 - [ ] Implement artifact ref plumbing or explicit placeholder errors if artifact store is not ready.
-- [ ] Implement latest-progress snapshot in resource/request-status responses.
+- [x] Implement latest-progress snapshot in resource/request-status responses.
 - [ ] Add tests for streamed progress, stdout/stderr summary truncation, result, structured error, timeout, cancel, and metrics.
 
 ## Phase 6: Migrate Workflow Python Helper Compatibility
