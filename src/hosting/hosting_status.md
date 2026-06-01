@@ -74,6 +74,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Documented workflow Python/JS runtime facade commands, environment lifecycle, resource/capacity/status/cancel usage, and node-profile streaming rollout in `HOSTING.md`.
 - Updated `sandbox/sandbox_test_status.md` with new process base, JS runtime base, runtime-env GC, workflow stream rollout, and auth/policy test navigation; Phase 0 inventory/characterization checklist is now current.
 - Switched workflow Python runtime base to the neutral `RuntimeEnvironmentManager` adapter rather than importing `ToolboxEnvironmentManager` directly.
+- Recorded open design decisions in the plan: workflow-named stream commands, helper profile sync-only behavior, one-worker-per-environment-key first pool shape, artifact-store placeholder, recent request retention, and CLI JSON/log summary posture.
 
 ## Key Design Decisions So Far
 

@@ -424,9 +424,15 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Open Design Decisions
 
-- [ ] Decide whether the first streaming implementation reuses existing generic worker stream proxy commands directly or introduces workflow-named aliases over the same transport.
-- [ ] Decide whether `workflow_python(profile=helper)` should expose streaming immediately or remain sync-only until node profile lands.
-- [ ] Decide whether the first pool implementation should support multiple workers per environment key or only one worker with an internal hot child pool.
-- [ ] Decide how artifact refs are stored and authorized for node-profile responses.
-- [ ] Decide the retention policy for recent request lifetime metrics.
-- [ ] Decide whether CLI should display raw stdout/stderr snippets by default or only summaries.
+- [x] Decide whether the first streaming implementation reuses existing generic worker stream proxy commands directly or introduces workflow-named aliases over the same transport.
+  - Decision: introduce workflow-named `workflow-python-stream-*` commands over shared base stream/session primitives.
+- [x] Decide whether `workflow_python(profile=helper)` should expose streaming immediately or remain sync-only until node profile lands.
+  - Decision: helper profile remains sync-only for compatibility; node profile owns the workflow stream rollout.
+- [x] Decide whether the first pool implementation should support multiple workers per environment key or only one worker with an internal hot child pool.
+  - Decision: one worker per environment key with per-worker/internal capacity first; base models allow future replicas.
+- [x] Decide how artifact refs are stored and authorized for node-profile responses.
+  - Decision: artifact refs are contract fields, but storage is explicitly reported as unavailable until an artifact store is designed.
+- [x] Decide the retention policy for recent request lifetime metrics.
+  - Decision: in-memory bounded recent request ring defaults to 100 entries per process pool.
+- [x] Decide whether CLI should display raw stdout/stderr snippets by default or only summaries.
+  - Decision: CLI surfaces structured JSON by default; workflow docs describe logs/stdout/stderr as response fields, not default raw terminal output.
