@@ -402,7 +402,7 @@ class WorkflowHelperMixin:
         eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=effective_key)
         out = self.cancel_workflow_js_helper_request(engine_id=eid, request_id=request_id)
         pool = self._workflow_python_pool_registry().get(self._workflow_js_pool_key(effective_key))
-        if pool is not None:
+        if pool is not None and "workflow_pool_cancel" not in dict(out or {}):
             out["workflow_pool_cancel"] = pool.cancel_request(request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
@@ -737,13 +737,27 @@ class WorkflowHelperMixin:
         )
 
     def workflow_js_helper_resources(self, *, engine_id: str = "workflow-js-helper") -> Dict[str, Any]:
+        eid = str(engine_id or "").strip() or "workflow-js-helper"
         out = self.proxy_rpc_call(
-            engine_id=str(engine_id or "").strip() or "workflow-js-helper",
+            engine_id=eid,
             method="worker.resources",
             params={},
             timeout_seconds=10.0,
         )
-        return self._enrich_workflow_js_helper_resources(dict(out.get("result") or out or {}))
+        result = self._enrich_workflow_js_helper_resources(dict(out.get("result") or out or {}))
+        return self._attach_workflow_js_alias_pool(engine_id=eid, result=result)
+
+    def _attach_workflow_js_alias_pool(self, *, engine_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(result or {})
+        environment_key = self._workflow_js_registration_environment_key(engine_id)
+        if not environment_key:
+            return out
+        pool = self._workflow_python_pool_registry().get(self._workflow_js_pool_key(environment_key))
+        out["workflow_runtime_kind"] = "workflow_js"
+        out["workflow_profile"] = "helper"
+        out["environment_key"] = environment_key
+        out["workflow_pool"] = pool.resources() if pool is not None else None
+        return out
 
     def _enrich_workflow_js_helper_resources(self, resources: Dict[str, Any]) -> Dict[str, Any]:
         result = dict(resources or {})
@@ -796,22 +810,34 @@ class WorkflowHelperMixin:
         return result
 
     def set_workflow_js_helper_capacity(self, *, engine_id: str = "workflow-js-helper", capacity: int) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip() or "workflow-js-helper"
         out = self.proxy_rpc_call(
-            engine_id=str(engine_id or "").strip() or "workflow-js-helper",
+            engine_id=eid,
             method="workflow_js_helper.set_capacity",
             params={"capacity": max(1, min(int(capacity or 1), 256))},
             timeout_seconds=10.0,
         )
-        return self._enrich_workflow_js_helper_resources(dict(out.get("result") or out or {}))
+        result = self._enrich_workflow_js_helper_resources(dict(out.get("result") or out or {}))
+        environment_key = self._workflow_js_registration_environment_key(eid)
+        if environment_key:
+            self._workflow_python_pool_registry().get_or_create(self._workflow_js_pool_key(environment_key), desired_capacity=capacity).set_capacity(capacity)
+        return self._attach_workflow_js_alias_pool(engine_id=eid, result=result)
 
     def cancel_workflow_js_helper_request(self, *, engine_id: str = "workflow-js-helper", request_id: str) -> Dict[str, Any]:
+        eid = str(engine_id or "").strip() or "workflow-js-helper"
         out = self.proxy_rpc_call(
-            engine_id=str(engine_id or "").strip() or "workflow-js-helper",
+            engine_id=eid,
             method="workflow_js_helper.cancel_request",
             params={"request_id": str(request_id or "").strip()},
             timeout_seconds=10.0,
         )
-        return dict(out.get("result") or out or {})
+        result = dict(out.get("result") or out or {})
+        environment_key = self._workflow_js_registration_environment_key(eid)
+        if environment_key:
+            pool = self._workflow_python_pool_registry().get(self._workflow_js_pool_key(environment_key))
+            if pool is not None:
+                result["workflow_pool_cancel"] = pool.cancel_request(request_id)
+        return self._attach_workflow_js_alias_pool(engine_id=eid, result=result)
 
     def spawn_workflow_python_helper(
         self,

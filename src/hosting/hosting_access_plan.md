@@ -318,10 +318,10 @@ Explicitly out of scope for this epic unless separately requested:
 - [x] Add environment/runtime key derivation for JS.
   - Include environment name, profile, Node executable/version, sandbox policy hash, and package/dependency identity if supported.
 
-- [ ] Rewire old `workflow_js_helper` APIs as compatibility aliases.
+- [x] Rewire old `workflow_js_helper` APIs as compatibility aliases.
 - [x] Align JS helper resource/capacity/cancel response shape with workflow Python.
 - [ ] Keep JS-specific compatibility fields until clients migrate.
-- [ ] Add JS helper compatibility tests.
+- [x] Add JS helper compatibility tests.
 - [x] Add new JS facade tests.
 - [ ] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 

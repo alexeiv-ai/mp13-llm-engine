@@ -137,6 +137,7 @@ Minimal helper-profile execute payload:
   - Old: `workflow-js-helper-resources`, `workflow-js-helper-set-capacity`, `workflow-js-helper-cancel-request`.
   - New: `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-cancel-request`.
   - Preferred selector: `environment_key`; temporary migration selector: annotated `engine_id`.
+  - Compatibility behavior: old JS helper resource/capacity/cancel calls now include `environment_key`, `workflow_runtime_kind=workflow_js`, and `workflow_pool` when the helper registration has been annotated through `workflow-js-ensure`.
 
 Minimal JS ensure payload:
 

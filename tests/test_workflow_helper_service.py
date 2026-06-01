@@ -430,6 +430,65 @@ def test_workflow_js_facade_isolates_pools_by_policy(tmp_path: Path, monkeypatch
     ]
 
 
+def test_old_js_helper_resource_alias_reports_workflow_pool_for_annotated_registration(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    svc.register_spawned(
+        engine_id="wf-js-existing",
+        pid=0,
+        command=["python", "-m", "hosting.workflow_js_helper_ipc"],
+        worker_profile_class="generic",
+        executor_kind="workflow_js_helper",
+        capabilities={"workflow_js_helper": True},
+    )
+    monkeypatch.setattr(svc, "ensure_running", lambda _engine_id: {"status": "already_running"})
+    monkeypatch.setattr(svc, "proxy_rpc_call", lambda **_kwargs: {"result": {"status": "ok", "capacity": 2, "node_pool": {}}})
+
+    ensured = svc.ensure_workflow_js(profile="helper", engine_id="wf-js-existing", capacity=2)
+    out = svc.workflow_js_helper_resources(engine_id="wf-js-existing")
+
+    assert out["workflow_runtime_kind"] == "workflow_js"
+    assert out["workflow_profile"] == "helper"
+    assert out["environment_key"] == ensured["environment_key"]
+    assert out["workflow_pool"]["metrics"]["desired_capacity"] == 2
+
+
+def test_old_js_helper_capacity_and_cancel_alias_update_workflow_pool(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    svc.register_spawned(
+        engine_id="wf-js-existing",
+        pid=0,
+        command=["python", "-m", "hosting.workflow_js_helper_ipc"],
+        worker_profile_class="generic",
+        executor_kind="workflow_js_helper",
+        capabilities={"workflow_js_helper": True},
+    )
+    monkeypatch.setattr(svc, "ensure_running", lambda _engine_id: {"status": "already_running"})
+
+    def fake_proxy_rpc_call(**kwargs):
+        if kwargs["method"] == "workflow_js_helper.set_capacity":
+            return {"result": {"status": "ok", "capacity": kwargs["params"]["capacity"], "node_pool": {}}}
+        if kwargs["method"] == "workflow_js_helper.cancel_request":
+            return {"result": {"status": "ok", "canceled": True, "request_id": kwargs["params"]["request_id"]}}
+        return {"result": {"status": "ok", "node_pool": {}}}
+
+    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
+
+    ensured = svc.ensure_workflow_js(profile="helper", engine_id="wf-js-existing", capacity=2)
+    resized = svc.set_workflow_js_helper_capacity(engine_id="wf-js-existing", capacity=4)
+    canceled = svc.cancel_workflow_js_helper_request(engine_id="wf-js-existing", request_id="req-missing")
+
+    assert resized["environment_key"] == ensured["environment_key"]
+    assert resized["workflow_pool"]["metrics"]["desired_capacity"] == 4
+    assert canceled["environment_key"] == ensured["environment_key"]
+    assert canceled["workflow_pool_cancel"]["status"] == "not_found"
+
+
 def test_workflow_python_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
