@@ -6,10 +6,11 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
 
 ## Planned Migration: Workflow Python
 
-- [ ] Stop treating `workflow_python_helper` as the long-term primary API.
-- [ ] Start using `workflow_python` once available.
+- [x] Stop treating `workflow_python_helper` as the long-term primary API.
+- [x] Start using `workflow_python` once available.
   - `workflow_python(profile=helper, environment_name=workflow-python-helper)` replaces the current helper lane.
   - `workflow_python(profile=node)` is planned for long-running workflow node execution with streaming responses.
+  - Initial host surfaces now exist for helper-profile compatibility; dependent projects should wait for integration guidance before removing old helper calls.
 
 - [ ] Stop routing workflow Python pools only by `engine_id`.
 - [ ] Start accepting a host-derived `environment_key`.
@@ -17,7 +18,7 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
   - Different environment keys will not share Python worker processes or hot child pools.
 
 - [ ] Stop assuming `python.package_pins` are installed/enforced merely because they are present in an execute request.
-- [ ] Start using explicit workflow environment APIs for dependency-bearing environments.
+- [x] Start using explicit workflow environment APIs for dependency-bearing environments.
   - Prepare.
   - Lock.
   - Verify.

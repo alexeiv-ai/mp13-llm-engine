@@ -5,8 +5,241 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..sandbox.python_runtime import HostedPythonRuntimeManager
+
 
 class WorkflowHelperMixin:
+    def _workflow_python_runtime_manager(self) -> HostedPythonRuntimeManager:
+        return HostedPythonRuntimeManager(self.hosting_root)
+
+    @staticmethod
+    def _workflow_python_profile(profile: str) -> str:
+        value = str(profile or "helper").strip().lower() or "helper"
+        if value not in {"helper", "node"}:
+            raise ValueError("profile must be 'helper' or 'node'")
+        return value
+
+    def workflow_python_environment_spec(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        python: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        return self._workflow_python_runtime_manager().environment_spec(
+            environment_name=environment_name,
+            profile=prof,
+            python_policy=dict(python or {}),
+            sandbox_policy=dict(sandbox_policy or {}),
+        )
+
+    def workflow_python_prepare_environment(
+        self,
+        *,
+        environment_name: str = "workflow-python-helper",
+        python: Optional[Dict[str, Any]] = None,
+        package_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self._workflow_python_runtime_manager().prepare_install(
+            environment_name=environment_name,
+            python_policy=dict(python or {}),
+            package_id=package_id,
+            workflow_id=workflow_id,
+        )
+
+    def workflow_python_lock_environment(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
+        return self._workflow_python_runtime_manager().lock_install(environment=dict(environment or {}))
+
+    def workflow_python_verify_environment(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
+        return self._workflow_python_runtime_manager().verify_install_lock(environment=dict(environment or {}))
+
+    def workflow_python_install_environment(self, *, environment: Dict[str, Any], allow_execution: bool = False) -> Dict[str, Any]:
+        return self._workflow_python_runtime_manager().execute_install(
+            environment=dict(environment or {}),
+            allow_execution=bool(allow_execution),
+        )
+
+    def workflow_python_verify_install_receipt(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
+        return self._workflow_python_runtime_manager().verify_install_receipt(environment=dict(environment or {}))
+
+    def workflow_python_default_engine_id(self, *, environment_key: str) -> str:
+        key = str(environment_key or "").strip()
+        return f"workflow-python-{key[:16]}" if key else "workflow-python-helper"
+
+    def ensure_workflow_python(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        python: Optional[Dict[str, Any]] = None,
+        python_executable: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        engine_id: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "helper":
+            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+        env = self.workflow_python_environment_spec(
+            profile=prof,
+            environment_name=environment_name,
+            python=python,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(env.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        if requested_key and requested_key != derived_key:
+            return {
+                "status": "error",
+                "reason": "environment_key_mismatch",
+                "environment_key": requested_key,
+                "derived_environment_key": derived_key,
+            }
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=derived_key)
+        existing = self.get_registration(eid)
+        if existing:
+            ensured = self.ensure_running(eid)
+            return {
+                "status": "ok",
+                "outcome": "already_registered",
+                "profile": prof,
+                "engine_id": eid,
+                "environment_key": derived_key,
+                "environment": dict(env.get("environment") or {}),
+                "ensure": dict(ensured or {}),
+            }
+        spawned = self.spawn_workflow_python_helper(
+            engine_id=eid,
+            python_executable=python_executable,
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            worker_profile_class=worker_profile_class,
+        )
+        return {
+            "status": "ok",
+            "outcome": "spawned",
+            "profile": prof,
+            "engine_id": eid,
+            "environment_key": derived_key,
+            "environment": dict(env.get("environment") or {}),
+            "spawn": dict(spawned or {}),
+        }
+
+    def execute_workflow_python(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "helper":
+            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+        req = dict(request or {})
+        py = dict(req.get("python") or {})
+        if environment_name:
+            py.setdefault("environment_name", str(environment_name or "workflow-python-helper"))
+        req["python"] = py
+        ensured = self.ensure_workflow_python(
+            profile=prof,
+            environment_name=str(py.get("environment_name") or environment_name or "workflow-python-helper"),
+            environment_key=environment_key,
+            python=py,
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            engine_id=engine_id,
+        )
+        if str(ensured.get("status") or "") != "ok":
+            return ensured
+        out = self.proxy_rpc_call(
+            engine_id=str(ensured["engine_id"]),
+            method="execute_workflow_python_helper",
+            params=req,
+            timeout_seconds=float(dict(req.get("limits") or {}).get("timeout_ms") or 30000) / 1000.0 + 5.0,
+        )
+        result = dict(out.get("result") or out or {})
+        return {
+            "status": "ok" if bool(result.get("ok", False)) else "error",
+            "ok": bool(result.get("ok", False)),
+            "profile": prof,
+            "engine_id": str(ensured["engine_id"]),
+            "environment_key": str(ensured.get("environment_key") or ""),
+            "output": result.get("result"),
+            "result": result,
+        }
+
+    def workflow_python_resources(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        python: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "helper":
+            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+        env = self.workflow_python_environment_spec(
+            profile=prof,
+            environment_name=environment_name,
+            python=python,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(env.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        if requested_key and requested_key != derived_key:
+            return {"status": "error", "reason": "environment_key_mismatch", "environment_key": requested_key, "derived_environment_key": derived_key}
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=derived_key)
+        resources = self.workflow_python_helper_resources(engine_id=eid)
+        return {
+            **dict(resources or {}),
+            "profile": prof,
+            "engine_id": eid,
+            "environment_key": derived_key,
+            "environment": dict(env.get("environment") or {}),
+        }
+
+    def set_workflow_python_capacity(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "helper":
+            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=str(environment_key or ""))
+        out = self.set_workflow_python_helper_capacity(engine_id=eid, capacity=capacity)
+        return {**dict(out or {}), "profile": prof, "environment_key": str(environment_key or "").strip() or None}
+
+    def cancel_workflow_python_request(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "helper":
+            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=str(environment_key or ""))
+        out = self.cancel_workflow_python_helper_request(engine_id=eid, request_id=request_id)
+        return {**dict(out or {}), "profile": prof, "environment_key": str(environment_key or "").strip() or None}
+
     @staticmethod
     def workflow_js_helper_default_sandbox_policy() -> Dict[str, Any]:
         return {

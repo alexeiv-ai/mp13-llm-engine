@@ -2121,6 +2121,76 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
                 request_id=str(payload.get("request_id") or ""),
             )
+        if cmd == "workflow-python-environment-spec":
+            return svc.workflow_python_environment_spec(
+                profile=str(payload.get("profile") or "helper"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                python=dict(payload.get("python") or {}),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
+        if cmd == "workflow-python-prepare-environment":
+            return svc.workflow_python_prepare_environment(
+                environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                python=dict(payload.get("python") or {}),
+                package_id=str(payload.get("package_id") or "").strip() or None,
+                workflow_id=str(payload.get("workflow_id") or "").strip() or None,
+            )
+        if cmd == "workflow-python-lock-environment":
+            return svc.workflow_python_lock_environment(environment=dict(payload.get("environment") or {}))
+        if cmd == "workflow-python-verify-environment":
+            return svc.workflow_python_verify_environment(environment=dict(payload.get("environment") or {}))
+        if cmd == "workflow-python-install-environment":
+            return svc.workflow_python_install_environment(
+                environment=dict(payload.get("environment") or {}),
+                allow_execution=bool(payload.get("allow_execution", False)),
+            )
+        if cmd == "workflow-python-verify-install-receipt":
+            return svc.workflow_python_verify_install_receipt(environment=dict(payload.get("environment") or {}))
+        if cmd == "workflow-python-ensure":
+            return svc.ensure_workflow_python(
+                profile=str(payload.get("profile") or "helper"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                python=dict(payload.get("python") or {}),
+                python_executable=payload.get("python_executable"),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+            )
+        if cmd == "workflow-python-execute":
+            return svc.execute_workflow_python(
+                profile=str(payload.get("profile") or "helper"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
+        if cmd == "workflow-python-resources":
+            return svc.workflow_python_resources(
+                profile=str(payload.get("profile") or "helper"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                python=dict(payload.get("python") or {}),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
+        if cmd == "workflow-python-set-capacity":
+            return svc.set_workflow_python_capacity(
+                profile=str(payload.get("profile") or "helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                capacity=int(payload.get("capacity") or 1),
+            )
+        if cmd == "workflow-python-cancel-request":
+            return svc.cancel_workflow_python_request(
+                profile=str(payload.get("profile") or "helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request_id=str(payload.get("request_id") or ""),
+            )
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
         if cmd == "shutdown":

@@ -255,6 +255,49 @@ def test_daemon_dispatches_workflow_python_helper_resources_and_capacity() -> No
     ]
 
 
+def test_daemon_dispatches_workflow_python_facade() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def workflow_python_environment_spec(self, **kwargs):
+            self.calls.append(("spec", dict(kwargs)))
+            return {"status": "ok", "environment_key": "env-key"}
+
+        def ensure_workflow_python(self, **kwargs):
+            self.calls.append(("ensure", dict(kwargs)))
+            return {"status": "ok", "engine_id": "wf-py"}
+
+        def execute_workflow_python(self, **kwargs):
+            self.calls.append(("execute", dict(kwargs)))
+            return {"status": "ok", "ok": True}
+
+        def workflow_python_resources(self, **kwargs):
+            self.calls.append(("resources", dict(kwargs)))
+            return {"status": "ok"}
+
+        def set_workflow_python_capacity(self, **kwargs):
+            self.calls.append(("set_capacity", dict(kwargs)))
+            return {"status": "ok", "capacity": kwargs["capacity"]}
+
+        def cancel_workflow_python_request(self, **kwargs):
+            self.calls.append(("cancel", dict(kwargs)))
+            return {"status": "ok", "request_id": kwargs["request_id"]}
+
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+
+    assert daemon._call_service("workflow-python-environment-spec", {"profile": "helper"})["environment_key"] == "env-key"
+    assert daemon._call_service("workflow-python-ensure", {"engine_id": "wf-py"})["engine_id"] == "wf-py"
+    assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+    assert daemon._call_service("workflow-python-resources", {"engine_id": "wf-py"})["status"] == "ok"
+    assert daemon._call_service("workflow-python-set-capacity", {"engine_id": "wf-py", "capacity": 5})["capacity"] == 5
+    assert daemon._call_service("workflow-python-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})["request_id"] == "req-1"
+
+    assert [name for name, _ in fake.calls] == ["spec", "ensure", "execute", "resources", "set_capacity", "cancel"]
+
+
 def test_workflow_js_helper_resources_include_normalized_pool_aliases(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -533,3 +576,109 @@ def test_workflow_python_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None
         assert ensured["status"] in {"ok", "already_running", "running"}
     finally:
         svc.shutdown(str(reg.get("engine_id") or "wf-py-roundtrip"), timeout_seconds=5.0)
+
+
+def test_workflow_python_environment_spec_facade(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    out = svc.workflow_python_environment_spec(
+        profile="helper",
+        python={"import_allowlist": ["json"], "package_pins": {"demo": "1.0.0"}},
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
+    )
+
+    assert out["status"] == "ok"
+    assert out["environment_key"]
+    assert out["environment"]["environment_root_kind"] == "runtime_envs"
+    assert out["environment"]["required_imports"] == ["json"]
+
+
+def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    seen = {}
+
+    monkeypatch.setattr(svc, "get_registration", lambda _engine_id: None)
+
+    def fake_spawn(**kwargs):
+        seen.update(kwargs)
+        return {"status": "ok", "engine_id": kwargs["engine_id"]}
+
+    monkeypatch.setattr(svc, "spawn_workflow_python_helper", fake_spawn)
+
+    out = svc.ensure_workflow_python(
+        profile="helper",
+        python={"import_allowlist": ["json"], "package_pins": {}},
+        capacity=3,
+    )
+
+    assert out["status"] == "ok"
+    assert out["outcome"] == "spawned"
+    assert out["engine_id"].startswith("workflow-python-")
+    assert out["environment_key"]
+    assert seen["engine_id"] == out["engine_id"]
+    assert seen["capacity"] == 3
+
+
+def test_ensure_workflow_python_rejects_environment_key_mismatch(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    out = svc.ensure_workflow_python(
+        profile="helper",
+        environment_key="wrong-key",
+        python={"import_allowlist": ["json"], "package_pins": {}},
+    )
+
+    assert out["status"] == "error"
+    assert out["reason"] == "environment_key_mismatch"
+    assert out["derived_environment_key"] != "wrong-key"
+
+
+def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    calls = {}
+
+    monkeypatch.setattr(
+        svc,
+        "ensure_workflow_python",
+        lambda **kwargs: {
+            "status": "ok",
+            "engine_id": "workflow-python-demo",
+            "environment_key": "env-demo",
+        },
+    )
+
+    def fake_proxy_rpc_call(**kwargs):
+        calls.update(kwargs)
+        return {"status": "ok", "result": {"ok": True, "result": {"accepted": True}}}
+
+    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
+
+    out = svc.execute_workflow_python(
+        profile="helper",
+        request={
+            "module_source": "def condition(input):\n    return {'accepted': True}\n",
+            "module_sha256": "demo",
+            "operation": "condition",
+            "export_name": "condition",
+            "payload": {},
+            "limits": {"timeout_ms": 1000},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["ok"] is True
+    assert out["output"] == {"accepted": True}
+    assert calls["engine_id"] == "workflow-python-demo"
+    assert calls["method"] == "execute_workflow_python_helper"

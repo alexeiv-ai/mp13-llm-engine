@@ -37,6 +37,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Started Phase 1 with `hosting.sandbox.runtime_base`: deterministic sandbox policy hashes, runtime/environment key specs, pool keys, worker slot snapshots, request lifecycle records, stream event envelopes, and pool metrics.
 - Completed the first internal Phase 2 pool foundation in `hosting.sandbox.runtime_pool`: pool registry, one-worker-per-environment-key scheduling, capacity changes, saturation tracking, request lifetime completion, cancellation accounting, error grouping, and resource rollups. This is not wired into workflow routing yet.
 - Completed the first internal Phase 3 Python runtime wrapper in `hosting.sandbox.python_runtime`: workflow-facing environment specs, environment-key identity, realization, prepare/lock/verify install flow, and runtime Python selection backed by the existing toolbox environment manager. This is not exposed through service/channel/CLI yet.
+- Started Phase 4 with a compatibility-first `workflow_python` facade. Service, daemon, channel, and direct CLI surfaces now expose environment spec/prepare/lock/verify/install/receipt commands plus helper-profile ensure/execute/resources/capacity/cancel. The backing worker is still the existing Python helper worker; `profile=node` still returns a not-implemented error.
 
 ## Key Design Decisions So Far
 
@@ -66,7 +67,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Internal workflow-facing Python environment manager exists without toolbox IDs/tool keys in its API.
 - [ ] Existing helper response shape is narrower than planned workflow node responses.
 - [ ] Existing helper streaming support is absent.
-- [ ] CLI and interactive CLI are helper-command oriented.
+- [ ] Interactive CLI is still helper-command oriented.
+- [x] Direct CLI has initial `workflow-python-*` commands.
 
 ## Next Implementation Steps
 
@@ -74,5 +76,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Implement stable environment-key derivation tests before changing worker routing.
 - [x] Add internal process pool registry tests for scheduling, saturation, cancellation, metrics, and resource rollups.
 - [x] Add internal Python runtime environment tests for workflow spec identity, realization, install plan/lock/verify, and runtime Python selection.
-- [ ] Draft the new workflow Python API surface in service/channel/CLI.
+- [x] Draft the new workflow Python API surface in service/channel/CLI for helper-profile compatibility.
+- [ ] Wire workflow Python facade to the internal pool registry and persist environment metadata on registrations.
+- [ ] Add interactive CLI views/actions for workflow runtime pools.
 - [ ] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.

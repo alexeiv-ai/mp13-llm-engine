@@ -1050,6 +1050,108 @@ def test_workflow_python_helper_channel_resources_and_capacity_use_proxy_rpc() -
     ]
 
 
+def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.workflow_python_environment_spec(
+        profile="helper",
+        python={"import_allowlist": ["json"]},
+        sandbox_policy={"sandbox": {"enabled": True}},
+    )
+    ch.ensure_workflow_python(
+        profile="helper",
+        environment_key="env-key",
+        python={"import_allowlist": ["json"]},
+        engine_id="wf-py",
+        capacity=4,
+    )
+    ch.execute_workflow_python(
+        profile="helper",
+        environment_key="env-key",
+        engine_id="wf-py",
+        request={"request_id": "req-1"},
+    )
+    ch.workflow_python_resources(profile="helper", environment_key="env-key", engine_id="wf-py")
+    ch.set_workflow_python_capacity(profile="helper", environment_key="env-key", engine_id="wf-py", capacity=6)
+    ch.cancel_workflow_python_request(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
+
+    assert fake.calls == [
+        (
+            "workflow-python-environment-spec",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-python-helper",
+                "python": {"import_allowlist": ["json"]},
+                "sandbox_policy": {"sandbox": {"enabled": True}},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-ensure",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-python-helper",
+                "environment_key": "env-key",
+                "python": {"import_allowlist": ["json"]},
+                "python_executable": None,
+                "capacity": 4,
+                "sandbox_policy": None,
+                "engine_id": "wf-py",
+                "worker_profile_class": "generic",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-execute",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-python-helper",
+                "environment_key": "env-key",
+                "engine_id": "wf-py",
+                "request": {"request_id": "req-1"},
+                "capacity": 1,
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-resources",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-python-helper",
+                "environment_key": "env-key",
+                "engine_id": "wf-py",
+                "python": {},
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-set-capacity",
+            {
+                "profile": "helper",
+                "environment_key": "env-key",
+                "engine_id": "wf-py",
+                "capacity": 6,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-cancel-request",
+            {
+                "profile": "helper",
+                "environment_key": "env-key",
+                "engine_id": "wf-py",
+                "request_id": "req-1",
+                "session_token": "tok-123",
+            },
+        ),
+    ]
+
+
 def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     custom_pid_file = Path("X:/tmp/custom_host.pid")
     captured: Dict[str, Any] = {}

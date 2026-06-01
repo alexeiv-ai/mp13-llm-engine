@@ -1630,6 +1630,140 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_environment_spec(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        python: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-environment-spec",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+                "python": dict(python or {}),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def ensure_workflow_python(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        python: Optional[Dict[str, Any]] = None,
+        python_executable: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        engine_id: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-ensure",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "python": dict(python or {}),
+                "python_executable": str(python_executable or "").strip() or None,
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
+            },
+        )
+        return dict(res or {})
+
+    def execute_workflow_python(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-execute",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_python_resources(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        python: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-resources",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "python": dict(python or {}),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def set_workflow_python_capacity(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-set-capacity",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "capacity": max(1, min(int(capacity or 1), 256)),
+            },
+        )
+        return dict(res or {})
+
+    def cancel_workflow_python_request(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-cancel-request",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def shutdown_managed(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         res = self._invoke("shutdown", {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds)})
         return dict(res or {})
