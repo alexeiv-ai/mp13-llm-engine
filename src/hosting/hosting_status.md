@@ -41,6 +41,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Extended the Phase 4 facade to annotate helper-backed registrations with workflow runtime/environment metadata and return request lifecycle metrics for sync helper-profile execution.
 - Wired the helper-backed `workflow_python(profile=helper)` facade to the internal in-memory pool registry. `ensure`, `execute`, `resources`, `set-capacity`, and `cancel-request` now maintain/report host-side pool capacity, active call counts, recent request lifetime metrics, and cancellation accounting by `environment_key`. This is accounting/scheduling around the existing helper worker, not the final new worker implementation.
 - Updated the interactive CLI workflow helper management path so annotated Python helper registrations use the new `workflow-python-*` facade for resources/capacity/cancel and display workflow pool metrics by `environment_key`, while legacy helper and JS helper paths remain compatible.
+- Tightened workflow Python facade migration behavior: resources/capacity/cancel can infer `environment_key` from annotated registrations, and tests now prove incompatible sandbox policies derive separate environment keys, engine IDs, and host-side pools.
 
 ## Key Design Decisions So Far
 

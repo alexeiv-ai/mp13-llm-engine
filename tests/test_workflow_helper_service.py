@@ -681,6 +681,87 @@ def test_ensure_workflow_python_rejects_environment_key_mismatch(tmp_path: Path)
     assert out["derived_environment_key"] != "wrong-key"
 
 
+def test_workflow_python_facade_isolates_pools_by_environment_key(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    spawned = []
+
+    monkeypatch.setattr(svc, "get_registration", lambda _engine_id: None)
+    monkeypatch.setattr(svc, "workflow_python_helper_resources", lambda **_kwargs: {"status": "ok"})
+
+    def fake_spawn(**kwargs):
+        spawned.append(dict(kwargs))
+        return {"status": "ok", "engine_id": kwargs["engine_id"]}
+
+    monkeypatch.setattr(svc, "spawn_workflow_python_helper", fake_spawn)
+
+    first = svc.ensure_workflow_python(
+        profile="helper",
+        python={"import_allowlist": ["json"]},
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
+    )
+    second = svc.ensure_workflow_python(
+        profile="helper",
+        python={"import_allowlist": ["json"]},
+        sandbox_policy={"sandbox": {"enabled": False, "profile": "workflow_python_helper_v1"}},
+    )
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["environment_key"] != second["environment_key"]
+    assert first["engine_id"] != second["engine_id"]
+    pools = svc._workflow_python_pool_registry().resources()["pools"]
+    assert sorted(pools.keys()) == [
+        f"workflow_python/{first['environment_key']}",
+        f"workflow_python/{second['environment_key']}",
+    ]
+    assert [row["engine_id"] for row in spawned] == [first["engine_id"], second["engine_id"]]
+
+
+def test_workflow_python_capacity_and_cancel_infer_environment_key_from_registration(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    svc.register_spawned(
+        engine_id="wf-py-existing",
+        pid=0,
+        command=["python", "-m", "hosting.workflow_python_helper_ipc"],
+        worker_profile_class="generic",
+        executor_kind="workflow_python_helper",
+        capabilities={"workflow_python_helper": True},
+    )
+    monkeypatch.setattr(svc, "ensure_running", lambda _engine_id: {"status": "already_running"})
+    monkeypatch.setattr(svc, "set_workflow_python_helper_capacity", lambda **kwargs: {"status": "ok", "capacity": kwargs["capacity"]})
+    monkeypatch.setattr(svc, "cancel_workflow_python_helper_request", lambda **kwargs: {"status": "ok", "canceled": True, "request_id": kwargs["request_id"]})
+
+    ensured = svc.ensure_workflow_python(
+        profile="helper",
+        engine_id="wf-py-existing",
+        python={"import_allowlist": ["json"], "package_pins": {}},
+    )
+
+    resized = svc.set_workflow_python_capacity(
+        profile="helper",
+        engine_id="wf-py-existing",
+        capacity=5,
+    )
+    canceled = svc.cancel_workflow_python_request(
+        profile="helper",
+        engine_id="wf-py-existing",
+        request_id="req-missing",
+    )
+
+    assert resized["environment_key"] == ensured["environment_key"]
+    assert canceled["environment_key"] == ensured["environment_key"]
+    pool = svc._workflow_python_pool_registry().get(svc._workflow_python_pool_key(ensured["environment_key"]))
+    assert pool is not None
+    assert pool.resources()["metrics"]["desired_capacity"] == 5
+    assert canceled["workflow_pool_cancel"]["status"] == "not_found"
+
+
 def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

@@ -93,6 +93,48 @@ class WorkflowHelperMixin:
             status="registered" if reg else "unknown",
         )
 
+    def _workflow_python_registration_environment_key(self, engine_id: Optional[str]) -> str:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            return ""
+        reg = dict(self.get_registration(eid) or {})
+        env = dict(reg.get("environment") or {})
+        caps = dict(reg.get("capabilities") or {})
+        return str(env.get("environment_key") or caps.get("environment_key") or "").strip()
+
+    def _workflow_python_effective_environment_key(
+        self,
+        *,
+        environment_key: Optional[str],
+        engine_id: Optional[str],
+        derived_environment_key: str,
+        spec_was_explicit: bool = False,
+    ) -> Dict[str, Any]:
+        requested_key = str(environment_key or "").strip()
+        registration_key = self._workflow_python_registration_environment_key(engine_id)
+        derived_key = str(derived_environment_key or "").strip()
+        if requested_key and registration_key and requested_key != registration_key:
+            return {
+                "status": "error",
+                "reason": "environment_key_mismatch",
+                "environment_key": requested_key,
+                "registration_environment_key": registration_key,
+            }
+        if requested_key and spec_was_explicit and derived_key and requested_key != derived_key:
+            return {
+                "status": "error",
+                "reason": "environment_key_mismatch",
+                "environment_key": requested_key,
+                "derived_environment_key": derived_key,
+            }
+        key = requested_key or registration_key or derived_key
+        return {
+            "status": "ok",
+            "environment_key": key,
+            "registration_environment_key": registration_key or None,
+            "derived_environment_key": derived_key or None,
+        }
+
     def _annotate_workflow_python_registration(
         self,
         *,
@@ -310,6 +352,7 @@ class WorkflowHelperMixin:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
             return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+        spec_was_explicit = bool(dict(python or {}) or dict(sandbox_policy or {}))
         env = self.workflow_python_environment_spec(
             profile=prof,
             environment_name=environment_name,
@@ -317,17 +360,23 @@ class WorkflowHelperMixin:
             sandbox_policy=sandbox_policy,
         )
         derived_key = str(env.get("environment_key") or "").strip()
-        requested_key = str(environment_key or "").strip()
-        if requested_key and requested_key != derived_key:
-            return {"status": "error", "reason": "environment_key_mismatch", "environment_key": requested_key, "derived_environment_key": derived_key}
-        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=derived_key)
+        resolved = self._workflow_python_effective_environment_key(
+            environment_key=environment_key,
+            engine_id=engine_id,
+            derived_environment_key=derived_key,
+            spec_was_explicit=spec_was_explicit,
+        )
+        if str(resolved.get("status") or "") != "ok":
+            return resolved
+        effective_key = str(resolved.get("environment_key") or "").strip()
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         resources = self.workflow_python_helper_resources(engine_id=eid)
-        pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(derived_key))
+        pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(effective_key))
         return {
             **dict(resources or {}),
             "profile": prof,
             "engine_id": eid,
-            "environment_key": derived_key,
+            "environment_key": effective_key,
             "environment": dict(env.get("environment") or {}),
             "workflow_pool": pool.resources() if pool is not None else None,
         }
@@ -343,14 +392,15 @@ class WorkflowHelperMixin:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
             return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
-        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=str(environment_key or ""))
+        effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         out = self.set_workflow_python_helper_capacity(engine_id=eid, capacity=capacity)
-        if environment_key:
+        if effective_key:
             self._workflow_python_pool_registry().get_or_create(
-                self._workflow_python_pool_key(str(environment_key or "")),
+                self._workflow_python_pool_key(effective_key),
                 desired_capacity=capacity,
             ).set_capacity(capacity)
-        return {**dict(out or {}), "profile": prof, "environment_key": str(environment_key or "").strip() or None}
+        return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
     def cancel_workflow_python_request(
         self,
@@ -363,12 +413,13 @@ class WorkflowHelperMixin:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
             return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
-        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=str(environment_key or ""))
+        effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         out = self.cancel_workflow_python_helper_request(engine_id=eid, request_id=request_id)
-        pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(str(environment_key or "")))
+        pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(effective_key))
         if pool is not None:
             out["workflow_pool_cancel"] = pool.cancel_request(request_id)
-        return {**dict(out or {}), "profile": prof, "environment_key": str(environment_key or "").strip() or None}
+        return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
     @staticmethod
     def workflow_js_helper_default_sandbox_policy() -> Dict[str, Any]:
