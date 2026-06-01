@@ -69,6 +69,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Centralized base IPC message family names (`hello`, `rpc_call`, stream open/recv/send/close, `shutdown`) in `hosting.sandbox.runtime_base`.
 - Updated `sandbox/SANDBOX_ARCHITECTURE.md` with the new internal runtime bases and the current workflow Python/JS facade status.
 - Added `HostedPythonRuntimeManager.gc_runtime_environments(...)` for dry-run or destructive cleanup of unreferenced `<hosting_root>/runtime_envs` entries by environment key/path.
+- Added in-memory stream session plumbing to `HostedProcessSandboxBase`: stream open/emit/recv/send-cancel/close now records progress and request lifecycle state through the shared pool registry.
 
 ## Key Design Decisions So Far
 

@@ -69,6 +69,52 @@ def test_process_base_reports_status_progress_and_cancel() -> None:
     assert base.resources("env-a")["metrics"]["cancellation_count"] == 1
 
 
+def test_process_base_stream_lifecycle_records_events_and_close() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream",
+        profile="node",
+        factory=_factory,
+    )
+    base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="progress",
+        payload={"progress_percent": 40},
+    )
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=4)
+    closed = base.stream_close(stream_id=str(opened["stream_id"]))
+    status = base.request_status(environment_key="env-a", request_id="req-stream")
+
+    assert opened["status"] == "ok"
+    assert [row["type"] for row in received["events"]] == ["started", "progress"]
+    assert closed["closed"] is True
+    assert status["request"]["status"] == "ok"
+    assert status["request"]["latest_progress"]["payload"]["progress_percent"] == 40
+
+
+def test_process_base_stream_cancel_uses_pool_cancellation() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream",
+        profile="node",
+        factory=_factory,
+    )
+    canceled = base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "cancel", "reason": "user"},
+    )
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=4)
+
+    assert canceled["accepted"] is True
+    assert canceled["workflow_pool_cancel"]["request"]["status"] == "canceled"
+    assert received["canceled"] is True
+    assert received["events"][-1]["type"] == "canceled"
+
+
 def test_process_base_missing_pool_results_are_structured() -> None:
     base = WorkflowPythonProcessBase()
 

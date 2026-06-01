@@ -154,7 +154,7 @@ Explicitly out of scope for this epic unless separately requested:
 - [ ] Keep short helper calls available as sync `rpc_call`.
   - `workflow_python(profile=helper)` and `workflow_js(profile=helper)` may start sync-only for compatibility.
 
-- [ ] Add async/streaming support as base capability.
+- [x] Add async/streaming support as base capability.
   - Required for `workflow_python(profile=node)`.
   - Optional for helper profiles.
   - Use bounded stream queues and explicit recv limits.
