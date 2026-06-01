@@ -931,6 +931,16 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
         python={"import_allowlist": ["json"]},
         sandbox_policy={"sandbox": {"enabled": True}},
     )
+    ch.workflow_python_prepare_environment(
+        environment_name="workflow-python-helper",
+        python={"package_pins": {"requests": "2.32.3"}},
+        package_id="pkg",
+        workflow_id="wf",
+    )
+    ch.workflow_python_lock_environment(environment={"environment_key": "env-key"})
+    ch.workflow_python_verify_environment(environment={"environment_key": "env-key"})
+    ch.workflow_python_install_environment(environment={"environment_key": "env-key"}, allow_execution=True)
+    ch.workflow_python_verify_install_receipt(environment={"environment_key": "env-key"})
     ch.ensure_workflow_python(
         profile="helper",
         environment_key="env-key",
@@ -967,6 +977,45 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
                 "environment_name": "workflow-python-helper",
                 "python": {"import_allowlist": ["json"]},
                 "sandbox_policy": {"sandbox": {"enabled": True}},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-prepare-environment",
+            {
+                "environment_name": "workflow-python-helper",
+                "python": {"package_pins": {"requests": "2.32.3"}},
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-lock-environment",
+            {
+                "environment": {"environment_key": "env-key"},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-verify-environment",
+            {
+                "environment": {"environment_key": "env-key"},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-install-environment",
+            {
+                "environment": {"environment_key": "env-key"},
+                "allow_execution": True,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-verify-install-receipt",
+            {
+                "environment": {"environment_key": "env-key"},
                 "session_token": "tok-123",
             },
         ),

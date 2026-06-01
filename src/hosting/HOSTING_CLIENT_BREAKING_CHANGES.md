@@ -7,7 +7,8 @@ Purpose: track dependent-project alignment with the hosted workflow runtime cont
 ## Workflow Python
 
 - [x] Use `workflow_python(profile=helper, environment_name=workflow-python-helper)` for helper-profile workflow Python execution.
-- [x] Use `workflow_python(profile=node, environment_name=workflow-python-node)` for node-profile workflow Python execution when a client owns that integration.
+- [ ] Use `workflow_python(profile=node, environment_name=workflow-python-node)` for node-profile workflow Python execution when a client owns that integration.
+  - mp13-docs: N/A for current helper-profile execution; this repo does not own node-profile workflow execution yet.
 - [x] Use workflow Python facade commands through `EngineHostControlChannel.invoke_control_command(...)`, `python -m hosting.engine_host_cli --payload-json ...`, or typed channel methods.
 
 ### Workflow Python API
@@ -23,6 +24,7 @@ Purpose: track dependent-project alignment with the hosted workflow runtime cont
   - `workflow-python-install-environment` with `allow_execution=true` only from an explicit host environment-management path
   - `workflow-python-verify-install-receipt`
   - Hosting owns these commands and install enforcement.
+  - Typed `EngineHostControlChannel.workflow_python_*_environment(...)` wrappers are available for these lifecycle commands.
   - Normal workflow execution clients do not install dependencies. They pass environment intent and execute against an environment that hosting has already prepared or verified.
   - Only clients that explicitly provide an environment-management UI or orchestration path call these commands and consume `install_status`.
 
@@ -88,8 +90,9 @@ Minimal helper-profile execute payload:
   - mp13-docs: package pins and import metadata are passed as environment inputs only.
 - [x] Do not install dependencies from workflow execution.
   - mp13-docs: package pins and import metadata are passed as environment intent only; hosting owns any prepare/lock/verify/install operation.
-- [x] Call host-controlled environment-management APIs only from an explicit environment-management path.
-  - mp13-docs: not applicable for current helper-profile execution because this client does not provide dependency installation UI/orchestration.
+- [ ] Call host-controlled environment-management APIs only from an explicit environment-management path.
+  - mp13-docs: N/A for current helper-profile execution because this client does not provide dependency installation UI/orchestration.
+  - Hosting API status: implemented on service, CLI, daemon IPC, auth/policy, and typed channel wrappers.
 - [x] Use package and workflow IDs as provenance/audit fields unless they affect runtime dependencies or policy.
   - mp13-docs: package/workflow IDs remain request provenance.
 - [x] Handle the workflow response envelope.
@@ -174,26 +177,30 @@ Minimal JS execute payload:
 
 ## Streaming
 
-- [x] Use streaming APIs for long-running `workflow_python(profile=node)` work when the client owns node-profile execution.
-  - mp13-docs: not applicable for current helper-profile execution because this project executes short helper-profile workflow modules only.
-- [x] Tolerate progress and terminal events as separate records.
-  - mp13-docs: not applicable for current helper-profile execution; this belongs to a node-profile integration.
-- [x] Handle node-profile execution envelopes where node-profile execution is present.
+- [ ] Use streaming APIs for long-running `workflow_python(profile=node)` work when the client owns node-profile execution.
+  - mp13-docs: N/A for current helper-profile execution because this project executes short helper-profile workflow modules only.
+- [ ] Tolerate progress and terminal events as separate records.
+  - mp13-docs: N/A for current helper-profile execution; this belongs to a node-profile integration.
+- [ ] Handle node-profile execution envelopes where node-profile execution is present.
+  - mp13-docs: N/A for current helper-profile execution; node-profile execution is future work for this repo.
   - Shared stream event type names are centralized in `hosting.sandbox.runtime_base.HOSTED_STREAM_EVENT_TYPES`.
 
 ## CLI And Interactive CLI
 
-- [x] Use workflow facade commands for integrations.
-  - mp13-docs: not applicable for CLI scripting because this repo does not contain hosting CLI scripts.
-- [x] Interactive CLI screens use workflow runtime pool views keyed by environment.
+- [ ] Use workflow facade commands for integrations.
+  - mp13-docs: N/A for CLI scripting because this repo does not contain hosting CLI scripts.
+- [ ] Interactive CLI screens use workflow runtime pool views keyed by environment.
+  - mp13-docs: N/A because interactive CLI screens are owned by the parent hosting project, not this repo.
   - Python and JS helper registrations use `workflow-python-*` and `workflow-js-*` facade calls inside workflow helper management screens.
 
 ## Host-Internal Entry Points
 
-- [x] Keep helper IPC worker modules host-internal.
+- [ ] Keep helper IPC worker modules host-internal.
+  - mp13-docs: N/A because helper IPC worker modules are owned by the parent hosting project.
   - `workflow_python_helper_ipc.py`
   - `workflow_js_helper_ipc.py`
-- [x] Keep helper-specific worker branches behind workflow runtime facades.
+- [ ] Keep helper-specific worker branches behind workflow runtime facades.
+  - mp13-docs: N/A because host-internal worker branches are owned by the parent hosting project.
 - [x] Treat helper result payloads as nested response data, not as the public API contract.
 
 ## Public Command Names
@@ -205,11 +212,12 @@ Minimal JS execute payload:
 
 - [x] Add client-side support for host-derived `environment_key`.
 - [x] Add client-side support for workflow runtime kind/profile fields.
-- [x] Add client-side support for streaming workflow node responses where node-profile execution is present.
-  - mp13-docs: not applicable for current helper-profile execution.
+- [ ] Add client-side support for streaming workflow node responses where node-profile execution is present.
+  - mp13-docs: N/A for current helper-profile execution.
 - [x] Avoid client-side dependency installation during workflow execution.
-- [x] Add prepare/lock/verify/install orchestration only in clients that explicitly manage workflow environments.
-  - mp13-docs: not applicable for current helper-profile execution because it does not provide dependency installation UI/orchestration.
+- [ ] Add prepare/lock/verify/install orchestration only in clients that explicitly manage workflow environments.
+  - mp13-docs: N/A for current helper-profile execution because it does not provide dependency installation UI/orchestration.
+  - Hosting API status: typed channel wrappers are available; no normal helper-profile execution client needs to call them.
 - [x] Add client-side support for per-environment resource/capacity views.
 - [x] Add client-side support for request lifetime and cancellation state.
 - [x] Keep schema validation and workflow authorization in the GUI/backend.

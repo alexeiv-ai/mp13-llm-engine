@@ -1553,6 +1553,49 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_prepare_environment(
+        self,
+        *,
+        environment_name: str = "workflow-python-helper",
+        python: Optional[Dict[str, Any]] = None,
+        package_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-prepare-environment",
+            {
+                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+                "python": dict(python or {}),
+                "package_id": str(package_id or "").strip() or None,
+                "workflow_id": str(workflow_id or "").strip() or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_python_lock_environment(self, *, environment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        res = self._invoke("workflow-python-lock-environment", {"environment": dict(environment or {})})
+        return dict(res or {})
+
+    def workflow_python_verify_environment(self, *, environment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        res = self._invoke("workflow-python-verify-environment", {"environment": dict(environment or {})})
+        return dict(res or {})
+
+    def workflow_python_install_environment(
+        self,
+        *,
+        environment: Optional[Dict[str, Any]] = None,
+        allow_execution: bool = False,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-install-environment",
+            {"environment": dict(environment or {}), "allow_execution": bool(allow_execution)},
+        )
+        return dict(res or {})
+
+    def workflow_python_verify_install_receipt(self, *, environment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        res = self._invoke("workflow-python-verify-install-receipt", {"environment": dict(environment or {})})
+        return dict(res or {})
+
     def ensure_workflow_python(
         self,
         *,
