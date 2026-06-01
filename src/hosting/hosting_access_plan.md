@@ -182,8 +182,8 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 0: Discovery And Tests Baseline
 
-- [ ] Inventory current hosting tests for sandbox, helper, toolbox, generic worker, CLI, and interactive CLI coverage.
-- [ ] Add missing characterization tests before refactoring old helper behavior.
+- [x] Inventory current hosting tests for sandbox, helper, toolbox, generic worker, CLI, and interactive CLI coverage.
+- [x] Add missing characterization tests before refactoring old helper behavior.
   - Python helper source hash verification.
   - Operation allowlist.
   - Timeout.
@@ -193,8 +193,8 @@ Explicitly out of scope for this epic unless separately requested:
   - Import allowlist behavior.
   - Audit/provenance fields.
   - JS helper equivalent behavior.
-- [ ] Capture current CLI command outputs for workflow helper resources/capacity/cancel paths.
-- [ ] Capture current interactive CLI workflow helper screens where practical.
+- [x] Capture current CLI command outputs for workflow helper resources/capacity/cancel paths.
+- [x] Capture current interactive CLI workflow helper screens where practical.
 - [x] Record baseline status in `src/hosting/hosting_status.md`.
 
 ## Phase 1: Shared Base Contracts And Models

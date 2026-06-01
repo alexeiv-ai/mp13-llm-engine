@@ -25,6 +25,9 @@ The hosted sandbox runtime refactor plan now treats this file as the test-naviga
 Update: 2026-06-01
 Shared runtime, pool, Python environment, workflow Python facade, and CLI compatibility slices now have focused coverage:
 `tests/test_hosting_sandbox_runtime_base.py`, `tests/test_hosting_sandbox_runtime_pool.py`, `tests/test_hosting_python_runtime_base.py`, `tests/test_workflow_python_contract.py`, `tests/test_workflow_helper_service.py`, `tests/test_engine_host_channel.py`, `tests/test_engine_host_cli_remote_args.py`, and `tests/test_engine_host_cli_interactive.py`.
+Update: 2026-06-01
+The refactor coverage now also includes internal process/JS runtime bases, runtime-env GC, workflow Python node stream command rollout, and auth/policy coverage:
+`tests/test_hosting_sandbox_process_base.py`, `tests/test_hosting_js_runtime_base.py`, `tests/test_hosting_python_runtime_base.py`, `tests/test_workflow_helper_service.py`, `tests/test_engine_host_channel.py`, and `tests/test_hosting_auth_roles.py`.
 
 ## 1. Environment
 
@@ -82,10 +85,14 @@ Current automated coverage includes:
     - service/channel/daemon helper spawn, resources, capacity, cancel, and runtime-environment realization paths
 18. hosted sandbox runtime refactor slices:
     - deterministic runtime/environment key models and sandbox policy hashes
+    - internal process base request lifecycle, stream session, cancellation, and status plumbing
     - process pool registry scheduling, capacity, cancellation, recent request, and metrics rollups
     - workflow-facing Python runtime environment prepare/lock/verify/install/receipt/select behavior
+    - workflow-facing Python runtime env GC for unreferenced `runtime_envs`
+    - JS runtime base identity and process-pool capability
     - `workflow_python(profile=helper)` service/channel/daemon/direct CLI facade coverage
     - `workflow_python(profile=node)` request/response contract and structured pending-worker envelope
+    - `workflow_python(profile=node)` stream-open/recv/send/close rollout coverage with pending-worker events
     - environment-key pool isolation for incompatible policy/dependency identity
     - interactive CLI workflow pool view compatibility for annotated Python helper registrations
 
@@ -153,6 +160,12 @@ python -m pytest tests/test_workflow_python_helper_ipc.py tests/test_workflow_js
 
 ```powershell
 python -m pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_runtime_pool.py tests/test_hosting_python_runtime_base.py tests/test_workflow_python_contract.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_engine_host_cli_interactive.py -q -k "workflow or runtime or cli or interactive or contract"
+```
+
+Current expanded refactor validation command:
+
+```powershell
+python -m pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py tests/test_hosting_sandbox_runtime_pool.py tests/test_hosting_python_runtime_base.py tests/test_hosting_js_runtime_base.py tests/test_workflow_python_contract.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_engine_host_cli_interactive.py tests/test_hosting_auth_roles.py -q -k "workflow or runtime or process_base or js_runtime or cli or interactive or contract or worker_user or diagnostic_user"
 ```
 
 ### 3.6 WSL Ubuntu shared-shadow validation slice
