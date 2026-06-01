@@ -19,7 +19,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 
 ## Active Phase
 
-- [ ] Phase 0: Discovery And Tests Baseline.
+- [x] Phase 0: Discovery And Tests Baseline.
+- [ ] Phase 1: Shared Base Contracts And Models.
 
 ## Progress Log
 
@@ -28,6 +29,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added comprehensive refactoring plan to `hosting_access_plan.md`.
 - Added client migration checklist to `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 - Seeded this status file.
+- Completed Phase 0 test inventory. Existing focused helper coverage is in `tests/test_workflow_python_helper_ipc.py`, `tests/test_workflow_js_helper_ipc.py`, `tests/test_workflow_helper_service.py`, and `tests/test_engine_host_channel.py`.
+- Existing sandbox navigation remains in `src/hosting/sandbox/sandbox_test_status.md`; new runtime-base tests should be added beside the helper/service tests rather than replacing the current sandbox suite.
 
 ## Key Design Decisions So Far
 
@@ -59,7 +62,6 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 
 ## Next Implementation Steps
 
-- [ ] Inventory tests and add characterization coverage for helper behavior.
 - [ ] Add internal data models for environment keys, pool keys, request lifetime, stream events, and metrics.
 - [ ] Implement stable environment-key derivation tests before changing worker routing.
 - [ ] Draft the new workflow Python API surface in service/channel/CLI.

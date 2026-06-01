@@ -20,6 +20,8 @@ User guides resolve as first-class guide tools, do not inherit parent-tool gatin
 Update: 2026-04-06
 Guide hardening is now in place too.
 All guides execute through the static guide runner; intrinsic guides are now registered from static guide content rather than callable guide implementations.
+Update: 2026-06-01
+The hosted sandbox runtime refactor plan now treats this file as the test-navigation baseline. Existing helper characterization tests live in `tests/test_workflow_python_helper_ipc.py`, `tests/test_workflow_js_helper_ipc.py`, `tests/test_workflow_helper_service.py`, and workflow helper slices in `tests/test_engine_host_channel.py`. New shared runtime-base tests should be added without removing the current sandbox/toolbox/generic slices until the migration phases explicitly mark old helper implementations removable.
 
 ## 1. Environment
 
@@ -71,6 +73,10 @@ Current automated coverage includes:
 16. brokered callback attribution slices:
     - brokered filesystem / HTTP service echo callback context
     - live toolbox execution proves brokered filesystem callback attribution to original tool call
+17. workflow helper characterization slices:
+    - Python helper module identity, operation allowlist, timeout, output limit, cancellation, capacity, import allowlist, audit/provenance, child process reuse, and real round trip
+    - JS helper module identity, operation allowlist, timeout, output limit, cancellation, capacity, audit/provenance, child process reuse, and real/service round trips where Node is available
+    - service/channel/daemon helper spawn, resources, capacity, cancel, and runtime-environment realization paths
 
 ## 3. Main Test Commands
 
@@ -124,6 +130,12 @@ python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "live_callback or c
 
 ```powershell
 python -m pytest tests/test_toolbox_admin.py -q
+```
+
+### 3.5A Workflow helper slices
+
+```powershell
+python -m pytest tests/test_workflow_python_helper_ipc.py tests/test_workflow_js_helper_ipc.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py -q -k "workflow"
 ```
 
 ### 3.6 WSL Ubuntu shared-shadow validation slice
