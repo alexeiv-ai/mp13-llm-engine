@@ -54,8 +54,9 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
   - New contract path: `workflow-python-execute` with `profile=node`.
   - Current behavior: returns a structured `workflow_python_node_profile_not_implemented` envelope with the stable node request/response contract.
   - Artifact refs are contract fields, but the current pending-worker envelope reports `artifact_store.status=unavailable` and `reason=artifact_store_not_implemented` until a store is wired.
-  - Streaming rollout commands are available as `workflow-python-stream-open`, `workflow-python-stream-recv`, `workflow-python-stream-send`, and `workflow-python-stream-close`; while the node worker is pending, stream-open emits `started`, structured `error`, and `done` events using the same pending-worker envelope.
+  - Streaming rollout commands are available as `workflow-python-stream-open`, `workflow-python-stream-recv`, `workflow-python-stream-send`, and `workflow-python-stream-close`; while the node worker is pending, stream-open emits `started`, `log`, structured `error`, and `done` events using the same pending-worker envelope.
   - Future behavior: the same streaming command set will be backed by real async node execution.
+  - Interactive CLI navigation: Workflow Helpers can inspect request status by `environment_key + request_id` and receive `workflow-python` stream events by `stream_id`; this is an operator aid, not the dependent-project integration path.
 
 Minimal helper-profile execute payload:
 

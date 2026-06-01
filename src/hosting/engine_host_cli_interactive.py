@@ -1782,6 +1782,45 @@ def _workflow_pool_active_request_ids(metrics: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _print_workflow_request_status(result: Dict[str, Any]) -> None:
+    data = dict(result or {})
+    request = dict(data.get("request") or {})
+    rows = [
+        ("Environment Key", data.get("environment_key") or request.get("environment_key") or "<unknown>"),
+        ("Request ID", request.get("request_id") or data.get("request_id") or "<unknown>"),
+        ("Request Status", request.get("status") or data.get("status") or "<unknown>"),
+        ("Reason", request.get("reason") or data.get("reason") or ""),
+        ("Worker", request.get("worker_engine_id") or data.get("engine_id") or ""),
+        ("Stream Events", request.get("stream_event_count")),
+    ]
+    latest = dict(request.get("latest_progress") or {})
+    if latest:
+        rows.append(("Latest Progress", latest.get("message") or latest.get("stage") or latest.get("type") or latest))
+    _kv_rows(rows)
+
+
+def _print_workflow_stream_events(result: Dict[str, Any]) -> None:
+    events = [dict(row or {}) for row in list(dict(result or {}).get("events") or []) if isinstance(row, dict)]
+    if not events:
+        print("  No stream events available.")
+        return
+    print("Stream Events:")
+    for event in events:
+        payload = dict(event.get("payload") or {}) if isinstance(event.get("payload"), dict) else {}
+        summary = ""
+        if event.get("type") == "error":
+            error = dict(payload.get("error") or {})
+            summary = str(error.get("code") or error.get("message") or "").strip()
+        elif event.get("type") == "log":
+            logs = dict(payload.get("logs") or {})
+            summary = str(logs.get("summary") or "").strip() or f"limit={logs.get('output_limit_bytes')}"
+        elif event.get("type") in {"progress", "metric"}:
+            summary = str(payload.get("message") or payload.get("stage") or payload).strip()
+        elif event.get("type") in {"result", "done", "canceled", "started"}:
+            summary = str(payload.get("status") or payload.get("request_id") or "").strip()
+        print(f"  - {event.get('type')}: {summary}")
+
+
 def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
     _print_block("Loaded Engines & Sandboxes")
     try:
@@ -2138,6 +2177,12 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                 action_opts["e"] = ("Ensure workflow runtime", "Annotate/use environment-keyed workflow Python")
             if active_request_ids:
                 action_opts["c"] = ("Cancel request", "Kill the child process currently running a request")
+            status_prefix = "workflow-python" if is_python else "workflow-js"
+            can_use_runtime_status = bool(environment_key)
+            if can_use_runtime_status:
+                action_opts["i"] = ("Inspect request", "Show request lifetime/progress by environment key")
+            if is_python:
+                action_opts["v"] = ("Receive stream events", "Read workflow-python stream events by stream id")
             action = _prompt_menu("Workflow Helper Action", action_opts, "b", allow_back=True, allow_changes=False)
             if action in ("b", "back"):
                 return session_token
@@ -2207,6 +2252,50 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                     print(_c("good", f"Canceled workflow helper request {request_id}."))
                 else:
                     print(_c("warn", f"Request was not active: {request_id} ({result.get('reason') or 'not_found'})."))
+                continue
+            if action == "i":
+                if not can_use_runtime_status:
+                    print(_c("bad", "Request status requires an environment key."))
+                    continue
+                default_request = active_request_ids[0] if active_request_ids else ""
+                prompt = f"Request id [{default_request}]: " if default_request else "Request id: "
+                request_id = input(prompt).strip() or default_request
+                if not request_id:
+                    print(_c("bad", "Request id is required."))
+                    continue
+                out = _api_invoke(
+                    args,
+                    f"{status_prefix}-request-status",
+                    {
+                        "engine_id": choice,
+                        "profile": "helper",
+                        "environment_key": environment_key,
+                        "request_id": request_id,
+                    },
+                    session_token=session_token,
+                )
+                session_token = _active_session_token(args, session_token)
+                _print_workflow_request_status(dict(out or {}))
+                continue
+            if action == "v":
+                stream_id = input("Stream id: ").strip()
+                if not stream_id:
+                    print(_c("bad", "Stream id is required."))
+                    continue
+                raw_limit = input("Max events [20]: ").strip()
+                try:
+                    max_items = max(1, min(int(raw_limit or "20"), 100))
+                except Exception:
+                    print(_c("bad", "Max events must be an integer from 1 to 100."))
+                    continue
+                out = _api_invoke(
+                    args,
+                    "workflow-python-stream-recv",
+                    {"stream_id": stream_id, "max_items": max_items},
+                    session_token=session_token,
+                )
+                session_token = _active_session_token(args, session_token)
+                _print_workflow_stream_events(dict(out or {}))
                 continue
         return session_token
     except PermissionError:

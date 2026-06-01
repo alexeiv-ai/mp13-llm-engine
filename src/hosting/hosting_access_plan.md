@@ -334,13 +334,13 @@ Explicitly out of scope for this epic unless separately requested:
   - Add CLI output fields for metrics, active requests, and environment key.
   - Avoid exposing raw module source/payload/result in logs unless explicitly requested.
 
-- [ ] Update `src/hosting/engine_host_cli_interactive.py`.
+- [x] Update `src/hosting/engine_host_cli_interactive.py`.
   - [x] Show workflow runtime pools by environment key.
   - [x] Show profile, capacity, active calls, available slots, process count, active request IDs, latency summaries, cancellation counters, and recent request outcomes.
   - [x] Keep old helper display paths compatible.
   - [x] Add actions for set capacity, cancel request, and inspect resources by environment key.
   - [x] Add ensure action by environment key.
-  - [ ] Add streaming/request-status UI where practical.
+  - [x] Add streaming/request-status UI where practical.
 
 - [x] Update channel wrappers in `src/hosting/engine_host_channel.py`.
   - Add new typed methods.

@@ -378,6 +378,123 @@ def test_manage_workflow_helpers_can_ensure_python_runtime(
     assert "runtime ensured" in capsys.readouterr().out
 
 
+def test_manage_workflow_helpers_can_inspect_request_status(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    invocations: list[tuple[str, Dict[str, Any]]] = []
+
+    def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
+        invocations.append((cmd, dict(payload)))
+        if cmd == "discover-running":
+            return {
+                "engines": {
+                    "wf-py": {
+                        "executor_kind": "workflow_python_helper",
+                        "environment": {"environment_key": "env-demo"},
+                        "process_resources": {"workflow_python_capacity": 2},
+                    }
+                }
+            }
+        if cmd == "workflow-python-resources":
+            return {
+                "status": "ok",
+                "engine_id": "wf-py",
+                "environment_key": "env-demo",
+                "workflow_pool": {
+                    "pool_id": "workflow_python/env-demo",
+                    "metrics": {
+                        "desired_capacity": 2,
+                        "active_request_ids": ["req-1"],
+                        "recent_requests": [{"request_id": "req-1", "status": "running"}],
+                    },
+                },
+            }
+        if cmd == "workflow-python-request-status":
+            return {
+                "status": "ok",
+                "environment_key": "env-demo",
+                "request": {
+                    "request_id": "req-1",
+                    "status": "running",
+                    "stream_event_count": 3,
+                    "latest_progress": {"message": "halfway"},
+                },
+            }
+        raise AssertionError(cmd)
+
+    choices = iter(["wf-py", "i", "b"])
+    monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(interactive, "_api_invoke", fake_api)
+    monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
+    monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+
+    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+
+    assert (
+        "workflow-python-request-status",
+        {"engine_id": "wf-py", "profile": "helper", "environment_key": "env-demo", "request_id": "req-1"},
+    ) in invocations
+    out = capsys.readouterr().out
+    assert "Request Status" in out
+    assert "halfway" in out
+
+
+def test_manage_workflow_helpers_can_receive_python_stream_events(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    invocations: list[tuple[str, Dict[str, Any]]] = []
+
+    def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
+        invocations.append((cmd, dict(payload)))
+        if cmd == "discover-running":
+            return {
+                "engines": {
+                    "wf-py": {
+                        "executor_kind": "workflow_python_helper",
+                        "environment": {"environment_key": "env-demo"},
+                        "process_resources": {"workflow_python_capacity": 2},
+                    }
+                }
+            }
+        if cmd == "workflow-python-resources":
+            return {
+                "status": "ok",
+                "engine_id": "wf-py",
+                "environment_key": "env-demo",
+                "workflow_pool": {"pool_id": "workflow_python/env-demo", "metrics": {"desired_capacity": 2}},
+            }
+        if cmd == "workflow-python-stream-recv":
+            return {
+                "status": "ok",
+                "events": [
+                    {"type": "started", "payload": {"request_id": "req-1"}},
+                    {"type": "log", "payload": {"logs": {"output_limit_bytes": 4096, "summary": ""}}},
+                    {"type": "error", "payload": {"error": {"code": "workflow_python_node_profile_not_implemented"}}},
+                ],
+            }
+        raise AssertionError(cmd)
+
+    choices = iter(["wf-py", "v", "b"])
+    inputs = iter(["stream-1", "5"])
+    monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(interactive, "_api_invoke", fake_api)
+    monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
+    monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+
+    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+
+    assert ("workflow-python-stream-recv", {"stream_id": "stream-1", "max_items": 5}) in invocations
+    out = capsys.readouterr().out
+    assert "Stream Events" in out
+    assert "workflow_python_node_profile_not_implemented" in out
+
+
 def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
     current = "abcdefghijk"
     other = "other-session-token"

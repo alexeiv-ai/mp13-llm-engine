@@ -119,7 +119,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Wire workflow Python facade to the internal pool registry and persist environment metadata on registrations.
 - [x] Persist workflow Python environment metadata on helper-backed registrations.
 - [x] Wire workflow Python facade to the internal pool registry for host-side scheduling/accounting.
-- [x] Add interactive CLI views/actions for workflow runtime pools.
+- [x] Add interactive CLI views/actions for workflow runtime pools, request status, and stream event receive.
 - [x] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
 - [ ] Implement workflow Python node-profile streaming worker.
 
@@ -127,7 +127,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 
 Completed implementation phases now cover Phase 0 through Phase 4, Phase 6,
 Phase 7, the shared/base pieces of Phase 5, Phase 8 direct/channel/interactive
-compatibility except a richer interactive streaming UI, and early/midpoint docs.
+compatibility, and early/midpoint docs.
 
 Remaining unchecked plan items are intentionally not marked complete:
 
@@ -140,20 +140,17 @@ Remaining unchecked plan items are intentionally not marked complete:
    - remaining tests should cover real streamed progress, stdout/stderr
      summaries, result, structured error, timeout, cancel, and metrics once
      the node worker exists.
-2. Phase 8 interactive streaming UI:
-   - interactive helper management can ensure/show resources/set capacity/cancel
-     by environment key, but it does not yet provide a dedicated node stream UI.
-3. Phase 9 toolbox migration:
+2. Phase 9 toolbox migration:
    - toolbox public APIs remain unchanged.
    - toolbox still needs a deliberate lifecycle mapping onto
      `HostedProcessSandboxBase`, parity tests, callback/brokered I/O regression
      coverage after migration, and docs/status updates.
-4. Phase 10 cleanup/removal:
+3. Phase 10 cleanup/removal:
    - old Python/JS helper implementations and compatibility fields must stay
      until dependent clients migrate.
    - removal of old CLI branches and duplicate toolbox environment code should
      happen only after that migration.
-5. Phase 11 final docs and client action checklist:
+4. Phase 11 final docs and client action checklist:
    - final public docs and example verification should wait until the node
      worker/toolbox migration/removal decisions are implemented.
    - client checklist items in `HOSTING_CLIENT_BREAKING_CHANGES.md` remain
