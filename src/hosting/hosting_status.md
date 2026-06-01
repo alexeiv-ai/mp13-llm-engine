@@ -62,6 +62,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Reconciled plan tracking for implemented foundations: temporary Python helper compatibility, workflow JS facade, generic/model separation, persisted workflow environment identity, environment-keyed pool registry, one-worker-per-key scheduling, resource reporting, capacity adjustment, and cancellation.
 - Added an explicit node-profile artifact-store placeholder in the workflow Python contract envelope so clients can distinguish "no artifacts" from "artifact store not wired yet."
 - Centralized the shared stream event type list and cancel control message shape in `hosting.sandbox.runtime_base`, giving future concrete sandboxes one event vocabulary.
+- Added internal `HostedProcessSandboxBase` in `hosting.sandbox.process_base` as a non-public composition layer over the pool registry for shared capacity, request status, progress, and cancellation plumbing.
 
 ## Key Design Decisions So Far
 

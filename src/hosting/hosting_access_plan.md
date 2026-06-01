@@ -36,7 +36,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 ### Shared Layers
 
-- [ ] Define `HostedProcessSandboxBase` as an internal abstraction, not a public sandbox kind.
+- [x] Define `HostedProcessSandboxBase` as an internal abstraction, not a public sandbox kind.
   - Owns process launch request construction, IPC metadata, worker auth token, persisted registration fields, lifecycle, shutdown, readiness probing, resource snapshots, logs, request tracking, cancellation plumbing, and pool scheduling.
   - Is language-neutral in design.
   - Initially uses existing hosting IPC/proxy commands.
