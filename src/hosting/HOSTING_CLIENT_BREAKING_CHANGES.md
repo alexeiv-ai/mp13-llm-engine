@@ -86,6 +86,7 @@ Minimal helper-profile execute payload:
 - [ ] Stop routing workflow Python pools only by `engine_id`.
 - [ ] Start accepting a host-derived `environment_key`.
   - The host will derive or verify the key from environment name, profile, Python runtime identity, imports, package pins or dependency lock identity, and sandbox policy hash.
+  - Workflow Python environment keys now include explicit Python runtime identity from `python.runtime_hash`, `python.python_executable`, `python.bootstrap_python_executable`, or `python.fallback_python_executable` when supplied.
   - Helper-profile workflow Python calls now route host-side pool accounting by `environment_key`.
   - Different helper-profile environment keys now get separate default engine IDs and host-side pool records. Full replacement of the legacy helper worker implementation is still pending.
 

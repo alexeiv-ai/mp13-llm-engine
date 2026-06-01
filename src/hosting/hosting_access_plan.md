@@ -80,12 +80,12 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Environment Key Rules
 
-- [ ] Implement a stable `environment_key` derivation helper.
+- [x] Implement a stable `environment_key` derivation helper.
   - Inputs: `environment_name`, runtime kind, runtime version/hash, profile, normalized imports, package pins or dependency lock hash, sandbox policy hash, and optional capability profile.
   - Excludes `package_id`, `workflow_id`, and request provenance unless those change dependencies or policy.
   - Produces stable short and full hashes for registration, logs, metrics, and GC.
 
-- [ ] Reject or warn on caller-provided `environment_key` mismatches.
+- [x] Reject or warn on caller-provided `environment_key` mismatches.
   - Host should derive the authoritative key or verify a caller-provided key against normalized inputs.
   - Do not let clients route by arbitrary key if it would merge incompatible policies/dependencies.
 

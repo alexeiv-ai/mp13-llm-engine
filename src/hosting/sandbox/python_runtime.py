@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 from ..toolbox.environment import ToolboxEnvironmentManager
 from ..toolbox.bundle_models import ToolboxEnvironmentSpec
-from .runtime_base import HostedEnvironmentKeySpec, HostedRuntimeIdentity
+from .runtime_base import HostedEnvironmentKeySpec, HostedRuntimeIdentity, stable_hash
 
 
 def _clean(value: Any) -> str:
@@ -38,6 +38,21 @@ def _imports(policy: Optional[Dict[str, Any]]) -> list[str]:
 
 def _pinned_packages(policy: Optional[Dict[str, Any]]) -> list[str]:
     return [f"{name}=={version}" for name, version in sorted(_pins(policy).items())]
+
+
+def _runtime_hash(default_hash: str, policy: Optional[Dict[str, Any]]) -> str:
+    row = dict(policy or {})
+    explicit = _clean(row.get("runtime_hash"))
+    if explicit:
+        return explicit
+    executable = (
+        _clean(row.get("python_executable"))
+        or _clean(row.get("bootstrap_python_executable"))
+        or _clean(row.get("fallback_python_executable"))
+    )
+    if executable:
+        return f"{_clean(default_hash) or 'workflow-python-v1'}:{stable_hash({'python_executable': executable})[:16]}"
+    return _clean(default_hash) or "workflow-python-v1"
 
 
 class HostedPythonRuntimeManager:
@@ -90,7 +105,7 @@ class HostedPythonRuntimeManager:
             profile=profile,
             python_policy=python_policy,
             sandbox_policy=sandbox_policy,
-            runtime_hash=spec.toolbox_runtime_hash,
+            runtime_hash=_runtime_hash(spec.toolbox_runtime_hash, python_policy),
         )
         return {
             "status": "ok",

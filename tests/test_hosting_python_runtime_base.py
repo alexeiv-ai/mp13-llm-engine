@@ -52,6 +52,22 @@ def test_workflow_python_environment_key_changes_with_sandbox_policy(tmp_path: P
     assert enabled["environment_key"] != disabled["environment_key"]
 
 
+def test_workflow_python_environment_key_changes_with_python_runtime_identity(tmp_path: Path) -> None:
+    manager = HostedPythonRuntimeManager(tmp_path)
+
+    default_runtime = manager.environment_spec(python_policy=_policy())
+    custom_runtime = manager.environment_spec(
+        python_policy={**_policy(), "bootstrap_python_executable": "python-custom"}
+    )
+    same_custom_runtime = manager.environment_spec(
+        python_policy={**_policy(), "python_executable": "python-custom"}
+    )
+
+    assert default_runtime["environment_key"] != custom_runtime["environment_key"]
+    assert custom_runtime["environment_key"] == same_custom_runtime["environment_key"]
+    assert "workflow-python-helper-v1:" in custom_runtime["environment_identity"]["runtime"]["runtime_hash"]
+
+
 def test_workflow_python_realize_and_prepare_lock_verify(tmp_path: Path) -> None:
     manager = HostedPythonRuntimeManager(tmp_path)
 
