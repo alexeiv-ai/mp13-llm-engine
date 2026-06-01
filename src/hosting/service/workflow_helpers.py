@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from ..sandbox.python_runtime import HostedPythonRuntimeManager
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
+from ..sandbox.workflow_python_contract import workflow_python_node_not_implemented_response
 
 
 class WorkflowHelperMixin:
@@ -28,6 +29,19 @@ class WorkflowHelperMixin:
         if value not in {"helper", "node"}:
             raise ValueError("profile must be 'helper' or 'node'")
         return value
+
+    def _workflow_python_node_unavailable(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return workflow_python_node_not_implemented_response(
+            environment_key=str(environment_key or ""),
+            engine_id=str(engine_id or ""),
+            request=dict(request or {}),
+        )
 
     def workflow_python_environment_spec(
         self,
@@ -185,7 +199,7 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
-            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
         env = self.workflow_python_environment_spec(
             profile=prof,
             environment_name=environment_name,
@@ -265,9 +279,9 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
-        if prof != "helper":
-            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
         req = dict(request or {})
+        if prof != "helper":
+            return self._workflow_python_node_unavailable(request=req, environment_key=environment_key, engine_id=engine_id)
         py = dict(req.get("python") or {})
         if environment_name:
             py.setdefault("environment_name", str(environment_name or "workflow-python-helper"))
@@ -351,7 +365,7 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
-            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
         spec_was_explicit = bool(dict(python or {}) or dict(sandbox_policy or {}))
         env = self.workflow_python_environment_spec(
             profile=prof,
@@ -391,7 +405,7 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
-            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
         effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         out = self.set_workflow_python_helper_capacity(engine_id=eid, capacity=capacity)
@@ -412,7 +426,7 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         if prof != "helper":
-            return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
+            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
         effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         out = self.cancel_workflow_python_helper_request(engine_id=eid, request_id=request_id)

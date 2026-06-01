@@ -13,6 +13,72 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
   - Helper-profile host surfaces now exist for environment spec/prepare/lock/verify/install/receipt, ensure, execute, resources, capacity, and cancel.
   - Dependent projects should keep old helper calls available until the compatibility migration phase is complete.
 
+### Workflow Python API Navigation
+
+Use these command names through `EngineHostControlChannel.invoke_control_command(...)`, `python -m hosting.engine_host_cli --payload-json ...`, or the corresponding typed channel methods where available.
+
+- Environment identity:
+  - Old: no standalone helper environment-key API.
+  - New: `workflow-python-environment-spec` with `profile`, `environment_name`, `python`, and `sandbox_policy`.
+  - Result to store/pass forward: `environment_key`, `environment_key_full`, and `environment`.
+
+- Dependency environment lifecycle:
+  - New: `workflow-python-prepare-environment`.
+  - New: `workflow-python-lock-environment`.
+  - New: `workflow-python-verify-environment`.
+  - New: `workflow-python-install-environment` with `allow_execution=true` only from an explicit host environment-management path.
+  - New: `workflow-python-verify-install-receipt`.
+
+- Worker/pool lifecycle:
+  - Old: `spawn-workflow-python-helper`.
+  - New: `workflow-python-ensure` with `profile=helper`, optional `environment_key`, `python`, `sandbox_policy`, `capacity`, and optional `engine_id`.
+  - Migration note: old spawn remains available while callers move; new ensure derives the default engine ID from `environment_key`.
+
+- Execute helper-profile workflow code:
+  - Old: GUI calls `spawn_workflow_python_helper`, then proxy RPC `execute_workflow_python_helper`.
+  - New: `workflow-python-execute` with `profile=helper` and request fields `module_source`, `module_sha256`, `package_id`, `workflow_id`, `package_source_digest`, `export_name` or `operation`, `payload`, `provenance`, `limits`, and optional `python`.
+  - New result fields to consume: `status`, `ok`, `output`, `result`, `environment_key`, `metrics.workflow_pool`, and `metrics.request`.
+
+- Resource/capacity/cancel:
+  - Old: `workflow-python-helper-resources`, `workflow-python-helper-set-capacity`, `workflow-python-helper-cancel-request`.
+  - New: `workflow-python-resources`, `workflow-python-set-capacity`, `workflow-python-cancel-request`.
+  - Preferred selector: `environment_key`; temporary migration selector: annotated `engine_id`.
+
+- Node-profile contract:
+  - New contract path: `workflow-python-execute` with `profile=node`.
+  - Current behavior: returns a structured `workflow_python_node_profile_not_implemented` envelope with the stable node request/response contract.
+  - Future behavior: same contract will be backed by async/streaming execution.
+
+Minimal helper-profile execute payload:
+
+```json
+{
+  "profile": "helper",
+  "environment_name": "workflow-python-helper",
+  "environment_key": "<optional-host-derived-key>",
+  "request": {
+    "request_id": "req-123",
+    "module_source": "def condition(input):\n    return {\"accepted\": True}\n",
+    "module_sha256": "<sha256>",
+    "package_id": "pkg",
+    "workflow_id": "workflow",
+    "package_source_digest": "<digest>",
+    "operation": "condition",
+    "payload": {},
+    "provenance": {},
+    "limits": {
+      "timeout_ms": 5000,
+      "output_limit_bytes": 65536,
+      "memory_limit_mb": 128
+    },
+    "python": {
+      "import_allowlist": [],
+      "package_pins": {}
+    }
+  }
+}
+```
+
 - [ ] Stop routing workflow Python pools only by `engine_id`.
 - [ ] Start accepting a host-derived `environment_key`.
   - The host will derive or verify the key from environment name, profile, Python runtime identity, imports, package pins or dependency lock identity, and sandbox policy hash.
@@ -44,6 +110,7 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
   - audit metadata.
   - progress/log/artifact events for streaming profiles.
   - Helper-profile `execute_workflow_python` now returns `metrics.workflow_pool` and `metrics.request` in addition to the compatibility helper result.
+  - Node-profile currently returns the same top-level envelope shape with a structured pending-worker error.
 
 - [ ] Stop omitting `request_id` for cancelable or long-running work.
 - [ ] Start passing stable `request_id` for request lifetime tracking and cancellation.
@@ -85,6 +152,7 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
   - Close stream.
 
 - [ ] Start tolerating partial progress and terminal events as separate records.
+- [x] Start tolerating node-profile pending-worker envelopes during rollout.
 
 ## Planned Migration: CLI And Interactive CLI
 

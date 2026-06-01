@@ -24,7 +24,7 @@ Update: 2026-06-01
 The hosted sandbox runtime refactor plan now treats this file as the test-navigation baseline. Existing helper characterization tests live in `tests/test_workflow_python_helper_ipc.py`, `tests/test_workflow_js_helper_ipc.py`, `tests/test_workflow_helper_service.py`, and workflow helper slices in `tests/test_engine_host_channel.py`. New shared runtime-base tests should be added without removing the current sandbox/toolbox/generic slices until the migration phases explicitly mark old helper implementations removable.
 Update: 2026-06-01
 Shared runtime, pool, Python environment, workflow Python facade, and CLI compatibility slices now have focused coverage:
-`tests/test_hosting_sandbox_runtime_base.py`, `tests/test_hosting_sandbox_runtime_pool.py`, `tests/test_hosting_python_runtime_base.py`, `tests/test_workflow_helper_service.py`, `tests/test_engine_host_channel.py`, `tests/test_engine_host_cli_remote_args.py`, and `tests/test_engine_host_cli_interactive.py`.
+`tests/test_hosting_sandbox_runtime_base.py`, `tests/test_hosting_sandbox_runtime_pool.py`, `tests/test_hosting_python_runtime_base.py`, `tests/test_workflow_python_contract.py`, `tests/test_workflow_helper_service.py`, `tests/test_engine_host_channel.py`, `tests/test_engine_host_cli_remote_args.py`, and `tests/test_engine_host_cli_interactive.py`.
 
 ## 1. Environment
 
@@ -85,6 +85,7 @@ Current automated coverage includes:
     - process pool registry scheduling, capacity, cancellation, recent request, and metrics rollups
     - workflow-facing Python runtime environment prepare/lock/verify/install/receipt/select behavior
     - `workflow_python(profile=helper)` service/channel/daemon/direct CLI facade coverage
+    - `workflow_python(profile=node)` request/response contract and structured pending-worker envelope
     - environment-key pool isolation for incompatible policy/dependency identity
     - interactive CLI workflow pool view compatibility for annotated Python helper registrations
 
@@ -151,7 +152,7 @@ python -m pytest tests/test_workflow_python_helper_ipc.py tests/test_workflow_js
 ### 3.5B Hosted runtime refactor slices
 
 ```powershell
-python -m pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_runtime_pool.py tests/test_hosting_python_runtime_base.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_engine_host_cli_interactive.py -q -k "workflow or runtime or cli or interactive"
+python -m pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_runtime_pool.py tests/test_hosting_python_runtime_base.py tests/test_workflow_python_contract.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_engine_host_cli_interactive.py -q -k "workflow or runtime or cli or interactive or contract"
 ```
 
 ### 3.6 WSL Ubuntu shared-shadow validation slice

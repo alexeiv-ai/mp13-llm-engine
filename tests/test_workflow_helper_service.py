@@ -805,3 +805,34 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
     assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-python-sync"
     assert calls["engine_id"] == "workflow-python-demo"
     assert calls["method"] == "execute_workflow_python_helper"
+
+
+def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        environment_key="env-node",
+        engine_id="wf-node",
+        request={
+            "request_id": "req-node",
+            "module_source": "def run(payload):\n    return payload\n",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["ok"] is False
+    assert out["profile"] == "node"
+    assert out["reason"] == "workflow_python_node_profile_not_implemented"
+    assert out["environment_key"] == "env-node"
+    assert out["request_id"] == "req-node"
+    assert "progress" in out["contract"]["stream_event_types"]

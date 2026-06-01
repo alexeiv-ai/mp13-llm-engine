@@ -45,6 +45,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` to reflect helper-profile workflow Python APIs and metrics that are now available, while keeping node-profile streaming and full helper implementation removal marked pending.
 - Added direct CLI compatibility tests for workflow Python facade resource/capacity/cancel commands and updated `sandbox_test_status.md` with the new runtime refactor test navigation.
 - Added RBAC/daemon policy support for the new `workflow-python-*` command family, with worker-user control access and diagnostic observe-only coverage.
+- Started Phase 5 by adding `hosting.sandbox.workflow_python_contract`: node-profile request normalization, validation, response-envelope fields, stream event names, and a structured not-implemented response. `workflow_python(profile=node)` now returns that stable envelope instead of the older generic profile error; the streaming worker remains pending.
 
 ## Key Design Decisions So Far
 
@@ -90,3 +91,4 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Wire workflow Python facade to the internal pool registry for host-side scheduling/accounting.
 - [x] Add interactive CLI views/actions for workflow runtime pools.
 - [x] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
+- [ ] Implement workflow Python node-profile streaming worker.

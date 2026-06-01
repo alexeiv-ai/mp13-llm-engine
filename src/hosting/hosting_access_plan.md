@@ -271,7 +271,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 5: Workflow Python Node Profile
 
-- [ ] Define `profile=node` request contract.
+- [x] Define `profile=node` request contract.
   - `module_source`
   - `module_sha256`
   - `package_id`
@@ -283,7 +283,7 @@ Explicitly out of scope for this epic unless separately requested:
   - `limits`
   - policy/environment identity
 
-- [ ] Define `profile=node` response contract.
+- [x] Define `profile=node` response contract.
   - `ok` / `status`
   - output JSON
   - state patch JSON
