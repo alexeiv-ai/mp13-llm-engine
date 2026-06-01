@@ -21,8 +21,12 @@ V1 includes JavaScript and Python helper executors:
 10. sandbox profile: `workflow_python_helper_v1`
 
 The worker is not a logical toolbox and does not participate in toolbox tool routing.
+New integrations should use the workflow runtime facade commands:
+`workflow-python-*` for Python and `workflow-js-*` for JavaScript. The old
+`workflow_python_helper` and `workflow_js_helper` commands remain compatibility
+aliases until dependent clients migrate.
 
-Python helper requests accept `python.import_allowlist`, `python.package_pins`, and `python.environment_name` for shared runtime environment intent. The default environment name is `workflow-python-helper`.
+Python helper requests accept `python.import_allowlist`, `python.package_pins`, and `python.environment_name` for shared runtime environment intent. The default helper environment name is `workflow-python-helper`; node-profile workflow Python uses `workflow-python-node` unless a caller supplies a specific environment name.
 
 ## Host Lifecycle
 
@@ -69,6 +73,17 @@ Live pool state is available through `workflow-js-helper-resources`, `workflow-p
 Capacity can be changed for a loaded worker through `workflow-js-helper-set-capacity` or `EngineHostControlChannel.set_workflow_js_helper_capacity(...)`. Increasing capacity allows the worker to create more hot Node children on demand. Decreasing capacity prevents new children above the new limit and retires idle excess children; active calls are allowed to finish.
 
 Specific active requests can be canceled through `workflow-js-helper-cancel-request`, `workflow-python-helper-cancel-request`, or the matching channel methods. Callers should provide `request_id` in helper execution calls when they need this control. Cancellation kills the child process that owns that request and removes it from the pool; the worker creates a fresh hot child later if capacity requires it.
+
+Environment-keyed workflow runtime commands provide the preferred management
+surface:
+
+1. `workflow-python-ensure`, `workflow-python-execute`, `workflow-python-resources`, `workflow-python-set-capacity`, `workflow-python-request-status`, and `workflow-python-cancel-request`
+2. `workflow-python-stream-open`, `workflow-python-stream-recv`, `workflow-python-stream-send`, and `workflow-python-stream-close`
+3. `workflow-js-ensure`, `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-request-status`, and `workflow-js-cancel-request`
+
+These commands route and report by host-derived `environment_key` so different
+runtime, dependency, or sandbox-policy identities do not share the same
+host-side pool.
 
 ## Default JS Sandbox Policy
 
@@ -150,6 +165,20 @@ Request fields match the JS helper contract and add:
 The public contract accepts `module_source`, not an executable path. The worker verifies `sha256(module_source) == module_sha256`, executes only the requested function name, requires JSON input/output, applies per-call timeout/output limits, and reports memory limit enforcement as best-effort unavailable when the platform/runtime does not enforce it.
 
 Allowed operations are the same as JS: `default`, `condition`, `evaluate_condition`, `routing_hint`, `route_hint`, `payload`, and `shape_payload`.
+
+## Workflow Python Node Profile
+
+`workflow_python(profile=node)` uses the same hosted Python execution runtime but
+returns the node-profile envelope:
+
+1. `workflow-python-execute` with `profile=node` runs the requested Python export and returns `output`, `state_patch`, `artifacts`, `progress`, `logs`, `metrics`, structured `error`, and `audit`.
+2. `workflow-python-stream-open` returns immediately and starts background execution.
+3. Stream events use the shared event names: `started`, `log`, optional `progress`, `result` or `error`, `canceled`, and `done`.
+4. `workflow-python-stream-send` accepts `{"action":"cancel","request_id":"..."}` and routes cancellation through host request tracking and the worker cancel hook.
+
+Artifact references are part of the response contract, but the host currently
+reports `artifact_store.status=unavailable` until a workflow artifact store is
+designed.
 
 ## Result Contract
 

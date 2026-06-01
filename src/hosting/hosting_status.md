@@ -24,7 +24,13 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Phase 2: Hosted Process Pool Base.
 - [x] Phase 3: Python Runtime Environment Base.
 - [x] Phase 4: New Workflow Python Worker.
-- [ ] Phase 5: Workflow Python Node Profile.
+- [x] Phase 5: Workflow Python Node Profile.
+- [x] Phase 6: Migrate Workflow Python Helper Compatibility.
+- [x] Phase 7: Workflow JS Helper Migration.
+- [x] Phase 8: CLI And Interactive CLI Compatibility.
+- [x] Phase 9: Toolbox Migration To Shared Base.
+- [ ] Phase 10: Cleanup And Removal After Dependent Migration.
+- [ ] Phase 11: Final Documentation And Migration Closeout.
 
 ## Progress Log
 
@@ -38,7 +44,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Started Phase 1 with `hosting.sandbox.runtime_base`: deterministic sandbox policy hashes, runtime/environment key specs, pool keys, worker slot snapshots, request lifecycle records, stream event envelopes, and pool metrics.
 - Completed the first internal Phase 2 pool foundation in `hosting.sandbox.runtime_pool`: pool registry, one-worker-per-environment-key scheduling, capacity changes, saturation tracking, request lifetime completion, cancellation accounting, error grouping, and resource rollups. This is not wired into workflow routing yet.
 - Completed the first internal Phase 3 Python runtime wrapper in `hosting.sandbox.python_runtime`: workflow-facing environment specs, environment-key identity, realization, prepare/lock/verify install flow, and runtime Python selection backed by the existing toolbox environment manager. This is not exposed through service/channel/CLI yet.
-- Started Phase 4 with a compatibility-first `workflow_python` facade. Service, daemon, channel, and direct CLI surfaces now expose environment spec/prepare/lock/verify/install/receipt commands plus helper-profile ensure/execute/resources/capacity/cancel. The backing worker is still the existing Python helper worker; `profile=node` still returns a not-implemented error.
+- Started Phase 4 with a compatibility-first `workflow_python` facade. Service, daemon, channel, and direct CLI surfaces now expose environment spec/prepare/lock/verify/install/receipt commands plus helper-profile ensure/execute/resources/capacity/cancel. The backing worker is still the existing Python helper worker for compatibility.
 - Extended the Phase 4 facade to annotate helper-backed registrations with workflow runtime/environment metadata and return request lifecycle metrics for sync helper-profile execution.
 - Wired the helper-backed `workflow_python(profile=helper)` facade to the internal in-memory pool registry. `ensure`, `execute`, `resources`, `set-capacity`, and `cancel-request` now maintain/report host-side pool capacity, active call counts, recent request lifetime metrics, and cancellation accounting by `environment_key`. This is accounting/scheduling around the existing helper worker, not the final new worker implementation.
 - Updated the interactive CLI workflow helper management path so annotated Python helper registrations use the new `workflow-python-*` facade for resources/capacity/cancel and display workflow pool metrics by `environment_key`, while legacy helper and JS helper paths remain compatible.
@@ -46,7 +52,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` to reflect helper-profile workflow Python APIs and metrics that are now available, while keeping node-profile streaming and full helper implementation removal marked pending.
 - Added direct CLI compatibility tests for workflow Python facade resource/capacity/cancel commands and updated `sandbox_test_status.md` with the new runtime refactor test navigation.
 - Added RBAC/daemon policy support for the new `workflow-python-*` command family, with worker-user control access and diagnostic observe-only coverage.
-- Started Phase 5 by adding `hosting.sandbox.workflow_python_contract`: node-profile request normalization, validation, response-envelope fields, stream event names, and a structured not-implemented response. `workflow_python(profile=node)` now returns that stable envelope instead of the older generic profile error; the streaming worker remains pending.
+- Started Phase 5 by adding `hosting.sandbox.workflow_python_contract`: node-profile request normalization, validation, response-envelope fields, and stream event names.
 - Started Phase 6 compatibility rewiring: legacy Python helper resources/capacity/cancel methods now preserve old helper results while attaching `environment_key`, `workflow_runtime_kind=workflow_python`, and `workflow_pool` metadata for annotated registrations.
 - Completed the interactive CLI ensure action for Python helpers: operators can annotate/use a selected legacy helper through `workflow-python-ensure` and then refresh via environment-keyed workflow resources.
 - Started Phase 7 by adding `workflow_js(profile=helper)` compatibility facade surfaces in service, daemon, direct CLI, channel, RBAC, and tests. The JS facade derives environment keys from environment name, profile, Node/runtime identity, dependency hints, and sandbox policy hash, then reports environment-keyed workflow pool metadata.
@@ -71,7 +77,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Updated `sandbox/SANDBOX_ARCHITECTURE.md` with the new internal runtime bases and the current workflow Python/JS facade status.
 - Added `HostedPythonRuntimeManager.gc_runtime_environments(...)` for dry-run or destructive cleanup of unreferenced `<hosting_root>/runtime_envs` entries by environment key/path.
 - Added in-memory stream session plumbing to `HostedProcessSandboxBase`: stream open/emit/recv/send-cancel/close now records progress and request lifecycle state through the shared pool registry.
-- Added workflow Python stream command surfaces for node-profile rollout (`workflow-python-stream-open/recv/send/close`). Until the real node worker lands, stream-open emits the structured pending-worker error envelope as stream events.
+- Added workflow Python stream command surfaces for node-profile rollout (`workflow-python-stream-open/recv/send/close`).
+- Completed node-profile execution by backing `workflow_python(profile=node)` with the hosted workflow Python runtime, wrapping results in the node envelope, and emitting `log`, optional `progress`, `result` or structured `error`, and `done` from stream-open background execution.
 - Documented workflow Python/JS runtime facade commands, environment lifecycle, resource/capacity/status/cancel usage, and node-profile streaming rollout in `HOSTING.md`.
 - Updated `sandbox/sandbox_test_status.md` with new process base, JS runtime base, runtime-env GC, workflow stream rollout, and auth/policy test navigation; Phase 0 inventory/characterization checklist is now current.
 - Switched workflow Python runtime base to the neutral `RuntimeEnvironmentManager` adapter rather than importing `ToolboxEnvironmentManager` directly.

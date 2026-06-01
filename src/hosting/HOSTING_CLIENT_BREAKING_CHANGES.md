@@ -119,7 +119,7 @@ Minimal helper-profile execute payload:
   - audit metadata.
   - progress/log/artifact events for streaming profiles.
   - Helper-profile `execute_workflow_python` now returns `metrics.workflow_pool` and `metrics.request` in addition to the compatibility helper result.
-  - Node-profile currently returns the same top-level envelope shape with a structured pending-worker error.
+  - Node-profile returns the same top-level envelope shape for sync execution and streaming terminal events.
 
 - [ ] Stop omitting `request_id` for cancelable or long-running work.
 - [ ] Start passing stable `request_id` for request lifetime tracking and cancellation.
@@ -199,7 +199,7 @@ Minimal JS ensure payload:
   - Close stream.
 
 - [ ] Start tolerating partial progress and terminal events as separate records.
-- [x] Start tolerating node-profile pending-worker envelopes during rollout.
+- [x] Start handling node-profile execution envelopes during rollout.
   - Shared stream event type names are now centralized in `hosting.sandbox.runtime_base.HOSTED_STREAM_EVENT_TYPES`; cancel control messages use `{"action":"cancel","request_id":"..."}`.
 
 ## Planned Migration: CLI And Interactive CLI

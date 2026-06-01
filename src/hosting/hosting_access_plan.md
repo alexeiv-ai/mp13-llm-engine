@@ -381,7 +381,7 @@ Do not front-load all documentation before implementation, because contracts wil
 
 - [x] Early docs: update architecture docs with intended shared-base design once Phase 1 models land.
 - [x] Midpoint docs: document workflow Python environment APIs when Phase 3/4 are usable.
-- [ ] Final docs: update all public docs after compatibility shims are verified.
+- [x] Final docs: update all public docs after compatibility shims are verified.
   - `src/hosting/HOSTING.md`
   - `src/hosting/sandbox/SANDBOX_ARCHITECTURE.md`
   - `src/hosting/sandbox/WORKFLOW_HELPER_WORKER.md`

@@ -249,13 +249,12 @@ Resource and request operations are keyed by `environment_key`:
 @'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-123"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-cancel-request
 ```
 
-Workflow Python node profile currently exposes the stable envelope and stream
-transport before the real node worker implementation. `workflow-python-execute`
-with `profile=node` returns a structured pending-worker error. The streaming
-rollout commands are `workflow-python-stream-open`,
-`workflow-python-stream-recv`, `workflow-python-stream-send`, and
-`workflow-python-stream-close`; today stream-open emits `started`, structured
-`error`, and `done` events using the pending-worker envelope.
+Workflow Python node profile uses the stable node response envelope. The sync
+path is `workflow-python-execute` with `profile=node`; the streaming path is
+`workflow-python-stream-open`, `workflow-python-stream-recv`,
+`workflow-python-stream-send`, and `workflow-python-stream-close`.
+Stream-open returns immediately and background execution emits `started`,
+`log`, optional `progress`, `result` or structured `error`, and `done`.
 
 Workflow JS helper profile exposes the same environment-keyed management shape:
 `workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-resources`,
