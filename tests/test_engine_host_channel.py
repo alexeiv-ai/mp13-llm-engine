@@ -1000,8 +1000,12 @@ def test_workflow_python_helper_channel_method_forwards_expected_payload() -> No
 
     assert fake.calls == [
         (
-            "spawn-workflow-python-helper",
+            "workflow-python-ensure",
             {
+                "profile": "helper",
+                "environment_name": "workflow-python-helper",
+                "environment_key": None,
+                "python": {"bootstrap_python_executable": "python-demo"},
                 "engine_id": "wf-py",
                 "python_executable": "python-demo",
                 "capacity": 5,

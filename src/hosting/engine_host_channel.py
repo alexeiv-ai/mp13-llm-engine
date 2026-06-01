@@ -1592,8 +1592,16 @@ class EngineHostControlChannel:
         worker_profile_class: str = "generic",
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "spawn-workflow-python-helper",
+            "workflow-python-ensure",
             {
+                "profile": "helper",
+                "environment_name": "workflow-python-helper",
+                "environment_key": None,
+                "python": (
+                    {"bootstrap_python_executable": str(python_executable or "").strip()}
+                    if str(python_executable or "").strip()
+                    else {}
+                ),
                 "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
                 "python_executable": str(python_executable or "").strip() or None,
                 "capacity": max(1, min(int(capacity or 1), 256)),

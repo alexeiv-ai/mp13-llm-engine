@@ -35,6 +35,7 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
   - New: `workflow-python-ensure` with `profile=helper`, optional `environment_key`, `python`, `sandbox_policy`, `capacity`, and optional `engine_id`.
   - Migration note: old spawn remains available while callers move; new ensure derives the default engine ID from `environment_key`.
   - Compatibility behavior: old Python helper spawn now delegates through `workflow-python-ensure` internally and includes `workflow_runtime_kind`, `workflow_profile`, `environment_key`, `environment`, and `workflow_ensure` alongside the raw spawn fields when it launches a worker.
+  - Typed channel compatibility: `EngineHostControlChannel.spawn_workflow_python_helper(...)` now forwards to `workflow-python-ensure` while preserving its old method signature.
 
 - Execute helper-profile workflow code:
   - Old: GUI calls `spawn_workflow_python_helper`, then proxy RPC `execute_workflow_python_helper`.

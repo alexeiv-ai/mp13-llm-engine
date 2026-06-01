@@ -302,7 +302,7 @@ Explicitly out of scope for this epic unless separately requested:
 ## Phase 6: Migrate Workflow Python Helper Compatibility
 
 - [x] Rewire `spawn_workflow_python_helper` service method to call `workflow_python(profile=helper)`.
-- [ ] Rewire channel method `spawn_workflow_python_helper`.
+- [x] Rewire channel method `spawn_workflow_python_helper`.
 - [x] Rewire `workflow_python_helper_resources`.
 - [x] Rewire `set_workflow_python_helper_capacity`.
 - [x] Rewire `cancel_workflow_python_helper_request`.

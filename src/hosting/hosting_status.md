@@ -56,6 +56,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added shared pool request-status/progress snapshot plumbing and workflow-named `workflow-python-request-status` / `workflow-js-request-status` surfaces. These report request lifetime metrics plus latest progress once stream/progress events are recorded.
 - Rewired old `spawn_workflow_python_helper` service calls to enter through `ensure_workflow_python(profile=helper)`, with raw helper worker spawning kept behind a private service helper for compatibility.
 - Tightened workflow Python environment identity so explicit Python runtime executables or runtime hashes contribute to `environment_key`; different Python runtimes no longer share the same host-side pool identity.
+- Rewired `EngineHostControlChannel.spawn_workflow_python_helper(...)` to forward to `workflow-python-ensure` while retaining the old typed method signature for dependent callers.
 
 ## Key Design Decisions So Far
 
