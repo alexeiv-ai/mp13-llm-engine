@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from ..toolbox.environment import ToolboxEnvironmentManager
 from ..toolbox.bundle_models import ToolboxEnvironmentSpec
+from .process_base import HostedProcessSandboxBase
 from .runtime_base import HostedEnvironmentKeySpec, HostedRuntimeIdentity, stable_hash
 
 
@@ -55,10 +56,13 @@ def _runtime_hash(default_hash: str, policy: Optional[Dict[str, Any]]) -> str:
     return _clean(default_hash) or "workflow-python-v1"
 
 
-class HostedPythonRuntimeManager:
-    """Internal Python environment adapter for workflow/runtime APIs."""
+class HostedPythonRuntimeBase(HostedProcessSandboxBase):
+    """Internal Python runtime base above the language-neutral process base."""
+
+    sandbox_kind = "workflow_python"
 
     def __init__(self, hosting_root: Path):
+        super().__init__()
         self.hosting_root = Path(hosting_root).expanduser().resolve()
         self.environment_manager = ToolboxEnvironmentManager(self.hosting_root)
 
@@ -86,6 +90,10 @@ class HostedPythonRuntimeManager:
             package_pins=_pins(python_policy),
             dependency_lock_hash=None,
         )
+
+
+class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
+    """Internal Python environment adapter for workflow/runtime APIs."""
 
     def environment_spec(
         self,
@@ -261,4 +269,4 @@ class HostedPythonRuntimeManager:
         }
 
 
-__all__ = ["HostedPythonRuntimeManager"]
+__all__ = ["HostedPythonRuntimeBase", "HostedPythonRuntimeManager"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hosting.sandbox.python_runtime import HostedPythonRuntimeManager
+from hosting.sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 
 
 def _policy():
@@ -35,6 +35,23 @@ def test_workflow_python_environment_spec_uses_runtime_envs_and_stable_key(tmp_p
     assert env["environment_name"] == "workflow-python-helper"
     assert env["required_imports"] == ["json", "math"]
     assert str(env["venv_path"]).startswith(str(tmp_path / "runtime_envs"))
+
+
+def test_python_runtime_base_sits_above_process_pool_base(tmp_path: Path) -> None:
+    base = HostedPythonRuntimeBase(tmp_path)
+
+    key_spec = base.environment_key_spec(
+        environment_name="workflow-python-helper",
+        profile="helper",
+        python_policy=_policy(),
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
+    )
+    capacity = base.set_capacity(key_spec.short_key(), capacity=2)
+
+    assert base.sandbox_kind == "workflow_python"
+    assert key_spec.to_dict()["runtime"]["runtime_kind"] == "workflow_python"
+    assert capacity["workflow_pool"]["pool_id"] == f"workflow_python/{key_spec.short_key()}"
+    assert capacity["workflow_pool"]["metrics"]["desired_capacity"] == 2
 
 
 def test_workflow_python_environment_key_changes_with_sandbox_policy(tmp_path: Path) -> None:

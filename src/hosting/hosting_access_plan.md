@@ -42,7 +42,7 @@ Explicitly out of scope for this epic unless separately requested:
   - Initially uses existing hosting IPC/proxy commands.
   - Does not define workflow, toolbox, model, or tool-call semantics.
 
-- [ ] Define `HostedPythonRuntimeBase` above the process base.
+- [x] Define `HostedPythonRuntimeBase` above the process base.
   - Owns Python runtime identity, venv/runtime environment realization, `environment_key` derivation, package/import identity, dependency lock/receipt metadata, Python executable selection, and Python environment GC.
   - Reuses and hardens `ToolboxEnvironmentManager`.
   - Uses `<hosting_root>/runtime_envs/<venv_key>` for non-toolbox Python runtime environments.

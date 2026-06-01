@@ -63,6 +63,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added an explicit node-profile artifact-store placeholder in the workflow Python contract envelope so clients can distinguish "no artifacts" from "artifact store not wired yet."
 - Centralized the shared stream event type list and cancel control message shape in `hosting.sandbox.runtime_base`, giving future concrete sandboxes one event vocabulary.
 - Added internal `HostedProcessSandboxBase` in `hosting.sandbox.process_base` as a non-public composition layer over the pool registry for shared capacity, request status, progress, and cancellation plumbing.
+- Added `HostedPythonRuntimeBase` above the process base and made `HostedPythonRuntimeManager` inherit it, preserving the existing workflow environment manager behavior while exposing shared process-pool capabilities.
 
 ## Key Design Decisions So Far
 
