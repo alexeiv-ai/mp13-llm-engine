@@ -191,7 +191,78 @@ the hosting state directory so recent operation status can survive daemon
 object recreation; consumers should still treat operation status as operational
 telemetry, not as a durable job queue contract.
 
-### 2.5 Proxying Worker Requests (RPC & Streams)
+### 2.5 Workflow Runtime APIs
+
+Workflow runtime APIs are the migration path for existing workflow helper
+lanes. New integrations should prefer workflow-named commands and treat old
+helper command names as compatibility aliases.
+
+Workflow Python helper profile:
+
+```powershell
+# Derive/inspect the host-owned environment identity.
+@'{
+  "profile":"helper",
+  "environment_name":"workflow-python-helper",
+  "python":{"import_allowlist":["json"],"package_pins":{}},
+  "sandbox_policy":{"sandbox":{"enabled":true,"profile":"workflow_python_helper_v1"}}
+}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-environment-spec
+
+# Ensure a worker/pool for that environment key.
+@'{
+  "profile":"helper",
+  "environment_key":"<environment_key>",
+  "capacity":2
+}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-ensure
+
+# Execute helper-profile source-in/JSON-out workflow code.
+@'{
+  "profile":"helper",
+  "environment_key":"<environment_key>",
+  "request":{
+    "request_id":"req-123",
+    "module_source":"def condition(input):\n    return {\"accepted\": True}\n",
+    "module_sha256":"<sha256>",
+    "package_id":"pkg",
+    "workflow_id":"workflow",
+    "package_source_digest":"<digest>",
+    "operation":"condition",
+    "payload":{},
+    "limits":{"timeout_ms":5000,"output_limit_bytes":65536}
+  }
+}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-execute
+```
+
+Dependency-bearing Python environments are host-managed. Use
+`workflow-python-prepare-environment`, `workflow-python-lock-environment`,
+`workflow-python-verify-environment`, `workflow-python-install-environment`
+when explicitly allowed, and `workflow-python-verify-install-receipt` before
+depending on installed packages. The stable `install_status` field summarizes
+that lifecycle.
+
+Resource and request operations are keyed by `environment_key`:
+
+```powershell
+@'{"profile":"helper","environment_key":"<environment_key>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-resources
+@'{"profile":"helper","environment_key":"<environment_key>","capacity":4}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-set-capacity
+@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-123"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-request-status
+@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-123"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-cancel-request
+```
+
+Workflow Python node profile currently exposes the stable envelope and stream
+transport before the real node worker implementation. `workflow-python-execute`
+with `profile=node` returns a structured pending-worker error. The streaming
+rollout commands are `workflow-python-stream-open`,
+`workflow-python-stream-recv`, `workflow-python-stream-send`, and
+`workflow-python-stream-close`; today stream-open emits `started`, structured
+`error`, and `done` events using the pending-worker envelope.
+
+Workflow JS helper profile exposes the same environment-keyed management shape:
+`workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-resources`,
+`workflow-js-set-capacity`, `workflow-js-request-status`, and
+`workflow-js-cancel-request`.
+
+### 2.6 Proxying Worker Requests (RPC & Streams)
 
 Once a traffic session is issued, developers can test proxy commands.
 Use `proxy-rpc-open`/`proxy-rpc-recv`/`proxy-rpc-close` for streamed

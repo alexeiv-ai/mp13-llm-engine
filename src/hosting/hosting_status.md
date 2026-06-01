@@ -71,6 +71,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added `HostedPythonRuntimeManager.gc_runtime_environments(...)` for dry-run or destructive cleanup of unreferenced `<hosting_root>/runtime_envs` entries by environment key/path.
 - Added in-memory stream session plumbing to `HostedProcessSandboxBase`: stream open/emit/recv/send-cancel/close now records progress and request lifecycle state through the shared pool registry.
 - Added workflow Python stream command surfaces for node-profile rollout (`workflow-python-stream-open/recv/send/close`). Until the real node worker lands, stream-open emits the structured pending-worker error envelope as stream events.
+- Documented workflow Python/JS runtime facade commands, environment lifecycle, resource/capacity/status/cancel usage, and node-profile streaming rollout in `HOSTING.md`.
 
 ## Key Design Decisions So Far
 

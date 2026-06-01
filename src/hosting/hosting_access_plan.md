@@ -92,7 +92,7 @@ Explicitly out of scope for this epic unless separately requested:
 - [x] Persist environment identity on worker registrations.
   - Include `environment_key`, `environment_name`, `environment_root_kind`, `environment_consumer_kind`, profile, runtime hash, sandbox policy hash, import/package/dependency identity, and install/receipt status summary.
 
-- [ ] Ensure different keys never share a live worker process or hot child process pool.
+- [x] Ensure different keys never share a live worker process or hot child process pool.
   - Enforce this at host routing and inside worker/runtime pool selection.
 
 ## Pooling, Metrics, And Request Tracking
@@ -151,7 +151,7 @@ Explicitly out of scope for this epic unless separately requested:
   - `stream_close`
   - `shutdown`
 
-- [ ] Keep short helper calls available as sync `rpc_call`.
+- [x] Keep short helper calls available as sync `rpc_call`.
   - `workflow_python(profile=helper)` and `workflow_js(profile=helper)` may start sync-only for compatibility.
 
 - [x] Add async/streaming support as base capability.
@@ -176,7 +176,7 @@ Explicitly out of scope for this epic unless separately requested:
   - `stream_close` closes client stream and requests stop.
   - Host-level cancel still works by `environment_key + request_id`.
 
-- [ ] Define response shape compatibility for sync calls.
+- [x] Define response shape compatibility for sync calls.
   - Sync calls return stable `status`, `ok`, result/output, structured error, runtime, metrics summary, and audit metadata.
   - Preserve old helper response shape through compatibility shims during migration.
 
@@ -379,7 +379,7 @@ Explicitly out of scope for this epic unless separately requested:
 Do not front-load all documentation before implementation, because contracts will move during the refactor. Do keep short design notes current during implementation and do a full docs pass after APIs stabilize.
 
 - [x] Early docs: update architecture docs with intended shared-base design once Phase 1 models land.
-- [ ] Midpoint docs: document workflow Python environment APIs when Phase 3/4 are usable.
+- [x] Midpoint docs: document workflow Python environment APIs when Phase 3/4 are usable.
 - [ ] Final docs: update all public docs after compatibility shims are verified.
   - `src/hosting/HOSTING.md`
   - `src/hosting/sandbox/SANDBOX_ARCHITECTURE.md`
