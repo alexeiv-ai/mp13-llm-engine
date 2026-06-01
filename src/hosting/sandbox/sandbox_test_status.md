@@ -31,6 +31,9 @@ The refactor coverage now also includes internal process/JS runtime bases, runti
 Update: 2026-06-01
 Phase 9 toolbox migration has initial coverage for shared hosted environment identity on toolbox registrations while preserving `toolbox_venvs`:
 `tests/test_hosting_toolbox_sandbox.py -k "toolbox_runtime_base or orchestrator_spawn_uses_shared_environment_identity"`.
+Update: 2026-06-01
+Workflow Python node profile now has real execution and streaming coverage through the hosted workflow Python runtime, including progress/result/error/timeout/cancel plumbing:
+`tests/test_workflow_helper_service.py -k "node or workflow_python"`.
 
 ## 1. Environment
 
@@ -94,8 +97,8 @@ Current automated coverage includes:
     - workflow-facing Python runtime env GC for unreferenced `runtime_envs`
     - JS runtime base identity and process-pool capability
     - `workflow_python(profile=helper)` service/channel/daemon/direct CLI facade coverage
-    - `workflow_python(profile=node)` request/response contract and structured pending-worker envelope
-    - `workflow_python(profile=node)` stream-open/recv/send/close rollout coverage with pending-worker events
+    - `workflow_python(profile=node)` request/response contract and real helper-backed execution envelope
+    - `workflow_python(profile=node)` stream-open/recv/send/close rollout coverage with progress/result/error/cancel paths
     - environment-key pool isolation for incompatible policy/dependency identity
     - interactive CLI workflow pool view compatibility for annotated Python helper registrations
     - initial toolbox executor registration identity mapping through `HostedToolboxRuntimeBase`

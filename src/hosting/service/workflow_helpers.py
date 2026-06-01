@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import sys
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
-from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
+from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot, hosted_log_summary
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
-from ..sandbox.workflow_python_contract import workflow_python_node_not_implemented_response
+from ..sandbox.workflow_python_contract import (
+    normalize_workflow_python_node_request,
+    validate_workflow_python_node_request,
+    workflow_python_node_contract,
+    workflow_python_node_not_implemented_response,
+)
 
 
 class WorkflowHelperMixin:
@@ -54,6 +60,86 @@ class WorkflowHelperMixin:
             engine_id=str(engine_id or ""),
             request=dict(request or {}),
         )
+
+    @staticmethod
+    def _workflow_python_node_helper_request(request: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = normalize_workflow_python_node_request(dict(request or {}))
+        export_name = str(normalized.get("export_name") or normalized.get("operation") or "").strip()
+        return {
+            **normalized,
+            "operation": "default",
+            "export_name": export_name,
+            "source_path": str(dict(normalized.get("provenance") or {}).get("source_path") or "workflow_python_node.py"),
+        }
+
+    @staticmethod
+    def _workflow_python_node_response_from_helper(
+        *,
+        helper_result: Dict[str, Any],
+        request: Dict[str, Any],
+        environment_key: str,
+        engine_id: str,
+        metrics: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        normalized = normalize_workflow_python_node_request(dict(request or {}))
+        helper = dict(helper_result or {})
+        ok = bool(helper.get("ok", False))
+        raw_output = helper.get("result") if ok else None
+        output = raw_output
+        state_patch = None
+        artifacts = []
+        progress = None
+        if isinstance(raw_output, dict):
+            row = dict(raw_output)
+            if "output" in row:
+                output = row.get("output")
+            if isinstance(row.get("state_patch"), dict):
+                state_patch = dict(row.get("state_patch") or {})
+            if isinstance(row.get("artifacts"), list):
+                artifacts = list(row.get("artifacts") or [])
+            if isinstance(row.get("progress"), dict):
+                progress = dict(row.get("progress") or {})
+        limits = dict(normalized.get("limits") or {})
+        logs = hosted_log_summary(max_bytes=int(limits.get("output_limit_bytes") or 4096))
+        reason = str(helper.get("reason") or "").strip()
+        detail = dict(helper.get("detail") or {}) if isinstance(helper.get("detail"), dict) else {}
+        return {
+            "status": "ok" if ok else "error",
+            "ok": ok,
+            "profile": "node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request_id": str(normalized.get("request_id") or "").strip() or None,
+            "reason": None if ok else (reason or "workflow_python_node_execution_failed"),
+            "error": None
+            if ok
+            else {
+                "code": reason or "workflow_python_node_execution_failed",
+                "message": str(detail.get("message") or reason or "workflow Python node execution failed"),
+                "detail": detail,
+            },
+            "output": output,
+            "state_patch": state_patch,
+            "artifacts": artifacts,
+            "artifact_store": {
+                "status": "unavailable",
+                "reason": "artifact_store_not_implemented",
+                "message": "artifact refs are part of the node-profile contract, but no workflow artifact store is wired yet",
+            },
+            "progress": progress,
+            "logs": logs,
+            "metrics": dict(metrics or {}),
+            "audit": {
+                "package_id": str(normalized.get("package_id") or "").strip() or None,
+                "workflow_id": str(normalized.get("workflow_id") or "").strip() or None,
+                "package_source_digest": str(normalized.get("package_source_digest") or "").strip() or None,
+                "module_sha256": str(normalized.get("module_sha256") or "").strip() or None,
+                "provenance": dict(normalized.get("provenance") or {}),
+                "helper_audit": dict(helper.get("audit") or {}),
+                "helper_runtime": dict(helper.get("runtime") or {}),
+            },
+            "contract": workflow_python_node_contract(),
+        }
 
     def workflow_python_environment_spec(
         self,
@@ -419,8 +505,8 @@ class WorkflowHelperMixin:
         worker_profile_class: str = "generic",
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
-        if prof != "helper":
-            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
+        if prof == "node" and str(environment_name or "") == "workflow-python-helper":
+            environment_name = "workflow-python-node"
         env = self.workflow_python_environment_spec(
             profile=prof,
             environment_name=environment_name,
@@ -501,12 +587,26 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
-        if prof != "helper":
-            return self._workflow_python_node_unavailable(request=req, environment_key=environment_key, engine_id=engine_id)
+        if prof == "node" and str(environment_name or "") == "workflow-python-helper":
+            environment_name = "workflow-python-node"
         py = dict(req.get("python") or {})
         if environment_name:
             py.setdefault("environment_name", str(environment_name or "workflow-python-helper"))
         req["python"] = py
+        if prof == "node":
+            validation = validate_workflow_python_node_request(req)
+            if str(validation.get("status") or "") != "ok":
+                return self._workflow_python_node_response_from_helper(
+                    helper_result={
+                        "ok": False,
+                        "reason": "workflow_python_node_invalid_request",
+                        "detail": {"missing_request_fields": list(validation.get("missing") or [])},
+                    },
+                    request=req,
+                    environment_key=str(environment_key or ""),
+                    engine_id=str(engine_id or ""),
+                )
+            req = self._workflow_python_node_helper_request(req)
         ensured = self.ensure_workflow_python(
             profile=prof,
             environment_name=str(py.get("environment_name") or environment_name or "workflow-python-helper"),
@@ -518,6 +618,12 @@ class WorkflowHelperMixin:
         )
         if str(ensured.get("status") or "") != "ok":
             return ensured
+        try:
+            reg = self.get_registration(str(ensured.get("engine_id") or ""))
+            if reg:
+                self._wait_for_worker_rpc_ready(reg, timeout_seconds=5.0, poll_interval_seconds=0.05)
+        except Exception:
+            pass
         pool = self._workflow_python_pool_registry().get_or_create(
             self._workflow_python_pool_key(str(ensured.get("environment_key") or "")),
             desired_capacity=capacity,
@@ -560,6 +666,18 @@ class WorkflowHelperMixin:
             status="ok" if bool(result.get("ok", False)) else "error",
             reason=str(result.get("reason") or "") or None,
         )
+        metrics = {
+            "workflow_pool": pool.resources(),
+            "request": dict(finished.get("request") or lifecycle.to_dict()),
+        }
+        if prof == "node":
+            return self._workflow_python_node_response_from_helper(
+                helper_result=result,
+                request={**dict(request or {}), "request_id": lifecycle.request_id, "python": py},
+                environment_key=str(ensured.get("environment_key") or ""),
+                engine_id=str(ensured["engine_id"]),
+                metrics=metrics,
+            )
         return {
             "status": "ok" if bool(result.get("ok", False)) else "error",
             "ok": bool(result.get("ok", False)),
@@ -568,10 +686,7 @@ class WorkflowHelperMixin:
             "environment_key": str(ensured.get("environment_key") or ""),
             "output": result.get("result"),
             "result": result,
-            "metrics": {
-                "workflow_pool": pool.resources(),
-                "request": dict(finished.get("request") or lifecycle.to_dict()),
-            },
+            "metrics": metrics,
         }
 
     def workflow_python_resources(
@@ -585,8 +700,8 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
-        if prof != "helper":
-            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
+        if prof == "node" and str(environment_name or "") == "workflow-python-helper":
+            environment_name = "workflow-python-node"
         spec_was_explicit = bool(dict(python or {}) or dict(sandbox_policy or {}))
         env = self.workflow_python_environment_spec(
             profile=prof,
@@ -625,8 +740,6 @@ class WorkflowHelperMixin:
         capacity: int,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
-        if prof != "helper":
-            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
         effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         out = self.set_workflow_python_helper_capacity(engine_id=eid, capacity=capacity)
@@ -646,8 +759,6 @@ class WorkflowHelperMixin:
         request_id: str,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
-        if prof != "helper":
-            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id)
         effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         out = self.cancel_workflow_python_helper_request(engine_id=eid, request_id=request_id)
@@ -665,8 +776,6 @@ class WorkflowHelperMixin:
         request_id: str,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
-        if prof != "helper":
-            return self._workflow_python_node_unavailable(environment_key=environment_key, engine_id=engine_id, request={"request_id": request_id})
         effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
         if not effective_key:
             return {"status": "not_found", "request_id": str(request_id or "").strip(), "profile": prof, "environment_key": None}
@@ -705,6 +814,21 @@ class WorkflowHelperMixin:
             }
         effective_key = requested_key or derived_key
         request_id = str(req.get("request_id") or "").strip() or f"workflow-python-{prof}-{int(time.time() * 1000)}"
+        ensured: Dict[str, Any] = {}
+        if prof == "node":
+            py.setdefault("environment_name", str(environment_name or "workflow-python-node"))
+            ensured = self.ensure_workflow_python(
+                profile=prof,
+                environment_name=str(py.get("environment_name") or environment_name or "workflow-python-node"),
+                environment_key=effective_key,
+                python=py,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                engine_id=engine_id,
+            )
+            if str(ensured.get("status") or "") != "ok":
+                return ensured
+            engine_id = str(ensured.get("engine_id") or engine_id or "")
         base = self._workflow_python_stream_base()
         opened = base.stream_open(
             environment_key=effective_key,
@@ -720,28 +844,20 @@ class WorkflowHelperMixin:
         if str(opened.get("status") or "") != "ok":
             return {**dict(opened or {}), "profile": prof, "environment_key": effective_key}
         if prof == "node":
-            pending = self._workflow_python_node_unavailable(request={**req, "request_id": request_id}, environment_key=effective_key, engine_id=engine_id)
-            base.stream_emit(
-                stream_id=str(opened.get("stream_id") or ""),
-                event_type="log",
-                payload={"logs": dict(pending.get("logs") or {})},
+            stream_id = str(opened.get("stream_id") or "")
+            thread = threading.Thread(
+                target=self._workflow_python_run_node_stream,
+                kwargs={
+                    "stream_id": stream_id,
+                    "environment_key": effective_key,
+                    "engine_id": str(engine_id or ""),
+                    "request": {**req, "request_id": request_id, "python": py},
+                    "capacity": capacity,
+                },
+                name=f"workflow-python-node-stream-{request_id}",
+                daemon=True,
             )
-            base.stream_emit(
-                stream_id=str(opened.get("stream_id") or ""),
-                event_type="error",
-                payload={"error": dict(pending.get("error") or {}), "response": pending},
-            )
-            base.stream_emit(
-                stream_id=str(opened.get("stream_id") or ""),
-                event_type="done",
-                payload={"status": "error", "reason": pending.get("reason")},
-            )
-            base.finish_request(
-                environment_key=effective_key,
-                request_id=request_id,
-                status="error",
-                reason=str(pending.get("reason") or "workflow_python_node_profile_not_implemented"),
-            )
+            thread.start()
         return {
             **dict(opened or {}),
             "profile": prof,
@@ -749,11 +865,87 @@ class WorkflowHelperMixin:
             "environment": dict(env.get("environment") or {}),
         }
 
+    def _workflow_python_run_node_stream(
+        self,
+        *,
+        stream_id: str,
+        environment_key: str,
+        engine_id: str,
+        request: Dict[str, Any],
+        capacity: int,
+    ) -> None:
+        base = self._workflow_python_stream_base()
+        helper_req = self._workflow_python_node_helper_request(request)
+        try:
+            reg = self.get_registration(str(engine_id or ""))
+            if reg:
+                self._wait_for_worker_rpc_ready(reg, timeout_seconds=5.0, poll_interval_seconds=0.05)
+        except Exception:
+            pass
+        out = self.proxy_rpc_call(
+            engine_id=str(engine_id or ""),
+            method="execute_workflow_python_helper",
+            params={**helper_req, "_workflow_python_facade_execute": True},
+            timeout_seconds=float(dict(helper_req.get("limits") or {}).get("timeout_ms") or 30000) / 1000.0 + 5.0,
+        )
+        result = dict(out.get("result") or out or {})
+        status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))
+        response = self._workflow_python_node_response_from_helper(
+            helper_result=result,
+            request=request,
+            environment_key=environment_key,
+            engine_id=engine_id,
+            metrics={"request": dict(status_snapshot.get("request") or {})},
+        )
+        base.stream_emit(stream_id=stream_id, event_type="log", payload={"logs": dict(response.get("logs") or {})})
+        if bool(response.get("ok", False)):
+            if isinstance(response.get("progress"), dict):
+                base.stream_emit(stream_id=stream_id, event_type="progress", payload=dict(response.get("progress") or {}))
+            for artifact in list(response.get("artifacts") or []):
+                if isinstance(artifact, dict):
+                    base.stream_emit(stream_id=stream_id, event_type="artifact", payload=dict(artifact or {}))
+            base.stream_emit(
+                stream_id=stream_id,
+                event_type="result",
+                payload={
+                    "output": response.get("output"),
+                    "state_patch": response.get("state_patch"),
+                    "artifacts": list(response.get("artifacts") or []),
+                    "metrics": dict(response.get("metrics") or {}),
+                },
+            )
+            base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "ok"})
+            base.finish_request(environment_key=environment_key, request_id=str(request.get("request_id") or ""), status="ok")
+            return
+        base.stream_emit(
+            stream_id=stream_id,
+            event_type="error",
+            payload={"error": dict(response.get("error") or {}), "response": response},
+        )
+        base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "error", "reason": response.get("reason")})
+        base.finish_request(
+            environment_key=environment_key,
+            request_id=str(request.get("request_id") or ""),
+            status="error",
+            reason=str(response.get("reason") or "workflow_python_node_execution_failed"),
+        )
+
     def workflow_python_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         return dict(self._workflow_python_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
 
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return dict(self._workflow_python_stream_base().stream_send(stream_id=stream_id, message=dict(message or {})))
+        base = self._workflow_python_stream_base()
+        msg = dict(message or {})
+        out = dict(base.stream_send(stream_id=stream_id, message=msg))
+        if bool(out.get("accepted")) and str(msg.get("action") or "").strip() == "cancel":
+            session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+            if session is not None:
+                out["worker_cancel"] = self.cancel_workflow_python_request(
+                    profile=str(getattr(session, "profile", "") or "node"),
+                    environment_key=str(getattr(session, "environment_key", "") or ""),
+                    request_id=str(getattr(session, "request_id", "") or ""),
+                )
+        return out
 
     def workflow_python_stream_close(self, *, stream_id: str) -> Dict[str, Any]:
         return dict(self._workflow_python_stream_base().stream_close(stream_id=stream_id))

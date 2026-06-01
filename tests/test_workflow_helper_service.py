@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import shutil
+import time
 
 import pytest
 from hosting.service.host_service import EngineHostService
@@ -1049,30 +1050,33 @@ def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) 
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    source = "def run(payload):\n    return {'output': {'accepted': payload['value'] == 7}, 'state_patch': {'seen': True}}\n"
 
-    out = svc.execute_workflow_python(
-        profile="node",
-        environment_key="env-node",
-        engine_id="wf-node",
-        request={
-            "request_id": "req-node",
-            "module_source": "def run(payload):\n    return payload\n",
-            "module_sha256": "sha",
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-            "limits": {"output_limit_bytes": 3},
-        },
-    )
+    try:
+        out = svc.execute_workflow_python(
+            profile="node",
+            engine_id="wf-node",
+            request={
+                "request_id": "req-node",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {"value": 7},
+                "limits": {"output_limit_bytes": 1024},
+            },
+        )
+    finally:
+        svc.shutdown("wf-node", timeout_seconds=5.0)
 
-    assert out["status"] == "error"
-    assert out["ok"] is False
+    assert out["status"] == "ok"
+    assert out["ok"] is True
     assert out["profile"] == "node"
-    assert out["reason"] == "workflow_python_node_profile_not_implemented"
-    assert out["environment_key"] == "env-node"
     assert out["request_id"] == "req-node"
+    assert out["output"] == {"accepted": True}
+    assert out["state_patch"] == {"seen": True}
     assert "progress" in out["contract"]["stream_event_types"]
 
 
@@ -1081,32 +1085,149 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    source = "def run(payload):\n    return {'output': {'accepted': payload['value'] == 7}, 'progress': {'message': 'finished'}}\n"
+    opened = {}
 
-    opened = svc.workflow_python_stream_open(
-        profile="node",
-        request={
-            "request_id": "req-node-stream",
-            "module_source": "def run(payload):\n    return payload\n",
-            "module_sha256": "sha",
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-            "limits": {"output_limit_bytes": 3},
-        },
-    )
-    received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
-    status = svc.workflow_python_request_status(
-        profile="helper",
-        environment_key=opened["environment_key"],
-        request_id="req-node-stream",
-    )
-    closed = svc.workflow_python_stream_close(stream_id=opened["stream_id"])
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-stream",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {"value": 7},
+                "limits": {"output_limit_bytes": 1024},
+            },
+        )
+        events = []
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("events") or []))
+            if any(dict(row or {}).get("type") == "done" for row in events):
+                break
+            time.sleep(0.05)
+        status = svc.workflow_python_request_status(
+            profile="node",
+            environment_key=opened["environment_key"],
+            request_id="req-node-stream",
+        )
+        closed = svc.workflow_python_stream_close(stream_id=opened["stream_id"])
+    finally:
+        svc.shutdown(str(opened.get("engine_id") or "workflow-python-node"), timeout_seconds=5.0)
 
     assert opened["status"] == "ok"
-    assert [row["type"] for row in received["events"]] == ["started", "log", "error", "done"]
-    assert received["events"][1]["payload"]["logs"]["output_limit_bytes"] == 3
-    assert received["events"][2]["payload"]["error"]["code"] == "workflow_python_node_profile_not_implemented"
-    assert status["request"]["status"] == "error"
+    assert [row["type"] for row in events] == ["started", "log", "progress", "result", "done"]
+    assert events[1]["payload"]["logs"]["output_limit_bytes"] == 1024
+    assert events[2]["payload"]["message"] == "finished"
+    assert events[3]["payload"]["output"] == {"accepted": True}
+    assert status["request"]["status"] == "ok"
     assert closed["closed"] is True
+
+
+def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    raise ValueError('bad node')\n"
+
+    try:
+        out = svc.execute_workflow_python(
+            profile="node",
+            engine_id="wf-node-error",
+            request={
+                "request_id": "req-node-error",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"timeout_ms": 1000, "output_limit_bytes": 1024},
+            },
+        )
+    finally:
+        svc.shutdown("wf-node-error", timeout_seconds=5.0)
+
+    assert out["status"] == "error"
+    assert out["ok"] is False
+    assert out["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "bad node" in out["error"]["message"]
+    assert out["metrics"]["request"]["status"] == "error"
+
+
+def test_execute_workflow_python_node_reports_timeout(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    while True:\n        pass\n"
+
+    try:
+        out = svc.execute_workflow_python(
+            profile="node",
+            engine_id="wf-node-timeout",
+            request={
+                "request_id": "req-node-timeout",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"timeout_ms": 50, "output_limit_bytes": 1024},
+            },
+        )
+    finally:
+        svc.shutdown("wf-node-timeout", timeout_seconds=5.0)
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_sandbox_timeout"
+    assert out["metrics"]["request"]["reason"] == "workflow_sandbox_timeout"
+
+
+def test_workflow_python_stream_cancel_routes_to_worker_cancel(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    base = svc._workflow_python_stream_base()
+    opened = base.stream_open(
+        environment_key="env-node-cancel",
+        request_id="req-node-cancel",
+        profile="node",
+        factory=lambda key, cap: svc._workflow_python_worker_slot(
+            engine_id="wf-node-cancel",
+            environment_key=key,
+            capacity=cap,
+        ),
+    )
+    calls = []
+
+    def fake_cancel(**kwargs):
+        calls.append(dict(kwargs))
+        return {"status": "ok", "canceled": True, "request_id": kwargs["request_id"]}
+
+    monkeypatch.setattr(svc, "cancel_workflow_python_request", fake_cancel)
+
+    out = svc.workflow_python_stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "cancel", "reason": "test_cancel"},
+    )
+
+    assert out["accepted"] is True
+    assert out["worker_cancel"]["canceled"] is True
+    assert calls == [
+        {
+            "profile": "node",
+            "environment_key": "env-node-cancel",
+            "request_id": "req-node-cancel",
+        }
+    ]

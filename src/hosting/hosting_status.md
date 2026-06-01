@@ -122,39 +122,21 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Wire workflow Python facade to the internal pool registry for host-side scheduling/accounting.
 - [x] Add interactive CLI views/actions for workflow runtime pools, request status, and stream event receive.
 - [x] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
-- [ ] Implement workflow Python node-profile streaming worker.
+- [x] Implement workflow Python node-profile streaming worker.
 
 ## Plan Audit: 2026-06-01
 
-Completed implementation phases now cover Phase 0 through Phase 4, Phase 6,
-Phase 7, the shared/base pieces of Phase 5, Phase 8 direct/channel/interactive
-compatibility, and early/midpoint docs.
+Completed implementation phases now cover Phase 0 through Phase 9 and
+early/midpoint docs.
 
 Remaining unchecked plan items are intentionally not marked complete:
 
-1. Phase 5 real node-profile execution:
-   - current code exposes the node contract and workflow stream commands, but
-     the stream currently emits the structured pending-worker error envelope
-     rather than executing node-profile workflow code.
-   - the pending-worker path now uses the shared hosted log-summary envelope
-     and emits a `log` stream event before the structured error.
-   - remaining tests should cover real streamed progress, stdout/stderr
-     summaries, result, structured error, timeout, cancel, and metrics once
-     the node worker exists.
-2. Phase 9 toolbox migration:
-   - toolbox public APIs remain unchanged.
-   - toolbox registrations now include shared `environment_key` and
-     `environment_identity` metadata through `HostedToolboxRuntimeBase`.
-   - toolbox keeps `ToolboxEnvironmentManager` and `toolbox_venvs` ownership;
-     it does not directly inherit workflow Python environment realization.
-   - toolbox parity/callback/brokered I/O coverage passed after the identity
-     migration (`tests/test_hosting_toolbox_sandbox.py`: 122 passed).
-3. Phase 10 cleanup/removal:
+1. Phase 10 cleanup/removal:
    - old Python/JS helper implementations and compatibility fields must stay
      until dependent clients migrate.
    - removal of old CLI branches and duplicate toolbox environment code should
      happen only after that migration.
-4. Phase 11 final docs and client action checklist:
+2. Phase 11 final docs and client action checklist:
    - final public docs and example verification should wait until the node
      worker/toolbox migration/removal decisions are implemented.
    - client checklist items in `HOSTING_CLIENT_BREAKING_CHANGES.md` remain

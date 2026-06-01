@@ -82,9 +82,11 @@ Concrete workflow facades currently use these layers incrementally:
    lifecycle hooks, ensure, execute, resources, capacity, cancel, and request
    status while keeping the old Python helper worker as temporary execution
    compatibility code.
-2. `workflow_python(profile=node)` has a stable request/response/stream
-   contract envelope, including explicit artifact-store-unavailable metadata,
-   but the async worker implementation is still pending.
+2. `workflow_python(profile=node)` executes Python exports through the hosted
+   workflow Python runtime and wraps results in the node response contract.
+   Stream-open returns immediately and emits `started`, `log`, optional
+   `progress`, `result` or structured `error`, and `done`. Artifact storage is
+   still reported as unavailable until a store is designed.
 3. `workflow_js(profile=helper)` exposes environment spec, ensure, resources,
    capacity, cancel, and request status through the JS runtime base and existing
    helper worker compatibility path.

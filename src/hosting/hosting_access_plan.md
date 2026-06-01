@@ -294,10 +294,10 @@ Explicitly out of scope for this epic unless separately requested:
   - structured error
   - audit metadata
 
-- [ ] Implement async/streaming execution for node profile.
+- [x] Implement async/streaming execution for node profile.
 - [x] Implement artifact ref plumbing or explicit placeholder errors if artifact store is not ready.
 - [x] Implement latest-progress snapshot in resource/request-status responses.
-- [ ] Add tests for streamed progress, stdout/stderr summary truncation, result, structured error, timeout, cancel, and metrics.
+- [x] Add tests for streamed progress, stdout/stderr summary truncation, result, structured error, timeout, cancel, and metrics.
 
 ## Phase 6: Migrate Workflow Python Helper Compatibility
 
@@ -416,7 +416,7 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 - [x] Unit tests for Python environment realization and install metadata.
 - [x] Integration tests for workflow Python helper compatibility.
 - [x] Integration tests for workflow Python new API.
-- [ ] Integration tests for workflow Python node streaming.
+- [x] Integration tests for workflow Python node streaming.
 - [x] Integration tests for workflow JS helper compatibility.
 - [x] Integration tests for toolbox parity after migration.
 - [x] CLI smoke tests.
