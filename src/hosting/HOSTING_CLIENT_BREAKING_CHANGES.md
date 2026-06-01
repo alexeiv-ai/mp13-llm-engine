@@ -10,12 +10,14 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
 - [x] Start using `workflow_python` once available.
   - `workflow_python(profile=helper, environment_name=workflow-python-helper)` replaces the current helper lane.
   - `workflow_python(profile=node)` is planned for long-running workflow node execution with streaming responses.
-  - Initial host surfaces now exist for helper-profile compatibility; dependent projects should wait for integration guidance before removing old helper calls.
+  - Helper-profile host surfaces now exist for environment spec/prepare/lock/verify/install/receipt, ensure, execute, resources, capacity, and cancel.
+  - Dependent projects should keep old helper calls available until the compatibility migration phase is complete.
 
 - [ ] Stop routing workflow Python pools only by `engine_id`.
 - [ ] Start accepting a host-derived `environment_key`.
   - The host will derive or verify the key from environment name, profile, Python runtime identity, imports, package pins or dependency lock identity, and sandbox policy hash.
-  - Different environment keys will not share Python worker processes or hot child pools.
+  - Helper-profile workflow Python calls now route host-side pool accounting by `environment_key`.
+  - Different helper-profile environment keys now get separate default engine IDs and host-side pool records. Full replacement of the legacy helper worker implementation is still pending.
 
 - [ ] Stop assuming `python.package_pins` are installed/enforced merely because they are present in an execute request.
 - [x] Start using explicit workflow environment APIs for dependency-bearing environments.
@@ -41,6 +43,7 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
   - metrics.
   - audit metadata.
   - progress/log/artifact events for streaming profiles.
+  - Helper-profile `execute_workflow_python` now returns `metrics.workflow_pool` and `metrics.request` in addition to the compatibility helper result.
 
 - [ ] Stop omitting `request_id` for cancelable or long-running work.
 - [ ] Start passing stable `request_id` for request lifetime tracking and cancellation.
@@ -56,6 +59,7 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
 
 - [ ] Stop reading capacity only from a single helper engine ID.
 - [ ] Start reading capacity and resources by runtime kind and `environment_key`.
+  - `workflow-python-resources` now reports `workflow_pool` when a helper-profile pool has been ensured.
 - [ ] Start consuming latency and concurrency metrics.
   - Queue wait ms.
   - Execution latency ms.
@@ -69,6 +73,7 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
 
 - [ ] Stop assuming capacity changes apply globally to all workflow Python helpers.
 - [ ] Start setting capacity per `environment_key`.
+  - `workflow-python-set-capacity` accepts `environment_key`; during migration it can also infer the key from an annotated helper registration when `engine_id` is supplied.
 
 ## Planned Migration: Streaming
 
@@ -84,9 +89,10 @@ Purpose: track dependent-project changes required by the hosted sandbox runtime 
 ## Planned Migration: CLI And Interactive CLI
 
 - [ ] Stop scripting only old commands after new workflow commands are available.
-- [ ] Start using new workflow commands for new integrations.
+- [x] Start using new workflow commands for new integrations.
 - [ ] Old helper commands will remain temporary aliases during migration.
-- [ ] Interactive CLI screens will move from helper-only views to workflow runtime pool views keyed by environment.
+- [x] Interactive CLI screens will move from helper-only views to workflow runtime pool views keyed by environment.
+  - Annotated Python helper registrations now use `workflow-python-*` facade calls inside the workflow helper management screen.
 
 ## Removal Candidates After Migration
 

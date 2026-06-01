@@ -387,7 +387,7 @@ Do not front-load all documentation before implementation, because contracts wil
   - `src/hosting/sandbox/GENERIC_WORKER.md`
   - CLI docs and examples.
 
-- [ ] Keep `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` current for dependent projects.
+- [x] Keep `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` current for dependent projects.
 - [ ] Keep `src/hosting/hosting_status.md` current after each phase or major PR.
 
 ## Dependent Project Migration Contract
