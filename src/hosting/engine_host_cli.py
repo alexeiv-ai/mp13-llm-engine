@@ -788,6 +788,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-python-set-capacity",
         "workflow-python-cancel-request",
         "workflow-python-request-status",
+        "workflow-python-stream-open",
+        "workflow-python-stream-recv",
+        "workflow-python-stream-send",
+        "workflow-python-stream-close",
         "get-registration",
         "shutdown",
         "ensure-running",
@@ -1338,6 +1342,39 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     request_id=str(payload.get("request_id") or ""),
                 )
             )
+            return 0
+        if cmd == "workflow-python-stream-open":
+            _print_ok(
+                svc.workflow_python_stream_open(
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-python-node"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request=dict(payload.get("request") or {}),
+                    python=dict(payload.get("python") or {}),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    capacity=int(payload.get("capacity") or 1),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-stream-recv":
+            _print_ok(
+                svc.workflow_python_stream_recv(
+                    stream_id=str(payload.get("stream_id") or ""),
+                    max_items=int(payload.get("max_items") or 64),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-stream-send":
+            _print_ok(
+                svc.workflow_python_stream_send(
+                    stream_id=str(payload.get("stream_id") or ""),
+                    message=dict(payload.get("message") or {}),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-stream-close":
+            _print_ok(svc.workflow_python_stream_close(stream_id=str(payload.get("stream_id") or "")))
             return 0
         if cmd == "workflow-js-helper-set-capacity":
             _print_ok(

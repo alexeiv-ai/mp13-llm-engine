@@ -1791,6 +1791,51 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_stream_open(
+        self,
+        *,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        python: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-stream-open",
+            {
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "python": dict(python or {}),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+                "capacity": max(1, min(int(capacity or 1), 256)),
+            },
+        )
+        return dict(res or {})
+
+    def workflow_python_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-stream-recv",
+            {"stream_id": str(stream_id or "").strip(), "max_items": max(1, min(int(max_items or 64), 4096))},
+        )
+        return dict(res or {})
+
+    def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-stream-send",
+            {"stream_id": str(stream_id or "").strip(), "message": dict(message or {})},
+        )
+        return dict(res or {})
+
+    def workflow_python_stream_close(self, *, stream_id: str) -> Dict[str, Any]:
+        res = self._invoke("workflow-python-stream-close", {"stream_id": str(stream_id or "").strip()})
+        return dict(res or {})
+
     def workflow_js_environment_spec(
         self,
         *,

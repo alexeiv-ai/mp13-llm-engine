@@ -1073,3 +1073,37 @@ def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) 
     assert out["environment_key"] == "env-node"
     assert out["request_id"] == "req-node"
     assert "progress" in out["contract"]["stream_event_types"]
+
+
+def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    opened = svc.workflow_python_stream_open(
+        profile="node",
+        request={
+            "request_id": "req-node-stream",
+            "module_source": "def run(payload):\n    return payload\n",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+    received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
+    status = svc.workflow_python_request_status(
+        profile="helper",
+        environment_key=opened["environment_key"],
+        request_id="req-node-stream",
+    )
+    closed = svc.workflow_python_stream_close(stream_id=opened["stream_id"])
+
+    assert opened["status"] == "ok"
+    assert [row["type"] for row in received["events"]] == ["started", "error", "done"]
+    assert received["events"][1]["payload"]["error"]["code"] == "workflow_python_node_profile_not_implemented"
+    assert status["request"]["status"] == "error"
+    assert closed["closed"] is True

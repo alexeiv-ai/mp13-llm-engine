@@ -2247,6 +2247,29 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 request_id=str(payload.get("request_id") or ""),
             )
+        if cmd == "workflow-python-stream-open":
+            return svc.workflow_python_stream_open(
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-node"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                python=dict(payload.get("python") or {}),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                capacity=int(payload.get("capacity") or 1),
+            )
+        if cmd == "workflow-python-stream-recv":
+            return svc.workflow_python_stream_recv(
+                stream_id=str(payload.get("stream_id") or ""),
+                max_items=int(payload.get("max_items") or 64),
+            )
+        if cmd == "workflow-python-stream-send":
+            return svc.workflow_python_stream_send(
+                stream_id=str(payload.get("stream_id") or ""),
+                message=dict(payload.get("message") or {}),
+            )
+        if cmd == "workflow-python-stream-close":
+            return svc.workflow_python_stream_close(stream_id=str(payload.get("stream_id") or ""))
         if cmd == "get-registration":
             return svc.get_registration(str(payload.get("engine_id") or ""))
         if cmd == "shutdown":

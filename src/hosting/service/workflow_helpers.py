@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..sandbox.python_runtime import HostedPythonRuntimeManager
+from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
@@ -26,6 +26,14 @@ class WorkflowHelperMixin:
             registry = HostedProcessPoolRegistry()
             setattr(self, "_workflow_python_runtime_pools", registry)
         return registry
+
+    def _workflow_python_stream_base(self) -> HostedPythonRuntimeBase:
+        base = getattr(self, "_workflow_python_stream_base_runtime", None)
+        if base is None:
+            base = HostedPythonRuntimeBase(self.hosting_root)
+            base.pool_registry = self._workflow_python_pool_registry()
+            setattr(self, "_workflow_python_stream_base_runtime", base)
+        return base
 
     @staticmethod
     def _workflow_python_profile(profile: str) -> str:
@@ -664,6 +672,86 @@ class WorkflowHelperMixin:
             return {"status": "not_found", "request_id": str(request_id or "").strip(), "profile": prof, "environment_key": None}
         out = self._workflow_python_pool_registry().request_status(self._workflow_python_pool_key(effective_key), request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key}
+
+    def workflow_python_stream_open(
+        self,
+        *,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        python: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        req = dict(request or {})
+        py = dict(python or req.get("python") or {})
+        env = self.workflow_python_environment_spec(
+            profile=prof,
+            environment_name=environment_name,
+            python=py,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(env.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        if requested_key and requested_key != derived_key:
+            return {
+                "status": "error",
+                "reason": "environment_key_mismatch",
+                "environment_key": requested_key,
+                "derived_environment_key": derived_key,
+            }
+        effective_key = requested_key or derived_key
+        request_id = str(req.get("request_id") or "").strip() or f"workflow-python-{prof}-{int(time.time() * 1000)}"
+        base = self._workflow_python_stream_base()
+        opened = base.stream_open(
+            environment_key=effective_key,
+            request_id=request_id,
+            profile=prof,
+            desired_capacity=capacity,
+            factory=lambda _key, cap: self._workflow_python_worker_slot(
+                engine_id=str(engine_id or self.workflow_python_default_engine_id(environment_key=effective_key)),
+                environment_key=effective_key,
+                capacity=cap,
+            ),
+        )
+        if str(opened.get("status") or "") != "ok":
+            return {**dict(opened or {}), "profile": prof, "environment_key": effective_key}
+        if prof == "node":
+            pending = self._workflow_python_node_unavailable(request={**req, "request_id": request_id}, environment_key=effective_key, engine_id=engine_id)
+            base.stream_emit(
+                stream_id=str(opened.get("stream_id") or ""),
+                event_type="error",
+                payload={"error": dict(pending.get("error") or {}), "response": pending},
+            )
+            base.stream_emit(
+                stream_id=str(opened.get("stream_id") or ""),
+                event_type="done",
+                payload={"status": "error", "reason": pending.get("reason")},
+            )
+            base.finish_request(
+                environment_key=effective_key,
+                request_id=request_id,
+                status="error",
+                reason=str(pending.get("reason") or "workflow_python_node_profile_not_implemented"),
+            )
+        return {
+            **dict(opened or {}),
+            "profile": prof,
+            "environment_key": effective_key,
+            "environment": dict(env.get("environment") or {}),
+        }
+
+    def workflow_python_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        return dict(self._workflow_python_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
+
+    def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return dict(self._workflow_python_stream_base().stream_send(stream_id=stream_id, message=dict(message or {})))
+
+    def workflow_python_stream_close(self, *, stream_id: str) -> Dict[str, Any]:
+        return dict(self._workflow_python_stream_base().stream_close(stream_id=stream_id))
 
     @staticmethod
     def workflow_js_helper_default_sandbox_policy() -> Dict[str, Any]:

@@ -38,6 +38,10 @@ _WORKFLOW_PYTHON_COMMANDS = {
     "workflow-python-set-capacity",
     "workflow-python-cancel-request",
     "workflow-python-request-status",
+    "workflow-python-stream-open",
+    "workflow-python-stream-recv",
+    "workflow-python-stream-send",
+    "workflow-python-stream-close",
 }
 
 _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
@@ -46,6 +50,7 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-verify-install-receipt",
     "workflow-python-resources",
     "workflow-python-request-status",
+    "workflow-python-stream-recv",
 }
 
 _WORKFLOW_JS_COMMANDS = {
