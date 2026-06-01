@@ -52,6 +52,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Extended Phase 7 compatibility aliases: old JS helper resources/capacity/cancel calls now preserve JS-specific fields while attaching `workflow_runtime_kind=workflow_js`, `environment_key`, and `workflow_pool` metadata for annotated registrations.
 - Marked old Python/JS helper command names as compatibility aliases in `HOSTING_CLIENT_BREAKING_CHANGES.md`; new integrations should use `workflow-python-*` and `workflow-js-*`.
 - Extended the workflow Python runtime environment wrapper to return a stable `install_status` summary for prepare/lock/verify/install/receipt operations, so workflow callers do not need to parse toolbox metadata directly.
+- Completed the tracked Phase 7 facade/alias checklist items; full old JS helper file removal remains a later cleanup phase after dependent migration.
 
 ## Key Design Decisions So Far
 

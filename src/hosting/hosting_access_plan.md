@@ -320,10 +320,10 @@ Explicitly out of scope for this epic unless separately requested:
 
 - [x] Rewire old `workflow_js_helper` APIs as compatibility aliases.
 - [x] Align JS helper resource/capacity/cancel response shape with workflow Python.
-- [ ] Keep JS-specific compatibility fields until clients migrate.
+- [x] Keep JS-specific compatibility fields until clients migrate.
 - [x] Add JS helper compatibility tests.
 - [x] Add new JS facade tests.
-- [ ] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
+- [x] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Phase 8: CLI And Interactive CLI Compatibility
 
