@@ -138,3 +138,30 @@ def test_workflow_python_no_package_env_selects_venv(tmp_path: Path) -> None:
 
     assert selected["python_executable"] != "python-bootstrap"
     assert selected["python_source"] == "venv"
+
+
+def test_workflow_python_runtime_gc_removes_unreferenced_runtime_envs(tmp_path: Path) -> None:
+    manager = HostedPythonRuntimeManager(tmp_path)
+    keep = manager.realize_environment(
+        environment_name="workflow-python-helper",
+        python_policy={"package_pins": {"keep": "1.0.0"}},
+    )["environment"]
+    stale = manager.realize_environment(
+        environment_name="workflow-python-helper",
+        python_policy={"package_pins": {"stale": "1.0.0"}},
+    )["environment"]
+
+    dry = manager.gc_runtime_environments(
+        referenced_environment_keys=[str(keep["venv_key"])],
+        dry_run=True,
+    )
+    assert str(stale["venv_key"]) in dry["stale_environment_keys"]
+    assert Path(stale["venv_path"]).exists()
+
+    out = manager.gc_runtime_environments(
+        referenced_environment_keys=[str(keep["venv_key"])],
+    )
+
+    assert out["removed_environment_keys"] == [str(stale["venv_key"])]
+    assert Path(keep["venv_path"]).exists()
+    assert not Path(stale["venv_path"]).exists()

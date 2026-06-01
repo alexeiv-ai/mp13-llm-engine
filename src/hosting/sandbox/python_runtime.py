@@ -5,8 +5,9 @@ terminology so new workflow APIs do not need to expose toolbox IDs or tool keys.
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from ..toolbox.environment import ToolboxEnvironmentManager
 from ..toolbox.bundle_models import ToolboxEnvironmentSpec
@@ -266,6 +267,59 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             "environment": spec.to_dict(),
             "python_executable": executable,
             "python_source": "bootstrap" if bootstrap and executable == bootstrap else "venv",
+        }
+
+    def gc_runtime_environments(
+        self,
+        *,
+        referenced_environment_keys: Optional[Sequence[str]] = None,
+        referenced_environment_paths: Optional[Sequence[str]] = None,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        root = self.environment_manager.runtime_environments_root
+        referenced_keys = {
+            _clean(item)
+            for item in list(referenced_environment_keys or [])
+            if _clean(item)
+        }
+        referenced_paths: set[str] = set()
+        for raw in list(referenced_environment_paths or []):
+            value = _clean(raw)
+            if not value:
+                continue
+            try:
+                resolved = Path(value).expanduser().resolve()
+            except Exception:
+                continue
+            try:
+                if resolved == root or root in resolved.parents:
+                    referenced_paths.add(str(resolved))
+            except Exception:
+                continue
+        stale: list[str] = []
+        removed: list[str] = []
+        if root.exists():
+            for child in root.iterdir():
+                if not child.is_dir():
+                    continue
+                try:
+                    resolved_child = str(child.expanduser().resolve())
+                except Exception:
+                    resolved_child = ""
+                if child.name in referenced_keys or (resolved_child and resolved_child in referenced_paths):
+                    continue
+                stale.append(child.name)
+                if not dry_run:
+                    shutil.rmtree(child, ignore_errors=True)
+                    removed.append(child.name)
+        return {
+            "status": "ok",
+            "environment_root_kind": "runtime_envs",
+            "environment_root": str(root),
+            "dry_run": bool(dry_run),
+            "referenced_environment_keys": sorted(referenced_keys),
+            "stale_environment_keys": sorted(stale),
+            "removed_environment_keys": sorted(removed),
         }
 
 

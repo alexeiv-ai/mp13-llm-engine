@@ -68,6 +68,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added shared runtime response helpers for registration environment metadata, resource responses, and cancellation results in `hosting.sandbox.runtime_base`.
 - Centralized base IPC message family names (`hello`, `rpc_call`, stream open/recv/send/close, `shutdown`) in `hosting.sandbox.runtime_base`.
 - Updated `sandbox/SANDBOX_ARCHITECTURE.md` with the new internal runtime bases and the current workflow Python/JS facade status.
+- Added `HostedPythonRuntimeManager.gc_runtime_environments(...)` for dry-run or destructive cleanup of unreferenced `<hosting_root>/runtime_envs` entries by environment key/path.
 
 ## Key Design Decisions So Far
 
