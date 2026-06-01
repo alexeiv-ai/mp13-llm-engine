@@ -476,7 +476,7 @@ class WorkflowHelperMixin:
                 "environment": dict(env.get("environment") or {}),
                 "ensure": dict(ensured or {}),
             }
-        spawned = self.spawn_workflow_python_helper(
+        spawned = self._spawn_workflow_python_helper_worker(
             engine_id=eid,
             python_executable=python_executable,
             capacity=capacity,
@@ -872,6 +872,40 @@ class WorkflowHelperMixin:
         return self._attach_workflow_js_alias_pool(engine_id=eid, result=result)
 
     def spawn_workflow_python_helper(
+        self,
+        *,
+        engine_id: str = "workflow-python-helper",
+        python_executable: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        python_policy: Dict[str, Any] = {}
+        if python_executable:
+            python_policy["bootstrap_python_executable"] = str(python_executable or "").strip()
+        ensured = self.ensure_workflow_python(
+            profile="helper",
+            environment_name="workflow-python-helper",
+            python=python_policy,
+            python_executable=python_executable,
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            engine_id=engine_id,
+            worker_profile_class=worker_profile_class,
+        )
+        spawn_result = dict(ensured.get("spawn") or {})
+        if spawn_result:
+            return {
+                **spawn_result,
+                "workflow_runtime_kind": "workflow_python",
+                "workflow_profile": "helper",
+                "environment_key": ensured.get("environment_key"),
+                "environment": dict(ensured.get("environment") or {}),
+                "workflow_ensure": ensured,
+            }
+        return ensured
+
+    def _spawn_workflow_python_helper_worker(
         self,
         *,
         engine_id: str = "workflow-python-helper",

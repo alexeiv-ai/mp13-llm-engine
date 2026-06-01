@@ -80,6 +80,10 @@ def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, 
     assert out["env"]["MP13_WORKFLOW_PYTHON_HELPER_CAPACITY"] == "3"
     assert out["worker_profile_class"] == "generic"
     assert out["executor_kind"] == "workflow_python_helper"
+    assert out["workflow_runtime_kind"] == "workflow_python"
+    assert out["workflow_profile"] == "helper"
+    assert out["environment_key"]
+    assert out["workflow_ensure"]["outcome"] == "spawned"
     assert out["sandbox_policy"]["sandbox"]["profile"] == "workflow_python_helper_v1"
     assert out["sandbox_policy"]["sandbox"]["network"]["mode"] == "disabled"
     assert out["sandbox_policy"]["sandbox"]["brokered_io"] == {
@@ -768,7 +772,7 @@ def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path:
         seen.update(kwargs)
         return {"status": "ok", "engine_id": kwargs["engine_id"]}
 
-    monkeypatch.setattr(svc, "spawn_workflow_python_helper", fake_spawn)
+    monkeypatch.setattr(svc, "_spawn_workflow_python_helper_worker", fake_spawn)
     monkeypatch.setattr(svc, "workflow_python_helper_resources", lambda **_kwargs: {"status": "ok"})
 
     out = svc.ensure_workflow_python(
@@ -854,7 +858,7 @@ def test_workflow_python_facade_isolates_pools_by_environment_key(tmp_path: Path
         spawned.append(dict(kwargs))
         return {"status": "ok", "engine_id": kwargs["engine_id"]}
 
-    monkeypatch.setattr(svc, "spawn_workflow_python_helper", fake_spawn)
+    monkeypatch.setattr(svc, "_spawn_workflow_python_helper_worker", fake_spawn)
 
     first = svc.ensure_workflow_python(
         profile="helper",

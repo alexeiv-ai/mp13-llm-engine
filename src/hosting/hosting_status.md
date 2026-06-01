@@ -54,6 +54,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Extended the workflow Python runtime environment wrapper to return a stable `install_status` summary for prepare/lock/verify/install/receipt operations, so workflow callers do not need to parse toolbox metadata directly.
 - Completed the tracked Phase 7 facade/alias checklist items; full old JS helper file removal remains a later cleanup phase after dependent migration.
 - Added shared pool request-status/progress snapshot plumbing and workflow-named `workflow-python-request-status` / `workflow-js-request-status` surfaces. These report request lifetime metrics plus latest progress once stream/progress events are recorded.
+- Rewired old `spawn_workflow_python_helper` service calls to enter through `ensure_workflow_python(profile=helper)`, with raw helper worker spawning kept behind a private service helper for compatibility.
 
 ## Key Design Decisions So Far
 
