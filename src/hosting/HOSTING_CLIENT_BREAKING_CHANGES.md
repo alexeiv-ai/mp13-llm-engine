@@ -28,6 +28,7 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
   - New: `workflow-python-verify-environment`.
   - New: `workflow-python-install-environment` with `allow_execution=true` only from an explicit host environment-management path.
   - New: `workflow-python-verify-install-receipt`.
+  - New result field: `install_status` summarizes plan/lock/verification/execution/receipt state without requiring clients to parse raw metadata.
 
 - Worker/pool lifecycle:
   - Old: `spawn-workflow-python-helper`.

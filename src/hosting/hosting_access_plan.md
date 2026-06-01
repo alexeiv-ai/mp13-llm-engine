@@ -235,7 +235,7 @@ Explicitly out of scope for this epic unless separately requested:
 - [x] Ensure dependency installation is never triggered from workflow execution code.
 - [x] Require explicit host environment-management API calls for dependency install.
 - [x] Make package pins/imports either enforced by selected verified environment or explicitly reported as declarative/unverified.
-- [ ] Persist install and receipt status with environment metadata.
+- [x] Persist install and receipt status with environment metadata.
 - [ ] Add GC support for unreferenced `runtime_envs` entries by environment key.
 - [x] Add tests for no-package runtime env, pinned-package env identity, lock/receipt metadata, and runtime Python selection.
 

@@ -122,6 +122,43 @@ class HostedPythonRuntimeManager:
             "lineage": [spec.environment_name],
         }
 
+    def _install_status_summary(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        row = dict(metadata or {})
+        plan = dict(row.get("install_plan") or {})
+        lock = dict(row.get("install_lock") or {})
+        lock_verification = dict(row.get("install_lock_verification") or {})
+        execution = dict(row.get("install_execution") or {})
+        receipt = dict(row.get("install_receipt") or {})
+        receipt_verification = dict(row.get("install_receipt_verification") or {})
+        resolved_lock = dict(row.get("resolved_install_lock") or {})
+        return {
+            "install_plan_status": str(plan.get("status") or ("planned" if plan else "missing")),
+            "install_lock_status": str(lock.get("status") or "missing"),
+            "install_lock_verification_status": str(lock_verification.get("status") or "not_checked"),
+            "install_execution_status": str(execution.get("status") or "not_executed"),
+            "install_receipt_status": str(receipt.get("status") or "missing"),
+            "install_receipt_verification_status": str(receipt_verification.get("status") or "not_checked"),
+            "resolved_lock_status": str(resolved_lock.get("status") or "missing"),
+            "install_lock_hash": str(lock.get("install_lock_hash") or lock_verification.get("install_lock_hash") or "").strip() or None,
+            "resolved_lock_hash": str(resolved_lock.get("resolved_lock_hash") or lock_verification.get("resolved_lock_hash") or "").strip() or None,
+            "receipt_packages_hash": str(receipt.get("packages_hash") or "").strip() or None,
+            "reason": str(
+                receipt_verification.get("reason")
+                or execution.get("reason")
+                or lock_verification.get("reason")
+                or ""
+            ).strip()
+            or None,
+        }
+
+    def _with_install_summary(self, *, status: str, environment: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "status": status,
+            "environment": dict(environment or {}),
+            "metadata": dict(metadata or {}),
+            "install_status": self._install_status_summary(metadata),
+        }
+
     def realize_environment(
         self,
         *,
@@ -140,7 +177,7 @@ class HostedPythonRuntimeManager:
             sandbox_profile_id=_clean(workflow_id) or "workflow_python",
             tool_keys=[],
         )
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def prepare_install(
         self,
@@ -160,32 +197,32 @@ class HostedPythonRuntimeManager:
             sandbox_profile_id=_clean(workflow_id) or "workflow_python",
             tool_keys=[],
         )
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def lock_install(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.lock_install_plan(spec)
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def verify_install_lock(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.verify_install_lock(spec)
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def resolve_install_lock(self, *, environment: Dict[str, Any], allow_resolution: bool = False) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.resolve_install_lock(spec, allow_resolution=bool(allow_resolution))
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def execute_install(self, *, environment: Dict[str, Any], allow_execution: bool = False) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.execute_install_plan(spec, allow_execution=bool(allow_execution))
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def verify_install_receipt(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.verify_install_receipt(spec)
-        return {"status": "ok", "environment": spec.to_dict(), "metadata": metadata}
+        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def select_runtime_python(
         self,

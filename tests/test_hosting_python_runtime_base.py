@@ -64,12 +64,21 @@ def test_workflow_python_realize_and_prepare_lock_verify(tmp_path: Path) -> None
     prepared = manager.prepare_install(python_policy=_policy(), package_id="pkg", workflow_id="wf")
     assert prepared["metadata"]["install_plan"]["planned_packages"] == ["demo==1.0.0"]
     assert prepared["metadata"]["install_plan"]["can_execute_online"] is False
+    assert prepared["install_status"]["install_plan_status"] == "planned"
+    assert prepared["install_status"]["install_lock_status"] == "missing"
 
     locked = manager.lock_install(environment=prepared["environment"])
     assert locked["metadata"]["install_lock"]["status"] == "locked"
+    assert locked["install_status"]["install_lock_status"] == "locked"
+    assert locked["install_status"]["install_lock_hash"]
 
     verified = manager.verify_install_lock(environment=prepared["environment"])
     assert verified["metadata"]["install_lock_verification"]["status"] == "ok"
+    assert verified["install_status"]["install_lock_verification_status"] == "ok"
+
+    receipt = manager.verify_install_receipt(environment=prepared["environment"])
+    assert receipt["install_status"]["install_receipt_verification_status"] == "missing"
+    assert receipt["install_status"]["reason"] in {"install_receipt_missing", "install_lock_missing"}
 
 
 def test_workflow_python_selects_bootstrap_until_dependency_env_verified(tmp_path: Path) -> None:

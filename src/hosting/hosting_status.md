@@ -51,6 +51,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Started Phase 7 by adding `workflow_js(profile=helper)` compatibility facade surfaces in service, daemon, direct CLI, channel, RBAC, and tests. The JS facade derives environment keys from environment name, profile, Node/runtime identity, dependency hints, and sandbox policy hash, then reports environment-keyed workflow pool metadata.
 - Extended Phase 7 compatibility aliases: old JS helper resources/capacity/cancel calls now preserve JS-specific fields while attaching `workflow_runtime_kind=workflow_js`, `environment_key`, and `workflow_pool` metadata for annotated registrations.
 - Marked old Python/JS helper command names as compatibility aliases in `HOSTING_CLIENT_BREAKING_CHANGES.md`; new integrations should use `workflow-python-*` and `workflow-js-*`.
+- Extended the workflow Python runtime environment wrapper to return a stable `install_status` summary for prepare/lock/verify/install/receipt operations, so workflow callers do not need to parse toolbox metadata directly.
 
 ## Key Design Decisions So Far
 
