@@ -159,7 +159,7 @@ Explicitly out of scope for this epic unless separately requested:
   - Optional for helper profiles.
   - Use bounded stream queues and explicit recv limits.
 
-- [ ] Define a common event envelope for streaming responses.
+- [x] Define a common event envelope for streaming responses.
   - `progress`
   - `stdout`
   - `stderr`
@@ -171,7 +171,7 @@ Explicitly out of scope for this epic unless separately requested:
   - `canceled`
   - `done`
 
-- [ ] Define stream cancellation semantics.
+- [x] Define stream cancellation semantics.
   - `stream_send` supports `{"action":"cancel","request_id":"..."}`.
   - `stream_close` closes client stream and requests stop.
   - Host-level cancel still works by `environment_key + request_id`.

@@ -199,6 +199,7 @@ Minimal JS ensure payload:
 
 - [ ] Start tolerating partial progress and terminal events as separate records.
 - [x] Start tolerating node-profile pending-worker envelopes during rollout.
+  - Shared stream event type names are now centralized in `hosting.sandbox.runtime_base.HOSTED_STREAM_EVENT_TYPES`; cancel control messages use `{"action":"cancel","request_id":"..."}`.
 
 ## Planned Migration: CLI And Interactive CLI
 

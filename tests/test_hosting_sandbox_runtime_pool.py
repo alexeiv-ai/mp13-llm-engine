@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from hosting.sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot
+from hosting.sandbox.runtime_base import (
+    HOSTED_STREAM_EVENT_TYPES,
+    HostedPoolKey,
+    HostedRequestLifecycle,
+    HostedStreamEvent,
+    HostedWorkerSlot,
+    hosted_stream_cancel_message,
+)
 from hosting.sandbox.runtime_pool import HostedProcessPoolRegistry
 
 
@@ -111,6 +118,19 @@ def test_pool_records_progress_snapshot_and_request_status() -> None:
     assert status["source"] == "active"
     assert status["request"]["stream_event_count"] == 1
     assert status["request"]["latest_progress"]["payload"]["progress_percent"] == 50
+
+
+def test_common_stream_event_contract_and_cancel_message() -> None:
+    assert "progress" in HOSTED_STREAM_EVENT_TYPES
+    assert "artifact" in HOSTED_STREAM_EVENT_TYPES
+    assert "done" in HOSTED_STREAM_EVENT_TYPES
+
+    event = HostedStreamEvent(type="custom-debug", request_id="req-1", payload={"message": "debug"}).to_dict()
+    cancel = hosted_stream_cancel_message("req-1", reason="user")
+
+    assert event["type"] == "log"
+    assert event["payload"] == {"message": "debug"}
+    assert cancel == {"action": "cancel", "request_id": "req-1", "reason": "user"}
 
 
 def test_request_status_checks_recent_finished_requests() -> None:

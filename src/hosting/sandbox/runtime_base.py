@@ -52,6 +52,21 @@ def _string_map(payload: Any) -> Dict[str, str]:
     return dict(sorted(out.items()))
 
 
+HOSTED_STREAM_EVENT_TYPES = [
+    "started",
+    "progress",
+    "stdout",
+    "stderr",
+    "log",
+    "artifact",
+    "metric",
+    "result",
+    "error",
+    "canceled",
+    "done",
+]
+
+
 def normalize_sandbox_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return WorkerSandboxPolicy.from_mapping(dict(policy or {})).to_dict()
 
@@ -243,13 +258,24 @@ class HostedStreamEvent:
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:
+        event_type = _clean(self.type) or "event"
+        if event_type not in HOSTED_STREAM_EVENT_TYPES:
+            event_type = "log"
         return {
-            "type": _clean(self.type) or "event",
+            "type": event_type,
             "request_id": _clean(self.request_id),
             "sequence": max(0, int(self.sequence or 0)),
             "timestamp": float(self.timestamp),
             "payload": dict(self.payload or {}),
         }
+
+
+def hosted_stream_cancel_message(request_id: str, *, reason: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "action": "cancel",
+        "request_id": _clean(request_id),
+        "reason": _clean(reason) or None,
+    }
 
 
 @dataclass
@@ -293,6 +319,8 @@ __all__ = [
     "HostedRuntimeIdentity",
     "HostedStreamEvent",
     "HostedWorkerSlot",
+    "HOSTED_STREAM_EVENT_TYPES",
+    "hosted_stream_cancel_message",
     "normalize_sandbox_policy",
     "sandbox_policy_hash",
     "stable_hash",

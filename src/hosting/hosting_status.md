@@ -61,6 +61,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Marked `workflow_python_helper_ipc.py` as a temporary compatibility worker to remove or reduce after dependent callers complete migration to workflow Python facade APIs.
 - Reconciled plan tracking for implemented foundations: temporary Python helper compatibility, workflow JS facade, generic/model separation, persisted workflow environment identity, environment-keyed pool registry, one-worker-per-key scheduling, resource reporting, capacity adjustment, and cancellation.
 - Added an explicit node-profile artifact-store placeholder in the workflow Python contract envelope so clients can distinguish "no artifacts" from "artifact store not wired yet."
+- Centralized the shared stream event type list and cancel control message shape in `hosting.sandbox.runtime_base`, giving future concrete sandboxes one event vocabulary.
 
 ## Key Design Decisions So Far
 
