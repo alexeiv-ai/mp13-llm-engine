@@ -450,7 +450,7 @@ class EngineHostDaemon:
     @staticmethod
     def _operation_target_engine_id(command: str, payload: Dict[str, Any]) -> Optional[str]:
         cmd = str(command or "").strip()
-        if cmd not in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "spawn-workflow-python-helper", "unload-model", "shutdown", "remove-registration"}:
+        if cmd not in {"connect-from-config", "spawn", "unload-model", "shutdown", "remove-registration"}:
             return None
         engine_id = str((payload or {}).get("engine_id") or "").strip()
         return engine_id or None
@@ -1312,7 +1312,7 @@ class EngineHostDaemon:
     def _operation_cancel_teardown(self, op: Dict[str, Any]) -> Dict[str, Any]:
         engine_id = str((op or {}).get("target_engine_id") or "").strip()
         command = str((op or {}).get("command") or "").strip()
-        if command not in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "spawn-workflow-python-helper"}:
+        if command not in {"connect-from-config", "spawn"}:
             return {"attempted": False, "status": "not_applicable", "engine_id": engine_id or None}
         if not engine_id:
             return {"attempted": False, "status": "target_engine_id_unknown", "engine_id": None}
@@ -1387,7 +1387,7 @@ class EngineHostDaemon:
             task = self._operation_tasks_by_id.get(op_id)
         command = str(op.get("command") or "").strip()
         active_task = bool(task is not None and not task.done())
-        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn", "spawn-workflow-js-helper", "spawn-workflow-python-helper"})
+        wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn"})
         task_cancel_requested = bool(active_task and not wait_for_service_result)
         if task_cancel_requested:
             task.cancel()
@@ -2081,34 +2081,6 @@ class EngineHostDaemon:
                 tool_access=dict(payload.get("tool_access") or {}),
                 capabilities=dict(payload.get("capabilities") or {}),
             )
-        if cmd == "spawn-workflow-js-helper":
-            return svc.spawn_workflow_js_helper(
-                engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
-                node_executable=payload.get("node_executable"),
-                capacity=int(payload.get("capacity") or 1),
-                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
-                worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
-            )
-        if cmd == "spawn-workflow-python-helper":
-            return svc.spawn_workflow_python_helper(
-                engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
-                python_executable=payload.get("python_executable"),
-                capacity=int(payload.get("capacity") or 1),
-                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
-                worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
-            )
-        if cmd == "workflow-js-helper-resources":
-            return svc.workflow_js_helper_resources(engine_id=str(payload.get("engine_id") or "workflow-js-helper"))
-        if cmd == "workflow-js-helper-set-capacity":
-            return svc.set_workflow_js_helper_capacity(
-                engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
-                capacity=int(payload.get("capacity") or 1),
-            )
-        if cmd == "workflow-js-helper-cancel-request":
-            return svc.cancel_workflow_js_helper_request(
-                engine_id=str(payload.get("engine_id") or "workflow-js-helper"),
-                request_id=str(payload.get("request_id") or ""),
-            )
         if cmd == "workflow-js-environment-spec":
             return svc.workflow_js_environment_spec(
                 profile=str(payload.get("profile") or "helper"),
@@ -2137,6 +2109,17 @@ class EngineHostDaemon:
                 node=dict(payload.get("node") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
             )
+        if cmd == "workflow-js-execute":
+            return svc.execute_workflow_js(
+                profile=str(payload.get("profile") or "helper"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                node=dict(payload.get("node") or {}),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
         if cmd == "workflow-js-set-capacity":
             return svc.set_workflow_js_capacity(
                 profile=str(payload.get("profile") or "helper"),
@@ -2156,18 +2139,6 @@ class EngineHostDaemon:
                 profile=str(payload.get("profile") or "helper"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
-                request_id=str(payload.get("request_id") or ""),
-            )
-        if cmd == "workflow-python-helper-resources":
-            return svc.workflow_python_helper_resources(engine_id=str(payload.get("engine_id") or "workflow-python-helper"))
-        if cmd == "workflow-python-helper-set-capacity":
-            return svc.set_workflow_python_helper_capacity(
-                engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
-                capacity=int(payload.get("capacity") or 1),
-            )
-        if cmd == "workflow-python-helper-cancel-request":
-            return svc.cancel_workflow_python_helper_request(
-                engine_id=str(payload.get("engine_id") or "workflow-python-helper"),
                 request_id=str(payload.get("request_id") or ""),
             )
         if cmd == "workflow-python-environment-spec":

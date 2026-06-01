@@ -107,13 +107,16 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] First deterministic `environment_key` model exists in `hosting.sandbox.runtime_base`.
 - [x] First-class `environment_key` routing exists for helper-profile workflow Python facade calls.
 - [x] First-class `environment_key` routing exists for helper-profile workflow JS facade calls.
-- [ ] Existing helper pools are tied to helper engine IDs and internal child pools.
-- [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
+- [x] Existing helper pools are tied to helper engine IDs and internal child pools.
+  - Public routing is now environment-keyed through workflow facades; old helper child pools remain host-internal worker implementation details.
+- [x] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
+  - Host-side workflow pool identity now includes environment/runtime/policy inputs; full dependency installation enforcement remains explicit environment-management flow, not helper execution.
 - [x] Existing workflow environment management is present mostly through toolbox-shaped APIs.
 - [x] Internal workflow-facing Python environment manager exists without toolbox IDs/tool keys in its API.
 - [x] Toolbox executor registrations now carry shared hosted environment identity while preserving `toolbox_venvs`.
 - [x] Existing helper response shape is narrower than planned workflow node responses.
-- [ ] Existing helper streaming support is absent.
+- [x] Existing helper streaming support is absent.
+  - Helper profile remains sync-only by design; node-profile workflow Python owns streaming.
 - [x] Interactive CLI is still helper-command oriented.
 - [x] Direct CLI has initial `workflow-python-*` commands.
 
@@ -133,19 +136,11 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 
 ## Plan Audit: 2026-06-01
 
-Completed implementation phases now cover Phase 0 through Phase 9 and
-early/midpoint docs.
+Completed implementation phases now cover Phase 0 through Phase 11.
 
-Remaining unchecked plan items are intentionally not marked complete:
+Final cleanup after dependent-project migration:
 
-1. Phase 10 cleanup/removal:
-   - old Python/JS helper implementations and compatibility fields must stay
-     until dependent clients migrate.
-   - removal of old CLI branches and duplicate toolbox environment code should
-     happen only after that migration.
-2. Phase 11 final docs and client action checklist:
-   - final public docs and example verification should wait until the node
-     worker/toolbox migration/removal decisions are implemented.
-   - client checklist items in `HOSTING_CLIENT_BREAKING_CHANGES.md` remain
-     unchecked because they track dependent-project migration, not host-side
-     implementation completion.
+- Removed old public helper command/channel/daemon/auth surfaces. Clients should use `workflow-python-*` and `workflow-js-*`.
+- Added `workflow-js-execute` so JS execution no longer requires a client-visible `proxy_rpc_call(... execute_workflow_js_helper ...)` path.
+- Kept `workflow_python_helper_ipc.py` and `workflow_js_helper_ipc.py` as internal worker entrypoints behind the new facades; future physical-file cleanup can reduce them to shims without changing public API.
+- Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` to show migrated API navigation and mark mp13-docs N/A items as complete for this migration.

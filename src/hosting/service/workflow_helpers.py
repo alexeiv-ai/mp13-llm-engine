@@ -491,6 +491,93 @@ class WorkflowHelperMixin:
         out = self._workflow_python_pool_registry().request_status(self._workflow_js_pool_key(effective_key), request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key}
 
+    def execute_workflow_js(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-js-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        node: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        req = dict(request or {})
+        ensured = self.ensure_workflow_js(
+            profile=prof,
+            environment_name=environment_name,
+            environment_key=environment_key,
+            node=dict(node or req.get("node") or {}),
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            engine_id=engine_id,
+        )
+        if str(ensured.get("status") or "") != "ok":
+            return ensured
+        try:
+            reg = self.get_registration(str(ensured.get("engine_id") or ""))
+            if reg:
+                self._wait_for_worker_rpc_ready(reg, timeout_seconds=5.0, poll_interval_seconds=0.05)
+        except Exception:
+            pass
+        pool = self._workflow_python_pool_registry().get_or_create(
+            self._workflow_js_pool_key(str(ensured.get("environment_key") or "")),
+            desired_capacity=capacity,
+        )
+        lifecycle = HostedRequestLifecycle(
+            request_id=str(req.get("request_id") or "").strip() or "workflow-js-sync",
+            environment_key=str(ensured.get("environment_key") or ""),
+            sandbox_kind="workflow_js",
+            profile=prof,
+            engine_id=str(ensured["engine_id"]),
+            submitted_at=time.time(),
+        )
+        scheduled = pool.submit_request(
+            lifecycle,
+            factory=lambda _key, cap: self._workflow_js_worker_slot(
+                engine_id=str(ensured["engine_id"]),
+                environment_key=str(ensured.get("environment_key") or ""),
+                capacity=cap,
+            ),
+        )
+        if str(scheduled.get("status") or "") != "ok":
+            return {
+                "status": "error",
+                "ok": False,
+                "profile": prof,
+                "engine_id": str(ensured["engine_id"]),
+                "environment_key": str(ensured.get("environment_key") or ""),
+                "reason": str(scheduled.get("reason") or "capacity_exceeded"),
+                "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
+            }
+        out = self.proxy_rpc_call(
+            engine_id=str(ensured["engine_id"]),
+            method="execute_workflow_js_helper",
+            params={**req, "_workflow_js_facade_execute": True},
+            timeout_seconds=float(dict(req.get("limits") or {}).get("timeout_ms") or 30000) / 1000.0 + 5.0,
+        )
+        result = dict(out.get("result") or out or {})
+        finished = pool.finish_request(
+            lifecycle.request_id,
+            status="ok" if bool(result.get("ok", False)) else "error",
+            reason=str(result.get("reason") or "") or None,
+        )
+        return {
+            "status": "ok" if bool(result.get("ok", False)) else "error",
+            "ok": bool(result.get("ok", False)),
+            "profile": prof,
+            "engine_id": str(ensured["engine_id"]),
+            "environment_key": str(ensured.get("environment_key") or ""),
+            "output": result.get("result"),
+            "result": result,
+            "metrics": {
+                "workflow_pool": pool.resources(),
+                "request": dict(finished.get("request") or lifecycle.to_dict()),
+            },
+        }
+
     def ensure_workflow_python(
         self,
         *,

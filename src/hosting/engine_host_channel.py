@@ -1534,110 +1534,6 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def spawn_workflow_js_helper(
-        self,
-        *,
-        engine_id: str = "workflow-js-helper",
-        node_executable: Optional[str] = None,
-        capacity: int = 1,
-        sandbox_policy: Optional[Dict[str, Any]] = None,
-        worker_profile_class: str = "generic",
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "spawn-workflow-js-helper",
-            {
-                "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
-                "node_executable": str(node_executable or "").strip() or None,
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
-            },
-        )
-        return dict(res or {})
-
-    def workflow_js_helper_resources(self, *, engine_id: str = "workflow-js-helper") -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-js-helper-resources",
-            {"engine_id": str(engine_id or "").strip() or "workflow-js-helper"},
-        )
-        return dict(res or {})
-
-    def set_workflow_js_helper_capacity(self, *, engine_id: str = "workflow-js-helper", capacity: int) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-js-helper-set-capacity",
-            {
-                "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
-                "capacity": max(1, min(int(capacity or 1), 256)),
-            },
-        )
-        return dict(res or {})
-
-    def cancel_workflow_js_helper_request(self, *, engine_id: str = "workflow-js-helper", request_id: str) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-js-helper-cancel-request",
-            {
-                "engine_id": str(engine_id or "").strip() or "workflow-js-helper",
-                "request_id": str(request_id or "").strip(),
-            },
-        )
-        return dict(res or {})
-
-    def spawn_workflow_python_helper(
-        self,
-        *,
-        engine_id: str = "workflow-python-helper",
-        python_executable: Optional[str] = None,
-        capacity: int = 1,
-        sandbox_policy: Optional[Dict[str, Any]] = None,
-        worker_profile_class: str = "generic",
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-python-ensure",
-            {
-                "profile": "helper",
-                "environment_name": "workflow-python-helper",
-                "environment_key": None,
-                "python": (
-                    {"bootstrap_python_executable": str(python_executable or "").strip()}
-                    if str(python_executable or "").strip()
-                    else {}
-                ),
-                "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
-                "python_executable": str(python_executable or "").strip() or None,
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-                "worker_profile_class": str(worker_profile_class or "generic").strip() or "generic",
-            },
-        )
-        return dict(res or {})
-
-    def workflow_python_helper_resources(self, *, engine_id: str = "workflow-python-helper") -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-python-helper-resources",
-            {"engine_id": str(engine_id or "").strip() or "workflow-python-helper"},
-        )
-        return dict(res or {})
-
-    def set_workflow_python_helper_capacity(self, *, engine_id: str = "workflow-python-helper", capacity: int) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-python-helper-set-capacity",
-            {
-                "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
-                "capacity": max(1, min(int(capacity or 1), 256)),
-            },
-        )
-        return dict(res or {})
-
-    def cancel_workflow_python_helper_request(self, *, engine_id: str = "workflow-python-helper", request_id: str) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-python-helper-cancel-request",
-            {
-                "engine_id": str(engine_id or "").strip() or "workflow-python-helper",
-                "request_id": str(request_id or "").strip(),
-            },
-        )
-        return dict(res or {})
-
     def workflow_python_environment_spec(
         self,
         *,
@@ -1902,6 +1798,33 @@ class EngineHostControlChannel:
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "node": dict(node or {}),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def execute_workflow_js(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-js-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        node: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-execute",
+            {
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_name": str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "node": dict(node or {}),
+                "capacity": max(1, min(int(capacity or 1), 256)),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
             },
         )

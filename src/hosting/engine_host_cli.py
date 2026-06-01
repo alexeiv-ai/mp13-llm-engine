@@ -762,20 +762,13 @@ def _build_parser() -> argparse.ArgumentParser:
     for name in [
         "discover-running",
         "spawn",
-        "spawn-workflow-js-helper",
-        "spawn-workflow-python-helper",
-        "workflow-js-helper-resources",
-        "workflow-js-helper-set-capacity",
-        "workflow-js-helper-cancel-request",
         "workflow-js-environment-spec",
         "workflow-js-ensure",
+        "workflow-js-execute",
         "workflow-js-resources",
         "workflow-js-set-capacity",
         "workflow-js-cancel-request",
         "workflow-js-request-status",
-        "workflow-python-helper-resources",
-        "workflow-python-helper-set-capacity",
-        "workflow-python-helper-cancel-request",
         "workflow-python-environment-spec",
         "workflow-python-prepare-environment",
         "workflow-python-lock-environment",
@@ -1117,35 +1110,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "spawn-workflow-js-helper":
-            _print_ok(
-                svc.spawn_workflow_js_helper(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
-                    node_executable=payload.get("node_executable"),
-                    capacity=int(payload.get("capacity") or 1),
-                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
-                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
-                )
-            )
-            return 0
-        if cmd == "spawn-workflow-python-helper":
-            _print_ok(
-                svc.spawn_workflow_python_helper(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
-                    python_executable=payload.get("python_executable"),
-                    capacity=int(payload.get("capacity") or 1),
-                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
-                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
-                )
-            )
-            return 0
-        if cmd == "workflow-js-helper-resources":
-            _print_ok(
-                svc.workflow_js_helper_resources(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
-                )
-            )
-            return 0
         if cmd == "workflow-js-environment-spec":
             _print_ok(
                 svc.workflow_js_environment_spec(
@@ -1183,6 +1147,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "workflow-js-execute":
+            _print_ok(
+                svc.execute_workflow_js(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request=dict(payload.get("request") or {}),
+                    node=dict(payload.get("node") or {}),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
         if cmd == "workflow-js-set-capacity":
             _print_ok(
                 svc.set_workflow_js_capacity(
@@ -1209,29 +1187,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     profile=str(payload.get("profile") or "helper"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
-                    request_id=str(payload.get("request_id") or ""),
-                )
-            )
-            return 0
-        if cmd == "workflow-python-helper-resources":
-            _print_ok(
-                svc.workflow_python_helper_resources(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
-                )
-            )
-            return 0
-        if cmd == "workflow-python-helper-set-capacity":
-            _print_ok(
-                svc.set_workflow_python_helper_capacity(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
-                    capacity=int(payload.get("capacity") or 1),
-                )
-            )
-            return 0
-        if cmd == "workflow-python-helper-cancel-request":
-            _print_ok(
-                svc.cancel_workflow_python_helper_request(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-python-helper"),
                     request_id=str(payload.get("request_id") or ""),
                 )
             )
@@ -1375,22 +1330,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "workflow-python-stream-close":
             _print_ok(svc.workflow_python_stream_close(stream_id=str(payload.get("stream_id") or "")))
-            return 0
-        if cmd == "workflow-js-helper-set-capacity":
-            _print_ok(
-                svc.set_workflow_js_helper_capacity(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
-                    capacity=int(payload.get("capacity") or 1),
-                )
-            )
-            return 0
-        if cmd == "workflow-js-helper-cancel-request":
-            _print_ok(
-                svc.cancel_workflow_js_helper_request(
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
-                    request_id=str(payload.get("request_id") or ""),
-                )
-            )
             return 0
         if cmd == "get-registration":
             _print_ok(svc.get_registration(str(payload.get("engine_id") or args.engine_id)))

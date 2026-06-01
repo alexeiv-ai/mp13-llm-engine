@@ -102,7 +102,6 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             "workflow-js-environment-spec",
             "workflow-js-resources",
             "workflow-js-request-status",
-            "workflow-js-helper-resources",
             "sandbox-fs-list",
             "sandbox-fs-read-text",
             "sandbox-fs-stat",
@@ -147,10 +146,9 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             "workflow-python-stream-send",
             "workflow-python-stream-close",
             "workflow-js-ensure",
+            "workflow-js-execute",
             "workflow-js-set-capacity",
             "workflow-js-cancel-request",
-            "workflow-js-helper-set-capacity",
-            "workflow-js-helper-cancel-request",
         ]:
             with pytest.raises(PermissionError, match="insufficient_role"):
                 svc.authorize_command(cmd, {"session_token": token})
@@ -207,17 +205,16 @@ def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
             "workflow-python-stream-close",
             "workflow-js-environment-spec",
             "workflow-js-ensure",
+            "workflow-js-execute",
             "workflow-js-resources",
             "workflow-js-set-capacity",
             "workflow-js-cancel-request",
             "workflow-js-request-status",
-            "workflow-js-helper-set-capacity",
-            "workflow-js-helper-cancel-request",
         ]:
             svc.authorize_command(cmd, {"session_token": token})
 
 
-def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_helper_spawn() -> None:
+def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_facade() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
         svc.auth_upsert_key(
@@ -239,7 +236,8 @@ def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_helper_spawn() -> 
         assert token
         with pytest.raises(PermissionError, match="insufficient_role"):
             svc.authorize_command("spawn", {"session_token": token})
-        svc.authorize_command("spawn-workflow-js-helper", {"session_token": token})
+        svc.authorize_command("workflow-js-ensure", {"session_token": token})
+        svc.authorize_command("workflow-js-execute", {"session_token": token})
 
 
 def test_config_editor_allowed_raw_spawn() -> None:

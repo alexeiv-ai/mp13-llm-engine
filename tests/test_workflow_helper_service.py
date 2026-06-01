@@ -122,144 +122,6 @@ def test_daemon_spawn_preserves_worker_profile_class() -> None:
     assert fake.kwargs["worker_profile_class"] == "generic"
 
 
-def test_daemon_dispatches_spawn_workflow_js_helper() -> None:
-    class FakeService:
-        def __init__(self) -> None:
-            self.kwargs = None
-
-        def spawn_workflow_js_helper(self, **kwargs):
-            self.kwargs = dict(kwargs)
-            return {"status": "ok", "executor_kind": "workflow_js_helper"}
-
-    fake = FakeService()
-    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
-    daemon.svc = fake
-
-    out = daemon._call_service(
-        "spawn-workflow-js-helper",
-        {
-            "engine_id": "wf-js",
-            "node_executable": "node-demo",
-            "capacity": 4,
-            "worker_profile_class": "generic",
-            "sandbox_policy": {"sandbox": {"enabled": True}},
-        },
-    )
-
-    assert out["executor_kind"] == "workflow_js_helper"
-    assert fake.kwargs == {
-        "engine_id": "wf-js",
-        "node_executable": "node-demo",
-        "capacity": 4,
-        "worker_profile_class": "generic",
-        "sandbox_policy": {"sandbox": {"enabled": True}},
-    }
-
-
-def test_daemon_dispatches_spawn_workflow_python_helper() -> None:
-    class FakeService:
-        def __init__(self) -> None:
-            self.kwargs = None
-
-        def spawn_workflow_python_helper(self, **kwargs):
-            self.kwargs = dict(kwargs)
-            return {"status": "ok", "executor_kind": "workflow_python_helper"}
-
-    fake = FakeService()
-    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
-    daemon.svc = fake
-
-    out = daemon._call_service(
-        "spawn-workflow-python-helper",
-        {
-            "engine_id": "wf-py",
-            "python_executable": "python-demo",
-            "capacity": 4,
-            "worker_profile_class": "generic",
-            "sandbox_policy": {"sandbox": {"enabled": True}},
-        },
-    )
-
-    assert out["executor_kind"] == "workflow_python_helper"
-    assert fake.kwargs == {
-        "engine_id": "wf-py",
-        "python_executable": "python-demo",
-        "capacity": 4,
-        "worker_profile_class": "generic",
-        "sandbox_policy": {"sandbox": {"enabled": True}},
-    }
-
-
-def test_daemon_dispatches_workflow_js_helper_resources_and_capacity() -> None:
-    class FakeService:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def workflow_js_helper_resources(self, **kwargs):
-            self.calls.append(("resources", dict(kwargs)))
-            return {"status": "ok", "capacity": 2}
-
-        def set_workflow_js_helper_capacity(self, **kwargs):
-            self.calls.append(("set_capacity", dict(kwargs)))
-            return {"status": "ok", "capacity": kwargs["capacity"]}
-
-        def cancel_workflow_js_helper_request(self, **kwargs):
-            self.calls.append(("cancel", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs["request_id"], "canceled": True}
-
-    fake = FakeService()
-    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
-    daemon.svc = fake
-
-    resources = daemon._call_service("workflow-js-helper-resources", {"engine_id": "wf-js"})
-    resized = daemon._call_service("workflow-js-helper-set-capacity", {"engine_id": "wf-js", "capacity": 6})
-    canceled = daemon._call_service("workflow-js-helper-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})
-
-    assert resources["capacity"] == 2
-    assert resized["capacity"] == 6
-    assert canceled["canceled"] is True
-    assert fake.calls == [
-        ("resources", {"engine_id": "wf-js"}),
-        ("set_capacity", {"engine_id": "wf-js", "capacity": 6}),
-        ("cancel", {"engine_id": "wf-js", "request_id": "req-1"}),
-    ]
-
-
-def test_daemon_dispatches_workflow_python_helper_resources_and_capacity() -> None:
-    class FakeService:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def workflow_python_helper_resources(self, **kwargs):
-            self.calls.append(("resources", dict(kwargs)))
-            return {"status": "ok", "capacity": 2}
-
-        def set_workflow_python_helper_capacity(self, **kwargs):
-            self.calls.append(("set_capacity", dict(kwargs)))
-            return {"status": "ok", "capacity": kwargs["capacity"]}
-
-        def cancel_workflow_python_helper_request(self, **kwargs):
-            self.calls.append(("cancel", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs["request_id"], "canceled": True}
-
-    fake = FakeService()
-    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
-    daemon.svc = fake
-
-    resources = daemon._call_service("workflow-python-helper-resources", {"engine_id": "wf-py"})
-    resized = daemon._call_service("workflow-python-helper-set-capacity", {"engine_id": "wf-py", "capacity": 6})
-    canceled = daemon._call_service("workflow-python-helper-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})
-
-    assert resources["capacity"] == 2
-    assert resized["capacity"] == 6
-    assert canceled["canceled"] is True
-    assert fake.calls == [
-        ("resources", {"engine_id": "wf-py"}),
-        ("set_capacity", {"engine_id": "wf-py", "capacity": 6}),
-        ("cancel", {"engine_id": "wf-py", "request_id": "req-1"}),
-    ]
-
-
 def test_daemon_dispatches_workflow_python_facade() -> None:
     class FakeService:
         def __init__(self) -> None:
@@ -316,6 +178,10 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
             self.calls.append(("ensure", dict(kwargs)))
             return {"status": "ok", "engine_id": kwargs.get("engine_id")}
 
+        def execute_workflow_js(self, **kwargs):
+            self.calls.append(("execute", dict(kwargs)))
+            return {"status": "ok", "ok": True}
+
         def workflow_js_resources(self, **kwargs):
             self.calls.append(("resources", dict(kwargs)))
             return {"status": "ok"}
@@ -334,11 +200,12 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
 
     assert daemon._call_service("workflow-js-environment-spec", {"profile": "helper"})["environment_key"] == "env-js"
     assert daemon._call_service("workflow-js-ensure", {"engine_id": "wf-js"})["engine_id"] == "wf-js"
+    assert daemon._call_service("workflow-js-execute", {"request": {"request_id": "req-1"}})["ok"] is True
     assert daemon._call_service("workflow-js-resources", {"engine_id": "wf-js"})["status"] == "ok"
     assert daemon._call_service("workflow-js-set-capacity", {"engine_id": "wf-js", "capacity": 5})["capacity"] == 5
     assert daemon._call_service("workflow-js-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
 
-    assert [name for name, _ in fake.calls] == ["spec", "ensure", "resources", "set_capacity", "cancel"]
+    assert [name for name, _ in fake.calls] == ["spec", "ensure", "execute", "resources", "set_capacity", "cancel"]
 
 
 def test_workflow_js_helper_resources_include_normalized_pool_aliases(tmp_path: Path, monkeypatch) -> None:
@@ -1043,6 +910,51 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
     assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-python-sync"
     assert calls["engine_id"] == "workflow-python-demo"
     assert calls["method"] == "execute_workflow_python_helper"
+
+
+def test_execute_workflow_js_facade_uses_existing_rpc(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    calls = {}
+
+    monkeypatch.setattr(
+        svc,
+        "ensure_workflow_js",
+        lambda **kwargs: {
+            "status": "ok",
+            "engine_id": "workflow-js-demo",
+            "environment_key": "env-js",
+        },
+    )
+
+    def fake_proxy_rpc_call(**kwargs):
+        calls.update(kwargs)
+        return {"status": "ok", "result": {"ok": True, "result": {"accepted": True}}}
+
+    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
+
+    out = svc.execute_workflow_js(
+        profile="helper",
+        request={
+            "module_source": "export function condition(input) { return { accepted: true }; }",
+            "module_sha256": "demo",
+            "operation": "condition",
+            "export_name": "condition",
+            "payload": {},
+            "limits": {"timeout_ms": 1000},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["ok"] is True
+    assert out["output"] == {"accepted": True}
+    assert out["metrics"]["request"]["status"] == "ok"
+    assert out["metrics"]["workflow_pool"]["metrics"]["active_calls"] == 0
+    assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-js-sync"
+    assert calls["engine_id"] == "workflow-js-demo"
+    assert calls["method"] == "execute_workflow_js_helper"
 
 
 def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:

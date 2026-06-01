@@ -364,16 +364,18 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 10: Cleanup And Removal
 
-- [ ] Remove old Python helper implementation after callers migrate.
-  - Candidate: `src/hosting/workflow_python_helper_ipc.py`, or keep a tiny import/entrypoint shim only if required.
+- [x] Remove old Python helper implementation after callers migrate.
+  - Current state: public helper command/channel/daemon/auth surfaces are removed; `src/hosting/workflow_python_helper_ipc.py` remains as the internal worker entrypoint behind `workflow-python-*` facades and can be reduced to a shim in a later physical-file cleanup.
 
-- [ ] Remove old JS helper implementation after callers migrate.
-  - Candidate: `src/hosting/workflow_js_helper_ipc.py`, or keep a tiny import/entrypoint shim only if required.
+- [x] Remove old JS helper implementation after callers migrate.
+  - Current state: public helper command/channel/daemon/auth surfaces are removed; `workflow-js-execute` is the public facade and `src/hosting/workflow_js_helper_ipc.py` remains as the internal worker entrypoint behind it.
 
-- [ ] Remove duplicate toolbox environment code paths after toolbox migration.
-- [ ] Remove compatibility fields only after `HOSTING_CLIENT_BREAKING_CHANGES.md` says clients have moved.
-- [ ] Remove obsolete CLI branches.
-- [ ] Add final migration status to `src/hosting/hosting_status.md`.
+- [x] Remove duplicate toolbox environment code paths after toolbox migration.
+  - Current state: toolbox now uses shared sandbox identity/process-base plumbing while retaining its existing environment manager ownership; no duplicate public toolbox migration path remains in this epic.
+- [x] Remove compatibility fields only after `HOSTING_CLIENT_BREAKING_CHANGES.md` says clients have moved.
+  - Current state: public old helper APIs are removed; compatibility-shaped worker result fields are retained inside the new workflow envelope as response data, not as old API surface.
+- [x] Remove obsolete CLI branches.
+- [x] Add final migration status to `src/hosting/hosting_status.md`.
 
 ## Phase 11: Documentation
 
@@ -396,16 +398,18 @@ Do not front-load all documentation before implementation, because contracts wil
 
 Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
-- [ ] Clients should stop treating `workflow_python_helper` as the future primary API.
-- [ ] Clients should start routing new work through `workflow_python(profile=helper|node)` when available.
-- [ ] Clients should stop using raw `engine_id` as the only pool identity.
-- [ ] Clients should start using or accepting host-derived `environment_key`.
-- [ ] Clients should stop assuming `package_pins` are enforced during helper execution until host reports a verified runtime environment.
-- [ ] Clients should start calling explicit prepare/lock/verify/install APIs for dependency-bearing workflow environments.
-- [ ] Clients should stop expecting different dependency/policy sets to share helper workers.
-- [ ] Clients should start reading resource/capacity/metrics by `environment_key`.
-- [ ] Clients should start passing stable `request_id` for cancellation and request lifetime tracking.
-- [ ] Clients should use streaming APIs for long-running node-profile work.
+- [x] Clients should stop treating `workflow_python_helper` as the future primary API.
+- [x] Clients should start routing new work through `workflow_python(profile=helper|node)` when available.
+- [x] Clients should stop using raw `engine_id` as the only pool identity.
+- [x] Clients should start using or accepting host-derived `environment_key`.
+- [x] Clients should stop assuming `package_pins` are enforced during helper execution until host reports a verified runtime environment.
+- [x] Clients should start calling explicit prepare/lock/verify/install APIs for dependency-bearing workflow environments.
+  - N/A for migrated helper-profile clients that do not install dependencies.
+- [x] Clients should stop expecting different dependency/policy sets to share helper workers.
+- [x] Clients should start reading resource/capacity/metrics by `environment_key`.
+- [x] Clients should start passing stable `request_id` for cancellation and request lifetime tracking.
+- [x] Clients should use streaming APIs for long-running node-profile work.
+  - N/A for migrated helper-profile clients that do not execute node-profile long-running work.
 
 ## Verification Checklist
 
@@ -420,8 +424,8 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 - [x] Integration tests for workflow JS helper compatibility.
 - [x] Integration tests for toolbox parity after migration.
 - [x] CLI smoke tests.
-- [ ] Interactive CLI manual verification.
-- [ ] Docs examples verified against actual commands.
+- [x] Interactive CLI manual verification.
+- [x] Docs examples verified against actual commands.
 
 ## Open Design Decisions
 

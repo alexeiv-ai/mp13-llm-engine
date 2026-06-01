@@ -160,25 +160,26 @@ but it does not decrypt or return file contents. Current daemon-owned encrypted
 state reads are intentionally disabled until daemon startup key propagation is
 wired.
 
-## Workflow Helper Commands
+## Workflow Runtime Commands
 
-Workflow helper workers are managed through normal JSON subcommands:
+Workflow helper-profile workers are managed through workflow runtime facades:
 
 ```powershell
-@'{"engine_id":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin spawn-workflow-python-helper
-@'{"engine_id":"workflow-python-helper","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-helper-resources
-@'{"engine_id":"workflow-python-helper","capacity":4,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-helper-set-capacity
-@'{"engine_id":"workflow-python-helper","request_id":"req-1","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-helper-cancel-request
+@'{"profile":"helper","environment_name":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-ensure
+@'{"profile":"helper","environment_key":"<environment_key>","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-resources
+@'{"profile":"helper","environment_key":"<environment_key>","capacity":4,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-set-capacity
+@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-1","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-cancel-request
 ```
 
-JS helper commands remain available as `spawn-workflow-js-helper`,
-`workflow-js-helper-resources`, `workflow-js-helper-set-capacity`, and
-`workflow-js-helper-cancel-request`. Resource responses expose generic
-`capacity`, `active_calls`, `available_slots`, and `pool` fields. JS responses
-also retain Node-specific compatibility fields.
+JS helper-profile workers use the same pattern with `workflow-js-ensure`,
+`workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and
+`workflow-js-cancel-request`. The old `*-helper-*` command names are no longer
+public host commands; the helper IPC workers remain internal implementation
+details behind these facades.
 
-The interactive menu exposes the same helper resource, capacity, refresh, and
-request-cancel commands under `Manage workflow helpers`.
+The interactive menu exposes workflow runtime resource, capacity, refresh,
+request-status, stream receive, and request-cancel actions under `Manage
+workflow helpers`.
 
 ## Remote Authentication Model
 

@@ -348,20 +348,18 @@ def test_manage_workflow_helpers_can_ensure_python_runtime(
                     }
                 }
             }
-        if cmd == "workflow-python-helper-resources":
-            return {"status": "ok", "capacity": 2, "pool": {}}
-        if cmd == "workflow-python-ensure":
-            return {
-                "status": "ok",
-                "engine_id": "wf-py",
-                "environment_key": "env-demo",
-            }
         if cmd == "workflow-python-resources":
             return {
                 "status": "ok",
                 "engine_id": "wf-py",
                 "environment_key": "env-demo",
                 "workflow_pool": {"pool_id": "workflow_python/env-demo", "metrics": {"desired_capacity": 2}},
+            }
+        if cmd == "workflow-python-ensure":
+            return {
+                "status": "ok",
+                "engine_id": "wf-py",
+                "environment_key": "env-demo",
             }
         raise AssertionError(cmd)
 

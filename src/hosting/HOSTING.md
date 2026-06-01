@@ -257,8 +257,8 @@ Stream-open returns immediately and background execution emits `started`,
 `log`, optional `progress`, `result` or structured `error`, and `done`.
 
 Workflow JS helper profile exposes the same environment-keyed management shape:
-`workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-resources`,
-`workflow-js-set-capacity`, `workflow-js-request-status`, and
+`workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-execute`,
+`workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-request-status`, and
 `workflow-js-cancel-request`.
 
 ### 2.6 Proxying Worker Requests (RPC & Streams)
@@ -296,39 +296,38 @@ Use `proxy-rpc-open`/`proxy-rpc-recv`/`proxy-rpc-close` for streamed
 }'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-recv
 ```
 
-### 2.6 Workflow Helper Workers
+### 2.6 Workflow Runtime Workers
 
-Workflow helpers are hosted `generic` workers with specialized executor kinds. Use these instead of backend-owned local helper subprocesses:
+Workflow helpers are hosted `generic` workers behind workflow runtime facades. Use these instead of backend-owned local helper subprocesses:
 
 ```powershell
-@'{"engine_id":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin spawn-workflow-python-helper
-@'{"engine_id":"workflow-python-helper","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-helper-resources
-@'{"engine_id":"workflow-python-helper","capacity":4,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-helper-set-capacity
-@'{"engine_id":"workflow-python-helper","request_id":"req-1","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-helper-cancel-request
+@'{"profile":"helper","environment_name":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-ensure
+@'{"profile":"helper","environment_key":"<environment_key>","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-resources
+@'{"profile":"helper","environment_key":"<environment_key>","capacity":4,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-set-capacity
+@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-1","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-cancel-request
 ```
 
-Execute Python helper code through traffic-scoped RPC:
+Execute Python helper-profile code through the workflow facade:
 
 ```powershell
 @'{
-  "engine_id":"workflow-python-helper",
-  "method":"execute_workflow_python_helper",
-  "params":{
+  "profile":"helper",
+  "environment_key":"<environment_key>",
+  "request":{
+    "request_id":"req-1",
     "module_source":"def condition(input):\n    return {\"accepted\": input[\"value\"] == 7}\n",
     "module_sha256":"<sha256-of-module_source>",
-    "source_path":"helpers/condition.py",
-    "request_id":"req-1",
     "export_name":"condition",
     "operation":"condition",
     "payload":{"value":7},
     "limits":{"timeout_ms":5000,"output_limit_bytes":65536,"memory_limit_mb":128},
     "python":{"import_allowlist":[],"package_pins":{},"environment_name":"workflow-python-helper"}
   },
-  "session_token":"<traffic_token>"
-}'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-call
+  "session_token":"<control_token>"
+}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-execute
 ```
 
-`source_path` is provenance only. The worker executes `module_source` after verifying `module_sha256`. JS helper resources keep existing Node-specific fields and add the same normalized top-level `pool` shape used by Python helper resources.
+JS helper-profile code uses `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. The worker executes `module_source` after verifying `module_sha256`; helper IPC RPC names such as `execute_workflow_python_helper` and `execute_workflow_js_helper` are host-internal implementation details.
 
 ## 3. Diagnostics and Auditing
 

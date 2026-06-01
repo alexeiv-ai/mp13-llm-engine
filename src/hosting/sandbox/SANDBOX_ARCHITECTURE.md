@@ -87,9 +87,9 @@ Concrete workflow facades currently use these layers incrementally:
    Stream-open returns immediately and emits `started`, `log`, optional
    `progress`, `result` or structured `error`, and `done`. Artifact storage is
    still reported as unavailable until a store is designed.
-3. `workflow_js(profile=helper)` exposes environment spec, ensure, resources,
-   capacity, cancel, and request status through the JS runtime base and existing
-   helper worker compatibility path.
+3. `workflow_js(profile=helper)` exposes environment spec, ensure, execute,
+   resources, capacity, cancel, and request status through the JS runtime base
+   and existing helper worker compatibility path.
 4. `toolbox_executor` registrations now include shared hosted environment
    identity through `HostedToolboxRuntimeBase`; toolbox public APIs and
    lifecycle semantics are otherwise unchanged.

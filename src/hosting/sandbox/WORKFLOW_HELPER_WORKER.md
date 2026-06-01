@@ -23,14 +23,15 @@ V1 includes JavaScript and Python helper executors:
 The worker is not a logical toolbox and does not participate in toolbox tool routing.
 New integrations should use the workflow runtime facade commands:
 `workflow-python-*` for Python and `workflow-js-*` for JavaScript. The old
-`workflow_python_helper` and `workflow_js_helper` commands remain compatibility
-aliases until dependent clients migrate.
+`workflow_python_helper` and `workflow_js_helper` command/channel surfaces have
+been removed after dependent-client migration; their IPC modules remain internal
+worker entrypoints behind the facades.
 
 Python helper requests accept `python.import_allowlist`, `python.package_pins`, and `python.environment_name` for shared runtime environment intent. The default helper environment name is `workflow-python-helper`; node-profile workflow Python uses `workflow-python-node` unless a caller supplies a specific environment name.
 
 ## Host Lifecycle
 
-Callers should use `EngineHostService.spawn_workflow_js_helper(...)`, `EngineHostService.spawn_workflow_python_helper(...)`, or the matching `EngineHostControlChannel` methods. Do not use raw `spawn` for workflow helpers; raw process launch is a higher-trust host operation.
+Callers should use `workflow-js-ensure`, `workflow-python-ensure`, and the matching workflow facade methods on `EngineHostControlChannel`. Do not use raw `spawn` for workflow helpers; raw process launch is a higher-trust host operation.
 
 The convenience API uses:
 
@@ -62,24 +63,24 @@ The JS helper follows the same bounded hosting-worker pattern as toolbox sandbox
 6. Node child processes are recycled after `MP13_WORKFLOW_JS_HELPER_MAX_REQUESTS_PER_NODE` calls, and terminated when the hosting worker exits, when a call times out, or when a specific request is canceled.
 7. When all call slots are in use, the worker returns `workflow_sandbox_capacity_exceeded`.
 
-`spawn_workflow_js_helper(capacity=N)` sets `MP13_WORKFLOW_JS_HELPER_CAPACITY=N` and records the capacity in worker capabilities. The default is `1`, which gives a bounded serialized lane with one hot Node child process. Increase it only for short helpers where parallel Node child processes are acceptable for the host.
+`workflow-js-ensure(capacity=N)` sets `MP13_WORKFLOW_JS_HELPER_CAPACITY=N` on the internal worker and records the capacity in worker capabilities. The default is `1`, which gives a bounded serialized lane with one hot Node child process. Increase it only for short helpers where parallel Node child processes are acceptable for the host.
 
 Each Node child defaults to a maximum of 256 requests before recycling. Recycling bounds long-lived module-cache growth from per-request data URL imports without changing the client contract.
 
 Toolbox sandboxes add another layer: the client-side harness can route calls across a pool of toolbox executor registrations and uses async gather/round-robin routing. JS helper v1 does not need a toolbox-style registry/pool for correctness because helper calls are source-in, JSON-out, and isolated per call. If throughput requires it later, the same pattern can be added by registering multiple `executor_kind = "workflow_js_helper"` workers and routing by capacity/busy state.
 
-Live pool state is available through `workflow-js-helper-resources`, `workflow-python-helper-resources`, or the matching channel methods. The response reports capacity, active calls, available slots, process counts, process ids, active request ids, per-process request counts, and per-process CPU/RSS when the host can sample the child process. JS responses keep `node_pool`, `workflow_js_node_process_count`, and related compatibility fields while also exposing the normalized `pool` shape.
+Live pool state is available through `workflow-js-resources`, `workflow-python-resources`, or the matching channel methods. The response reports capacity, active calls, available slots, process counts, process ids, active request ids, per-process request counts, and per-process CPU/RSS when the host can sample the child process. JS responses keep `node_pool`, `workflow_js_node_process_count`, and related compatibility fields while also exposing the normalized `pool` shape.
 
-Capacity can be changed for a loaded worker through `workflow-js-helper-set-capacity` or `EngineHostControlChannel.set_workflow_js_helper_capacity(...)`. Increasing capacity allows the worker to create more hot Node children on demand. Decreasing capacity prevents new children above the new limit and retires idle excess children; active calls are allowed to finish.
+Capacity can be changed for a loaded worker through `workflow-js-set-capacity` / `workflow-python-set-capacity` or the matching workflow channel methods. Increasing capacity allows the worker to create more hot child processes on demand. Decreasing capacity prevents new children above the new limit and retires idle excess children; active calls are allowed to finish.
 
-Specific active requests can be canceled through `workflow-js-helper-cancel-request`, `workflow-python-helper-cancel-request`, or the matching channel methods. Callers should provide `request_id` in helper execution calls when they need this control. Cancellation kills the child process that owns that request and removes it from the pool; the worker creates a fresh hot child later if capacity requires it.
+Specific active requests can be canceled through `workflow-js-cancel-request`, `workflow-python-cancel-request`, or the matching channel methods. Callers should provide `request_id` in helper execution calls when they need this control. Cancellation kills the child process that owns that request and removes it from the pool; the worker creates a fresh hot child later if capacity requires it.
 
 Environment-keyed workflow runtime commands provide the preferred management
 surface:
 
 1. `workflow-python-ensure`, `workflow-python-execute`, `workflow-python-resources`, `workflow-python-set-capacity`, `workflow-python-request-status`, and `workflow-python-cancel-request`
 2. `workflow-python-stream-open`, `workflow-python-stream-recv`, `workflow-python-stream-send`, and `workflow-python-stream-close`
-3. `workflow-js-ensure`, `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-request-status`, and `workflow-js-cancel-request`
+3. `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-request-status`, and `workflow-js-cancel-request`
 
 These commands route and report by host-derived `environment_key` so different
 runtime, dependency, or sandbox-policy identities do not share the same
@@ -228,7 +229,7 @@ Stable failure reasons include:
 
 ## Current Limits
 
-1. The worker uses a bounded serialized call lane by default. `spawn_workflow_js_helper(capacity=N)` enables bounded in-worker parallelism.
+1. The worker uses a bounded serialized call lane by default. `workflow-js-ensure(capacity=N)` enables bounded in-worker parallelism.
 2. Memory limit reporting is best-effort and currently reports unavailable enforcement.
 3. V1 is for short helper calls only, not long-running jobs or general Node app hosting.
 4. Audit/provenance is returned in the per-call result. There is no persistent audit sink yet.

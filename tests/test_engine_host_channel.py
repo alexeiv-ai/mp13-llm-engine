@@ -920,140 +920,6 @@ def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
     ]
 
 
-def test_workflow_js_helper_channel_method_forwards_expected_payload() -> None:
-    fake = _FakeConn()
-    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
-    ch._get_connection = lambda: fake  # type: ignore[method-assign]
-    ch.set_session_token("tok-123")
-
-    ch.spawn_workflow_js_helper(
-        engine_id="wf-js",
-        node_executable="node-demo",
-        capacity=5,
-        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
-    )
-
-    assert fake.calls == [
-        (
-            "spawn-workflow-js-helper",
-            {
-                "engine_id": "wf-js",
-                "node_executable": "node-demo",
-                "capacity": 5,
-                "sandbox_policy": {"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
-                "worker_profile_class": "generic",
-                "session_token": "tok-123",
-            },
-        )
-    ]
-
-
-def test_workflow_js_helper_channel_resources_and_capacity_use_proxy_rpc() -> None:
-    fake = _FakeConn()
-    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
-    ch._get_connection = lambda: fake  # type: ignore[method-assign]
-    ch.set_session_token("tok-123")
-
-    ch.workflow_js_helper_resources(engine_id="wf-js")
-    ch.set_workflow_js_helper_capacity(engine_id="wf-js", capacity=7)
-    ch.cancel_workflow_js_helper_request(engine_id="wf-js", request_id="req-789")
-
-    assert fake.calls == [
-        (
-            "workflow-js-helper-resources",
-            {
-                "engine_id": "wf-js",
-                "session_token": "tok-123",
-            },
-        ),
-        (
-            "workflow-js-helper-set-capacity",
-            {
-                "engine_id": "wf-js",
-                "capacity": 7,
-                "session_token": "tok-123",
-            },
-        ),
-        (
-            "workflow-js-helper-cancel-request",
-            {
-                "engine_id": "wf-js",
-                "request_id": "req-789",
-                "session_token": "tok-123",
-            },
-        ),
-    ]
-
-
-def test_workflow_python_helper_channel_method_forwards_expected_payload() -> None:
-    fake = _FakeConn()
-    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
-    ch._get_connection = lambda: fake  # type: ignore[method-assign]
-    ch.set_session_token("tok-123")
-
-    ch.spawn_workflow_python_helper(
-        engine_id="wf-py",
-        python_executable="python-demo",
-        capacity=5,
-        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
-    )
-
-    assert fake.calls == [
-        (
-            "workflow-python-ensure",
-            {
-                "profile": "helper",
-                "environment_name": "workflow-python-helper",
-                "environment_key": None,
-                "python": {"bootstrap_python_executable": "python-demo"},
-                "engine_id": "wf-py",
-                "python_executable": "python-demo",
-                "capacity": 5,
-                "sandbox_policy": {"sandbox": {"enabled": True, "profile": "workflow_python_helper_v1"}},
-                "worker_profile_class": "generic",
-                "session_token": "tok-123",
-            },
-        )
-    ]
-
-
-def test_workflow_python_helper_channel_resources_and_capacity_use_proxy_rpc() -> None:
-    fake = _FakeConn()
-    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
-    ch._get_connection = lambda: fake  # type: ignore[method-assign]
-    ch.set_session_token("tok-123")
-
-    ch.workflow_python_helper_resources(engine_id="wf-py")
-    ch.set_workflow_python_helper_capacity(engine_id="wf-py", capacity=7)
-    ch.cancel_workflow_python_helper_request(engine_id="wf-py", request_id="req-789")
-
-    assert fake.calls == [
-        (
-            "workflow-python-helper-resources",
-            {
-                "engine_id": "wf-py",
-                "session_token": "tok-123",
-            },
-        ),
-        (
-            "workflow-python-helper-set-capacity",
-            {
-                "engine_id": "wf-py",
-                "capacity": 7,
-                "session_token": "tok-123",
-            },
-        ),
-        (
-            "workflow-python-helper-cancel-request",
-            {
-                "engine_id": "wf-py",
-                "request_id": "req-789",
-                "session_token": "tok-123",
-            },
-        ),
-    ]
-
-
 def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
@@ -1233,6 +1099,19 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         capacity=4,
     )
     ch.workflow_js_resources(profile="helper", environment_key="env-js", engine_id="wf-js")
+    ch.execute_workflow_js(
+        profile="helper",
+        environment_key="env-js",
+        engine_id="wf-js",
+        request={
+            "request_id": "req-1",
+            "module_source": "export function condition(input) { return { accepted: true }; }",
+            "module_sha256": "sha",
+            "operation": "condition",
+            "export_name": "condition",
+            "payload": {},
+        },
+    )
     ch.set_workflow_js_capacity(profile="helper", environment_key="env-js", engine_id="wf-js", capacity=6)
     ch.cancel_workflow_js_request(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
     ch.workflow_js_request_status(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
@@ -1271,6 +1150,27 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "node": {},
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-execute",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-js-helper",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "request": {
+                    "request_id": "req-1",
+                    "module_source": "export function condition(input) { return { accepted: true }; }",
+                    "module_sha256": "sha",
+                    "operation": "condition",
+                    "export_name": "condition",
+                    "payload": {},
+                },
+                "node": {},
+                "capacity": 1,
                 "sandbox_policy": None,
                 "session_token": "tok-123",
             },

@@ -2057,14 +2057,17 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
         selected_info = dict(helpers.get(choice) or {})
         selected_executor = str(selected_info.get("executor_kind") or "").strip()
         is_python = selected_executor == "workflow_python_helper"
+        runtime_kind = "workflow-python" if is_python else "workflow-js"
         environment_key = _workflow_environment_key(selected_info)
-        use_workflow_python_facade = bool(is_python and environment_key)
-        command_prefix = "workflow-python" if use_workflow_python_facade else ("workflow-python-helper" if is_python else "workflow-js-helper")
-        helper_label = "Workflow Python runtime" if use_workflow_python_facade else ("Workflow Python helper" if is_python else "Workflow JS helper")
+        command_prefix = runtime_kind
+        helper_label = "Workflow Python runtime" if is_python else "Workflow JS runtime"
         while True:
-            resource_payload = {"engine_id": choice}
-            if use_workflow_python_facade:
-                resource_payload.update({"profile": "helper", "environment_key": environment_key})
+            resource_payload = {
+                "engine_id": choice,
+                "profile": "helper",
+            }
+            if environment_key:
+                resource_payload["environment_key"] = environment_key
             resources = dict(
                 _api_invoke(
                     args,
@@ -2200,10 +2203,6 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                 session_token = _active_session_token(args, session_token)
                 result = dict(out or {})
                 environment_key = str(result.get("environment_key") or environment_key or "").strip()
-                use_workflow_python_facade = bool(environment_key)
-                if use_workflow_python_facade:
-                    command_prefix = "workflow-python"
-                    helper_label = "Workflow Python runtime"
                 print(_c("good", f"Workflow Python runtime ensured for {choice}."))
                 continue
             if action == "s":
@@ -2220,7 +2219,8 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                     f"{command_prefix}-set-capacity",
                     {
                         "engine_id": choice,
-                        **({"profile": "helper", "environment_key": environment_key} if use_workflow_python_facade else {}),
+                        "profile": "helper",
+                        **({"environment_key": environment_key} if environment_key else {}),
                         "capacity": capacity,
                     },
                     session_token=session_token,
@@ -2241,7 +2241,8 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                     f"{command_prefix}-cancel-request",
                     {
                         "engine_id": choice,
-                        **({"profile": "helper", "environment_key": environment_key} if use_workflow_python_facade else {}),
+                        "profile": "helper",
+                        **({"environment_key": environment_key} if environment_key else {}),
                         "request_id": request_id,
                     },
                     session_token=session_token,
