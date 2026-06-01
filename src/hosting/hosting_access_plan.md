@@ -339,7 +339,7 @@ Explicitly out of scope for this epic unless separately requested:
   - [x] Show profile, capacity, active calls, available slots, process count, active request IDs, latency summaries, cancellation counters, and recent request outcomes.
   - [x] Keep old helper display paths compatible.
   - [x] Add actions for set capacity, cancel request, and inspect resources by environment key.
-  - [ ] Add ensure action by environment key.
+  - [x] Add ensure action by environment key.
   - [ ] Add streaming/request-status UI where practical.
 
 - [x] Update channel wrappers in `src/hosting/engine_host_channel.py`.

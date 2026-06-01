@@ -330,6 +330,54 @@ def test_manage_workflow_helpers_prefers_workflow_python_facade(
     assert "req-1" in out
 
 
+def test_manage_workflow_helpers_can_ensure_python_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    invocations: list[tuple[str, Dict[str, Any]]] = []
+
+    def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
+        invocations.append((cmd, dict(payload)))
+        if cmd == "discover-running":
+            return {
+                "engines": {
+                    "wf-py": {
+                        "executor_kind": "workflow_python_helper",
+                        "process_resources": {"workflow_python_capacity": 2},
+                    }
+                }
+            }
+        if cmd == "workflow-python-helper-resources":
+            return {"status": "ok", "capacity": 2, "pool": {}}
+        if cmd == "workflow-python-ensure":
+            return {
+                "status": "ok",
+                "engine_id": "wf-py",
+                "environment_key": "env-demo",
+            }
+        if cmd == "workflow-python-resources":
+            return {
+                "status": "ok",
+                "engine_id": "wf-py",
+                "environment_key": "env-demo",
+                "workflow_pool": {"pool_id": "workflow_python/env-demo", "metrics": {"desired_capacity": 2}},
+            }
+        raise AssertionError(cmd)
+
+    choices = iter(["wf-py", "e", "b"])
+    monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(interactive, "_api_invoke", fake_api)
+    monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
+    monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
+
+    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+
+    assert ("workflow-python-ensure", {"profile": "helper", "engine_id": "wf-py", "capacity": 2}) in invocations
+    assert ("workflow-python-resources", {"engine_id": "wf-py", "profile": "helper", "environment_key": "env-demo"}) in invocations
+    assert "runtime ensured" in capsys.readouterr().out
+
+
 def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
     current = "abcdefghijk"
     other = "other-session-token"

@@ -2134,12 +2134,32 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                 "s": ("Set capacity", ""),
                 "r": ("Refresh", ""),
             }
+            if is_python:
+                action_opts["e"] = ("Ensure workflow runtime", "Annotate/use environment-keyed workflow Python")
             if active_request_ids:
                 action_opts["c"] = ("Cancel request", "Kill the child process currently running a request")
             action = _prompt_menu("Workflow Helper Action", action_opts, "b", allow_back=True, allow_changes=False)
             if action in ("b", "back"):
                 return session_token
             if action == "r":
+                continue
+            if action == "e":
+                payload = {
+                    "profile": "helper",
+                    "engine_id": choice,
+                    "capacity": int(capacity_value or 1),
+                }
+                if environment_key:
+                    payload["environment_key"] = environment_key
+                out = _api_invoke(args, "workflow-python-ensure", payload, session_token=session_token)
+                session_token = _active_session_token(args, session_token)
+                result = dict(out or {})
+                environment_key = str(result.get("environment_key") or environment_key or "").strip()
+                use_workflow_python_facade = bool(environment_key)
+                if use_workflow_python_facade:
+                    command_prefix = "workflow-python"
+                    helper_label = "Workflow Python runtime"
+                print(_c("good", f"Workflow Python runtime ensured for {choice}."))
                 continue
             if action == "s":
                 raw = input("New capacity [leave blank to keep]: ").strip()

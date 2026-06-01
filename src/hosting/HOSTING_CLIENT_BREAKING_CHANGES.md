@@ -163,6 +163,7 @@ Minimal helper-profile execute payload:
   - Python helper resources/capacity/cancel now expose workflow pool metadata for annotated registrations.
 - [x] Interactive CLI screens will move from helper-only views to workflow runtime pool views keyed by environment.
   - Annotated Python helper registrations now use `workflow-python-*` facade calls inside the workflow helper management screen.
+  - Operators can choose "Ensure workflow runtime" for an existing Python helper to annotate it and switch the screen to environment-keyed resources.
 
 ## Removal Candidates After Migration
 
