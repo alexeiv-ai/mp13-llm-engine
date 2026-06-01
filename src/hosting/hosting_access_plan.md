@@ -403,9 +403,10 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 - [x] Clients should stop using raw `engine_id` as the only pool identity.
 - [x] Clients should start using or accepting host-derived `environment_key`.
 - [x] Clients should stop assuming `package_pins` are enforced during helper execution until host reports a verified runtime environment.
-- [x] Clients should start calling explicit prepare/lock/verify/install APIs for dependency-bearing workflow environments.
-  - Required only for clients that request dependency-bearing workflow environments. Hosting owns the lifecycle commands and install enforcement; those clients must call the lifecycle commands and wait for host verification before execute.
-  - The migrated helper-profile client path is complete without install orchestration because it does not trigger dependency installation from workflow execution.
+- [x] Clients should stop installing dependencies during workflow execution.
+- [x] Clients should call prepare/lock/verify/install APIs only from explicit environment-management paths.
+  - Hosting owns the lifecycle commands and install enforcement.
+  - The migrated helper-profile client path is complete without install orchestration because it does not provide dependency installation UI/orchestration.
 - [x] Clients should stop expecting different dependency/policy sets to share helper workers.
 - [x] Clients should start reading resource/capacity/metrics by `environment_key`.
 - [x] Clients should start passing stable `request_id` for cancellation and request lifetime tracking.
