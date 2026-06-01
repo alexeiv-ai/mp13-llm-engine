@@ -558,10 +558,11 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
     monkeypatch.setattr(svc, "_ipc_call", fake_ipc_call)
 
     try:
-        svc.proxy_rpc_call(
+        out = svc.proxy_rpc_call(
             engine_id="wf-py-runtime",
             method="execute_workflow_python_helper",
             params={
+                "request_id": "req-runtime",
                 "module_source": "def condition(input):\n    return None\n",
                 "module_sha256": "abc123",
                 "package_id": "pkg-demo",
@@ -582,6 +583,10 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
         svc.shutdown("wf-py-runtime", timeout_seconds=5.0)
 
     rpc_params = captured["payload"]["params"]
+    assert "_workflow_python_facade_execute" not in rpc_params
+    assert out["workflow_runtime_kind"] == "workflow_python"
+    assert out["environment_key"]
+    assert out["workflow_execute"]["metrics"]["request"]["request_id"] == "req-runtime"
     python_runtime = rpc_params["python"]
     assert python_runtime["environment_name"] == "workflow-python-helper"
     assert python_runtime["python_executable"]

@@ -567,7 +567,7 @@ class WorkflowHelperMixin:
         out = self.proxy_rpc_call(
             engine_id=str(ensured["engine_id"]),
             method="execute_workflow_python_helper",
-            params=req,
+            params={**req, "_workflow_python_facade_execute": True},
             timeout_seconds=float(dict(req.get("limits") or {}).get("timeout_ms") or 30000) / 1000.0 + 5.0,
         )
         result = dict(out.get("result") or out or {})

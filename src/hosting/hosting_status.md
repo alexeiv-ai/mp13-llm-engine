@@ -57,6 +57,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Rewired old `spawn_workflow_python_helper` service calls to enter through `ensure_workflow_python(profile=helper)`, with raw helper worker spawning kept behind a private service helper for compatibility.
 - Tightened workflow Python environment identity so explicit Python runtime executables or runtime hashes contribute to `environment_key`; different Python runtimes no longer share the same host-side pool identity.
 - Rewired `EngineHostControlChannel.spawn_workflow_python_helper(...)` to forward to `workflow-python-ensure` while retaining the old typed method signature for dependent callers.
+- Rewired direct old `proxy_rpc_call(method=execute_workflow_python_helper)` calls for Python helpers through `execute_workflow_python(profile=helper)` so legacy execution now records workflow pool/request metrics before the raw worker RPC.
 
 ## Key Design Decisions So Far
 

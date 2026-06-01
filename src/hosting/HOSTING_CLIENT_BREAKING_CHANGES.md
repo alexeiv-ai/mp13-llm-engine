@@ -41,6 +41,7 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
   - Old: GUI calls `spawn_workflow_python_helper`, then proxy RPC `execute_workflow_python_helper`.
   - New: `workflow-python-execute` with `profile=helper` and request fields `module_source`, `module_sha256`, `package_id`, `workflow_id`, `package_source_digest`, `export_name` or `operation`, `payload`, `provenance`, `limits`, and optional `python`.
   - New result fields to consume: `status`, `ok`, `output`, `result`, `environment_key`, `metrics.workflow_pool`, and `metrics.request`.
+  - Compatibility behavior: old `proxy_rpc_call(method=execute_workflow_python_helper)` now routes through `workflow-python-execute` for workflow pool accounting, then performs the raw worker RPC through an internal bypass flag.
 
 - Resource/capacity/cancel:
   - Old: `workflow-python-helper-resources`, `workflow-python-helper-set-capacity`, `workflow-python-helper-cancel-request`.
