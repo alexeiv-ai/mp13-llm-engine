@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeManager
-from ..sandbox.runtime_base import HostedEnvironmentKeySpec, HostedPoolKey, HostedRequestLifecycle, HostedRuntimeIdentity, HostedWorkerSlot
+from ..sandbox.js_runtime import HostedJsRuntimeBase
+from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 from ..sandbox.workflow_python_contract import workflow_python_node_not_implemented_response
 
@@ -15,6 +16,9 @@ from ..sandbox.workflow_python_contract import workflow_python_node_not_implemen
 class WorkflowHelperMixin:
     def _workflow_python_runtime_manager(self) -> HostedPythonRuntimeManager:
         return HostedPythonRuntimeManager(self.hosting_root)
+
+    def _workflow_js_runtime_base(self) -> HostedJsRuntimeBase:
+        return HostedJsRuntimeBase(self.hosting_root)
 
     def _workflow_python_pool_registry(self) -> HostedProcessPoolRegistry:
         registry = getattr(self, "_workflow_python_runtime_pools", None)
@@ -110,40 +114,12 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         node_policy = dict(node or {})
-        runtime_hash = str(node_policy.get("node_executable") or node_policy.get("runtime_hash") or "node-default").strip() or "node-default"
-        spec = HostedEnvironmentKeySpec(
-            environment_name=str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
-            runtime=HostedRuntimeIdentity(
-                runtime_kind="workflow_js",
-                profile=prof,
-                runtime_hash=runtime_hash,
-                capability_profile="workflow_js_helper",
-            ),
-            sandbox_policy=dict(sandbox_policy or {}),
-            required_imports=list(node_policy.get("required_imports") or []),
-            package_pins=dict(node_policy.get("package_pins") or {}),
-            dependency_lock_hash=str(node_policy.get("dependency_lock_hash") or "").strip() or None,
+        return self._workflow_js_runtime_base().environment_spec(
+            profile=prof,
+            environment_name=environment_name,
+            node_policy=node_policy,
+            sandbox_policy=sandbox_policy,
         )
-        env = spec.to_dict()
-        return {
-            "status": "ok",
-            **env,
-            "environment": {
-                "environment_key": env["environment_key"],
-                "environment_key_full": env["environment_key_full"],
-                "environment_name": env["environment_name"],
-                "environment_root_kind": "runtime_envs",
-                "environment_consumer_kind": "workflow_js_helper",
-                "workflow_runtime_kind": "workflow_js",
-                "workflow_profile": prof,
-                "runtime_hash": runtime_hash,
-                "sandbox_policy_hash": env["sandbox_policy_hash"],
-                "required_imports": list(env["required_imports"]),
-                "package_pins": dict(env["package_pins"]),
-                "dependency_lock_hash": env.get("dependency_lock_hash"),
-                "install_status": "not_applicable",
-            },
-        }
 
     def _workflow_python_pool_key(self, environment_key: str) -> HostedPoolKey:
         return HostedPoolKey(sandbox_kind="workflow_python", environment_key=str(environment_key or "").strip())

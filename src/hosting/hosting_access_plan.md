@@ -48,7 +48,7 @@ Explicitly out of scope for this epic unless separately requested:
   - Uses `<hosting_root>/runtime_envs/<venv_key>` for non-toolbox Python runtime environments.
   - Keeps existing toolbox `<hosting_root>/toolbox_venvs/<venv_key>` compatibility until toolbox migration is complete.
 
-- [ ] Define optional `HostedJsRuntimeBase` only if needed during JS helper migration.
+- [x] Define optional `HostedJsRuntimeBase` only if needed during JS helper migration.
   - Owns Node executable/runtime identity and JS-specific dependency identity if added later.
   - Does not reuse Python venv machinery.
   - May initially be a thin wrapper over `HostedProcessSandboxBase`.
