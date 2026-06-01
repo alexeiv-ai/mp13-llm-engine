@@ -25,6 +25,27 @@ from .constants import (
     VALID_AUTH_ROLES,
 )
 
+_WORKFLOW_PYTHON_COMMANDS = {
+    "workflow-python-environment-spec",
+    "workflow-python-prepare-environment",
+    "workflow-python-lock-environment",
+    "workflow-python-verify-environment",
+    "workflow-python-install-environment",
+    "workflow-python-verify-install-receipt",
+    "workflow-python-ensure",
+    "workflow-python-execute",
+    "workflow-python-resources",
+    "workflow-python-set-capacity",
+    "workflow-python-cancel-request",
+}
+
+_WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
+    "workflow-python-environment-spec",
+    "workflow-python-verify-environment",
+    "workflow-python-verify-install-receipt",
+    "workflow-python-resources",
+}
+
 
 class AuthMixin:
     @staticmethod
@@ -229,6 +250,7 @@ class AuthMixin:
             "workflow-python-helper-resources",
             "workflow-python-helper-set-capacity",
             "workflow-python-helper-cancel-request",
+            *_WORKFLOW_PYTHON_COMMANDS,
             "get-registration",
             "shutdown",
             "ensure-running",
@@ -335,6 +357,7 @@ class AuthMixin:
                 "workflow-python-helper-resources",
                 "workflow-python-helper-set-capacity",
                 "workflow-python-helper-cancel-request",
+                *_WORKFLOW_PYTHON_COMMANDS,
                 "get-registration",
                 "shutdown",
                 "ensure-running",
@@ -408,6 +431,7 @@ class AuthMixin:
                 "workflow-python-helper-resources",
                 "workflow-python-helper-set-capacity",
                 "workflow-python-helper-cancel-request",
+                *_WORKFLOW_PYTHON_COMMANDS,
                 "get-registration",
                 "shutdown",
                 "ensure-running",
@@ -513,6 +537,7 @@ class AuthMixin:
                 "inspect-capabilities",
                 "workflow-js-helper-resources",
                 "workflow-python-helper-resources",
+                *_WORKFLOW_PYTHON_OBSERVE_COMMANDS,
                 "logs-tail",
                 "logs-follow",
                 "sandbox-fs-list",

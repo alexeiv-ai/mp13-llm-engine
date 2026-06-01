@@ -267,6 +267,7 @@ Explicitly out of scope for this epic unless separately requested:
 - [x] Add sync tests through new API.
 - [x] Add compatibility tests through old helper API.
 - [x] Add environment-key isolation tests to prove incompatible policies/dependencies do not share pools.
+- [x] Add RBAC and daemon claim-policy coverage for new `workflow-python-*` commands.
 
 ## Phase 5: Workflow Python Node Profile
 
