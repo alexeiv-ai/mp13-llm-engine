@@ -303,11 +303,11 @@ Explicitly out of scope for this epic unless separately requested:
 
 - [ ] Rewire `spawn_workflow_python_helper` service method to call `workflow_python(profile=helper)`.
 - [ ] Rewire channel method `spawn_workflow_python_helper`.
-- [ ] Rewire `workflow_python_helper_resources`.
-- [ ] Rewire `set_workflow_python_helper_capacity`.
-- [ ] Rewire `cancel_workflow_python_helper_request`.
+- [x] Rewire `workflow_python_helper_resources`.
+- [x] Rewire `set_workflow_python_helper_capacity`.
+- [x] Rewire `cancel_workflow_python_helper_request`.
 - [ ] Rewire `execute_workflow_python_helper` proxy path.
-- [ ] Keep old command names as aliases.
+- [x] Keep old command names as aliases.
 - [ ] Mark old implementation files for removal once dependent callers migrate.
 - [ ] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 

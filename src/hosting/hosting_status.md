@@ -46,6 +46,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added direct CLI compatibility tests for workflow Python facade resource/capacity/cancel commands and updated `sandbox_test_status.md` with the new runtime refactor test navigation.
 - Added RBAC/daemon policy support for the new `workflow-python-*` command family, with worker-user control access and diagnostic observe-only coverage.
 - Started Phase 5 by adding `hosting.sandbox.workflow_python_contract`: node-profile request normalization, validation, response-envelope fields, stream event names, and a structured not-implemented response. `workflow_python(profile=node)` now returns that stable envelope instead of the older generic profile error; the streaming worker remains pending.
+- Started Phase 6 compatibility rewiring: legacy Python helper resources/capacity/cancel methods now preserve old helper results while attaching `environment_key`, `workflow_runtime_kind=workflow_python`, and `workflow_pool` metadata for annotated registrations.
 
 ## Key Design Decisions So Far
 

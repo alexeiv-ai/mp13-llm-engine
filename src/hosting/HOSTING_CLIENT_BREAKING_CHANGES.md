@@ -43,6 +43,7 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
   - Old: `workflow-python-helper-resources`, `workflow-python-helper-set-capacity`, `workflow-python-helper-cancel-request`.
   - New: `workflow-python-resources`, `workflow-python-set-capacity`, `workflow-python-cancel-request`.
   - Preferred selector: `environment_key`; temporary migration selector: annotated `engine_id`.
+  - Compatibility behavior: old Python helper resource/capacity/cancel calls now include `environment_key`, `workflow_runtime_kind=workflow_python`, and `workflow_pool` when the helper registration has been annotated through `workflow-python-ensure` or `workflow-python-execute`.
 
 - Node-profile contract:
   - New contract path: `workflow-python-execute` with `profile=node`.
@@ -158,7 +159,8 @@ Minimal helper-profile execute payload:
 
 - [ ] Stop scripting only old commands after new workflow commands are available.
 - [x] Start using new workflow commands for new integrations.
-- [ ] Old helper commands will remain temporary aliases during migration.
+- [x] Old helper commands will remain temporary aliases during migration.
+  - Python helper resources/capacity/cancel now expose workflow pool metadata for annotated registrations.
 - [x] Interactive CLI screens will move from helper-only views to workflow runtime pool views keyed by environment.
   - Annotated Python helper registrations now use `workflow-python-*` facade calls inside the workflow helper management screen.
 
