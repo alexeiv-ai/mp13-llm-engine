@@ -75,5 +75,6 @@ def test_node_not_implemented_response_uses_node_envelope() -> None:
     assert out["output"] is None
     assert out["state_patch"] is None
     assert out["artifacts"] == []
+    assert out["artifact_store"]["reason"] == "artifact_store_not_implemented"
     assert out["error"]["code"] == "workflow_python_node_profile_not_implemented"
     assert out["audit"]["package_id"] == "pkg"

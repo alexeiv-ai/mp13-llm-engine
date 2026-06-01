@@ -53,6 +53,7 @@ Use these command names through `EngineHostControlChannel.invoke_control_command
 - Node-profile contract:
   - New contract path: `workflow-python-execute` with `profile=node`.
   - Current behavior: returns a structured `workflow_python_node_profile_not_implemented` envelope with the stable node request/response contract.
+  - Artifact refs are contract fields, but the current pending-worker envelope reports `artifact_store.status=unavailable` and `reason=artifact_store_not_implemented` until a store is wired.
   - Future behavior: same contract will be backed by async/streaming execution.
 
 Minimal helper-profile execute payload:

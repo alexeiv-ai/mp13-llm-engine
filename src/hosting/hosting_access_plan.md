@@ -295,7 +295,7 @@ Explicitly out of scope for this epic unless separately requested:
   - audit metadata
 
 - [ ] Implement async/streaming execution for node profile.
-- [ ] Implement artifact ref plumbing or explicit placeholder errors if artifact store is not ready.
+- [x] Implement artifact ref plumbing or explicit placeholder errors if artifact store is not ready.
 - [x] Implement latest-progress snapshot in resource/request-status responses.
 - [ ] Add tests for streamed progress, stdout/stderr summary truncation, result, structured error, timeout, cancel, and metrics.
 
