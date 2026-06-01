@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import sys
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeManager
+from ..sandbox.runtime_base import HostedRequestLifecycle
 
 
 class WorkflowHelperMixin:
@@ -69,6 +71,41 @@ class WorkflowHelperMixin:
         key = str(environment_key or "").strip()
         return f"workflow-python-{key[:16]}" if key else "workflow-python-helper"
 
+    def _annotate_workflow_python_registration(
+        self,
+        *,
+        engine_id: str,
+        profile: str,
+        environment_key: str,
+        environment: Dict[str, Any],
+    ) -> None:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            return
+        rows = self._read_engines()
+        changed = False
+        for row in rows:
+            if str(row.get("engine_id") or "").strip() != eid:
+                continue
+            env_row = dict(row.get("environment") or {})
+            env_row.update(dict(environment or {}))
+            env_row["environment_key"] = str(environment_key or "").strip() or None
+            env_row["workflow_runtime_kind"] = "workflow_python"
+            env_row["workflow_profile"] = str(profile or "helper").strip() or "helper"
+            row["environment"] = env_row
+            capabilities = dict(row.get("capabilities") or {})
+            capabilities.update(
+                {
+                    "workflow_python": True,
+                    "workflow_python_profile": str(profile or "helper").strip() or "helper",
+                    "environment_key": str(environment_key or "").strip() or None,
+                }
+            )
+            row["capabilities"] = capabilities
+            changed = True
+        if changed:
+            self._write_engines(rows)
+
     def ensure_workflow_python(
         self,
         *,
@@ -104,6 +141,12 @@ class WorkflowHelperMixin:
         existing = self.get_registration(eid)
         if existing:
             ensured = self.ensure_running(eid)
+            self._annotate_workflow_python_registration(
+                engine_id=eid,
+                profile=prof,
+                environment_key=derived_key,
+                environment=dict(env.get("environment") or {}),
+            )
             return {
                 "status": "ok",
                 "outcome": "already_registered",
@@ -119,6 +162,12 @@ class WorkflowHelperMixin:
             capacity=capacity,
             sandbox_policy=sandbox_policy,
             worker_profile_class=worker_profile_class,
+        )
+        self._annotate_workflow_python_registration(
+            engine_id=eid,
+            profile=prof,
+            environment_key=derived_key,
+            environment=dict(env.get("environment") or {}),
         )
         return {
             "status": "ok",
@@ -160,6 +209,15 @@ class WorkflowHelperMixin:
         )
         if str(ensured.get("status") or "") != "ok":
             return ensured
+        lifecycle = HostedRequestLifecycle(
+            request_id=str(req.get("request_id") or "").strip() or "workflow-python-sync",
+            environment_key=str(ensured.get("environment_key") or ""),
+            sandbox_kind="workflow_python",
+            profile=prof,
+            engine_id=str(ensured["engine_id"]),
+            submitted_at=time.time(),
+        )
+        lifecycle.mark_started(engine_id=str(ensured["engine_id"]))
         out = self.proxy_rpc_call(
             engine_id=str(ensured["engine_id"]),
             method="execute_workflow_python_helper",
@@ -167,6 +225,7 @@ class WorkflowHelperMixin:
             timeout_seconds=float(dict(req.get("limits") or {}).get("timeout_ms") or 30000) / 1000.0 + 5.0,
         )
         result = dict(out.get("result") or out or {})
+        lifecycle.mark_finished("ok" if bool(result.get("ok", False)) else "error", reason=str(result.get("reason") or "") or None)
         return {
             "status": "ok" if bool(result.get("ok", False)) else "error",
             "ok": bool(result.get("ok", False)),
@@ -175,6 +234,9 @@ class WorkflowHelperMixin:
             "environment_key": str(ensured.get("environment_key") or ""),
             "output": result.get("result"),
             "result": result,
+            "metrics": {
+                "request": lifecycle.to_dict(),
+            },
         }
 
     def workflow_python_resources(

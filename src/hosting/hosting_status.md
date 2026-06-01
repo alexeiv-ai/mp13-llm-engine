@@ -38,6 +38,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Completed the first internal Phase 2 pool foundation in `hosting.sandbox.runtime_pool`: pool registry, one-worker-per-environment-key scheduling, capacity changes, saturation tracking, request lifetime completion, cancellation accounting, error grouping, and resource rollups. This is not wired into workflow routing yet.
 - Completed the first internal Phase 3 Python runtime wrapper in `hosting.sandbox.python_runtime`: workflow-facing environment specs, environment-key identity, realization, prepare/lock/verify install flow, and runtime Python selection backed by the existing toolbox environment manager. This is not exposed through service/channel/CLI yet.
 - Started Phase 4 with a compatibility-first `workflow_python` facade. Service, daemon, channel, and direct CLI surfaces now expose environment spec/prepare/lock/verify/install/receipt commands plus helper-profile ensure/execute/resources/capacity/cancel. The backing worker is still the existing Python helper worker; `profile=node` still returns a not-implemented error.
+- Extended the Phase 4 facade to annotate helper-backed registrations with workflow runtime/environment metadata and return request lifecycle metrics for sync helper-profile execution.
 
 ## Key Design Decisions So Far
 
@@ -78,5 +79,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Add internal Python runtime environment tests for workflow spec identity, realization, install plan/lock/verify, and runtime Python selection.
 - [x] Draft the new workflow Python API surface in service/channel/CLI for helper-profile compatibility.
 - [ ] Wire workflow Python facade to the internal pool registry and persist environment metadata on registrations.
+- [x] Persist workflow Python environment metadata on helper-backed registrations.
+- [ ] Wire workflow Python facade to the internal pool registry for host-side scheduling.
 - [ ] Add interactive CLI views/actions for workflow runtime pools.
 - [ ] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.

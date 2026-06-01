@@ -625,6 +625,36 @@ def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path:
     assert seen["capacity"] == 3
 
 
+def test_ensure_workflow_python_annotates_existing_registration(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    svc.register_spawned(
+        engine_id="wf-py-existing",
+        pid=0,
+        command=["python", "-m", "hosting.workflow_python_helper_ipc"],
+        worker_profile_class="generic",
+        executor_kind="workflow_python_helper",
+        capabilities={"workflow_python_helper": True},
+    )
+    monkeypatch.setattr(svc, "ensure_running", lambda _engine_id: {"status": "already_running"})
+
+    out = svc.ensure_workflow_python(
+        profile="helper",
+        engine_id="wf-py-existing",
+        python={"import_allowlist": ["json"], "package_pins": {}},
+    )
+
+    assert out["status"] == "ok"
+    reg = svc.get_registration("wf-py-existing")
+    assert reg is not None
+    assert reg["environment"]["environment_key"] == out["environment_key"]
+    assert reg["environment"]["workflow_runtime_kind"] == "workflow_python"
+    assert reg["capabilities"]["workflow_python"] is True
+    assert reg["capabilities"]["environment_key"] == out["environment_key"]
+
+
 def test_ensure_workflow_python_rejects_environment_key_mismatch(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -680,5 +710,6 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
     assert out["status"] == "ok"
     assert out["ok"] is True
     assert out["output"] == {"accepted": True}
+    assert out["metrics"]["request"]["status"] == "ok"
     assert calls["engine_id"] == "workflow-python-demo"
     assert calls["method"] == "execute_workflow_python_helper"
