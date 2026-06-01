@@ -59,6 +59,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Rewired `EngineHostControlChannel.spawn_workflow_python_helper(...)` to forward to `workflow-python-ensure` while retaining the old typed method signature for dependent callers.
 - Rewired direct old `proxy_rpc_call(method=execute_workflow_python_helper)` calls for Python helpers through `execute_workflow_python(profile=helper)` so legacy execution now records workflow pool/request metrics before the raw worker RPC.
 - Marked `workflow_python_helper_ipc.py` as a temporary compatibility worker to remove or reduce after dependent callers complete migration to workflow Python facade APIs.
+- Reconciled plan tracking for implemented foundations: temporary Python helper compatibility, workflow JS facade, generic/model separation, persisted workflow environment identity, environment-keyed pool registry, one-worker-per-key scheduling, resource reporting, capacity adjustment, and cancellation.
 
 ## Key Design Decisions So Far
 

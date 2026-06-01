@@ -61,11 +61,11 @@ Explicitly out of scope for this epic unless separately requested:
   - Uses `executor_kind="workflow_python"`.
   - Uses a new contract name such as `hosting.workflow_python.worker.v1`.
 
-- [ ] Keep `workflow_python_helper` as a temporary compatibility surface.
+- [x] Keep `workflow_python_helper` as a temporary compatibility surface.
   - Old spawn/execute/resources/capacity/cancel APIs call the new `workflow_python(profile=helper)` implementation.
   - The shim must stay thin so old implementation can be removed promptly after migration.
 
-- [ ] Add `workflow_js` as a concrete public hosted runtime kind or compatibility facade.
+- [x] Add `workflow_js` as a concrete public hosted runtime kind or compatibility facade.
   - Supports `profile=helper` first.
   - Existing `workflow_js_helper` becomes an alias after migration.
   - Uses the shared process/pool foundation, not Python runtime environment code.
@@ -74,7 +74,7 @@ Explicitly out of scope for this epic unless separately requested:
   - Toolbox remains semantically separate: toolbox IDs, staged bundles, manifests, tool registry, tool gating/scope semantics, callbacks, repair/reconcile.
   - Toolbox should migrate to the shared base after workflow Python proves the base.
 
-- [ ] Keep generic/model workers separate.
+- [x] Keep generic/model workers separate.
   - Borrow protocol ideas only.
   - Do not merge `hosting.engine_worker_ipc` model semantics into workflow/toolbox contracts.
 
@@ -89,7 +89,7 @@ Explicitly out of scope for this epic unless separately requested:
   - Host should derive the authoritative key or verify a caller-provided key against normalized inputs.
   - Do not let clients route by arbitrary key if it would merge incompatible policies/dependencies.
 
-- [ ] Persist environment identity on worker registrations.
+- [x] Persist environment identity on worker registrations.
   - Include `environment_key`, `environment_name`, `environment_root_kind`, `environment_consumer_kind`, profile, runtime hash, sandbox policy hash, import/package/dependency identity, and install/receipt status summary.
 
 - [ ] Ensure different keys never share a live worker process or hot child process pool.
@@ -97,15 +97,15 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Pooling, Metrics, And Request Tracking
 
-- [ ] Implement a host-side pool registry by concrete kind and `environment_key`.
+- [x] Implement a host-side pool registry by concrete kind and `environment_key`.
   - Example key path: `workflow_python/<environment_key>`.
   - Tracks desired capacity, current capacity, active calls, queued or rejected calls, workers, active request IDs, and recent terminal outcomes.
 
-- [ ] Start with one worker per environment key with an internal hot child pool.
+- [x] Start with one worker per environment key with an internal hot child pool.
   - `desired_capacity=N` maps to one worker with N execution slots where practical.
   - Keep design open for replicas: multiple workers per key, each with per-worker capacity.
 
-- [ ] Add a scheduler policy.
+- [x] Add a scheduler policy.
   - Select existing available worker.
   - Spawn/ensure worker when none exists.
   - Grow within capacity if needed.
@@ -127,14 +127,14 @@ Explicitly out of scope for this epic unless separately requested:
   - Error count by reason.
   - Per-worker CPU/RSS where available.
 
-- [ ] Add resource reporting by `environment_key`.
+- [x] Add resource reporting by `environment_key`.
   - Roll up desired capacity, active calls, available slots, worker count, process count, active request IDs, metrics, and worker details.
 
-- [ ] Add capacity adjustment by `environment_key`.
+- [x] Add capacity adjustment by `environment_key`.
   - Changing desired capacity updates scheduler state and worker/internal pool capacity.
   - Decrease retires idle excess workers/children and allows active calls to finish unless explicit cancel is requested.
 
-- [ ] Add cancellation by `environment_key + request_id`.
+- [x] Add cancellation by `environment_key + request_id`.
   - Locate active request in pool registry.
   - Forward to worker request cancellation when supported.
   - Fall back to killing/replacing the owning child/worker when contract requires it.
