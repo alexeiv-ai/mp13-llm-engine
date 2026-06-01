@@ -31,6 +31,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Seeded this status file.
 - Completed Phase 0 test inventory. Existing focused helper coverage is in `tests/test_workflow_python_helper_ipc.py`, `tests/test_workflow_js_helper_ipc.py`, `tests/test_workflow_helper_service.py`, and `tests/test_engine_host_channel.py`.
 - Existing sandbox navigation remains in `src/hosting/sandbox/sandbox_test_status.md`; new runtime-base tests should be added beside the helper/service tests rather than replacing the current sandbox suite.
+- Started Phase 1 with `hosting.sandbox.runtime_base`: deterministic sandbox policy hashes, runtime/environment key specs, pool keys, worker slot snapshots, request lifecycle records, stream event envelopes, and pool metrics.
 
 ## Key Design Decisions So Far
 
@@ -52,6 +53,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 ## Known Gaps Before Implementation
 
 - [ ] No formal hosted process pool abstraction exists yet.
+- [x] First deterministic `environment_key` model exists in `hosting.sandbox.runtime_base`.
 - [ ] No first-class `environment_key` routing exists for workflow Python/JS.
 - [ ] Existing helper pools are tied to helper engine IDs and internal child pools.
 - [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
@@ -62,7 +64,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 
 ## Next Implementation Steps
 
-- [ ] Add internal data models for environment keys, pool keys, request lifetime, stream events, and metrics.
-- [ ] Implement stable environment-key derivation tests before changing worker routing.
+- [x] Add internal data models for environment keys, pool keys, request lifetime, stream events, and metrics.
+- [x] Implement stable environment-key derivation tests before changing worker routing.
 - [ ] Draft the new workflow Python API surface in service/channel/CLI.
 - [ ] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
