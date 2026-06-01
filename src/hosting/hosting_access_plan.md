@@ -55,7 +55,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 ### Concrete Public Kinds
 
-- [ ] Add `workflow_python` as a concrete public hosted runtime kind.
+- [x] Add `workflow_python` as a concrete public hosted runtime kind.
   - Supports `profile=helper` first.
   - Supports `profile=node` after streaming/async response contract is ready.
   - Uses `executor_kind="workflow_python"`.
@@ -70,7 +70,7 @@ Explicitly out of scope for this epic unless separately requested:
   - Existing `workflow_js_helper` becomes an alias after migration.
   - Uses the shared process/pool foundation, not Python runtime environment code.
 
-- [ ] Keep `toolbox_executor` as a concrete public hosted runtime kind.
+- [x] Keep `toolbox_executor` as a concrete public hosted runtime kind.
   - Toolbox remains semantically separate: toolbox IDs, staged bundles, manifests, tool registry, tool gating/scope semantics, callbacks, repair/reconcile.
   - Toolbox should migrate to the shared base after workflow Python proves the base.
 

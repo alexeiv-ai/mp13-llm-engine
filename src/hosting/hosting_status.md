@@ -15,7 +15,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Implementation started.
 - [x] Tests updated for the first runtime base, Python environment base, pool registry, and workflow Python compatibility facade slices.
 - [x] Direct CLI updated for initial `workflow-python-*` commands.
-- [ ] Docs not updated beyond planning/tracking files.
+- [x] Docs updated beyond planning/tracking files.
 
 ## Active Phase
 
@@ -23,7 +23,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Phase 1: Shared Base Contracts And Models.
 - [x] Phase 2: Hosted Process Pool Base.
 - [x] Phase 3: Python Runtime Environment Base.
-- [ ] Phase 4: New Workflow Python Worker.
+- [x] Phase 4: New Workflow Python Worker.
+- [ ] Phase 5: Workflow Python Node Profile.
 
 ## Progress Log
 
@@ -101,11 +102,11 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] First-class `environment_key` routing exists for helper-profile workflow JS facade calls.
 - [ ] Existing helper pools are tied to helper engine IDs and internal child pools.
 - [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
-- [ ] Existing workflow environment management is present mostly through toolbox-shaped APIs.
+- [x] Existing workflow environment management is present mostly through toolbox-shaped APIs.
 - [x] Internal workflow-facing Python environment manager exists without toolbox IDs/tool keys in its API.
-- [ ] Existing helper response shape is narrower than planned workflow node responses.
+- [x] Existing helper response shape is narrower than planned workflow node responses.
 - [ ] Existing helper streaming support is absent.
-- [ ] Interactive CLI is still helper-command oriented.
+- [x] Interactive CLI is still helper-command oriented.
 - [x] Direct CLI has initial `workflow-python-*` commands.
 
 ## Next Implementation Steps
