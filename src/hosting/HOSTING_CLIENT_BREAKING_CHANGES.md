@@ -105,7 +105,9 @@ Minimal helper-profile execute payload:
 
 - [x] Stop using workflow execution code to install dependencies.
 - [x] Start treating dependency installation as a host-controlled environment-management operation.
-  - mp13-docs migration: N/A for install flow ownership; the client has no dependency-install execution path and leaves dependency realization to hosting.
+  - Host responsibility: expose and enforce `workflow-python-prepare-environment`, `workflow-python-lock-environment`, `workflow-python-verify-environment`, `workflow-python-install-environment`, and `workflow-python-verify-install-receipt`. Install execution is allowed only through the explicit environment-management command with `allow_execution=true`.
+  - Client responsibility when dependencies matter: call the environment lifecycle commands before execute, persist or pass the resulting `environment_key` / install metadata, and execute only after the host reports a verified environment.
+  - mp13-docs migration: no client work is missing for the current helper-profile migration because mp13-docs does not request dependency installation or dependency-bearing workflow node execution. It passes package pins/import metadata only as environment identity/policy input and leaves actual dependency realization to the hosting environment-management API when a future feature needs it.
 
 - [x] Stop relying on package ID or workflow ID to isolate process pools.
 - [x] Start using package/workflow IDs as provenance/audit fields unless they change runtime dependencies or policy.
@@ -213,20 +215,28 @@ Minimal JS execute payload:
 
 ## Planned Migration: Streaming
 
-- [x] Stop using sync helper execution for long-running workflow node work. N/A for mp13-docs: this project currently executes helper-profile workflow modules only and does not own long-running node-profile workflow execution.
-- [x] Start using streaming APIs for `workflow_python(profile=node)`. N/A for mp13-docs: no node-profile streaming client path is present in this repo.
+- [x] Stop using sync helper execution for long-running workflow node work.
+  - Client responsibility when long-running node-profile work is introduced: use `workflow-python-stream-open/recv/send/close` instead of synchronous helper execution.
+  - mp13-docs migration: no client work is missing for the current helper-profile migration because this project executes short helper-profile workflow modules only.
+- [x] Start using streaming APIs for `workflow_python(profile=node)`.
+  - Host responsibility: provide workflow Python stream-open/recv/send/close commands and shared stream event types.
+  - Client responsibility when node-profile streaming is adopted: open a stream, receive progress/log/artifact/result/error events, send cancel when needed, and close the stream.
+  - mp13-docs migration: no node-profile streaming client path exists in this repo today, so this is not required to complete the helper-profile migration.
   - Open stream.
   - Receive progress/log/artifact/result/error events.
   - Send cancel.
   - Close stream.
 
-- [x] Start tolerating partial progress and terminal events as separate records. N/A for mp13-docs helper-profile migration; streaming event handling belongs to future node-profile integration.
+- [x] Start tolerating partial progress and terminal events as separate records.
+  - Client responsibility when streaming is adopted: do not assume result/error arrives in the same record as progress/log output.
+  - mp13-docs migration: no client work is missing for helper-profile execution; this belongs to future node-profile integration.
 - [x] Start handling node-profile execution envelopes during rollout.
   - Shared stream event type names are now centralized in `hosting.sandbox.runtime_base.HOSTED_STREAM_EVENT_TYPES`; cancel control messages use `{"action":"cancel","request_id":"..."}`.
 
 ## Planned Migration: CLI And Interactive CLI
 
-- [x] Stop scripting only old commands after new workflow commands are available. N/A for mp13-docs: no hosting CLI scripts in this repo were using the helper-only commands.
+- [x] Stop scripting only old commands after new workflow commands are available.
+  - mp13-docs migration: no client work is missing here because this repo did not have hosting CLI scripts using the removed helper-only command names.
 - [x] Start using new workflow commands for new integrations.
 - [x] Old helper commands have been removed from public CLI/channel/daemon/auth surfaces after migration.
   - Internal helper worker entrypoints remain while the facade reuses the current worker implementations.
@@ -236,11 +246,15 @@ Minimal JS execute payload:
 
 ## Removal Candidates After Migration
 
-- [x] Remove or reduce `workflow_python_helper_ipc.py` to a thin compatibility entrypoint. N/A for mp13-docs: host-internal removal is owned by mp13-llm-engine.
+- [x] Remove or reduce `workflow_python_helper_ipc.py` to a thin compatibility entrypoint.
+  - Host responsibility: this is mp13-llm-engine-internal cleanup. Dependent projects should not import or call the helper IPC module directly.
   - Marked in code as a temporary compatibility worker; do not add new public host-facing behavior there.
-- [x] Remove or reduce `workflow_js_helper_ipc.py` to a thin compatibility entrypoint. N/A for mp13-docs: host-internal removal is owned by mp13-llm-engine.
-- [x] Remove old helper-specific service branches once dependent projects use workflow runtime APIs. N/A for mp13-docs: public helper command/channel/daemon/auth surfaces were removed; service worker branches remain internal implementation details behind the facades.
-- [x] Remove compatibility response fields only after clients confirm migration. N/A for mp13-docs: this client accepts the current workflow envelope and compatibility-shaped helper result nested inside it.
+- [x] Remove or reduce `workflow_js_helper_ipc.py` to a thin compatibility entrypoint.
+  - Host responsibility: this is mp13-llm-engine-internal cleanup. Dependent projects should use `workflow-js-execute`, not `execute_workflow_js_helper`.
+- [x] Remove old helper-specific service branches once dependent projects use workflow runtime APIs.
+  - Host responsibility: public helper command/channel/daemon/auth surfaces were removed; remaining service worker branches are internal implementation details behind the facades.
+- [x] Remove compatibility response fields only after clients confirm migration.
+  - Client expectation: migrated clients should consume the workflow envelope and treat compatibility-shaped helper results as nested response data, not as the API contract.
 
 ## Removed Public Command Names After Migration
 
@@ -264,8 +278,11 @@ Minimal JS execute payload:
 
 - [x] Add client-side support for host-derived `environment_key`.
 - [x] Add client-side support for workflow runtime kind/profile fields.
-- [x] Add client-side support for streaming workflow node responses. N/A for mp13-docs helper-profile migration; no node-profile streaming client exists yet.
-- [x] Add client-side support for environment prepare/lock/verify/install flows. N/A for mp13-docs current workflow helpers; dependency installation is host-managed and not triggered by this client.
+- [x] Add client-side support for streaming workflow node responses.
+  - Required only for clients that execute long-running `workflow_python(profile=node)` work. The current mp13-docs helper-profile migration is complete without this because no node-profile streaming client path exists yet.
+- [x] Add client-side support for environment prepare/lock/verify/install flows.
+  - Required only for clients that request dependency-bearing workflow environments. The host owns the lifecycle commands and install enforcement; those clients must call the commands and wait for host verification before execute.
+  - The current mp13-docs helper-profile migration is complete without client-side install orchestration because mp13-docs does not trigger dependency installation from workflow execution.
 - [x] Add client-side support for per-environment resource/capacity views.
 - [x] Add client-side support for request lifetime and cancellation state.
 - [x] Keep schema validation and workflow authorization in the GUI/backend.

@@ -404,12 +404,13 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 - [x] Clients should start using or accepting host-derived `environment_key`.
 - [x] Clients should stop assuming `package_pins` are enforced during helper execution until host reports a verified runtime environment.
 - [x] Clients should start calling explicit prepare/lock/verify/install APIs for dependency-bearing workflow environments.
-  - N/A for migrated helper-profile clients that do not install dependencies.
+  - Required only for clients that request dependency-bearing workflow environments. Hosting owns the lifecycle commands and install enforcement; those clients must call the lifecycle commands and wait for host verification before execute.
+  - The migrated helper-profile client path is complete without install orchestration because it does not trigger dependency installation from workflow execution.
 - [x] Clients should stop expecting different dependency/policy sets to share helper workers.
 - [x] Clients should start reading resource/capacity/metrics by `environment_key`.
 - [x] Clients should start passing stable `request_id` for cancellation and request lifetime tracking.
 - [x] Clients should use streaming APIs for long-running node-profile work.
-  - N/A for migrated helper-profile clients that do not execute node-profile long-running work.
+  - Required only for clients that execute long-running node-profile work. The migrated helper-profile client path is complete without streaming because it executes short helper-profile modules.
 
 ## Verification Checklist
 
