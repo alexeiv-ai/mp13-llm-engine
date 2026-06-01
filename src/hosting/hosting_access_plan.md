@@ -353,13 +353,14 @@ Explicitly out of scope for this epic unless separately requested:
 ## Phase 9: Toolbox Migration To Shared Base
 
 - [x] Map toolbox worker lifecycle onto `HostedProcessSandboxBase`.
-- [ ] Keep toolbox public APIs unchanged during migration.
-- [ ] Keep toolbox staged bundle, manifest, tool routing, callbacks, gate/scope, repair/reconcile semantics unchanged.
-- [ ] Reuse `HostedPythonRuntimeBase` for toolbox environment realization where compatible.
+- [x] Keep toolbox public APIs unchanged during migration.
+- [x] Keep toolbox staged bundle, manifest, tool routing, callbacks, gate/scope, repair/reconcile semantics unchanged.
+- [x] Reuse shared Python/runtime identity concepts where compatible.
+  - Decision: toolbox keeps `ToolboxEnvironmentManager` and `toolbox_venvs` ownership; `HostedToolboxRuntimeBase` adds shared hosted identity without directly inheriting workflow Python environment realization.
 - [x] Preserve existing `<hosting_root>/toolbox_venvs` behavior until a deliberate storage migration is planned.
-- [ ] Add parity tests for toolbox register/execute/cancel/resources/repair/reconcile.
-- [ ] Add tests for callback relay and brokered FS/HTTP after migration.
-- [ ] Update toolbox docs and status notes.
+- [x] Add parity tests for toolbox register/execute/cancel/resources/repair/reconcile.
+- [x] Add tests for callback relay and brokered FS/HTTP after migration.
+- [x] Update toolbox docs and status notes.
 
 ## Phase 10: Cleanup And Removal
 
@@ -389,7 +390,7 @@ Do not front-load all documentation before implementation, because contracts wil
   - CLI docs and examples.
 
 - [x] Keep `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` current for dependent projects.
-- [ ] Keep `src/hosting/hosting_status.md` current after each phase or major PR.
+- [x] Keep `src/hosting/hosting_status.md` current after each phase or major PR.
 
 ## Dependent Project Migration Contract
 
@@ -416,9 +417,9 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 - [x] Integration tests for workflow Python helper compatibility.
 - [x] Integration tests for workflow Python new API.
 - [ ] Integration tests for workflow Python node streaming.
-- [ ] Integration tests for workflow JS helper compatibility.
-- [ ] Integration tests for toolbox parity after migration.
-- [ ] CLI smoke tests.
+- [x] Integration tests for workflow JS helper compatibility.
+- [x] Integration tests for toolbox parity after migration.
+- [x] CLI smoke tests.
 - [ ] Interactive CLI manual verification.
 - [ ] Docs examples verified against actual commands.
 

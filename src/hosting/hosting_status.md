@@ -145,8 +145,10 @@ Remaining unchecked plan items are intentionally not marked complete:
    - toolbox public APIs remain unchanged.
    - toolbox registrations now include shared `environment_key` and
      `environment_identity` metadata through `HostedToolboxRuntimeBase`.
-   - toolbox still needs parity tests, callback/brokered I/O regression
-     coverage after deeper migration, and docs/status updates.
+   - toolbox keeps `ToolboxEnvironmentManager` and `toolbox_venvs` ownership;
+     it does not directly inherit workflow Python environment realization.
+   - toolbox parity/callback/brokered I/O coverage passed after the identity
+     migration (`tests/test_hosting_toolbox_sandbox.py`: 122 passed).
 3. Phase 10 cleanup/removal:
    - old Python/JS helper implementations and compatibility fields must stay
      until dependent clients migrate.

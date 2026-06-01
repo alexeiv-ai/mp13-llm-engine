@@ -306,6 +306,8 @@ Verified from this session about WSL:
    - `2 passed, 14 deselected`
 28. `pytest -q tests/test_hosted_tool_visibility.py tests/test_hosting_toolbox_sandbox.py tests/test_mp13chat_hosted_toolbox_api.py`
    - `123 passed`
+29. `python -m pytest tests/test_hosting_toolbox_sandbox.py -q`
+   - `122 passed`
 
 ## 5. Polished Hosted Chat Smoke Flow
 
