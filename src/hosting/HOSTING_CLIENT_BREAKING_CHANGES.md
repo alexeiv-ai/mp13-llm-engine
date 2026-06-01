@@ -212,6 +212,7 @@ Minimal JS ensure payload:
 ## Removal Candidates After Migration
 
 - [ ] Remove or reduce `workflow_python_helper_ipc.py` to a thin compatibility entrypoint.
+  - Marked in code as a temporary compatibility worker; do not add new public host-facing behavior there.
 - [ ] Remove or reduce `workflow_js_helper_ipc.py` to a thin compatibility entrypoint.
 - [ ] Remove old helper-specific service branches once dependent projects use workflow runtime APIs.
 - [ ] Remove compatibility response fields only after clients confirm migration.

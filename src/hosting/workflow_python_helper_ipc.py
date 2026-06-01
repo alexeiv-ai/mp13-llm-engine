@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Temporary workflow Python helper compatibility worker.
+
+New host-facing integrations should enter through the `workflow-python-*`
+facade commands. This worker remains only as the current helper-profile process
+implementation and is marked for removal or reduction to a thin entrypoint once
+dependent callers migrate.
+"""
+
 import argparse
 import asyncio
 import base64
