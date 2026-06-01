@@ -262,6 +262,74 @@ def test_print_live_consumers_marks_current_interactive_cli(capsys: pytest.Captu
     assert "key:admin-main" in out
 
 
+def test_workflow_pool_active_request_ids_merges_workers() -> None:
+    assert interactive._workflow_pool_active_request_ids(
+        {
+            "active_request_ids": ["req-a"],
+            "workers": [
+                {"active_request_ids": ["req-a", "req-b"]},
+                {"active_request_ids": ["req-c"]},
+            ],
+        }
+    ) == ["req-a", "req-b", "req-c"]
+
+
+def test_manage_workflow_helpers_prefers_workflow_python_facade(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    invocations: list[tuple[str, Dict[str, Any]]] = []
+
+    def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
+        invocations.append((cmd, dict(payload)))
+        if cmd == "discover-running":
+            return {
+                "engines": {
+                    "wf-py": {
+                        "executor_kind": "workflow_python_helper",
+                        "environment": {"environment_key": "env-demo"},
+                        "process_resources": {"workflow_python_capacity": 2},
+                    }
+                }
+            }
+        if cmd == "workflow-python-resources":
+            return {
+                "status": "ok",
+                "engine_id": "wf-py",
+                "environment_key": "env-demo",
+                "workflow_pool": {
+                    "pool_id": "workflow_python/env-demo",
+                    "metrics": {
+                        "desired_capacity": 2,
+                        "worker_count": 1,
+                        "active_calls": 1,
+                        "available_slots": 1,
+                        "saturation_count": 0,
+                        "cancellation_count": 0,
+                        "error_count": 0,
+                        "workers": [{"active_request_ids": ["req-1"]}],
+                        "recent_requests": [{"request_id": "req-0", "status": "ok", "lifetime_ms": 12}],
+                    },
+                },
+            }
+        raise AssertionError(cmd)
+
+    choices = iter(["wf-py", "b"])
+    monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(interactive, "_api_invoke", fake_api)
+    monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
+    monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
+
+    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+
+    assert ("workflow-python-resources", {"engine_id": "wf-py", "profile": "helper", "environment_key": "env-demo"}) in invocations
+    out = capsys.readouterr().out
+    assert "Environment Key" in out
+    assert "workflow_python/env-demo" in out
+    assert "req-1" in out
+
+
 def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
     current = "abcdefghijk"
     other = "other-session-token"

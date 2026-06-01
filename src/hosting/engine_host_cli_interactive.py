@@ -1759,6 +1759,29 @@ def _print_live_consumers(res: Dict[str, Any], session_token: Optional[str]) -> 
             print(f"    - {row.get('actor_id')}: {row.get('connection_count')}")
 
 
+def _workflow_environment_key(info: Dict[str, Any]) -> str:
+    env = dict(dict(info or {}).get("environment") or {})
+    caps = dict(dict(info or {}).get("capabilities") or {})
+    return str(env.get("environment_key") or caps.get("environment_key") or "").strip()
+
+
+def _workflow_pool_active_request_ids(metrics: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for request_id in list(metrics.get("active_request_ids") or []):
+        rid = str(request_id or "").strip()
+        if rid and rid not in seen:
+            seen.add(rid)
+            out.append(rid)
+    for worker in [dict(row or {}) for row in list(metrics.get("workers") or []) if isinstance(row, dict)]:
+        for request_id in list(worker.get("active_request_ids") or []):
+            rid = str(request_id or "").strip()
+            if rid and rid not in seen:
+                seen.add(rid)
+                out.append(rid)
+    return out
+
+
 def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
     _print_block("Loaded Engines & Sandboxes")
     try:
@@ -1977,7 +2000,17 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
             active = resources.get("workflow_helper_pool_active_process_count")
             total = resources.get("workflow_helper_pool_process_count")
             label = "Python" if executor == "workflow_python_helper" else "JS"
-            hint = f"{label} capacity={cap} active={active} total={total}" if cap is not None else label
+            env_key = _workflow_environment_key(dict(info or {}))
+            hint_bits = [label]
+            if env_key:
+                hint_bits.append(f"env={env_key[:16]}")
+            if cap is not None:
+                hint_bits.append(f"capacity={cap}")
+            if active is not None:
+                hint_bits.append(f"active={active}")
+            if total is not None:
+                hint_bits.append(f"total={total}")
+            hint = " ".join(hint_bits)
             opts[eid] = (f"Manage {eid}", hint)
         choice = _prompt_menu("Select Workflow Helper", opts, "b", allow_back=True, allow_changes=False)
         if choice in ("b", "back"):
@@ -1985,19 +2018,26 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
         selected_info = dict(helpers.get(choice) or {})
         selected_executor = str(selected_info.get("executor_kind") or "").strip()
         is_python = selected_executor == "workflow_python_helper"
-        command_prefix = "workflow-python-helper" if is_python else "workflow-js-helper"
-        helper_label = "Workflow Python helper" if is_python else "Workflow JS helper"
+        environment_key = _workflow_environment_key(selected_info)
+        use_workflow_python_facade = bool(is_python and environment_key)
+        command_prefix = "workflow-python" if use_workflow_python_facade else ("workflow-python-helper" if is_python else "workflow-js-helper")
+        helper_label = "Workflow Python runtime" if use_workflow_python_facade else ("Workflow Python helper" if is_python else "Workflow JS helper")
         while True:
+            resource_payload = {"engine_id": choice}
+            if use_workflow_python_facade:
+                resource_payload.update({"profile": "helper", "environment_key": environment_key})
             resources = dict(
                 _api_invoke(
                     args,
                     f"{command_prefix}-resources",
-                    {"engine_id": choice},
+                    resource_payload,
                     session_token=session_token,
                 )
                 or {}
             )
             session_token = _active_session_token(args, session_token)
+            workflow_pool = dict(resources.get("workflow_pool") or {})
+            workflow_pool_metrics = dict(workflow_pool.get("metrics") or {})
             pool = dict(resources.get("pool") or resources.get("node_pool") or {})
             node_rows = [
                 dict(row or {})
@@ -2015,11 +2055,29 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                     for x in list(pool.get("active_request_ids") or [])
                     if str(x or "").strip()
                 ]
+            if workflow_pool_metrics:
+                active_request_ids = _workflow_pool_active_request_ids(workflow_pool_metrics)
+            capacity_value = (
+                workflow_pool_metrics.get("desired_capacity")
+                if workflow_pool_metrics
+                else resources.get("capacity") or pool.get("capacity")
+            )
+            active_value = (
+                workflow_pool_metrics.get("active_calls")
+                if workflow_pool_metrics
+                else resources.get("active_calls")
+            )
+            available_value = (
+                workflow_pool_metrics.get("available_slots")
+                if workflow_pool_metrics
+                else resources.get("available_slots")
+            )
             _kv_rows([
                 ("Engine ID", choice),
-                ("Capacity", resources.get("capacity") or pool.get("capacity")),
-                ("Active Calls", resources.get("active_calls")),
-                ("Available Slots", resources.get("available_slots")),
+                ("Environment Key", environment_key or resources.get("environment_key") or "<legacy helper>"),
+                ("Capacity", capacity_value),
+                ("Active Calls", active_value),
+                ("Available Slots", available_value),
                 ("Processes", (
                     f"active={pool.get('active_process_count') if pool.get('active_process_count') is not None else pool.get('active_node_process_count')}, "
                     f"idle={pool.get('idle_process_count') if pool.get('idle_process_count') is not None else pool.get('idle_node_process_count')}, "
@@ -2029,6 +2087,31 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                 ("RSS", _format_mb_or_na(pool.get("memory_mb") if pool.get("memory_mb") is not None else pool.get("node_memory_mb") if pool.get("node_memory_mb") is not None else resources.get("node_memory_mb") if not is_python else resources.get("python_memory_mb"))),
                 ("Active Requests", ", ".join(active_request_ids) or "<none>"),
             ])
+            if workflow_pool_metrics:
+                _kv_rows([
+                    ("Pool ID", workflow_pool.get("pool_id")),
+                    ("Pool Workers", workflow_pool_metrics.get("worker_count")),
+                    ("Pool Saturation", workflow_pool_metrics.get("saturation_count")),
+                    ("Pool Canceled", workflow_pool_metrics.get("cancellation_count")),
+                    ("Pool Errors", workflow_pool_metrics.get("error_count")),
+                ])
+                recent = [
+                    dict(row or {})
+                    for row in list(workflow_pool_metrics.get("recent_requests") or [])
+                    if isinstance(row, dict)
+                ]
+                if recent:
+                    print()
+                    print("Recent Requests:")
+                    for row in recent[-5:]:
+                        bits = [
+                            f"id={row.get('request_id')}",
+                            f"status={row.get('status')}",
+                            f"lifetime_ms={row.get('lifetime_ms')}",
+                        ]
+                        if row.get("reason"):
+                            bits.append(f"reason={row.get('reason')}")
+                        print(f"  - {', '.join(bits)}")
             if node_rows:
                 print()
                 print("Process Pool:")
@@ -2072,6 +2155,7 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                     f"{command_prefix}-set-capacity",
                     {
                         "engine_id": choice,
+                        **({"profile": "helper", "environment_key": environment_key} if use_workflow_python_facade else {}),
                         "capacity": capacity,
                     },
                     session_token=session_token,
@@ -2092,6 +2176,7 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
                     f"{command_prefix}-cancel-request",
                     {
                         "engine_id": choice,
+                        **({"profile": "helper", "environment_key": environment_key} if use_workflow_python_facade else {}),
                         "request_id": request_id,
                     },
                     session_token=session_token,

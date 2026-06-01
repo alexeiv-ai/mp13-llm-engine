@@ -195,35 +195,35 @@ Explicitly out of scope for this epic unless separately requested:
   - JS helper equivalent behavior.
 - [ ] Capture current CLI command outputs for workflow helper resources/capacity/cancel paths.
 - [ ] Capture current interactive CLI workflow helper screens where practical.
-- [ ] Record baseline status in `src/hosting/hosting_status.md`.
+- [x] Record baseline status in `src/hosting/hosting_status.md`.
 
 ## Phase 1: Shared Base Contracts And Models
 
-- [ ] Add internal data models for hosted sandbox kind, profile, environment key, pool key, worker slot, request lifecycle, stream event, and metrics.
-- [ ] Add shared normalization for sandbox policy hash.
-- [ ] Add shared normalization for runtime/profile identity.
+- [x] Add internal data models for hosted sandbox kind, profile, environment key, pool key, worker slot, request lifecycle, stream event, and metrics.
+- [x] Add shared normalization for sandbox policy hash.
+- [x] Add shared normalization for runtime/profile identity.
 - [ ] Add shared registration metadata helpers.
 - [ ] Add shared resource/metrics response builders.
 - [ ] Add shared cancellation result shape.
-- [ ] Add base tests for environment key stability and policy hash changes.
+- [x] Add base tests for environment key stability and policy hash changes.
 - [ ] Update docs with draft internal contract notes after models stabilize.
 
 ## Phase 2: Hosted Process Pool Base
 
-- [ ] Implement host-side process pool registry.
-- [ ] Implement worker ensure/spawn by pool key.
-- [ ] Implement worker selection by availability.
-- [ ] Implement desired capacity and per-worker capacity state.
-- [ ] Implement resource rollups.
-- [ ] Implement request lifetime registry and recent request ring.
-- [ ] Implement cancel routing by request ID.
-- [ ] Implement metrics collection and latency/concurrency summaries.
-- [ ] Add tests for pool routing, capacity saturation, cancel lookup, and metrics rollup.
+- [x] Implement host-side process pool registry.
+- [x] Implement worker ensure/spawn by pool key.
+- [x] Implement worker selection by availability.
+- [x] Implement desired capacity and per-worker capacity state.
+- [x] Implement resource rollups.
+- [x] Implement request lifetime registry and recent request ring.
+- [x] Implement cancel routing by request ID.
+- [x] Implement metrics collection and latency/concurrency summaries.
+- [x] Add tests for pool routing, capacity saturation, cancel lookup, and metrics rollup.
 
 ## Phase 3: Python Runtime Environment Base
 
 - [ ] Extract workflow-neutral Python environment helpers from `ToolboxEnvironmentManager`.
-- [ ] Expose workflow-specific environment operations without toolbox IDs/tool keys in the public API.
+- [x] Expose workflow-specific environment operations without toolbox IDs/tool keys in the public API.
   - Prepare environment.
   - Lock install.
   - Verify lock.
@@ -232,16 +232,16 @@ Explicitly out of scope for this epic unless separately requested:
   - Verify install receipt.
   - Realize/select runtime Python.
 
-- [ ] Ensure dependency installation is never triggered from workflow execution code.
-- [ ] Require explicit host environment-management API calls for dependency install.
-- [ ] Make package pins/imports either enforced by selected verified environment or explicitly reported as declarative/unverified.
+- [x] Ensure dependency installation is never triggered from workflow execution code.
+- [x] Require explicit host environment-management API calls for dependency install.
+- [x] Make package pins/imports either enforced by selected verified environment or explicitly reported as declarative/unverified.
 - [ ] Persist install and receipt status with environment metadata.
 - [ ] Add GC support for unreferenced `runtime_envs` entries by environment key.
-- [ ] Add tests for no-package runtime env, pinned-package env identity, lock/receipt metadata, and runtime Python selection.
+- [x] Add tests for no-package runtime env, pinned-package env identity, lock/receipt metadata, and runtime Python selection.
 
 ## Phase 4: New Workflow Python Worker
 
-- [ ] Add `workflow_python` service/channel/CLI API.
+- [x] Add `workflow_python` service/channel/CLI API.
   - `workflow-python-prepare-environment`
   - `workflow-python-lock-environment`
   - `workflow-python-verify-environment`
@@ -252,8 +252,8 @@ Explicitly out of scope for this epic unless separately requested:
   - `workflow-python-resources`
   - `workflow-python-set-capacity`
 
-- [ ] Add `workflow_python` worker implementation or adapt current Python helper worker behind the new contract.
-- [ ] Implement `profile=helper`.
+- [x] Add `workflow_python` worker implementation or adapt current Python helper worker behind the new contract.
+- [x] Implement `profile=helper`.
   - Keep helper operations: `default`, `condition`, `evaluate_condition`, `routing_hint`, `route_hint`, `payload`, `shape_payload`.
   - Keep source hash verification.
   - Keep JSON payload/result.
@@ -262,10 +262,10 @@ Explicitly out of scope for this epic unless separately requested:
   - Add environment-keyed pool isolation.
   - Add request lifetime metrics.
 
-- [ ] Implement compatibility response adapter for `execute_workflow_python_helper`.
-- [ ] Add new response shape for `workflow_python(profile=helper)`.
-- [ ] Add sync tests through new API.
-- [ ] Add compatibility tests through old helper API.
+- [x] Implement compatibility response adapter for `execute_workflow_python_helper`.
+- [x] Add new response shape for `workflow_python(profile=helper)`.
+- [x] Add sync tests through new API.
+- [x] Add compatibility tests through old helper API.
 - [ ] Add environment-key isolation tests to prove incompatible policies/dependencies do not share pools.
 
 ## Phase 5: Workflow Python Node Profile
@@ -326,7 +326,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 8: CLI And Interactive CLI Compatibility
 
-- [ ] Update `src/hosting/engine_host_cli.py`.
+- [x] Update `src/hosting/engine_host_cli.py`.
   - Add new workflow Python commands.
   - Keep old workflow helper commands as aliases.
   - Normalize payload parsing for environment keys, profiles, capacity, request IDs, and streaming operations.
@@ -334,19 +334,20 @@ Explicitly out of scope for this epic unless separately requested:
   - Avoid exposing raw module source/payload/result in logs unless explicitly requested.
 
 - [ ] Update `src/hosting/engine_host_cli_interactive.py`.
-  - Show workflow runtime pools by environment key.
-  - Show profile, capacity, active calls, available slots, process count, active request IDs, latency summaries, cancellation counters, and recent request outcomes.
-  - Keep old helper display paths compatible.
-  - Add actions for ensure, set capacity, cancel request, and inspect resources by environment key.
-  - Add streaming/request-status UI where practical.
+  - [x] Show workflow runtime pools by environment key.
+  - [x] Show profile, capacity, active calls, available slots, process count, active request IDs, latency summaries, cancellation counters, and recent request outcomes.
+  - [x] Keep old helper display paths compatible.
+  - [x] Add actions for set capacity, cancel request, and inspect resources by environment key.
+  - [ ] Add ensure action by environment key.
+  - [ ] Add streaming/request-status UI where practical.
 
-- [ ] Update channel wrappers in `src/hosting/engine_host_channel.py`.
+- [x] Update channel wrappers in `src/hosting/engine_host_channel.py`.
   - Add new typed methods.
   - Preserve old helper wrappers as aliases.
   - Support sync and streaming proxy helpers.
 
-- [ ] Add tests or smoke scripts for CLI command compatibility.
-- [ ] Add manual verification notes to `src/hosting/hosting_status.md`.
+- [x] Add tests or smoke scripts for CLI command compatibility.
+- [x] Add manual verification notes to `src/hosting/hosting_status.md`.
 
 ## Phase 9: Toolbox Migration To Shared Base
 
@@ -406,13 +407,13 @@ Track details in `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Verification Checklist
 
-- [ ] Unit tests for model normalization.
-- [ ] Unit tests for environment key derivation.
-- [ ] Unit tests for pool scheduler.
-- [ ] Unit tests for request lifetime metrics.
-- [ ] Unit tests for Python environment realization and install metadata.
-- [ ] Integration tests for workflow Python helper compatibility.
-- [ ] Integration tests for workflow Python new API.
+- [x] Unit tests for model normalization.
+- [x] Unit tests for environment key derivation.
+- [x] Unit tests for pool scheduler.
+- [x] Unit tests for request lifetime metrics.
+- [x] Unit tests for Python environment realization and install metadata.
+- [x] Integration tests for workflow Python helper compatibility.
+- [x] Integration tests for workflow Python new API.
 - [ ] Integration tests for workflow Python node streaming.
 - [ ] Integration tests for workflow JS helper compatibility.
 - [ ] Integration tests for toolbox parity after migration.

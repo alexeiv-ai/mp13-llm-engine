@@ -40,6 +40,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Started Phase 4 with a compatibility-first `workflow_python` facade. Service, daemon, channel, and direct CLI surfaces now expose environment spec/prepare/lock/verify/install/receipt commands plus helper-profile ensure/execute/resources/capacity/cancel. The backing worker is still the existing Python helper worker; `profile=node` still returns a not-implemented error.
 - Extended the Phase 4 facade to annotate helper-backed registrations with workflow runtime/environment metadata and return request lifecycle metrics for sync helper-profile execution.
 - Wired the helper-backed `workflow_python(profile=helper)` facade to the internal in-memory pool registry. `ensure`, `execute`, `resources`, `set-capacity`, and `cancel-request` now maintain/report host-side pool capacity, active call counts, recent request lifetime metrics, and cancellation accounting by `environment_key`. This is accounting/scheduling around the existing helper worker, not the final new worker implementation.
+- Updated the interactive CLI workflow helper management path so annotated Python helper registrations use the new `workflow-python-*` facade for resources/capacity/cancel and display workflow pool metrics by `environment_key`, while legacy helper and JS helper paths remain compatible.
 
 ## Key Design Decisions So Far
 
@@ -83,5 +84,5 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Wire workflow Python facade to the internal pool registry and persist environment metadata on registrations.
 - [x] Persist workflow Python environment metadata on helper-backed registrations.
 - [x] Wire workflow Python facade to the internal pool registry for host-side scheduling/accounting.
-- [ ] Add interactive CLI views/actions for workflow runtime pools.
+- [x] Add interactive CLI views/actions for workflow runtime pools.
 - [ ] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
