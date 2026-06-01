@@ -7,12 +7,20 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeManager
-from ..sandbox.runtime_base import HostedRequestLifecycle
+from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
+from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 
 
 class WorkflowHelperMixin:
     def _workflow_python_runtime_manager(self) -> HostedPythonRuntimeManager:
         return HostedPythonRuntimeManager(self.hosting_root)
+
+    def _workflow_python_pool_registry(self) -> HostedProcessPoolRegistry:
+        registry = getattr(self, "_workflow_python_runtime_pools", None)
+        if registry is None:
+            registry = HostedProcessPoolRegistry()
+            setattr(self, "_workflow_python_runtime_pools", registry)
+        return registry
 
     @staticmethod
     def _workflow_python_profile(profile: str) -> str:
@@ -70,6 +78,20 @@ class WorkflowHelperMixin:
     def workflow_python_default_engine_id(self, *, environment_key: str) -> str:
         key = str(environment_key or "").strip()
         return f"workflow-python-{key[:16]}" if key else "workflow-python-helper"
+
+    def _workflow_python_pool_key(self, environment_key: str) -> HostedPoolKey:
+        return HostedPoolKey(sandbox_kind="workflow_python", environment_key=str(environment_key or "").strip())
+
+    def _workflow_python_worker_slot(self, *, engine_id: str, environment_key: str, capacity: int) -> HostedWorkerSlot:
+        reg = self.get_registration(engine_id)
+        pid = int(dict(reg or {}).get("pid") or 0) or None
+        return HostedWorkerSlot(
+            engine_id=str(engine_id or "").strip(),
+            environment_key=str(environment_key or "").strip(),
+            capacity=max(1, int(capacity or 1)),
+            pid=pid,
+            status="registered" if reg else "unknown",
+        )
 
     def _annotate_workflow_python_registration(
         self,
@@ -147,6 +169,11 @@ class WorkflowHelperMixin:
                 environment_key=derived_key,
                 environment=dict(env.get("environment") or {}),
             )
+            pool = self._workflow_python_pool_registry().get_or_create(
+                self._workflow_python_pool_key(derived_key),
+                desired_capacity=capacity,
+            )
+            pool.ensure_worker(lambda _key, cap: self._workflow_python_worker_slot(engine_id=eid, environment_key=derived_key, capacity=cap))
             return {
                 "status": "ok",
                 "outcome": "already_registered",
@@ -169,6 +196,11 @@ class WorkflowHelperMixin:
             environment_key=derived_key,
             environment=dict(env.get("environment") or {}),
         )
+        pool = self._workflow_python_pool_registry().get_or_create(
+            self._workflow_python_pool_key(derived_key),
+            desired_capacity=capacity,
+        )
+        pool.ensure_worker(lambda _key, cap: self._workflow_python_worker_slot(engine_id=eid, environment_key=derived_key, capacity=cap))
         return {
             "status": "ok",
             "outcome": "spawned",
@@ -209,6 +241,10 @@ class WorkflowHelperMixin:
         )
         if str(ensured.get("status") or "") != "ok":
             return ensured
+        pool = self._workflow_python_pool_registry().get_or_create(
+            self._workflow_python_pool_key(str(ensured.get("environment_key") or "")),
+            desired_capacity=capacity,
+        )
         lifecycle = HostedRequestLifecycle(
             request_id=str(req.get("request_id") or "").strip() or "workflow-python-sync",
             environment_key=str(ensured.get("environment_key") or ""),
@@ -217,7 +253,24 @@ class WorkflowHelperMixin:
             engine_id=str(ensured["engine_id"]),
             submitted_at=time.time(),
         )
-        lifecycle.mark_started(engine_id=str(ensured["engine_id"]))
+        scheduled = pool.submit_request(
+            lifecycle,
+            factory=lambda _key, cap: self._workflow_python_worker_slot(
+                engine_id=str(ensured["engine_id"]),
+                environment_key=str(ensured.get("environment_key") or ""),
+                capacity=cap,
+            ),
+        )
+        if str(scheduled.get("status") or "") != "ok":
+            return {
+                "status": "error",
+                "ok": False,
+                "profile": prof,
+                "engine_id": str(ensured["engine_id"]),
+                "environment_key": str(ensured.get("environment_key") or ""),
+                "reason": str(scheduled.get("reason") or "capacity_exceeded"),
+                "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
+            }
         out = self.proxy_rpc_call(
             engine_id=str(ensured["engine_id"]),
             method="execute_workflow_python_helper",
@@ -225,7 +278,11 @@ class WorkflowHelperMixin:
             timeout_seconds=float(dict(req.get("limits") or {}).get("timeout_ms") or 30000) / 1000.0 + 5.0,
         )
         result = dict(out.get("result") or out or {})
-        lifecycle.mark_finished("ok" if bool(result.get("ok", False)) else "error", reason=str(result.get("reason") or "") or None)
+        finished = pool.finish_request(
+            lifecycle.request_id,
+            status="ok" if bool(result.get("ok", False)) else "error",
+            reason=str(result.get("reason") or "") or None,
+        )
         return {
             "status": "ok" if bool(result.get("ok", False)) else "error",
             "ok": bool(result.get("ok", False)),
@@ -235,7 +292,8 @@ class WorkflowHelperMixin:
             "output": result.get("result"),
             "result": result,
             "metrics": {
-                "request": lifecycle.to_dict(),
+                "workflow_pool": pool.resources(),
+                "request": dict(finished.get("request") or lifecycle.to_dict()),
             },
         }
 
@@ -264,12 +322,14 @@ class WorkflowHelperMixin:
             return {"status": "error", "reason": "environment_key_mismatch", "environment_key": requested_key, "derived_environment_key": derived_key}
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=derived_key)
         resources = self.workflow_python_helper_resources(engine_id=eid)
+        pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(derived_key))
         return {
             **dict(resources or {}),
             "profile": prof,
             "engine_id": eid,
             "environment_key": derived_key,
             "environment": dict(env.get("environment") or {}),
+            "workflow_pool": pool.resources() if pool is not None else None,
         }
 
     def set_workflow_python_capacity(
@@ -285,6 +345,11 @@ class WorkflowHelperMixin:
             return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=str(environment_key or ""))
         out = self.set_workflow_python_helper_capacity(engine_id=eid, capacity=capacity)
+        if environment_key:
+            self._workflow_python_pool_registry().get_or_create(
+                self._workflow_python_pool_key(str(environment_key or "")),
+                desired_capacity=capacity,
+            ).set_capacity(capacity)
         return {**dict(out or {}), "profile": prof, "environment_key": str(environment_key or "").strip() or None}
 
     def cancel_workflow_python_request(
@@ -300,6 +365,9 @@ class WorkflowHelperMixin:
             return {"status": "error", "reason": "workflow_python_profile_not_implemented", "profile": prof}
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=str(environment_key or ""))
         out = self.cancel_workflow_python_helper_request(engine_id=eid, request_id=request_id)
+        pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(str(environment_key or "")))
+        if pool is not None:
+            out["workflow_pool_cancel"] = pool.cancel_request(request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": str(environment_key or "").strip() or None}
 
     @staticmethod

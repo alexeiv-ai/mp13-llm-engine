@@ -610,6 +610,7 @@ def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path:
         return {"status": "ok", "engine_id": kwargs["engine_id"]}
 
     monkeypatch.setattr(svc, "spawn_workflow_python_helper", fake_spawn)
+    monkeypatch.setattr(svc, "workflow_python_helper_resources", lambda **_kwargs: {"status": "ok"})
 
     out = svc.ensure_workflow_python(
         profile="helper",
@@ -623,6 +624,14 @@ def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path:
     assert out["environment_key"]
     assert seen["engine_id"] == out["engine_id"]
     assert seen["capacity"] == 3
+
+    resources = svc.workflow_python_resources(
+        profile="helper",
+        python={"import_allowlist": ["json"], "package_pins": {}},
+    )
+    assert resources["workflow_pool"]["metrics"]["desired_capacity"] == 3
+    assert resources["workflow_pool"]["metrics"]["worker_count"] == 1
+    assert resources["workflow_pool"]["metrics"]["available_slots"] == 3
 
 
 def test_ensure_workflow_python_annotates_existing_registration(tmp_path: Path, monkeypatch) -> None:
@@ -711,5 +720,7 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
     assert out["ok"] is True
     assert out["output"] == {"accepted": True}
     assert out["metrics"]["request"]["status"] == "ok"
+    assert out["metrics"]["workflow_pool"]["metrics"]["active_calls"] == 0
+    assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-python-sync"
     assert calls["engine_id"] == "workflow-python-demo"
     assert calls["method"] == "execute_workflow_python_helper"

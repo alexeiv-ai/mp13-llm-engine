@@ -12,9 +12,9 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Existing `toolbox_executor` placement decided: migrate later onto shared base while preserving toolbox semantics.
 - [x] Existing generic/model worker placement decided: remain separate; borrow IPC/streaming ideas only.
 - [x] Non-Python worker scope clarified: out of this epic except for external implementation of the selected wire contract.
-- [ ] Implementation not started.
-- [ ] Tests not updated.
-- [ ] CLI not updated.
+- [x] Implementation started.
+- [x] Tests updated for the first runtime base, Python environment base, pool registry, and workflow Python compatibility facade slices.
+- [x] Direct CLI updated for initial `workflow-python-*` commands.
 - [ ] Docs not updated beyond planning/tracking files.
 
 ## Active Phase
@@ -39,6 +39,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Completed the first internal Phase 3 Python runtime wrapper in `hosting.sandbox.python_runtime`: workflow-facing environment specs, environment-key identity, realization, prepare/lock/verify install flow, and runtime Python selection backed by the existing toolbox environment manager. This is not exposed through service/channel/CLI yet.
 - Started Phase 4 with a compatibility-first `workflow_python` facade. Service, daemon, channel, and direct CLI surfaces now expose environment spec/prepare/lock/verify/install/receipt commands plus helper-profile ensure/execute/resources/capacity/cancel. The backing worker is still the existing Python helper worker; `profile=node` still returns a not-implemented error.
 - Extended the Phase 4 facade to annotate helper-backed registrations with workflow runtime/environment metadata and return request lifecycle metrics for sync helper-profile execution.
+- Wired the helper-backed `workflow_python(profile=helper)` facade to the internal in-memory pool registry. `ensure`, `execute`, `resources`, `set-capacity`, and `cancel-request` now maintain/report host-side pool capacity, active call counts, recent request lifetime metrics, and cancellation accounting by `environment_key`. This is accounting/scheduling around the existing helper worker, not the final new worker implementation.
 
 ## Key Design Decisions So Far
 
@@ -61,7 +62,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 
 - [x] Internal hosted process pool abstraction exists in `hosting.sandbox.runtime_pool`.
 - [x] First deterministic `environment_key` model exists in `hosting.sandbox.runtime_base`.
-- [ ] No first-class `environment_key` routing exists for workflow Python/JS.
+- [x] First-class `environment_key` routing exists for helper-profile workflow Python facade calls.
+- [ ] No first-class `environment_key` routing exists for workflow JS yet.
 - [ ] Existing helper pools are tied to helper engine IDs and internal child pools.
 - [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
 - [ ] Existing workflow environment management is present mostly through toolbox-shaped APIs.
@@ -78,8 +80,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Add internal process pool registry tests for scheduling, saturation, cancellation, metrics, and resource rollups.
 - [x] Add internal Python runtime environment tests for workflow spec identity, realization, install plan/lock/verify, and runtime Python selection.
 - [x] Draft the new workflow Python API surface in service/channel/CLI for helper-profile compatibility.
-- [ ] Wire workflow Python facade to the internal pool registry and persist environment metadata on registrations.
+- [x] Wire workflow Python facade to the internal pool registry and persist environment metadata on registrations.
 - [x] Persist workflow Python environment metadata on helper-backed registrations.
-- [ ] Wire workflow Python facade to the internal pool registry for host-side scheduling.
+- [x] Wire workflow Python facade to the internal pool registry for host-side scheduling/accounting.
 - [ ] Add interactive CLI views/actions for workflow runtime pools.
 - [ ] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
