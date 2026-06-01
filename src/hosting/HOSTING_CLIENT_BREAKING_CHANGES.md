@@ -207,6 +207,24 @@ Minimal JS ensure payload:
 - [ ] Remove old helper-specific service branches once dependent projects use workflow runtime APIs.
 - [ ] Remove compatibility response fields only after clients confirm migration.
 
+## Deprecated Command Names During Migration
+
+- Python helper commands are compatibility aliases:
+  - `spawn-workflow-python-helper`
+  - `workflow-python-helper-resources`
+  - `workflow-python-helper-set-capacity`
+  - `workflow-python-helper-cancel-request`
+
+- JS helper commands are compatibility aliases:
+  - `spawn-workflow-js-helper`
+  - `workflow-js-helper-resources`
+  - `workflow-js-helper-set-capacity`
+  - `workflow-js-helper-cancel-request`
+
+- New integrations should use:
+  - `workflow-python-*` for Python workflow runtimes.
+  - `workflow-js-*` for JS workflow runtimes.
+
 ## Client Action Checklist
 
 - [ ] Add client-side support for host-derived `environment_key`.

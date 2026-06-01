@@ -309,7 +309,7 @@ Explicitly out of scope for this epic unless separately requested:
 - [ ] Rewire `execute_workflow_python_helper` proxy path.
 - [x] Keep old command names as aliases.
 - [ ] Mark old implementation files for removal once dependent callers migrate.
-- [ ] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
+- [x] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Phase 7: Workflow JS Helper Migration
 
