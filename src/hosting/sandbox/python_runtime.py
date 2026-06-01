@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from ..toolbox.environment import ToolboxEnvironmentManager
+from ..toolbox.environment import RuntimeEnvironmentManager
 from ..toolbox.bundle_models import ToolboxEnvironmentSpec
 from .process_base import HostedProcessSandboxBase
 from .runtime_base import HostedEnvironmentKeySpec, HostedRuntimeIdentity, stable_hash
@@ -65,7 +65,7 @@ class HostedPythonRuntimeBase(HostedProcessSandboxBase):
     def __init__(self, hosting_root: Path):
         super().__init__()
         self.hosting_root = Path(hosting_root).expanduser().resolve()
-        self.environment_manager = ToolboxEnvironmentManager(self.hosting_root)
+        self.environment_manager = RuntimeEnvironmentManager(self.hosting_root)
 
     def environment_key_spec(
         self,

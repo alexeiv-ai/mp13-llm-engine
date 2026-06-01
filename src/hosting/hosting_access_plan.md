@@ -222,7 +222,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 3: Python Runtime Environment Base
 
-- [ ] Extract workflow-neutral Python environment helpers from `ToolboxEnvironmentManager`.
+- [x] Extract workflow-neutral Python environment helpers from `ToolboxEnvironmentManager`.
 - [x] Expose workflow-specific environment operations without toolbox IDs/tool keys in the public API.
   - Prepare environment.
   - Lock install.
