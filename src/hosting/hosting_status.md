@@ -22,7 +22,8 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Phase 0: Discovery And Tests Baseline.
 - [x] Phase 1: Shared Base Contracts And Models.
 - [x] Phase 2: Hosted Process Pool Base.
-- [ ] Phase 3: Python Runtime Environment Base.
+- [x] Phase 3: Python Runtime Environment Base.
+- [ ] Phase 4: New Workflow Python Worker.
 
 ## Progress Log
 
@@ -35,6 +36,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Existing sandbox navigation remains in `src/hosting/sandbox/sandbox_test_status.md`; new runtime-base tests should be added beside the helper/service tests rather than replacing the current sandbox suite.
 - Started Phase 1 with `hosting.sandbox.runtime_base`: deterministic sandbox policy hashes, runtime/environment key specs, pool keys, worker slot snapshots, request lifecycle records, stream event envelopes, and pool metrics.
 - Completed the first internal Phase 2 pool foundation in `hosting.sandbox.runtime_pool`: pool registry, one-worker-per-environment-key scheduling, capacity changes, saturation tracking, request lifetime completion, cancellation accounting, error grouping, and resource rollups. This is not wired into workflow routing yet.
+- Completed the first internal Phase 3 Python runtime wrapper in `hosting.sandbox.python_runtime`: workflow-facing environment specs, environment-key identity, realization, prepare/lock/verify install flow, and runtime Python selection backed by the existing toolbox environment manager. This is not exposed through service/channel/CLI yet.
 
 ## Key Design Decisions So Far
 
@@ -61,6 +63,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [ ] Existing helper pools are tied to helper engine IDs and internal child pools.
 - [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
 - [ ] Existing workflow environment management is present mostly through toolbox-shaped APIs.
+- [x] Internal workflow-facing Python environment manager exists without toolbox IDs/tool keys in its API.
 - [ ] Existing helper response shape is narrower than planned workflow node responses.
 - [ ] Existing helper streaming support is absent.
 - [ ] CLI and interactive CLI are helper-command oriented.
@@ -70,5 +73,6 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Add internal data models for environment keys, pool keys, request lifetime, stream events, and metrics.
 - [x] Implement stable environment-key derivation tests before changing worker routing.
 - [x] Add internal process pool registry tests for scheduling, saturation, cancellation, metrics, and resource rollups.
+- [x] Add internal Python runtime environment tests for workflow spec identity, realization, install plan/lock/verify, and runtime Python selection.
 - [ ] Draft the new workflow Python API surface in service/channel/CLI.
 - [ ] Keep `HOSTING_CLIENT_BREAKING_CHANGES.md` updated as compatibility shims land.
