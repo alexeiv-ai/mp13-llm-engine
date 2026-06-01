@@ -206,7 +206,7 @@ Explicitly out of scope for this epic unless separately requested:
 - [x] Add shared resource/metrics response builders.
 - [x] Add shared cancellation result shape.
 - [x] Add base tests for environment key stability and policy hash changes.
-- [ ] Update docs with draft internal contract notes after models stabilize.
+- [x] Update docs with draft internal contract notes after models stabilize.
 
 ## Phase 2: Hosted Process Pool Base
 
@@ -378,7 +378,7 @@ Explicitly out of scope for this epic unless separately requested:
 
 Do not front-load all documentation before implementation, because contracts will move during the refactor. Do keep short design notes current during implementation and do a full docs pass after APIs stabilize.
 
-- [ ] Early docs: update architecture docs with intended shared-base design once Phase 1 models land.
+- [x] Early docs: update architecture docs with intended shared-base design once Phase 1 models land.
 - [ ] Midpoint docs: document workflow Python environment APIs when Phase 3/4 are usable.
 - [ ] Final docs: update all public docs after compatibility shims are verified.
   - `src/hosting/HOSTING.md`

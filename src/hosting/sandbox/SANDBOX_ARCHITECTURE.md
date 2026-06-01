@@ -47,6 +47,47 @@ Primary implementation files:
 9. [../service/engines.py](../service/engines.py): spawn, registration, shutdown, and broker lookup integration
 10. [../service/workflow_helpers.py](../service/workflow_helpers.py): workflow helper spawn convenience API
 
+## Internal Runtime Bases
+
+The refactoring introduces internal bases for new hosted runtime kinds. These
+are implementation layers, not public sandbox kinds:
+
+1. [runtime_base.py](runtime_base.py): deterministic environment identity,
+   pool/request/worker models, shared stream event names, IPC message family
+   names, registration metadata helpers, resource response helpers, and
+   cancellation result shapes.
+2. [runtime_pool.py](runtime_pool.py): in-memory process pool registry keyed by
+   concrete runtime kind and `environment_key`; tracks desired capacity,
+   workers, active requests, recent request outcomes, latency metrics, progress
+   snapshots, and cancellation/error counts.
+3. [process_base.py](process_base.py): `HostedProcessSandboxBase`, an internal
+   language-neutral composition layer over the pool registry for capacity,
+   request status, progress, and cancellation plumbing.
+4. [python_runtime.py](python_runtime.py): `HostedPythonRuntimeBase` and
+   `HostedPythonRuntimeManager`, which add Python runtime/environment identity,
+   runtime environment realization, install plan/lock/verify/receipt hooks, and
+   Python executable selection.
+5. [js_runtime.py](js_runtime.py): `HostedJsRuntimeBase`, a thin Node/runtime
+   identity layer for workflow JS helper compatibility. It intentionally does
+   not reuse Python venv machinery.
+
+Concrete workflow facades currently use these layers incrementally:
+
+1. `workflow_python(profile=helper)` exposes environment spec, environment
+   lifecycle hooks, ensure, execute, resources, capacity, cancel, and request
+   status while keeping the old Python helper worker as temporary execution
+   compatibility code.
+2. `workflow_python(profile=node)` has a stable request/response/stream
+   contract envelope, including explicit artifact-store-unavailable metadata,
+   but the async worker implementation is still pending.
+3. `workflow_js(profile=helper)` exposes environment spec, ensure, resources,
+   capacity, cancel, and request status through the JS runtime base and existing
+   helper worker compatibility path.
+
+Generic/model workers remain separate. They share IPC vocabulary ideas and
+proxy commands, but their model-worker semantics do not become workflow or
+toolbox semantics.
+
 ## Shared API
 
 ### `WorkerSandboxPolicy`
