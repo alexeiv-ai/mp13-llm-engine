@@ -118,10 +118,44 @@ Minimal helper-profile execute payload:
 
 ## Planned Migration: Workflow JS
 
-- [ ] Stop treating `workflow_js_helper` as a separate long-term architecture.
-- [ ] Start using `workflow_js(profile=helper)` once available.
-- [ ] Start reading resources/capacity/cancellation state from the same environment-keyed resource model as workflow Python.
+- [x] Stop treating `workflow_js_helper` as a separate long-term architecture.
+- [x] Start using `workflow_js(profile=helper)` once available.
+- [x] Start reading resources/capacity/cancellation state from the same environment-keyed resource model as workflow Python.
 - [ ] Continue handling JS-specific compatibility fields until they are removed after migration.
+
+### Workflow JS API Navigation
+
+- Environment identity:
+  - Old: no standalone JS helper environment-key API.
+  - New: `workflow-js-environment-spec` with `profile=helper`, `environment_name=workflow-js-helper`, optional `node`, and `sandbox_policy`.
+
+- Worker/pool lifecycle:
+  - Old: `spawn-workflow-js-helper`.
+  - New: `workflow-js-ensure` with optional `environment_key`, `node.node_executable`, `capacity`, `sandbox_policy`, and optional `engine_id`.
+
+- Resource/capacity/cancel:
+  - Old: `workflow-js-helper-resources`, `workflow-js-helper-set-capacity`, `workflow-js-helper-cancel-request`.
+  - New: `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-cancel-request`.
+  - Preferred selector: `environment_key`; temporary migration selector: annotated `engine_id`.
+
+Minimal JS ensure payload:
+
+```json
+{
+  "profile": "helper",
+  "environment_name": "workflow-js-helper",
+  "node": {
+    "node_executable": "node"
+  },
+  "capacity": 2,
+  "sandbox_policy": {
+    "sandbox": {
+      "enabled": true,
+      "profile": "workflow_js_helper_v1"
+    }
+  }
+}
+```
 
 ## Planned Migration: Resources, Capacity, Metrics
 

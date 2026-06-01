@@ -313,16 +313,16 @@ Explicitly out of scope for this epic unless separately requested:
 
 ## Phase 7: Workflow JS Helper Migration
 
-- [ ] Add `workflow_js(profile=helper)` facade.
-- [ ] Move JS helper worker/pool lifecycle onto `HostedProcessSandboxBase`.
-- [ ] Add environment/runtime key derivation for JS.
+- [x] Add `workflow_js(profile=helper)` facade.
+- [x] Move JS helper worker/pool lifecycle onto `HostedProcessSandboxBase`.
+- [x] Add environment/runtime key derivation for JS.
   - Include environment name, profile, Node executable/version, sandbox policy hash, and package/dependency identity if supported.
 
 - [ ] Rewire old `workflow_js_helper` APIs as compatibility aliases.
-- [ ] Align JS helper resource/capacity/cancel response shape with workflow Python.
+- [x] Align JS helper resource/capacity/cancel response shape with workflow Python.
 - [ ] Keep JS-specific compatibility fields until clients migrate.
 - [ ] Add JS helper compatibility tests.
-- [ ] Add new JS facade tests.
+- [x] Add new JS facade tests.
 - [ ] Add deprecation entries to `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Phase 8: CLI And Interactive CLI Compatibility

@@ -60,6 +60,11 @@ class PolicyMixin:
             "workflow-js-helper-resources",
             "workflow-js-helper-set-capacity",
             "workflow-js-helper-cancel-request",
+            "workflow-js-environment-spec",
+            "workflow-js-ensure",
+            "workflow-js-resources",
+            "workflow-js-set-capacity",
+            "workflow-js-cancel-request",
             "workflow-python-helper-resources",
             "workflow-python-helper-set-capacity",
             "workflow-python-helper-cancel-request",
@@ -374,6 +379,10 @@ class PolicyMixin:
             "workflow-python-resources",
             "workflow-python-set-capacity",
             "workflow-python-cancel-request",
+            "workflow-js-ensure",
+            "workflow-js-resources",
+            "workflow-js-set-capacity",
+            "workflow-js-cancel-request",
         }
 
         if c in claim_cmds and (not is_localhost) and (not bool(p.get("exclusive", False))):

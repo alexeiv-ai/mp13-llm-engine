@@ -767,6 +767,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-js-helper-resources",
         "workflow-js-helper-set-capacity",
         "workflow-js-helper-cancel-request",
+        "workflow-js-environment-spec",
+        "workflow-js-ensure",
+        "workflow-js-resources",
+        "workflow-js-set-capacity",
+        "workflow-js-cancel-request",
         "workflow-python-helper-resources",
         "workflow-python-helper-set-capacity",
         "workflow-python-helper-cancel-request",
@@ -1132,6 +1137,63 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(
                 svc.workflow_js_helper_resources(
                     engine_id=str(payload.get("engine_id") or args.engine_id or "workflow-js-helper"),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-environment-spec":
+            _print_ok(
+                svc.workflow_js_environment_spec(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    node=dict(payload.get("node") or {}),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
+        if cmd == "workflow-js-ensure":
+            _print_ok(
+                svc.ensure_workflow_js(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    node=dict(payload.get("node") or {}),
+                    node_executable=payload.get("node_executable"),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    worker_profile_class=str(payload.get("worker_profile_class") or "generic"),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-resources":
+            _print_ok(
+                svc.workflow_js_resources(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    node=dict(payload.get("node") or {}),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
+        if cmd == "workflow-js-set-capacity":
+            _print_ok(
+                svc.set_workflow_js_capacity(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    capacity=int(payload.get("capacity") or 1),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-cancel-request":
+            _print_ok(
+                svc.cancel_workflow_js_request(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request_id=str(payload.get("request_id") or ""),
                 )
             )
             return 0

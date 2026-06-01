@@ -46,6 +46,19 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-resources",
 }
 
+_WORKFLOW_JS_COMMANDS = {
+    "workflow-js-environment-spec",
+    "workflow-js-ensure",
+    "workflow-js-resources",
+    "workflow-js-set-capacity",
+    "workflow-js-cancel-request",
+}
+
+_WORKFLOW_JS_OBSERVE_COMMANDS = {
+    "workflow-js-environment-spec",
+    "workflow-js-resources",
+}
+
 
 class AuthMixin:
     @staticmethod
@@ -247,6 +260,7 @@ class AuthMixin:
             "workflow-js-helper-resources",
             "workflow-js-helper-set-capacity",
             "workflow-js-helper-cancel-request",
+            *_WORKFLOW_JS_COMMANDS,
             "workflow-python-helper-resources",
             "workflow-python-helper-set-capacity",
             "workflow-python-helper-cancel-request",
@@ -354,6 +368,7 @@ class AuthMixin:
                 "workflow-js-helper-resources",
                 "workflow-js-helper-set-capacity",
                 "workflow-js-helper-cancel-request",
+                *_WORKFLOW_JS_COMMANDS,
                 "workflow-python-helper-resources",
                 "workflow-python-helper-set-capacity",
                 "workflow-python-helper-cancel-request",
@@ -428,6 +443,7 @@ class AuthMixin:
                 "workflow-js-helper-resources",
                 "workflow-js-helper-set-capacity",
                 "workflow-js-helper-cancel-request",
+                *_WORKFLOW_JS_COMMANDS,
                 "workflow-python-helper-resources",
                 "workflow-python-helper-set-capacity",
                 "workflow-python-helper-cancel-request",
@@ -536,6 +552,7 @@ class AuthMixin:
                 "resource-claim-status",
                 "inspect-capabilities",
                 "workflow-js-helper-resources",
+                *_WORKFLOW_JS_OBSERVE_COMMANDS,
                 "workflow-python-helper-resources",
                 *_WORKFLOW_PYTHON_OBSERVE_COMMANDS,
                 "logs-tail",

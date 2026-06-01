@@ -298,6 +298,44 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert [name for name, _ in fake.calls] == ["spec", "ensure", "execute", "resources", "set_capacity", "cancel"]
 
 
+def test_daemon_dispatches_workflow_js_facade() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def workflow_js_environment_spec(self, **kwargs):
+            self.calls.append(("spec", dict(kwargs)))
+            return {"status": "ok", "environment_key": "env-js"}
+
+        def ensure_workflow_js(self, **kwargs):
+            self.calls.append(("ensure", dict(kwargs)))
+            return {"status": "ok", "engine_id": kwargs.get("engine_id")}
+
+        def workflow_js_resources(self, **kwargs):
+            self.calls.append(("resources", dict(kwargs)))
+            return {"status": "ok"}
+
+        def set_workflow_js_capacity(self, **kwargs):
+            self.calls.append(("set_capacity", dict(kwargs)))
+            return {"status": "ok", "capacity": kwargs["capacity"]}
+
+        def cancel_workflow_js_request(self, **kwargs):
+            self.calls.append(("cancel", dict(kwargs)))
+            return {"status": "ok", "request_id": kwargs["request_id"]}
+
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+
+    assert daemon._call_service("workflow-js-environment-spec", {"profile": "helper"})["environment_key"] == "env-js"
+    assert daemon._call_service("workflow-js-ensure", {"engine_id": "wf-js"})["engine_id"] == "wf-js"
+    assert daemon._call_service("workflow-js-resources", {"engine_id": "wf-js"})["status"] == "ok"
+    assert daemon._call_service("workflow-js-set-capacity", {"engine_id": "wf-js", "capacity": 5})["capacity"] == 5
+    assert daemon._call_service("workflow-js-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
+
+    assert [name for name, _ in fake.calls] == ["spec", "ensure", "resources", "set_capacity", "cancel"]
+
+
 def test_workflow_js_helper_resources_include_normalized_pool_aliases(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -328,6 +366,68 @@ def test_workflow_js_helper_resources_include_normalized_pool_aliases(tmp_path: 
     assert out["pool"]["process_count"] == 1
     assert out["pool"]["active_process_count"] == 1
     assert out["pool"]["active_request_ids"] == ["req-live"]
+
+
+def test_workflow_js_facade_spawns_environment_keyed_worker(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    seen = {}
+
+    monkeypatch.setattr(svc, "get_registration", lambda _engine_id: None)
+
+    def fake_spawn(**kwargs):
+        seen.update(kwargs)
+        return {"status": "ok", "engine_id": kwargs["engine_id"]}
+
+    monkeypatch.setattr(svc, "spawn_workflow_js_helper", fake_spawn)
+    monkeypatch.setattr(svc, "workflow_js_helper_resources", lambda **_kwargs: {"status": "ok"})
+
+    out = svc.ensure_workflow_js(
+        profile="helper",
+        node={"node_executable": "node-demo"},
+        capacity=3,
+    )
+
+    assert out["status"] == "ok"
+    assert out["outcome"] == "spawned"
+    assert out["engine_id"].startswith("workflow-js-")
+    assert out["environment_key"]
+    assert seen["engine_id"] == out["engine_id"]
+    assert seen["capacity"] == 3
+
+    resources = svc.workflow_js_resources(
+        profile="helper",
+        node={"node_executable": "node-demo"},
+    )
+    assert resources["workflow_pool"]["metrics"]["desired_capacity"] == 3
+    assert resources["workflow_pool"]["metrics"]["worker_count"] == 1
+
+
+def test_workflow_js_facade_isolates_pools_by_policy(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    monkeypatch.setattr(svc, "get_registration", lambda _engine_id: None)
+    monkeypatch.setattr(svc, "spawn_workflow_js_helper", lambda **kwargs: {"status": "ok", "engine_id": kwargs["engine_id"]})
+
+    first = svc.ensure_workflow_js(
+        profile="helper",
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
+    )
+    second = svc.ensure_workflow_js(
+        profile="helper",
+        sandbox_policy={"sandbox": {"enabled": False, "profile": "workflow_js_helper_v1"}},
+    )
+
+    assert first["environment_key"] != second["environment_key"]
+    pools = svc._workflow_python_pool_registry().resources()["pools"]
+    assert sorted(pools.keys()) == [
+        f"workflow_js/{first['environment_key']}",
+        f"workflow_js/{second['environment_key']}",
+    ]
 
 
 def test_workflow_python_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:

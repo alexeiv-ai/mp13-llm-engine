@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeManager
-from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot
+from ..sandbox.runtime_base import HostedEnvironmentKeySpec, HostedPoolKey, HostedRequestLifecycle, HostedRuntimeIdentity, HostedWorkerSlot
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 from ..sandbox.workflow_python_contract import workflow_python_node_not_implemented_response
 
@@ -93,8 +93,63 @@ class WorkflowHelperMixin:
         key = str(environment_key or "").strip()
         return f"workflow-python-{key[:16]}" if key else "workflow-python-helper"
 
+    @staticmethod
+    def _workflow_js_profile(profile: str) -> str:
+        value = str(profile or "helper").strip().lower() or "helper"
+        if value != "helper":
+            raise ValueError("workflow_js currently supports only profile='helper'")
+        return value
+
+    def workflow_js_environment_spec(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-js-helper",
+        node: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        node_policy = dict(node or {})
+        runtime_hash = str(node_policy.get("node_executable") or node_policy.get("runtime_hash") or "node-default").strip() or "node-default"
+        spec = HostedEnvironmentKeySpec(
+            environment_name=str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
+            runtime=HostedRuntimeIdentity(
+                runtime_kind="workflow_js",
+                profile=prof,
+                runtime_hash=runtime_hash,
+                capability_profile="workflow_js_helper",
+            ),
+            sandbox_policy=dict(sandbox_policy or {}),
+            required_imports=list(node_policy.get("required_imports") or []),
+            package_pins=dict(node_policy.get("package_pins") or {}),
+            dependency_lock_hash=str(node_policy.get("dependency_lock_hash") or "").strip() or None,
+        )
+        env = spec.to_dict()
+        return {
+            "status": "ok",
+            **env,
+            "environment": {
+                "environment_key": env["environment_key"],
+                "environment_key_full": env["environment_key_full"],
+                "environment_name": env["environment_name"],
+                "environment_root_kind": "runtime_envs",
+                "environment_consumer_kind": "workflow_js_helper",
+                "workflow_runtime_kind": "workflow_js",
+                "workflow_profile": prof,
+                "runtime_hash": runtime_hash,
+                "sandbox_policy_hash": env["sandbox_policy_hash"],
+                "required_imports": list(env["required_imports"]),
+                "package_pins": dict(env["package_pins"]),
+                "dependency_lock_hash": env.get("dependency_lock_hash"),
+                "install_status": "not_applicable",
+            },
+        }
+
     def _workflow_python_pool_key(self, environment_key: str) -> HostedPoolKey:
         return HostedPoolKey(sandbox_kind="workflow_python", environment_key=str(environment_key or "").strip())
+
+    def _workflow_js_pool_key(self, environment_key: str) -> HostedPoolKey:
+        return HostedPoolKey(sandbox_kind="workflow_js", environment_key=str(environment_key or "").strip())
 
     def _workflow_python_worker_slot(self, *, engine_id: str, environment_key: str, capacity: int) -> HostedWorkerSlot:
         reg = self.get_registration(engine_id)
@@ -107,7 +162,27 @@ class WorkflowHelperMixin:
             status="registered" if reg else "unknown",
         )
 
+    def _workflow_js_worker_slot(self, *, engine_id: str, environment_key: str, capacity: int) -> HostedWorkerSlot:
+        reg = self.get_registration(engine_id)
+        pid = int(dict(reg or {}).get("pid") or 0) or None
+        return HostedWorkerSlot(
+            engine_id=str(engine_id or "").strip(),
+            environment_key=str(environment_key or "").strip(),
+            capacity=max(1, int(capacity or 1)),
+            pid=pid,
+            status="registered" if reg else "unknown",
+        )
+
     def _workflow_python_registration_environment_key(self, engine_id: Optional[str]) -> str:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            return ""
+        reg = dict(self.get_registration(eid) or {})
+        env = dict(reg.get("environment") or {})
+        caps = dict(reg.get("capabilities") or {})
+        return str(env.get("environment_key") or caps.get("environment_key") or "").strip()
+
+    def _workflow_js_registration_environment_key(self, engine_id: Optional[str]) -> str:
         eid = str(engine_id or "").strip()
         if not eid:
             return ""
@@ -183,6 +258,153 @@ class WorkflowHelperMixin:
             changed = True
         if changed:
             self._write_engines(rows)
+
+    def _annotate_workflow_js_registration(
+        self,
+        *,
+        engine_id: str,
+        profile: str,
+        environment_key: str,
+        environment: Dict[str, Any],
+    ) -> None:
+        eid = str(engine_id or "").strip()
+        if not eid:
+            return
+        rows = self._read_engines()
+        changed = False
+        for row in rows:
+            if str(row.get("engine_id") or "").strip() != eid:
+                continue
+            env_row = dict(row.get("environment") or {})
+            env_row.update(dict(environment or {}))
+            env_row["environment_key"] = str(environment_key or "").strip() or None
+            env_row["workflow_runtime_kind"] = "workflow_js"
+            env_row["workflow_profile"] = str(profile or "helper").strip() or "helper"
+            row["environment"] = env_row
+            capabilities = dict(row.get("capabilities") or {})
+            capabilities.update(
+                {
+                    "workflow_js": True,
+                    "workflow_js_profile": str(profile or "helper").strip() or "helper",
+                    "environment_key": str(environment_key or "").strip() or None,
+                }
+            )
+            row["capabilities"] = capabilities
+            changed = True
+        if changed:
+            self._write_engines(rows)
+
+    def workflow_js_default_engine_id(self, *, environment_key: str) -> str:
+        key = str(environment_key or "").strip()
+        return f"workflow-js-{key[:16]}" if key else "workflow-js-helper"
+
+    def ensure_workflow_js(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-js-helper",
+        environment_key: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        node_executable: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        engine_id: Optional[str] = None,
+        worker_profile_class: str = "generic",
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        node_policy = dict(node or {})
+        if node_executable:
+            node_policy.setdefault("node_executable", str(node_executable or ""))
+        env = self.workflow_js_environment_spec(
+            profile=prof,
+            environment_name=environment_name,
+            node=node_policy,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(env.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        if requested_key and requested_key != derived_key:
+            return {
+                "status": "error",
+                "reason": "environment_key_mismatch",
+                "environment_key": requested_key,
+                "derived_environment_key": derived_key,
+            }
+        eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=derived_key)
+        existing = self.get_registration(eid)
+        if existing:
+            ensured = self.ensure_running(eid)
+            self._annotate_workflow_js_registration(engine_id=eid, profile=prof, environment_key=derived_key, environment=dict(env.get("environment") or {}))
+            pool = self._workflow_python_pool_registry().get_or_create(self._workflow_js_pool_key(derived_key), desired_capacity=capacity)
+            pool.ensure_worker(lambda _key, cap: self._workflow_js_worker_slot(engine_id=eid, environment_key=derived_key, capacity=cap))
+            return {"status": "ok", "outcome": "already_registered", "profile": prof, "engine_id": eid, "environment_key": derived_key, "environment": dict(env.get("environment") or {}), "ensure": dict(ensured or {})}
+        spawned = self.spawn_workflow_js_helper(
+            engine_id=eid,
+            node_executable=node_executable or node_policy.get("node_executable"),
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            worker_profile_class=worker_profile_class,
+        )
+        self._annotate_workflow_js_registration(engine_id=eid, profile=prof, environment_key=derived_key, environment=dict(env.get("environment") or {}))
+        pool = self._workflow_python_pool_registry().get_or_create(self._workflow_js_pool_key(derived_key), desired_capacity=capacity)
+        pool.ensure_worker(lambda _key, cap: self._workflow_js_worker_slot(engine_id=eid, environment_key=derived_key, capacity=cap))
+        return {"status": "ok", "outcome": "spawned", "profile": prof, "engine_id": eid, "environment_key": derived_key, "environment": dict(env.get("environment") or {}), "spawn": dict(spawned or {})}
+
+    def workflow_js_resources(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-js-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        env = self.workflow_js_environment_spec(profile=prof, environment_name=environment_name, node=node, sandbox_policy=sandbox_policy)
+        derived_key = str(env.get("environment_key") or "").strip()
+        registration_key = self._workflow_js_registration_environment_key(engine_id)
+        requested_key = str(environment_key or "").strip()
+        effective_key = requested_key or registration_key or derived_key
+        if requested_key and registration_key and requested_key != registration_key:
+            return {"status": "error", "reason": "environment_key_mismatch", "environment_key": requested_key, "registration_environment_key": registration_key}
+        eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=effective_key)
+        resources = self.workflow_js_helper_resources(engine_id=eid)
+        pool = self._workflow_python_pool_registry().get(self._workflow_js_pool_key(effective_key))
+        return {**dict(resources or {}), "profile": prof, "engine_id": eid, "environment_key": effective_key, "environment": dict(env.get("environment") or {}), "workflow_pool": pool.resources() if pool is not None else None}
+
+    def set_workflow_js_capacity(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        effective_key = str(environment_key or "").strip() or self._workflow_js_registration_environment_key(engine_id)
+        eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=effective_key)
+        out = self.set_workflow_js_helper_capacity(engine_id=eid, capacity=capacity)
+        if effective_key:
+            self._workflow_python_pool_registry().get_or_create(self._workflow_js_pool_key(effective_key), desired_capacity=capacity).set_capacity(capacity)
+        return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
+
+    def cancel_workflow_js_request(
+        self,
+        *,
+        profile: str = "helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        effective_key = str(environment_key or "").strip() or self._workflow_js_registration_environment_key(engine_id)
+        eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=effective_key)
+        out = self.cancel_workflow_js_helper_request(engine_id=eid, request_id=request_id)
+        pool = self._workflow_python_pool_registry().get(self._workflow_js_pool_key(effective_key))
+        if pool is not None:
+            out["workflow_pool_cancel"] = pool.cancel_request(request_id)
+        return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
     def ensure_workflow_python(
         self,

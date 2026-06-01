@@ -48,6 +48,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Started Phase 5 by adding `hosting.sandbox.workflow_python_contract`: node-profile request normalization, validation, response-envelope fields, stream event names, and a structured not-implemented response. `workflow_python(profile=node)` now returns that stable envelope instead of the older generic profile error; the streaming worker remains pending.
 - Started Phase 6 compatibility rewiring: legacy Python helper resources/capacity/cancel methods now preserve old helper results while attaching `environment_key`, `workflow_runtime_kind=workflow_python`, and `workflow_pool` metadata for annotated registrations.
 - Completed the interactive CLI ensure action for Python helpers: operators can annotate/use a selected legacy helper through `workflow-python-ensure` and then refresh via environment-keyed workflow resources.
+- Started Phase 7 by adding `workflow_js(profile=helper)` compatibility facade surfaces in service, daemon, direct CLI, channel, RBAC, and tests. The JS facade derives environment keys from environment name, profile, Node/runtime identity, dependency hints, and sandbox policy hash, then reports environment-keyed workflow pool metadata.
 
 ## Key Design Decisions So Far
 
@@ -71,7 +72,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - [x] Internal hosted process pool abstraction exists in `hosting.sandbox.runtime_pool`.
 - [x] First deterministic `environment_key` model exists in `hosting.sandbox.runtime_base`.
 - [x] First-class `environment_key` routing exists for helper-profile workflow Python facade calls.
-- [ ] No first-class `environment_key` routing exists for workflow JS yet.
+- [x] First-class `environment_key` routing exists for helper-profile workflow JS facade calls.
 - [ ] Existing helper pools are tied to helper engine IDs and internal child pools.
 - [ ] Existing Python helper only separates hot child checkout by Python executable, not full dependency/policy identity.
 - [ ] Existing workflow environment management is present mostly through toolbox-shaped APIs.

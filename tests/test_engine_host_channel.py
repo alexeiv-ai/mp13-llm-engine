@@ -1152,6 +1152,89 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     ]
 
 
+def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.workflow_js_environment_spec(
+        profile="helper",
+        node={"node_executable": "node-demo"},
+        sandbox_policy={"sandbox": {"enabled": True}},
+    )
+    ch.ensure_workflow_js(
+        profile="helper",
+        environment_key="env-js",
+        node={"node_executable": "node-demo"},
+        engine_id="wf-js",
+        capacity=4,
+    )
+    ch.workflow_js_resources(profile="helper", environment_key="env-js", engine_id="wf-js")
+    ch.set_workflow_js_capacity(profile="helper", environment_key="env-js", engine_id="wf-js", capacity=6)
+    ch.cancel_workflow_js_request(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
+
+    assert fake.calls == [
+        (
+            "workflow-js-environment-spec",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-js-helper",
+                "node": {"node_executable": "node-demo"},
+                "sandbox_policy": {"sandbox": {"enabled": True}},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-ensure",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-js-helper",
+                "environment_key": "env-js",
+                "node": {"node_executable": "node-demo"},
+                "node_executable": None,
+                "capacity": 4,
+                "sandbox_policy": None,
+                "engine_id": "wf-js",
+                "worker_profile_class": "generic",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-resources",
+            {
+                "profile": "helper",
+                "environment_name": "workflow-js-helper",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "node": {},
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-set-capacity",
+            {
+                "profile": "helper",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "capacity": 6,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-cancel-request",
+            {
+                "profile": "helper",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "request_id": "req-1",
+                "session_token": "tok-123",
+            },
+        ),
+    ]
+
+
 def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     custom_pid_file = Path("X:/tmp/custom_host.pid")
     captured: Dict[str, Any] = {}

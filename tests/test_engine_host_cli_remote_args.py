@@ -194,3 +194,74 @@ def test_cli_local_workflow_python_capacity_and_cancel_use_facade(
     out = capsys.readouterr().out
     assert '"capacity": 7' in out
     assert '"request_id": "req-1"' in out
+
+
+def test_cli_local_workflow_js_facade_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Dict[str, Any]]] = []
+
+    class FakeService:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def authorize_command(self, command: str, payload: Dict[str, Any]) -> None:
+            calls.append(("authorize", {"command": command, **dict(payload)}))
+
+        def workflow_js_resources(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("resources", dict(kwargs)))
+            return {"status": "ok", "environment_key": kwargs.get("environment_key")}
+
+        def set_workflow_js_capacity(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("capacity", dict(kwargs)))
+            return {"status": "ok", "capacity": kwargs.get("capacity")}
+
+        def cancel_workflow_js_request(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("cancel", dict(kwargs)))
+            return {"status": "ok", "request_id": kwargs.get("request_id")}
+
+    monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
+
+    resources_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "node": {"node_executable": "node-demo"}}),
+            "workflow-js-resources",
+        ]
+    )
+    resize_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}),
+            "workflow-js-set-capacity",
+        ]
+    )
+    cancel_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}),
+            "workflow-js-cancel-request",
+        ]
+    )
+
+    assert resources_rc == 0
+    assert resize_rc == 0
+    assert cancel_rc == 0
+    assert (
+        "resources",
+        {
+            "profile": "helper",
+            "environment_name": "workflow-js-helper",
+            "environment_key": "env-js",
+            "engine_id": "wf-js",
+            "node": {"node_executable": "node-demo"},
+            "sandbox_policy": None,
+        },
+    ) in calls
+    assert ("capacity", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}) in calls
+    assert ("cancel", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
+    out = capsys.readouterr().out
+    assert '"environment_key": "env-js"' in out
+    assert '"request_id": "req-1"' in out
