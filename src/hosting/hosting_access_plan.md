@@ -202,9 +202,9 @@ Explicitly out of scope for this epic unless separately requested:
 - [x] Add internal data models for hosted sandbox kind, profile, environment key, pool key, worker slot, request lifecycle, stream event, and metrics.
 - [x] Add shared normalization for sandbox policy hash.
 - [x] Add shared normalization for runtime/profile identity.
-- [ ] Add shared registration metadata helpers.
-- [ ] Add shared resource/metrics response builders.
-- [ ] Add shared cancellation result shape.
+- [x] Add shared registration metadata helpers.
+- [x] Add shared resource/metrics response builders.
+- [x] Add shared cancellation result shape.
 - [x] Add base tests for environment key stability and policy hash changes.
 - [ ] Update docs with draft internal contract notes after models stabilize.
 

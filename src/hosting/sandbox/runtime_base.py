@@ -278,6 +278,67 @@ def hosted_stream_cancel_message(request_id: str, *, reason: Optional[str] = Non
     }
 
 
+def hosted_registration_environment_metadata(
+    *,
+    environment: Dict[str, Any],
+    runtime_kind: str,
+    profile: str,
+) -> Dict[str, Any]:
+    env = dict(environment or {})
+    return {
+        **env,
+        "environment_key": _clean(env.get("environment_key")) or None,
+        "environment_name": _clean(env.get("environment_name")) or None,
+        "workflow_runtime_kind": _clean(runtime_kind) or _clean(env.get("workflow_runtime_kind")) or None,
+        "workflow_profile": _clean(profile) or _clean(env.get("workflow_profile")) or None,
+        "sandbox_policy_hash": _clean(env.get("sandbox_policy_hash")) or None,
+        "required_imports": _unique_strings(env.get("required_imports") or []),
+        "package_pins": _string_map(env.get("package_pins") or {}),
+        "dependency_lock_hash": _clean(env.get("dependency_lock_hash")) or None,
+        "install_status": env.get("install_status"),
+    }
+
+
+def hosted_resource_response(
+    *,
+    sandbox_kind: str,
+    profile: str,
+    environment_key: str,
+    engine_id: Optional[str] = None,
+    pool: Optional[Dict[str, Any]] = None,
+    resources: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        **dict(resources or {}),
+        "status": str(dict(resources or {}).get("status") or "ok"),
+        "sandbox_kind": _clean(sandbox_kind) or None,
+        "profile": _clean(profile) or None,
+        "engine_id": _clean(engine_id) or None,
+        "environment_key": _clean(environment_key) or None,
+        "workflow_pool": dict(pool or {}) or None,
+    }
+
+
+def hosted_cancellation_result(
+    *,
+    request_id: str,
+    environment_key: str,
+    canceled: bool,
+    reason: str = "canceled",
+    worker_result: Optional[Dict[str, Any]] = None,
+    pool_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "status": "ok" if canceled else "not_found",
+        "request_id": _clean(request_id),
+        "environment_key": _clean(environment_key) or None,
+        "canceled": bool(canceled),
+        "reason": _clean(reason) or None,
+        "worker_cancel": dict(worker_result or {}) or None,
+        "workflow_pool_cancel": dict(pool_result or {}) or None,
+    }
+
+
 @dataclass
 class HostedPoolMetrics:
     desired_capacity: int = 1
@@ -320,6 +381,9 @@ __all__ = [
     "HostedStreamEvent",
     "HostedWorkerSlot",
     "HOSTED_STREAM_EVENT_TYPES",
+    "hosted_cancellation_result",
+    "hosted_registration_environment_metadata",
+    "hosted_resource_response",
     "hosted_stream_cancel_message",
     "normalize_sandbox_policy",
     "sandbox_policy_hash",

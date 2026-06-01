@@ -65,6 +65,7 @@ This file tracks progress on the hosted sandbox runtime refactoring plan in `src
 - Added internal `HostedProcessSandboxBase` in `hosting.sandbox.process_base` as a non-public composition layer over the pool registry for shared capacity, request status, progress, and cancellation plumbing.
 - Added `HostedPythonRuntimeBase` above the process base and made `HostedPythonRuntimeManager` inherit it, preserving the existing workflow environment manager behavior while exposing shared process-pool capabilities.
 - Added thin `HostedJsRuntimeBase` above the process base for Node/runtime identity and environment-key derivation, and routed the workflow JS facade environment spec through it.
+- Added shared runtime response helpers for registration environment metadata, resource responses, and cancellation results in `hosting.sandbox.runtime_base`.
 
 ## Key Design Decisions So Far
 

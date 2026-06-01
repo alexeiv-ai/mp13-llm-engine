@@ -8,6 +8,9 @@ from hosting.sandbox.runtime_base import (
     HostedRuntimeIdentity,
     HostedStreamEvent,
     HostedWorkerSlot,
+    hosted_cancellation_result,
+    hosted_registration_environment_metadata,
+    hosted_resource_response,
     sandbox_policy_hash,
 )
 
@@ -160,3 +163,39 @@ def test_stream_event_and_pool_metrics_shapes() -> None:
     assert row["active_calls"] == 1
     assert row["available_slots"] == 1
     assert row["errors_by_reason"] == {"boom": 4}
+
+
+def test_shared_registration_resource_and_cancel_shapes() -> None:
+    env = hosted_registration_environment_metadata(
+        environment={
+            "environment_key": "env-a",
+            "environment_name": "workflow-python-helper",
+            "required_imports": ["json", "json"],
+            "package_pins": {"demo": "1.0.0"},
+            "install_status": "verified",
+        },
+        runtime_kind="workflow_python",
+        profile="helper",
+    )
+    resources = hosted_resource_response(
+        sandbox_kind="workflow_python",
+        profile="helper",
+        environment_key="env-a",
+        engine_id="wf-py",
+        pool={"pool_id": "workflow_python/env-a"},
+        resources={"status": "ok", "capacity": 2},
+    )
+    cancel = hosted_cancellation_result(
+        request_id="req-1",
+        environment_key="env-a",
+        canceled=True,
+        worker_result={"status": "ok"},
+        pool_result={"status": "ok"},
+    )
+
+    assert env["workflow_runtime_kind"] == "workflow_python"
+    assert env["required_imports"] == ["json"]
+    assert resources["workflow_pool"]["pool_id"] == "workflow_python/env-a"
+    assert resources["capacity"] == 2
+    assert cancel["canceled"] is True
+    assert cancel["workflow_pool_cancel"] == {"status": "ok"}
