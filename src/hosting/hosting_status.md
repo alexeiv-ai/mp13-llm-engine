@@ -90,6 +90,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Reviewed Python helper worker cleanup after node decoupling; no code removal is part of this node plan because `workflow_python(profile=helper)` still intentionally depends on that worker.
 - Expanded node artifacts to support inline inputs, declared inline outputs, and relative alias refs such as `@artifacts/...` and policy-configured `@project/...` roots.
 - Updated the interactive CLI stream event renderer to summarize artifact events.
+- Added `sandbox/PY_NODE_WORKER.md` documenting the Python node execution API, artifact contract, and comparison with helper/toolbox workers.
+- Investigated worker architecture: Python node uses shared runtime/pool primitives but is not a registered IPC worker; toolbox and helper remain separate worker entrypoints with distinct orchestration and compatibility roles.
 
 ## Current Client Impact
 

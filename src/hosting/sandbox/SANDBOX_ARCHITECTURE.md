@@ -89,7 +89,8 @@ Concrete workflow facades currently use these layers incrementally:
    Dependency-bearing node execution requires an explicitly prepared and
    verified runtime environment; normal execution does not install packages
    implicitly. Declared artifact inputs and outputs use the host-provisioned
-   local artifact data plane described below.
+   local artifact data plane described below and in
+   [PY_NODE_WORKER.md](PY_NODE_WORKER.md).
 3. `workflow_js(profile=helper)` exposes environment spec, ensure, execute,
    resources, capacity, cancel, and request status through the JS runtime base
    and existing helper worker compatibility path.

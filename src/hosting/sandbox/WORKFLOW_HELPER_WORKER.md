@@ -169,24 +169,13 @@ Allowed operations are the same as JS: `default`, `condition`, `evaluate_conditi
 
 ## Workflow Python Node Profile
 
-`workflow_python(profile=node)` uses the same hosted Python execution runtime but
-returns the node-profile envelope:
+`workflow_python(profile=node)` is no longer helper-backed. It has a separate
+first-class node contract for `output`, `state_patch`, artifacts, streaming,
+progress, logs, metrics, structured errors, and audit fields.
 
-1. `workflow-python-execute` with `profile=node` runs the requested Python export and returns `output`, `state_patch`, `artifacts`, `progress`, `logs`, `metrics`, structured `error`, and `audit`.
-2. `workflow-python-stream-open` returns immediately and starts background execution.
-3. Stream events use the shared event names: `started`, `log`, optional `progress`, `artifact`, `result` or `error`, `canceled`, and `done`.
-4. `workflow-python-stream-send` accepts `{"action":"cancel","request_id":"..."}` and routes cancellation through host request tracking and the worker cancel hook.
-5. Dependency-bearing requests require a prepared and verified runtime environment. Normal execution does not install dependencies implicitly.
-
-Artifact references are part of the response contract. The current node
-implementation provides a local host-provisioned artifact store: input artifact
-refs such as `@artifacts/...` or policy-configured roots such as `@project/...`
-resolve to request-scoped sandbox paths, inline inputs are materialized as
-request input files, output artifact slots resolve to exact writable sandbox
-paths, and only the host may register output files as alias refs. Declared
-inline output artifacts can be returned inline. Returned values such as
-`{"path": "..."}`, `{"url": "..."}`, or `{"artifact_id": "..."}` remain ordinary
-JSON unless the host artifact manager validates and mints the ref.
+See [PY_NODE_WORKER.md](PY_NODE_WORKER.md) for the node-profile execution and
+artifact contract. This helper document remains scoped to the short helper
+workers and their compatibility surfaces.
 
 ## Result Contract
 

@@ -210,6 +210,8 @@ Cleanup decision: the Python helper worker is no longer part of node-profile exe
 - [x] Remove the current helper-backed node facade as the temporary compatibility path during migration.
 - [x] Remove helper-backed node execution once direct node execution is verified.
 - [x] Revisit whether the Python helper worker can be reduced after node no longer depends on it.
+- [x] Document why node does not fully subsume helper-profile compatibility yet.
+- [x] Compare Python node, Python helper, and toolbox worker architecture for shared base/refactoring opportunities.
 - [x] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` only for remaining dependent-project actions.
 - [x] Update public hosting docs after first-class node behavior is implemented and tested.
 - [x] Remove or rewrite stale docs that imply helper-backed node execution is complete first-class node sandboxing.
