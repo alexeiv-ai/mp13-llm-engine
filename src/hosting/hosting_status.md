@@ -12,7 +12,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
 - Node artifact store: local host-provisioned refs implemented for declared input refs and output slots.
-- Python helper worker cleanup: not complete because helper-profile execution still depends on it.
+- Python helper worker cleanup: reviewed; it remains intentionally required for helper-profile execution.
 
 ## Implemented
 
@@ -50,7 +50,7 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
-- Revisit Python helper worker cleanup after node execution no longer depends on it.
+- Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
 
 ## Progress Updates
@@ -87,6 +87,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Implemented local host-provisioned node artifacts: declared input refs resolve to request input paths, declared output slots expose exact writable paths, and successful outputs are copied into host-controlled local artifact storage.
 - Added sync artifact tests for output collection, input-ref consumption, and rejection of undeclared file writes.
 - Added stream artifact-event coverage for host-minted refs.
+- Reviewed Python helper worker cleanup after node decoupling; no code removal is part of this node plan because `workflow_python(profile=helper)` still intentionally depends on that worker.
 
 ## Current Client Impact
 

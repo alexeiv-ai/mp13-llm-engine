@@ -198,10 +198,12 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 
 ### Compatibility And Cleanup
 
+Cleanup decision: the Python helper worker is no longer part of node-profile execution, but it is still the intentional backing implementation for `workflow_python(profile=helper)`. Reducing or removing it would now be a separate helper-profile replacement project, not required for first-class node sandboxing.
+
 - [x] Keep existing helper-profile clients working while node implementation changes.
 - [x] Remove the current helper-backed node facade as the temporary compatibility path during migration.
 - [x] Remove helper-backed node execution once direct node execution is verified.
-- [ ] Revisit whether the Python helper worker can be reduced after node no longer depends on it.
+- [x] Revisit whether the Python helper worker can be reduced after node no longer depends on it.
 - [x] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` only for remaining dependent-project actions.
 - [x] Update public hosting docs after first-class node behavior is implemented and tested.
 - [x] Remove or rewrite stale docs that imply helper-backed node execution is complete first-class node sandboxing.
