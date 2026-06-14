@@ -53,6 +53,7 @@ import builtins
 import contextlib
 import io
 import json
+import os
 import sys
 import traceback
 
@@ -113,6 +114,22 @@ def normalize_result(value):
         }
     return {"output": value, "state_patch": None, "artifacts": [], "progress": None}
 
+def make_artifact_open(inputs, outputs):
+    readable = {os.path.abspath(str(path)) for path in dict(inputs or {}).values() if str(path or "")}
+    writable = {os.path.abspath(str(path)) for path in dict(outputs or {}).values() if str(path or "")}
+
+    def guarded_open(path, mode="r", *args, **kwargs):
+        target = os.path.abspath(str(path or ""))
+        write_mode = any(flag in str(mode or "") for flag in ("w", "a", "x", "+"))
+        if write_mode:
+            if target not in writable:
+                raise PermissionError(f"artifact output path not allowed: {path}")
+        elif target not in readable and target not in writable:
+            raise PermissionError(f"artifact input path not allowed: {path}")
+        return builtins.open(target, mode, *args, **kwargs)
+
+    return guarded_open
+
 def main():
     try:
         req = json.loads(sys.stdin.read() or "{}")
@@ -124,10 +141,15 @@ def main():
     export_name = str(req.get("export_name") or req.get("operation") or "")
     allowlist = list(req.get("import_allowlist") or [])
     payload = req.get("payload")
+    artifact_context = req.get("artifact_context") if isinstance(req.get("artifact_context"), dict) else {}
+    artifact_inputs = artifact_context.get("inputs") if isinstance(artifact_context.get("inputs"), dict) else {}
+    artifact_outputs = artifact_context.get("outputs") if isinstance(artifact_context.get("outputs"), dict) else {}
     output_limit_bytes = max(1, int(req.get("output_limit_bytes") or 65536))
     builtins_row = dict(SAFE_BUILTINS)
     if allowlist:
         builtins_row["__import__"] = make_importer(allowlist)
+    if artifact_inputs or artifact_outputs:
+        builtins_row["open"] = make_artifact_open(artifact_inputs, artifact_outputs)
 
     def progress(payload):
         row = payload if isinstance(payload, dict) else {"value": payload}
@@ -140,6 +162,8 @@ def main():
         "__name__": "workflow_python_node_module",
         "progress": progress,
         "emit_progress": progress,
+        "artifact_inputs": dict(artifact_inputs or {}),
+        "artifact_outputs": dict(artifact_outputs or {}),
     }
     try:
         with contextlib.redirect_stdout(stdout_io), contextlib.redirect_stderr(stderr_io):

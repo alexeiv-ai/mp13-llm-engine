@@ -21,6 +21,8 @@ NODE_REQUEST_FIELDS = [
     "limits",
     "policy",
     "python",
+    "artifact_inputs",
+    "artifact_outputs",
 ]
 
 NODE_RESPONSE_FIELDS = [
@@ -94,6 +96,8 @@ def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) ->
         "limits": _dict(req.get("limits")),
         "policy": _dict(req.get("policy")),
         "python": _dict(req.get("python")),
+        "artifact_inputs": list(req.get("artifact_inputs") or []) if isinstance(req.get("artifact_inputs"), list) else [],
+        "artifact_outputs": list(req.get("artifact_outputs") or []) if isinstance(req.get("artifact_outputs"), list) else [],
     }
     return normalized
 

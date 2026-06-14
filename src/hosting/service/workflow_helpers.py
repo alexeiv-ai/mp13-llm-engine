@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import os
 import json
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -91,6 +92,21 @@ class WorkflowHelperMixin:
             max_bytes=int(limits.get("output_limit_bytes") or 4096),
         )
         status = "ok" if ok else ("canceled" if reason == "workflow_sandbox_canceled" else "error")
+        artifact_rows = list(result.get("artifacts") or []) if isinstance(result.get("artifacts"), list) else []
+        artifact_store = (
+            {
+                "status": "ok",
+                "kind": "local",
+                "reason": None,
+                "message": "artifact refs were minted from host-provided workflow Python output paths",
+            }
+            if artifact_rows
+            else {
+                "status": "unavailable",
+                "reason": "artifact_store_no_refs",
+                "message": "no host-minted artifact refs were created for this response",
+            }
+        )
         return {
             "status": status,
             "ok": ok,
@@ -108,12 +124,8 @@ class WorkflowHelperMixin:
             },
             "output": result.get("output") if ok else None,
             "state_patch": dict(result.get("state_patch") or {}) or None,
-            "artifacts": [],
-            "artifact_store": {
-                "status": "unavailable",
-                "reason": "artifact_store_not_implemented",
-                "message": "artifact refs are part of the node-profile contract, but no workflow artifact store is wired yet",
-            },
+            "artifacts": artifact_rows,
+            "artifact_store": artifact_store,
             "progress": dict(result.get("progress") or {}) or None,
             "logs": logs,
             "metrics": dict(metrics or {}),
@@ -188,6 +200,118 @@ class WorkflowHelperMixin:
                 },
             },
             request={**dict(request or {}), "python": dict(python or {})},
+            environment_key=environment_key,
+            engine_id=engine_id,
+        )
+
+    def _workflow_python_artifact_root(self) -> Path:
+        root = Path(self.hosting_root).expanduser().resolve() / "workflow_artifacts"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @staticmethod
+    def _workflow_python_artifact_safe_name(value: Any, *, fallback: str) -> str:
+        raw = str(value or "").strip() or fallback
+        safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw)
+        return safe.strip("._") or fallback
+
+    def _workflow_python_artifact_path_from_ref(self, ref: str) -> Optional[Path]:
+        value = str(ref or "").strip()
+        prefix = "workflow-artifact://"
+        if not value.startswith(prefix):
+            return None
+        rest = value[len(prefix):]
+        artifact_id, _, filename = rest.partition("/")
+        artifact_id = self._workflow_python_artifact_safe_name(artifact_id, fallback="")
+        filename = self._workflow_python_artifact_safe_name(filename, fallback="artifact.bin")
+        if not artifact_id:
+            return None
+        path = (self._workflow_python_artifact_root() / "objects" / artifact_id / filename).resolve()
+        try:
+            path.relative_to((self._workflow_python_artifact_root() / "objects").resolve())
+        except ValueError:
+            return None
+        return path
+
+    def _workflow_python_prepare_node_artifacts(self, *, request: Dict[str, Any], request_id: str) -> Dict[str, Any]:
+        inputs = []
+        outputs = []
+        child_inputs: Dict[str, str] = {}
+        child_outputs: Dict[str, str] = {}
+        run_root = (self._workflow_python_artifact_root() / "runs" / self._workflow_python_artifact_safe_name(request_id, fallback="request")).resolve()
+        input_root = run_root / "inputs"
+        output_root = run_root / "outputs"
+        input_root.mkdir(parents=True, exist_ok=True)
+        output_root.mkdir(parents=True, exist_ok=True)
+        for index, spec in enumerate(list(request.get("artifact_inputs") or [])):
+            row = dict(spec or {})
+            name = self._workflow_python_artifact_safe_name(row.get("name"), fallback=f"input_{index}")
+            source = self._workflow_python_artifact_path_from_ref(str(row.get("ref") or ""))
+            if source is None or not source.exists():
+                raise ValueError(f"artifact_input_unavailable:{name}")
+            filename = self._workflow_python_artifact_safe_name(row.get("filename") or source.name, fallback="artifact.bin")
+            target = (input_root / name / filename).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            child_inputs[name] = str(target)
+            inputs.append({"name": name, "ref": str(row.get("ref") or ""), "path": str(target)})
+        for index, spec in enumerate(list(request.get("artifact_outputs") or [])):
+            row = dict(spec or {})
+            name = self._workflow_python_artifact_safe_name(row.get("name"), fallback=f"output_{index}")
+            filename = self._workflow_python_artifact_safe_name(row.get("filename"), fallback=f"{name}.bin")
+            target = (output_root / name / filename).resolve()
+            try:
+                target.relative_to(output_root)
+            except ValueError as exc:
+                raise ValueError(f"artifact_output_path_invalid:{name}") from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            child_outputs[name] = str(target)
+            outputs.append({"name": name, "filename": filename, "path": str(target), "media_type": str(row.get("media_type") or "application/octet-stream")})
+        return {
+            "run_root": str(run_root),
+            "inputs": inputs,
+            "outputs": outputs,
+            "child_context": {"inputs": child_inputs, "outputs": child_outputs},
+        }
+
+    def _workflow_python_collect_node_artifacts(self, context: Dict[str, Any], *, request_id: str) -> list[Dict[str, Any]]:
+        out = []
+        for row in list(dict(context or {}).get("outputs") or []):
+            spec = dict(row or {})
+            source = Path(str(spec.get("path") or "")).expanduser().resolve()
+            if not source.exists() or not source.is_file():
+                continue
+            artifact_id = self._workflow_python_artifact_safe_name(f"{request_id}-{spec.get('name')}-{int(time.time() * 1000)}", fallback="artifact")
+            filename = self._workflow_python_artifact_safe_name(spec.get("filename") or source.name, fallback="artifact.bin")
+            target = (self._workflow_python_artifact_root() / "objects" / artifact_id / filename).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            out.append(
+                {
+                    "name": str(spec.get("name") or "").strip() or None,
+                    "ref": f"workflow-artifact://{artifact_id}/{filename}",
+                    "filename": filename,
+                    "media_type": str(spec.get("media_type") or "application/octet-stream"),
+                    "size_bytes": int(target.stat().st_size),
+                }
+            )
+        return out
+
+    def _workflow_python_node_artifact_error(
+        self,
+        *,
+        request: Dict[str, Any],
+        environment_key: str,
+        engine_id: str,
+        error: Exception,
+    ) -> Dict[str, Any]:
+        return self._workflow_python_node_response_from_execution(
+            execution={
+                "ok": False,
+                "reason": "workflow_python_artifact_error",
+                "detail": {"message": str(error)},
+            },
+            request=request,
             environment_key=environment_key,
             engine_id=engine_id,
         )
@@ -809,6 +933,31 @@ class WorkflowHelperMixin:
                     "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
                 }
 
+            artifact_context: Optional[Dict[str, Any]] = None
+            if req.get("artifact_inputs") or req.get("artifact_outputs"):
+                try:
+                    artifact_context = self._workflow_python_prepare_node_artifacts(
+                        request=req,
+                        request_id=lifecycle.request_id,
+                    )
+                except Exception as exc:
+                    finished = pool.finish_request(
+                        lifecycle.request_id,
+                        status="error",
+                        reason="workflow_python_artifact_error",
+                    )
+                    response = self._workflow_python_node_artifact_error(
+                        request={**dict(request or {}), "request_id": lifecycle.request_id, "python": py},
+                        environment_key=effective_key,
+                        engine_id=eid,
+                        error=exc,
+                    )
+                    response["metrics"] = {
+                        "workflow_pool": pool.resources(),
+                        "request": dict(finished.get("request") or lifecycle.to_dict()),
+                    }
+                    return response
+
             def _record_node_event(event_type: str, payload: Dict[str, Any]) -> None:
                 pool.record_stream_event(
                     lifecycle.request_id,
@@ -816,10 +965,32 @@ class WorkflowHelperMixin:
                 )
 
             result = self._workflow_python_node_runtime_registry().execute(
-                {**req, "request_id": lifecycle.request_id, "python": py},
+                {
+                    **req,
+                    "request_id": lifecycle.request_id,
+                    "python": py,
+                    "artifact_context": dict((artifact_context or {}).get("child_context") or {}),
+                },
                 python_executable=str(py.get("python_executable") or "").strip() or None,
                 on_event=_record_node_event,
             )
+            if artifact_context is not None and bool(result.get("ok", False)):
+                try:
+                    result["artifacts"] = self._workflow_python_collect_node_artifacts(
+                        artifact_context,
+                        request_id=lifecycle.request_id,
+                    )
+                except Exception as exc:
+                    result = {
+                        "ok": False,
+                        "reason": "workflow_python_artifact_error",
+                        "detail": {"message": str(exc)},
+                        "stdout": str(result.get("stdout") or ""),
+                        "stderr": str(result.get("stderr") or ""),
+                        "artifacts": [],
+                    }
+            else:
+                result["artifacts"] = []
             status = "ok" if bool(result.get("ok", False)) else "error"
             reason = str(result.get("reason") or "") or None
             if reason == "workflow_sandbox_timeout":
@@ -1199,11 +1370,58 @@ class WorkflowHelperMixin:
         def _emit_node_event(event_type: str, payload: Dict[str, Any]) -> None:
             base.stream_emit(stream_id=stream_id, event_type=event_type, payload=dict(payload or {}))
 
+        artifact_context: Optional[Dict[str, Any]] = None
+        if request.get("artifact_inputs") or request.get("artifact_outputs"):
+            try:
+                artifact_context = self._workflow_python_prepare_node_artifacts(
+                    request=request,
+                    request_id=str(request.get("request_id") or ""),
+                )
+            except Exception as exc:
+                response = self._workflow_python_node_artifact_error(
+                    request=request,
+                    environment_key=environment_key,
+                    engine_id=engine_id,
+                    error=exc,
+                )
+                base.stream_emit(stream_id=stream_id, event_type="error", payload={"error": dict(response.get("error") or {}), "response": response})
+                base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "error", "reason": response.get("reason")})
+                session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+                if session is not None:
+                    session.closed = True
+                base.finish_request(
+                    environment_key=environment_key,
+                    request_id=str(request.get("request_id") or ""),
+                    status="error",
+                    reason="workflow_python_artifact_error",
+                )
+                return
+
         result = self._workflow_python_node_runtime_registry().execute(
-            dict(request or {}),
+            {
+                **dict(request or {}),
+                "artifact_context": dict((artifact_context or {}).get("child_context") or {}),
+            },
             python_executable=str(dict(request.get("python") or {}).get("python_executable") or "").strip() or None,
             on_event=_emit_node_event,
         )
+        if artifact_context is not None and bool(result.get("ok", False)):
+            try:
+                result["artifacts"] = self._workflow_python_collect_node_artifacts(
+                    artifact_context,
+                    request_id=str(request.get("request_id") or ""),
+                )
+            except Exception as exc:
+                result = {
+                    "ok": False,
+                    "reason": "workflow_python_artifact_error",
+                    "detail": {"message": str(exc)},
+                    "stdout": str(result.get("stdout") or ""),
+                    "stderr": str(result.get("stderr") or ""),
+                    "artifacts": [],
+                }
+        else:
+            result["artifacts"] = []
         status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))
         response = self._workflow_python_node_response_from_execution(
             execution=result,
@@ -1221,6 +1439,9 @@ class WorkflowHelperMixin:
         if bool(response.get("ok", False)):
             if isinstance(response.get("progress"), dict):
                 base.stream_emit(stream_id=stream_id, event_type="progress", payload=dict(response.get("progress") or {}))
+            for artifact in list(response.get("artifacts") or []):
+                if isinstance(artifact, dict):
+                    base.stream_emit(stream_id=stream_id, event_type="artifact", payload=dict(artifact or {}))
             base.stream_emit(
                 stream_id=stream_id,
                 event_type="result",

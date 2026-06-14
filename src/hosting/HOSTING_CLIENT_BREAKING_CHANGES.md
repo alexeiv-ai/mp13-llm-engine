@@ -29,7 +29,7 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 - Node-profile clients must pass stable `request_id` values for cancellation and request-status lookup.
 - Node-profile clients must use host-derived `environment_key` for resources, capacity, cancellation, and request status.
 - Node-profile clients must not rely on helper-shaped nested result payloads. They should consume the node response envelope directly.
-- Node-profile clients must stop assuming `artifact_store.status=unavailable` once artifact storage is implemented. They must pass input artifacts as refs, consume host-provided sandbox paths, write outputs only to host-provided artifact paths or brokered APIs, and handle host-minted output refs, authorization failures, expiry, and missing-artifact errors.
+- Node-profile clients must stop assuming `artifact_store.status=unavailable`. They must pass input artifacts as refs, write outputs only to host-provided artifact output paths, consume host-minted output refs, and handle missing-artifact or unavailable-artifact responses when no refs are produced.
 - Clients that provide dependency-management UI or orchestration must call host-controlled prepare/lock/verify/install/receipt APIs explicitly before dependency-bearing execution. Normal workflow execution does not install dependencies implicitly.
 
 ## No Remaining Action For Already Migrated Helper Clients

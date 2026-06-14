@@ -11,7 +11,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
-- Node artifact store: deliberately unavailable for this pass.
+- Node artifact store: local host-provisioned refs implemented for declared input refs and output slots.
 - Python helper worker cleanup: not complete because helper-profile execution still depends on it.
 
 ## Implemented
@@ -42,17 +42,14 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Dependency-bearing node execution now rejects missing preparation and missing install receipts.
 - Verified dependency runtime success now selects the verified runtime interpreter before node execution.
-- Artifact I/O is intended to be host-provisioned sandbox file access, but artifact storage is still unavailable; artifact contract fields remain present.
-- Node cancellation is wired through the node runtime registry, but still needs focused stream/host cancellation tests.
-- Node output-limit behavior is implemented, but still needs focused node-profile tests.
-- Node stderr/log truncation behavior is implemented, but still needs focused truncation tests.
+- Artifact I/O is host-provisioned local sandbox file access: input refs are copied into request input paths, output slots become exact writable paths, and host-minted `workflow-artifact://...` refs are returned only for declared output files.
+- Artifact authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
 ## Open Work
 
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
-- Add unavailable-artifact behavior tests and document host-provisioned input/output artifact requirements.
-- Add focused node cancellation, output-limit, truncation, environment-policy, and artifact tests.
+- Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
 - Revisit Python helper worker cleanup after node execution no longer depends on it.
 - Update public docs after the first-class node behavior is implemented and verified.
 
@@ -73,7 +70,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` so dependent-project actions no longer describe node execution as helper-backed.
 - Clarified the artifact decision: artifact I/O belongs in the node sandbox contract, but must be host-provisioned through input refs, read-only input paths, output paths or brokered writes, host validation, and host-minted refs.
 - Clarified the artifact sandbox boundary: sandboxed code cannot mint trusted artifact refs by returning paths, URLs, or tokens; only the host artifact manager may create artifact refs after validating files from allowed output locations.
-- Changed node responses to drop sandbox-returned `artifacts` while the artifact manager is unavailable.
+- Changed node responses to drop sandbox-returned `artifacts` unless the host collected declared output files and minted refs.
 - Added artifact-safety tests proving unavailable artifact behavior and preventing sandbox-returned refs from becoming stream `artifact` events.
 - Added focused node tests for output-limit errors and stdout/stderr log truncation.
 - Implemented structured node cancellation results for active runtime cancellation.
@@ -87,9 +84,12 @@ Purpose: record the current implementation state and the discrepancies against `
 - Documented the host-provisioned artifact boundary and requirements in sandbox architecture/workflow docs.
 - Updated remaining client-change notes to reflect enforced dependency-environment prechecks.
 - Added active node runtime process resource reporting with host CPU/RSS snapshots where available.
+- Implemented local host-provisioned node artifacts: declared input refs resolve to request input paths, declared output slots expose exact writable paths, and successful outputs are copied into host-controlled local artifact storage.
+- Added sync artifact tests for output collection, input-ref consumption, and rejection of undeclared file writes.
+- Added stream artifact-event coverage for host-minted refs.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
-- Clients that will own dependency-bearing node-profile workflow execution must wait for verified-environment enforcement before relying on package/runtime isolation guarantees.
-- Future node-profile clients should treat `artifact_store.status=unavailable` as deliberate current behavior and expect artifact behavior to change to host-provisioned input refs plus host-minted output refs when artifact storage is implemented.
+- Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
+- Node-profile clients should pass input artifacts as host refs, write only to provided `artifact_outputs` paths, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.

@@ -28,13 +28,12 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
   - Its stream API routes execution through the node runtime and emits node events through the shared stream/session plumbing.
 - `workflow_js(profile=helper)` exists as a public facade over the JS helper implementation.
 - Host-side environment-key routing and pool/request accounting exist for the workflow facades.
-- Artifact storage for node-profile responses is not implemented; current responses use an explicit unavailable placeholder.
+- Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots. It returns `artifact_store.status=ok` only when refs are minted from declared output files.
 
 ## Current Discrepancies
 
-- Node-profile dependency/runtime enforcement is incomplete. Package/import intent contributes to identity, but execution must still be tightened so dependency-bearing node work runs only in a verified runtime or fails explicitly.
-- Node-profile artifact refs are contract fields only; there is no storage, authorization, lifetime, or reference implementation.
-- Node-profile cancellation, output-limit, truncation, environment-policy, and artifact behavior need additional focused tests.
+- Node-profile artifact refs are implemented as local host-controlled `workflow-artifact://...` refs, but authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
+- Node-profile cancellation, output-limit, truncation, environment-policy, and artifact behavior now have focused coverage; broader integration coverage can still be added when real dependency installs and artifact consumers exist.
 - Cleanup is incomplete: the Python helper worker remains the actual execution substrate for helper-profile execution.
 
 ## Work Items
@@ -117,7 +116,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [x] Capture and emit bounded `stderr` events from executed Python code.
 - [x] Emit `log` events for host/runtime diagnostics that are safe to expose.
 - [x] Emit `progress` during execution, not only after final return.
-- [ ] Emit `artifact` events when artifact refs are created.
+- [x] Emit `artifact` events when artifact refs are created.
 - [x] Emit `result` for successful terminal output.
 - [x] Emit `error` for structured terminal failures.
 - [x] Emit `canceled` when cancellation wins.
@@ -144,30 +143,30 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 ### Artifacts
 
-Decision: artifact I/O belongs in the first-class node sandbox contract, but it must be host-provisioned. The current implementation does not yet provide artifact storage, so the node response keeps the `artifacts` and `artifact_store` contract fields with `artifact_store.status=unavailable` until the host-managed artifact path is implemented.
+Decision: artifact I/O belongs in the first-class node sandbox contract, and this pass implements the local host-provisioned version. The node response keeps `artifacts` and `artifact_store` stable; `artifact_store.status=ok` is returned only when the host mints refs from declared output files, while requests with no declared output artifacts still report the store as unavailable for that response.
 
-How artifacts fit the sandbox model: input artifacts are host-issued refs that the host resolves into sandbox-visible read-only paths before execution. Output artifacts are files written by sandboxed code only under host-provided output directories or through a brokered host API. After execution, the host scans and validates those output locations, applies size/count/lifetime policy, moves or registers the bytes in host-controlled storage, and returns host-minted artifact refs. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
+How artifacts fit the sandbox model: input artifacts are host-issued refs that the host resolves into sandbox-visible input paths before execution. Output artifacts are files written by sandboxed code only to exact host-provided output paths. After execution, the host validates those output paths, copies the bytes into host-controlled local artifact storage, and returns host-minted `workflow-artifact://...` refs. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
 
-Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which input refs are readable, which output directories are writable, what crosses back out, and which durable refs clients may later read. Adding direct filesystem artifact refs now would create unclear ownership and security behavior. Keeping a structured unavailable response preserves the public envelope while avoiding a misleading partial artifact system.
+Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which input refs are readable, which exact output files are writable, what crosses back out, and which refs clients may later read. Direct filesystem paths are not promoted as artifact refs.
 
 Untrusted artifact refs means any artifact-looking value produced by sandboxed code rather than by the host artifact manager. Examples include returned dicts such as `{"path": "/tmp/report.csv"}`, `{"url": "file:///..."}`, `{"artifact_id": "abc"}`, or `{"ref": "../other-run/output"}`. These values may be useful as ordinary JSON output if the workflow wants them, but the host must not treat them as authorized downloadable artifacts, emit them as `artifact` stream events, or store them in the response `artifacts` list until the host has verified the file came from an allowed output path and has created/registered the reference.
 
 - [x] Decide whether first-class node supports artifacts in this implementation pass.
 - [x] Choose host-provisioned artifact I/O as the intended sandbox model.
-- [x] Keep a deliberate structured unavailable response as the product decision.
-- [ ] Define request fields for input artifact refs and host-provided output artifact slots/directories.
-- [ ] Resolve input artifact refs into sandbox-visible read-only paths before execution.
-- [ ] Provide output artifact paths or a brokered write API scoped to the current request.
-- [ ] Collect only files written under host-provided output locations.
-- [ ] Register collected output files into host-controlled artifact storage and return host-minted refs.
+- [x] Keep a deliberate structured unavailable response when no host-minted artifact refs exist for a response.
+- [x] Define request fields for input artifact refs and host-provided output artifact slots/directories.
+- [x] Resolve input artifact refs into sandbox-visible input paths before execution.
+- [x] Provide output artifact paths scoped to the current request.
+- [x] Collect only files written under host-provided output locations.
+- [x] Register collected output files into host-controlled artifact storage and return host-minted refs.
 - [x] Ensure direct node execution ignores or rejects untrusted returned artifact refs instead of treating them as host-created artifacts.
 - [x] Ensure stream execution emits `artifact` events only for host-minted refs.
 - [x] Keep artifact-looking values from sandbox code as ordinary `output` only, unless the host artifact manager creates the reference.
-- [x] Add tests for explicit unavailable-artifact behavior on successful node execution.
+- [x] Add tests for no-host-minted-artifact behavior on successful node execution.
 - [x] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
-- [ ] Add tests for input artifact ref resolution to read-only sandbox paths.
-- [ ] Add tests for output artifact collection from allowed output paths.
-- [ ] Add tests rejecting artifact collection from paths outside host-provided output locations.
+- [x] Add tests for input artifact ref resolution to sandbox paths.
+- [x] Add tests for output artifact collection from allowed output paths.
+- [x] Add tests rejecting artifact collection from paths outside host-provided output locations.
 - [x] Document the artifact-storage requirements before enabling artifacts:
   - [x] host-controlled storage root
   - [x] stable reference shape

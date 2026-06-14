@@ -88,8 +88,8 @@ Concrete workflow facades currently use these layers incrementally:
    `progress`, `result` or structured `error`, `canceled`, and `done`.
    Dependency-bearing node execution requires an explicitly prepared and
    verified runtime environment; normal execution does not install packages
-   implicitly. Artifact storage is still reported as unavailable until the
-   host-provisioned artifact data plane below is implemented.
+   implicitly. Declared artifact inputs and outputs use the host-provisioned
+   local artifact data plane described below.
 3. `workflow_js(profile=helper)` exposes environment spec, ensure, execute,
    resources, capacity, cancel, and request status through the JS runtime base
    and existing helper worker compatibility path.
@@ -104,23 +104,27 @@ toolbox semantics.
 ## Workflow Artifact Boundary
 
 Artifact I/O is part of the node sandbox contract, but artifact authority stays
-with the host. A complete implementation must provide:
+with the host. The current implementation provides local host-controlled
+`workflow-artifact://...` refs for declared output files and resolves declared
+input refs into request-scoped input paths. The remaining durable-service
+concerns are explicit:
 
 1. A host-controlled storage root outside arbitrary sandbox paths.
 2. Stable artifact reference shape, including request/workflow/package identity.
 3. Read and write authorization rules for refs.
 4. Lifetime, expiry, cleanup, and garbage-collection policy.
 5. Size and count limits per request.
-6. Input-ref resolution into sandbox-visible read-only paths.
-7. Output-slot resolution into sandbox-visible writable paths.
+6. Input-ref resolution into sandbox-visible input paths.
+7. Output-slot resolution into exact sandbox-visible writable paths.
 8. A brokered write API if path-based output slots are insufficient.
 9. Stream `artifact` events only for host-minted refs.
 10. Response `artifacts` entries only for host-validated output files.
 
 Sandboxed code may return ordinary JSON values that look like paths, URLs, or
 artifact IDs, but those values are not trusted artifact refs. The host only
-mints artifact refs after validating files from allowed output locations and
-registering them in host-controlled storage.
+mints artifact refs after validating files from declared output locations and
+registering them in host-controlled storage. Stronger authorization, expiry,
+cleanup, and external artifact-read APIs remain future durable-service work.
 
 ## Shared API
 

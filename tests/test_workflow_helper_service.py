@@ -1323,6 +1323,137 @@ def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(t
     assert out["artifact_store"]["status"] == "unavailable"
 
 
+def test_execute_workflow_python_node_collects_declared_output_artifact(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    f = open(artifact_outputs['report'], 'w')\n"
+        "    f.write('hello artifact')\n"
+        "    f.close()\n"
+        "    return {'output': {'done': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-output-artifact",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"done": True}
+    assert out["artifact_store"]["status"] == "ok"
+    assert out["artifacts"] == [
+        {
+            "name": "report",
+            "ref": out["artifacts"][0]["ref"],
+            "filename": "report.txt",
+            "media_type": "text/plain",
+            "size_bytes": len("hello artifact"),
+        }
+    ]
+    assert out["artifacts"][0]["ref"].startswith("workflow-artifact://")
+
+
+def test_execute_workflow_python_node_reads_declared_input_artifact_ref(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    write_source = (
+        "def run(payload):\n"
+        "    f = open(artifact_outputs['seed'], 'w')\n"
+        "    f.write('seed text')\n"
+        "    f.close()\n"
+        "    return {'output': {'written': True}}\n"
+    )
+    read_source = (
+        "def run(payload):\n"
+        "    f = open(artifact_inputs['seed'], 'r')\n"
+        "    text = f.read()\n"
+        "    f.close()\n"
+        "    return {'output': {'text': text}}\n"
+    )
+
+    written = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-input-artifact-write",
+            "module_source": write_source,
+            "module_sha256": hashlib.sha256(write_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
+        },
+    )
+    read = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-input-artifact-read",
+            "module_source": read_source,
+            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": [{"name": "seed", "ref": written["artifacts"][0]["ref"]}],
+        },
+    )
+
+    assert written["status"] == "ok"
+    assert read["status"] == "ok"
+    assert read["output"] == {"text": "seed text"}
+
+
+def test_execute_workflow_python_node_rejects_undeclared_artifact_file_access(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    f = open('outside.txt', 'w')\n"
+        "    f.write('nope')\n"
+        "    f.close()\n"
+        "    return {'output': {'done': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-artifact-outside",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "artifact output path not allowed" in out["error"]["message"]
+    assert out["artifacts"] == []
+
+
 def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1457,6 +1588,58 @@ def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp
     result_events = [row for row in events if row["type"] == "result"]
     assert result_events
     assert result_events[0]["payload"]["artifacts"] == []
+
+
+def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    f = open(artifact_outputs['report'], 'w')\n"
+        "    f.write('stream artifact')\n"
+        "    f.close()\n"
+        "    return {'output': {'done': True}}\n"
+    )
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-stream-output-artifact",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"output_limit_bytes": 1024},
+                "artifact_outputs": [{"name": "report", "filename": "stream.txt", "media_type": "text/plain"}],
+            },
+        )
+        events = []
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("events") or []))
+            if any(dict(row or {}).get("type") == "done" for row in events):
+                break
+            time.sleep(0.05)
+    finally:
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    event_types = [row["type"] for row in events]
+    assert "artifact" in event_types
+    assert event_types.index("artifact") < event_types.index("result")
+    artifact_events = [row for row in events if row["type"] == "artifact"]
+    result_events = [row for row in events if row["type"] == "result"]
+    assert artifact_events[0]["payload"]["ref"].startswith("workflow-artifact://")
+    assert artifact_events[0]["payload"]["filename"] == "stream.txt"
+    assert result_events[0]["payload"]["artifacts"] == [artifact_events[0]["payload"]]
 
 
 def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path: Path) -> None:
