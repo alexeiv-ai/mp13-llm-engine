@@ -73,6 +73,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` so dependent-project actions no longer describe node execution as helper-backed.
 - Clarified the artifact decision: artifact I/O belongs in the node sandbox contract, but must be host-provisioned through input refs, read-only input paths, output paths or brokered writes, host validation, and host-minted refs.
 - Clarified the artifact sandbox boundary: sandboxed code cannot mint trusted artifact refs by returning paths, URLs, or tokens; only the host artifact manager may create artifact refs after validating files from allowed output locations.
+- Changed node responses to drop sandbox-returned `artifacts` while the artifact manager is unavailable.
+- Added artifact-safety tests proving unavailable artifact behavior and preventing sandbox-returned refs from becoming stream `artifact` events.
 
 ## Current Client Impact
 

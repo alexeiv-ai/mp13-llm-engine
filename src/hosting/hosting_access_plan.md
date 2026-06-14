@@ -160,11 +160,11 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [ ] Provide output artifact paths or a brokered write API scoped to the current request.
 - [ ] Collect only files written under host-provided output locations.
 - [ ] Register collected output files into host-controlled artifact storage and return host-minted refs.
-- [ ] Ensure direct node execution ignores or rejects untrusted returned artifact refs instead of treating them as host-created artifacts.
-- [ ] Ensure stream execution emits `artifact` events only for host-minted refs.
-- [ ] Keep artifact-looking values from sandbox code as ordinary `output` only, unless the host artifact manager creates the reference.
-- [ ] Add tests for explicit unavailable-artifact behavior on successful node execution.
-- [ ] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
+- [x] Ensure direct node execution ignores or rejects untrusted returned artifact refs instead of treating them as host-created artifacts.
+- [x] Ensure stream execution emits `artifact` events only for host-minted refs.
+- [x] Keep artifact-looking values from sandbox code as ordinary `output` only, unless the host artifact manager creates the reference.
+- [x] Add tests for explicit unavailable-artifact behavior on successful node execution.
+- [x] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
 - [ ] Add tests for input artifact ref resolution to read-only sandbox paths.
 - [ ] Add tests for output artifact collection from allowed output paths.
 - [ ] Add tests rejecting artifact collection from paths outside host-provided output locations.

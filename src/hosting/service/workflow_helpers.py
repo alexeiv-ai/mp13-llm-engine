@@ -107,7 +107,7 @@ class WorkflowHelperMixin:
             },
             "output": result.get("output") if ok else None,
             "state_patch": dict(result.get("state_patch") or {}) or None,
-            "artifacts": list(result.get("artifacts") or []),
+            "artifacts": [],
             "artifact_store": {
                 "status": "unavailable",
                 "reason": "artifact_store_not_implemented",
@@ -1093,9 +1093,6 @@ class WorkflowHelperMixin:
         if bool(response.get("ok", False)):
             if isinstance(response.get("progress"), dict):
                 base.stream_emit(stream_id=stream_id, event_type="progress", payload=dict(response.get("progress") or {}))
-            for artifact in list(response.get("artifacts") or []):
-                if isinstance(artifact, dict):
-                    base.stream_emit(stream_id=stream_id, event_type="artifact", payload=dict(artifact or {}))
             base.stream_emit(
                 stream_id=stream_id,
                 event_type="result",
