@@ -9,10 +9,10 @@ Purpose: record the current implementation state and the discrepancies against `
 - Helper-profile workflow Python facade: implemented.
 - Workflow JS helper facade: implemented.
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
-- First-class workflow Python node sandbox: not implemented.
-- Node-profile compatibility facade: implemented, but helper-backed.
-- Node artifact store: not implemented.
-- Python helper worker cleanup: not complete because helper-profile execution and the current node facade still depend on it.
+- First-class workflow Python node execution path: implemented.
+- Full node sandbox hardening: still in progress.
+- Node artifact store: deliberately unavailable for this pass.
+- Python helper worker cleanup: not complete because helper-profile execution still depends on it.
 
 ## Implemented
 
@@ -20,44 +20,62 @@ Purpose: record the current implementation state and the discrepancies against `
 - Helper-profile environment spec, prepare, lock, verify, install, receipt, ensure, execute, resources, capacity, cancel, and request-status surfaces.
 - Helper-profile request metrics and environment-keyed pool accounting.
 - Helper-profile import allowlist behavior in the existing helper worker.
-- `workflow_python(profile=node)` request/response compatibility facade.
+- `workflow_python(profile=node)` request/response facade.
 - Node-profile stream command surfaces:
   - `workflow-python-stream-open`
   - `workflow-python-stream-recv`
   - `workflow-python-stream-send`
   - `workflow-python-stream-close`
-- Host-side stream event wrapping for the current helper-backed node facade.
+- Shared stream/session plumbing for node-profile stream events.
 - `workflow_js(profile=helper)` public facade and `workflow-js-execute`.
 - RBAC/daemon/channel/CLI support for the workflow command families.
 - Toolbox shared identity/process-base migration while preserving toolbox semantics.
+- Direct node-profile Python execution path that no longer calls `execute_workflow_python_helper`.
+- Node-profile sync execution through the direct node runtime.
+- Node-profile stream execution through the direct node runtime.
+- Node-owned import allowlist/default-deny enforcement.
+- Node runtime progress events during execution through `progress(...)` / `emit_progress(...)`.
+- Node stdout/stderr capture and stream emission.
+- Node resource, request-status, capacity, and metrics reporting through the workflow pool.
 
 ## Discrepancies
 
-- `workflow_python(profile=node)` still executes through `execute_workflow_python_helper`.
-- The current node facade is constrained by helper source-in / JSON-out execution.
-- Node import restrictions are not independently implemented; they are inherited from helper execution.
+- Dependency-bearing node execution still needs hard verified-environment enforcement.
 - Node dependency/runtime verification is not enforced as a hard execution precondition.
-- Node streaming is host-side wrapping around a synchronous helper call, not node-owned streaming execution.
-- Progress is only lifted from a final return value when present.
-- stdout/stderr/log capture is not node-native.
-- Artifact storage is unavailable.
-- Current node tests cover the helper-backed facade, not a first-class node sandbox.
+- Artifact I/O is intended to be host-provisioned sandbox file access, but artifact storage is still unavailable; artifact contract fields remain present.
+- Node cancellation is wired through the node runtime registry, but still needs focused stream/host cancellation tests.
+- Node output-limit behavior is implemented, but still needs focused node-profile tests.
+- Node stderr/log truncation behavior is implemented, but still needs focused truncation tests.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
 ## Open Work
 
-- Implement direct node-profile execution without helper request translation.
-- Implement node-owned import allowlist/default-deny enforcement and tests.
 - Enforce verified runtime environment selection for dependency-bearing node work.
-- Implement native node streaming events for stdout, stderr, logs, progress, artifacts, result, error, cancellation, and done.
-- Implement artifact storage or make a deliberate no-artifacts product decision.
-- Implement node-native cancellation, request status, resources, and metrics.
-- Add first-class node sandbox tests.
+- Add unavailable-artifact behavior tests and document host-provisioned input/output artifact requirements.
+- Add focused node cancellation, output-limit, truncation, environment-policy, and artifact tests.
 - Revisit Python helper worker cleanup after node execution no longer depends on it.
 - Update public docs after the first-class node behavior is implemented and verified.
+
+## Progress Updates
+
+### 2026-06-14
+
+- Added `hosting.sandbox.workflow_python_node_runtime`, a node-owned Python child runtime for node-profile execution.
+- Routed `workflow_python(profile=node)` sync execution away from `execute_workflow_python_helper`.
+- Routed `workflow-python-stream-open` node execution away from helper RPC and through the node runtime.
+- Routed node resources, capacity, request status, and cancellation through the workflow pool/node runtime registry instead of helper worker RPCs.
+- Added node import policy tests covering default-deny, wrong allowlist, and allowlisted imports.
+- Added a regression test proving node execution does not call the helper proxy path.
+- Added a stream test proving runtime progress can arrive before the final result and stdout is emitted as a stream event.
+- Fixed stream close handling so a stream already marked closed by terminal execution does not emit a second `done` event.
+- Verified focused hosting workflow tests: `87 passed`.
+- Updated the checked plan items to reflect only the node behavior implemented or verified in this pass.
+- Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` so dependent-project actions no longer describe node execution as helper-backed.
+- Clarified the artifact decision: artifact I/O belongs in the node sandbox contract, but must be host-provisioned through input refs, read-only input paths, output paths or brokered writes, host validation, and host-minted refs.
+- Clarified the artifact sandbox boundary: sandboxed code cannot mint trusted artifact refs by returning paths, URLs, or tokens; only the host artifact manager may create artifact refs after validating files from allowed output locations.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
-- Clients that will own node-profile workflow execution must not assume the current helper-backed behavior is final.
-- Future node-profile clients should expect a richer streaming/runtime/artifact contract once the first-class node sandbox lands.
+- Clients that will own dependency-bearing node-profile workflow execution must wait for verified-environment enforcement before relying on package/runtime isolation guarantees.
+- Future node-profile clients should treat `artifact_store.status=unavailable` as deliberate current behavior and expect artifact behavior to change to host-provisioned input refs plus host-minted output refs when artifact storage is implemented.

@@ -20,27 +20,22 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 - `workflow_python(profile=helper)` exists as a public facade and is backed by the existing Python helper worker.
 - Helper-profile execution has source hash verification, operation allowlisting, JSON payload/result handling, import allowlist enforcement, timeout/output limits, capacity, cancellation, and request metrics.
-- `workflow_python(profile=node)` currently exists as a compatibility facade:
+- `workflow_python(profile=node)` now has a direct node execution path:
   - It validates node-profile request fields.
-  - It translates the request into a helper-style call.
-  - It executes through `execute_workflow_python_helper`.
-  - It wraps the returned JSON into the node response envelope.
-  - Its stream API is host-side wrapping around a synchronous helper execution.
+  - It executes node requests through node-owned Python child runtime code.
+  - It no longer translates node execution through `execute_workflow_python_helper`.
+  - It preserves the node response envelope.
+  - Its stream API routes execution through the node runtime and emits node events through the shared stream/session plumbing.
 - `workflow_js(profile=helper)` exists as a public facade over the JS helper implementation.
 - Host-side environment-key routing and pool/request accounting exist for the workflow facades.
 - Artifact storage for node-profile responses is not implemented; current responses use an explicit unavailable placeholder.
 
 ## Current Discrepancies
 
-- Node-profile Python is not a first-class sandbox yet. It still depends on the helper execution path.
-- Node-profile imports are not independently implemented. Node inherits helper import behavior.
 - Node-profile dependency/runtime enforcement is incomplete. Package/import intent contributes to identity, but execution must still be tightened so dependency-bearing node work runs only in a verified runtime or fails explicitly.
-- Node-profile streaming is not native. Progress, artifact, stdout, stderr, and logs are not emitted by a node-owned execution loop.
-- Node-profile progress is lifted from the final returned JSON, not streamed during execution.
-- Node-profile logs are host-created summaries, not captured Python execution logs.
 - Node-profile artifact refs are contract fields only; there is no storage, authorization, lifetime, or reference implementation.
-- Cleanup is incomplete: the Python helper worker remains the actual execution substrate for helper-profile execution and the current node facade.
-- Previous plan/status text over-marked node-profile execution and cleanup as complete. The corrected status is that helper/facade work is complete, but first-class node sandbox work remains open.
+- Node-profile cancellation, output-limit, truncation, environment-policy, and artifact behavior need additional focused tests.
+- Cleanup is incomplete: the Python helper worker remains the actual execution substrate for helper-profile execution.
 
 ## Work Items
 
@@ -57,56 +52,56 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 ### Node Execution Path
 
-- [ ] Add a direct `workflow_python(profile=node)` execution path that does not call `execute_workflow_python_helper`.
-- [ ] Route node-profile sync execution through the new node execution path.
-- [ ] Route node-profile stream execution through the new node execution path.
-- [ ] Keep helper-profile execution behavior unchanged while node execution is replaced.
-- [ ] Keep the public node request fields stable:
-  - [ ] `request_id`
-  - [ ] `module_source`
-  - [ ] `module_sha256`
-  - [ ] `package_id`
-  - [ ] `workflow_id`
-  - [ ] `package_source_digest`
-  - [ ] `export_name` or `operation`
-  - [ ] `payload`
-  - [ ] `provenance`
-  - [ ] `limits`
-  - [ ] `policy`
-  - [ ] `python`
-- [ ] Keep the public node response fields stable:
-  - [ ] `status`
-  - [ ] `ok`
-  - [ ] `output`
-  - [ ] `state_patch`
-  - [ ] `artifacts`
-  - [ ] `artifact_store`
-  - [ ] `progress`
-  - [ ] `logs`
-  - [ ] `metrics`
-  - [ ] `error`
-  - [ ] `audit`
-- [ ] Return a structured error when required node request fields are missing.
-- [ ] Return a structured error when `module_sha256` does not match `module_source`.
-- [ ] Return a structured error when the requested export/operation cannot be executed.
+- [x] Add a direct `workflow_python(profile=node)` execution path that does not call `execute_workflow_python_helper`.
+- [x] Route node-profile sync execution through the new node execution path.
+- [x] Route node-profile stream execution through the new node execution path.
+- [x] Keep helper-profile execution behavior unchanged while node execution is replaced.
+- [x] Keep the public node request fields stable:
+  - [x] `request_id`
+  - [x] `module_source`
+  - [x] `module_sha256`
+  - [x] `package_id`
+  - [x] `workflow_id`
+  - [x] `package_source_digest`
+  - [x] `export_name` or `operation`
+  - [x] `payload`
+  - [x] `provenance`
+  - [x] `limits`
+  - [x] `policy`
+  - [x] `python`
+- [x] Keep the public node response fields stable:
+  - [x] `status`
+  - [x] `ok`
+  - [x] `output`
+  - [x] `state_patch`
+  - [x] `artifacts`
+  - [x] `artifact_store`
+  - [x] `progress`
+  - [x] `logs`
+  - [x] `metrics`
+  - [x] `error`
+  - [x] `audit`
+- [x] Return a structured error when required node request fields are missing.
+- [x] Return a structured error when `module_sha256` does not match `module_source`.
+- [x] Return a structured error when the requested export/operation cannot be executed.
 
 ### Import Policy
 
-- [ ] Move node-profile import enforcement into node-owned execution code.
-- [ ] Default-deny imports when `python.import_allowlist` is empty or absent.
-- [ ] Allow only explicitly listed root modules when `python.import_allowlist` is present.
-- [ ] Reject imports whose root module is not allowlisted.
-- [ ] Preserve safe builtin behavior appropriate for node execution.
-- [ ] Ensure import policy failures produce structured node errors.
-- [ ] Add tests for default-deny imports.
-- [ ] Add tests for allowlisted imports.
-- [ ] Add tests for unallowlisted imports.
+- [x] Move node-profile import enforcement into node-owned execution code.
+- [x] Default-deny imports when `python.import_allowlist` is empty or absent.
+- [x] Allow only explicitly listed root modules when `python.import_allowlist` is present.
+- [x] Reject imports whose root module is not allowlisted.
+- [x] Preserve safe builtin behavior appropriate for node execution.
+- [x] Ensure import policy failures produce structured node errors.
+- [x] Add tests for default-deny imports.
+- [x] Add tests for allowlisted imports.
+- [x] Add tests for unallowlisted imports.
 
 ### Runtime Environment Policy
 
-- [ ] Derive node `environment_key` from environment name, runtime intent, import intent, dependency intent, and sandbox policy identity.
-- [ ] Reject caller-supplied `environment_key` values that do not match host-derived identity.
-- [ ] Ensure different dependency/import/runtime/sandbox-policy identities do not share node workers.
+- [x] Derive node `environment_key` from environment name, runtime intent, import intent, dependency intent, and sandbox policy identity.
+- [x] Reject caller-supplied `environment_key` values that do not match host-derived identity.
+- [x] Ensure different dependency/import/runtime/sandbox-policy identities do not share node workers.
 - [ ] Ensure dependency-bearing node requests execute only against a selected verified runtime environment.
 - [ ] Return a structured environment error when required dependency environment preparation is missing.
 - [ ] Return a structured environment error when install receipt verification failed or is absent.
@@ -117,56 +112,85 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 ### Streaming And Events
 
-- [ ] Emit `started` when node execution begins.
-- [ ] Capture and emit bounded `stdout` events from executed Python code.
-- [ ] Capture and emit bounded `stderr` events from executed Python code.
-- [ ] Emit `log` events for host/runtime diagnostics that are safe to expose.
-- [ ] Emit `progress` during execution, not only after final return.
+- [x] Emit `started` when node execution begins.
+- [x] Capture and emit bounded `stdout` events from executed Python code.
+- [x] Capture and emit bounded `stderr` events from executed Python code.
+- [x] Emit `log` events for host/runtime diagnostics that are safe to expose.
+- [x] Emit `progress` during execution, not only after final return.
 - [ ] Emit `artifact` events when artifact refs are created.
-- [ ] Emit `result` for successful terminal output.
-- [ ] Emit `error` for structured terminal failures.
+- [x] Emit `result` for successful terminal output.
+- [x] Emit `error` for structured terminal failures.
 - [ ] Emit `canceled` when cancellation wins.
-- [ ] Emit `done` exactly once for each stream.
-- [ ] Keep stream queues bounded and enforce `max_items` on receive.
-- [ ] Add tests proving progress can be observed before final result.
+- [x] Emit `done` exactly once for each stream.
+- [x] Keep stream queues bounded and enforce `max_items` on receive.
+- [x] Add tests proving progress can be observed before final result.
 - [ ] Add tests for stdout/stderr/log truncation.
-- [ ] Add tests for terminal event ordering.
+- [x] Add tests for terminal event ordering.
 
 ### Result Semantics
 
-- [ ] Preserve node `output` as the primary successful result value.
-- [ ] Preserve `state_patch` as JSON object or `null`.
-- [ ] Preserve `progress` as latest progress snapshot where available.
-- [ ] Preserve `logs` as bounded summaries that do not expose raw source by default.
-- [ ] Preserve `audit` fields for package, workflow, source digest, module hash, provenance, runtime, and request identifiers.
-- [ ] Return structured runtime errors with safe traceback/message summaries.
-- [ ] Return structured timeout errors.
-- [ ] Return structured output-limit errors.
-- [ ] Add tests for successful output/state patch.
-- [ ] Add tests for structured runtime errors.
-- [ ] Add tests for timeout.
+- [x] Preserve node `output` as the primary successful result value.
+- [x] Preserve `state_patch` as JSON object or `null`.
+- [x] Preserve `progress` as latest progress snapshot where available.
+- [x] Preserve `logs` as bounded summaries that do not expose raw source by default.
+- [x] Preserve `audit` fields for package, workflow, source digest, module hash, provenance, runtime, and request identifiers.
+- [x] Return structured runtime errors with safe traceback/message summaries.
+- [x] Return structured timeout errors.
+- [x] Return structured output-limit errors.
+- [x] Add tests for successful output/state patch.
+- [x] Add tests for structured runtime errors.
+- [x] Add tests for timeout.
 - [ ] Add tests for output limit.
 
 ### Artifacts
 
-- [ ] Decide whether first-class node supports artifacts in this implementation pass.
-- [ ] If artifacts are supported, define storage root, reference shape, authorization, lifetime, and cleanup.
-- [ ] If artifacts are supported, write artifacts only through host-controlled storage.
-- [ ] If artifacts are supported, emit artifact events during streaming.
-- [ ] If artifacts are supported, return artifact refs in node responses.
-- [ ] If artifacts are not supported, keep a deliberate structured unavailable response and document it as a product decision.
-- [ ] Add tests for artifact refs or explicit unavailable-artifact behavior, depending on the decision.
+Decision: artifact I/O belongs in the first-class node sandbox contract, but it must be host-provisioned. The current implementation does not yet provide artifact storage, so the node response keeps the `artifacts` and `artifact_store` contract fields with `artifact_store.status=unavailable` until the host-managed artifact path is implemented.
+
+How artifacts fit the sandbox model: input artifacts are host-issued refs that the host resolves into sandbox-visible read-only paths before execution. Output artifacts are files written by sandboxed code only under host-provided output directories or through a brokered host API. After execution, the host scans and validates those output locations, applies size/count/lifetime policy, moves or registers the bytes in host-controlled storage, and returns host-minted artifact refs. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
+
+Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which input refs are readable, which output directories are writable, what crosses back out, and which durable refs clients may later read. Adding direct filesystem artifact refs now would create unclear ownership and security behavior. Keeping a structured unavailable response preserves the public envelope while avoiding a misleading partial artifact system.
+
+Untrusted artifact refs means any artifact-looking value produced by sandboxed code rather than by the host artifact manager. Examples include returned dicts such as `{"path": "/tmp/report.csv"}`, `{"url": "file:///..."}`, `{"artifact_id": "abc"}`, or `{"ref": "../other-run/output"}`. These values may be useful as ordinary JSON output if the workflow wants them, but the host must not treat them as authorized downloadable artifacts, emit them as `artifact` stream events, or store them in the response `artifacts` list until the host has verified the file came from an allowed output path and has created/registered the reference.
+
+- [x] Decide whether first-class node supports artifacts in this implementation pass.
+- [x] Choose host-provisioned artifact I/O as the intended sandbox model.
+- [x] Keep a deliberate structured unavailable response as the product decision.
+- [ ] Define request fields for input artifact refs and host-provided output artifact slots/directories.
+- [ ] Resolve input artifact refs into sandbox-visible read-only paths before execution.
+- [ ] Provide output artifact paths or a brokered write API scoped to the current request.
+- [ ] Collect only files written under host-provided output locations.
+- [ ] Register collected output files into host-controlled artifact storage and return host-minted refs.
+- [ ] Ensure direct node execution ignores or rejects untrusted returned artifact refs instead of treating them as host-created artifacts.
+- [ ] Ensure stream execution emits `artifact` events only for host-minted refs.
+- [ ] Keep artifact-looking values from sandbox code as ordinary `output` only, unless the host artifact manager creates the reference.
+- [ ] Add tests for explicit unavailable-artifact behavior on successful node execution.
+- [ ] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
+- [ ] Add tests for input artifact ref resolution to read-only sandbox paths.
+- [ ] Add tests for output artifact collection from allowed output paths.
+- [ ] Add tests rejecting artifact collection from paths outside host-provided output locations.
+- [ ] Document the artifact-storage requirements before enabling artifacts:
+  - [ ] host-controlled storage root
+  - [ ] stable reference shape
+  - [ ] authorization model for reads and writes
+  - [ ] lifetime/expiry policy
+  - [ ] cleanup policy
+  - [ ] size/count limits
+  - [ ] input-ref-to-read-only-path mapping
+  - [ ] output-slot-to-writable-path mapping
+  - [ ] brokered write API from sandboxed execution if path-based output is insufficient
+  - [ ] stream `artifact` event semantics
+  - [ ] response artifact ref semantics
 
 ### Cancellation, Status, And Resources
 
 - [ ] Make `workflow-python-stream-send` cancellation interrupt active node execution.
 - [ ] Make host-level `workflow-python-cancel-request` cancellation interrupt active node execution.
 - [ ] Record terminal request state for canceled node executions.
-- [ ] Report active node request status by `environment_key + request_id`.
-- [ ] Report latest progress in node request status.
-- [ ] Report node resources by `environment_key`.
-- [ ] Report node capacity, active calls, available slots, active request IDs, and process count.
-- [ ] Report latency, timeout, cancellation, saturation, and error counters.
+- [x] Report active node request status by `environment_key + request_id`.
+- [x] Report latest progress in node request status.
+- [x] Report node resources by `environment_key`.
+- [x] Report node capacity, active calls, available slots, active request IDs, and process count.
+- [x] Report latency, timeout, cancellation, saturation, and error counters.
 - [ ] Report per-process CPU/RSS where the host can sample them.
 - [ ] Add tests for stream cancellation.
 - [ ] Add tests for host-level cancellation.
@@ -175,9 +199,9 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 ### Compatibility And Cleanup
 
-- [ ] Keep existing helper-profile clients working while node implementation changes.
-- [ ] Keep the current helper-backed node facade only as a temporary compatibility path during migration.
-- [ ] Remove helper-backed node execution once direct node execution is verified.
+- [x] Keep existing helper-profile clients working while node implementation changes.
+- [x] Remove the current helper-backed node facade as the temporary compatibility path during migration.
+- [x] Remove helper-backed node execution once direct node execution is verified.
 - [ ] Revisit whether the Python helper worker can be reduced after node no longer depends on it.
 - [ ] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` only for remaining dependent-project actions.
 - [ ] Update public hosting docs after first-class node behavior is implemented and tested.
@@ -186,15 +210,16 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 ### Verification
 
 - [ ] Add focused unit tests for node request normalization and validation.
-- [ ] Add focused unit tests for node import policy.
+- [x] Add focused unit tests for node import policy.
 - [ ] Add focused unit tests for node runtime environment policy.
-- [ ] Add service-level sync execution tests for node success and failure.
-- [ ] Add service-level streaming tests for node events and cancellation.
+- [x] Add service-level sync execution tests for node success and failure.
+- [x] Add service-level streaming tests for node events.
+- [ ] Add service-level streaming tests for node cancellation.
 - [ ] Add CLI/channel payload forwarding tests for node sync and stream commands.
-- [ ] Add resource/request-status tests for node metrics.
-- [ ] Add regression tests proving helper-profile behavior remains unchanged.
-- [ ] Run the focused hosting workflow test suite.
-- [ ] Record the verified behavior in `hosting_status.md`.
+- [x] Add resource/request-status tests for node metrics.
+- [x] Add regression tests proving helper-profile behavior remains unchanged.
+- [x] Run the focused hosting workflow test suite.
+- [x] Record the verified behavior in `hosting_status.md`.
 
 ## Non-Goals
 

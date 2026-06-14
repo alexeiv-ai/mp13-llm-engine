@@ -8,11 +8,12 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 
 - Helper-profile dependent clients have already migrated to workflow facade APIs.
 - No additional client action is required for existing short helper-profile Python or JS execution.
-- The current `workflow_python(profile=node)` behavior is a helper-backed compatibility facade, not the final first-class node sandbox.
+- `workflow_python(profile=node)` now has a direct node execution path and no longer returns helper-shaped nested results.
+- Dependency-bearing node-profile execution still needs verified-environment enforcement before clients can rely on package/runtime isolation guarantees.
 
 ## Remaining Client Changes
 
-- Clients that own node-profile workflow execution must validate against the first-class node sandbox when it lands.
+- Clients that own node-profile workflow execution must validate against the direct node response envelope and stream event model before adopting it.
 - Node-profile clients must consume streaming events as separate records:
   - `started`
   - `stdout`
@@ -28,8 +29,8 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 - Node-profile clients must pass stable `request_id` values for cancellation and request-status lookup.
 - Node-profile clients must use host-derived `environment_key` for resources, capacity, cancellation, and request status.
 - Node-profile clients must not rely on helper-shaped nested result payloads. They should consume the node response envelope directly.
-- Node-profile clients must stop assuming `artifact_store.status=unavailable` once artifact storage is implemented. They must handle real artifact refs, authorization failures, expiry, and missing-artifact errors.
-- Clients that provide dependency-management UI or orchestration must call host-controlled prepare/lock/verify/install/receipt APIs explicitly before dependency-bearing execution. Normal workflow execution must not install dependencies implicitly.
+- Node-profile clients must stop assuming `artifact_store.status=unavailable` once artifact storage is implemented. They must pass input artifacts as refs, consume host-provided sandbox paths, write outputs only to host-provided artifact paths or brokered APIs, and handle host-minted output refs, authorization failures, expiry, and missing-artifact errors.
+- Clients that provide dependency-management UI or orchestration must call host-controlled prepare/lock/verify/install/receipt APIs explicitly before dependency-bearing execution once verified-environment enforcement is wired. Normal workflow execution must not install dependencies implicitly.
 
 ## No Remaining Action For Already Migrated Helper Clients
 

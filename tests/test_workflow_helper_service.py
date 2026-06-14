@@ -992,6 +992,76 @@ def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) 
     assert "progress" in out["contract"]["stream_event_types"]
 
 
+def test_execute_workflow_python_node_does_not_call_helper_proxy(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'value': payload['value']}}\n"
+
+    def fail_proxy(**_kwargs):
+        raise AssertionError("node execution should not use execute_workflow_python_helper")
+
+    monkeypatch.setattr(svc, "proxy_rpc_call", fail_proxy)
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        engine_id="wf-node-direct",
+        request={
+            "request_id": "req-node-direct",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {"value": 11},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"value": 11}
+
+
+def test_execute_workflow_python_node_enforces_import_allowlist(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import math\n\ndef run(payload):\n    return {'output': math.sqrt(payload['value'])}\n"
+    base_request = {
+        "request_id": "req-node-import",
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "payload": {"value": 9},
+    }
+
+    denied = svc.execute_workflow_python(profile="node", engine_id="wf-node-import-denied", request=base_request)
+    wrong_allowlist = svc.execute_workflow_python(
+        profile="node",
+        engine_id="wf-node-import-wrong",
+        request={**base_request, "request_id": "req-node-import-wrong", "python": {"import_allowlist": ["json"]}},
+    )
+    allowed = svc.execute_workflow_python(
+        profile="node",
+        engine_id="wf-node-import-allowed",
+        request={**base_request, "request_id": "req-node-import-allowed", "python": {"import_allowlist": ["math"]}},
+    )
+
+    assert denied["status"] == "error"
+    assert denied["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "import" in denied["error"]["message"].lower()
+    assert wrong_allowlist["status"] == "error"
+    assert wrong_allowlist["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "math" in wrong_allowlist["error"]["message"]
+    assert allowed["status"] == "ok"
+    assert allowed["output"] == 3.0
+
+
 def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1039,6 +1109,46 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
     assert events[3]["payload"]["output"] == {"accepted": True}
     assert status["request"]["status"] == "ok"
     assert closed["closed"] is True
+
+
+def test_workflow_python_node_stream_emits_runtime_progress_and_stdout(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    progress({'message': 'halfway'})\n    print('node stdout')\n    return {'output': {'done': True}}\n"
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-stream-progress",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"output_limit_bytes": 1024},
+            },
+        )
+        events = []
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("events") or []))
+            if any(dict(row or {}).get("type") == "done" for row in events):
+                break
+            time.sleep(0.05)
+    finally:
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    event_types = [row["type"] for row in events]
+    assert event_types.index("progress") < event_types.index("result")
+    assert any(row["type"] == "stdout" and "node stdout" in row["payload"]["text"] for row in events)
 
 
 def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path: Path) -> None:

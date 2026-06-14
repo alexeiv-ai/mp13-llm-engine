@@ -214,8 +214,9 @@ class HostedProcessSandboxBase:
         session = self._streams.pop(sid, None)
         if session is None:
             return {"status": "ok", "stream_id": sid, "closed": False, "status_message": "not_found"}
+        was_closed = bool(session.closed)
         session.closed = True
-        if not session.canceled:
+        if not session.canceled and not was_closed:
             event = session.append("done", {"closed": True})
             self.record_stream_event(environment_key=session.environment_key, request_id=session.request_id, event=event)
             self.finish_request(environment_key=session.environment_key, request_id=session.request_id, status="ok")
