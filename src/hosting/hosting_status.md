@@ -84,6 +84,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added node resource metrics coverage after success, error, timeout, and cancellation.
 - Added focused node request normalization and validation contract tests.
 - Added channel/daemon forwarding coverage for node sync execution and node stream commands.
+- Documented the host-provisioned artifact boundary and requirements in sandbox architecture/workflow docs.
+- Updated remaining client-change notes to reflect enforced dependency-environment prechecks.
 
 ## Current Client Impact
 

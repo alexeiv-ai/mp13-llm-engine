@@ -168,18 +168,18 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [ ] Add tests for input artifact ref resolution to read-only sandbox paths.
 - [ ] Add tests for output artifact collection from allowed output paths.
 - [ ] Add tests rejecting artifact collection from paths outside host-provided output locations.
-- [ ] Document the artifact-storage requirements before enabling artifacts:
-  - [ ] host-controlled storage root
-  - [ ] stable reference shape
-  - [ ] authorization model for reads and writes
-  - [ ] lifetime/expiry policy
-  - [ ] cleanup policy
-  - [ ] size/count limits
-  - [ ] input-ref-to-read-only-path mapping
-  - [ ] output-slot-to-writable-path mapping
-  - [ ] brokered write API from sandboxed execution if path-based output is insufficient
-  - [ ] stream `artifact` event semantics
-  - [ ] response artifact ref semantics
+- [x] Document the artifact-storage requirements before enabling artifacts:
+  - [x] host-controlled storage root
+  - [x] stable reference shape
+  - [x] authorization model for reads and writes
+  - [x] lifetime/expiry policy
+  - [x] cleanup policy
+  - [x] size/count limits
+  - [x] input-ref-to-read-only-path mapping
+  - [x] output-slot-to-writable-path mapping
+  - [x] brokered write API from sandboxed execution if path-based output is insufficient
+  - [x] stream `artifact` event semantics
+  - [x] response artifact ref semantics
 
 ### Cancellation, Status, And Resources
 
@@ -203,9 +203,9 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Remove the current helper-backed node facade as the temporary compatibility path during migration.
 - [x] Remove helper-backed node execution once direct node execution is verified.
 - [ ] Revisit whether the Python helper worker can be reduced after node no longer depends on it.
-- [ ] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` only for remaining dependent-project actions.
-- [ ] Update public hosting docs after first-class node behavior is implemented and tested.
-- [ ] Remove or rewrite stale docs that imply helper-backed node execution is complete first-class node sandboxing.
+- [x] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` only for remaining dependent-project actions.
+- [x] Update public hosting docs after first-class node behavior is implemented and tested.
+- [x] Remove or rewrite stale docs that imply helper-backed node execution is complete first-class node sandboxing.
 
 ### Verification
 

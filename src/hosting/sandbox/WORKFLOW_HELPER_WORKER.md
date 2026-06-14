@@ -176,10 +176,16 @@ returns the node-profile envelope:
 2. `workflow-python-stream-open` returns immediately and starts background execution.
 3. Stream events use the shared event names: `started`, `log`, optional `progress`, `result` or `error`, `canceled`, and `done`.
 4. `workflow-python-stream-send` accepts `{"action":"cancel","request_id":"..."}` and routes cancellation through host request tracking and the worker cancel hook.
+5. Dependency-bearing requests require a prepared and verified runtime environment. Normal execution does not install dependencies implicitly.
 
 Artifact references are part of the response contract, but the host currently
 reports `artifact_store.status=unavailable` until a workflow artifact store is
-designed.
+implemented. The intended artifact model is host-provisioned: input artifact
+refs resolve to read-only sandbox paths, output artifact slots resolve to
+writable sandbox paths or brokered writes, and only the host may register output
+files as downloadable artifact refs. Returned values such as `{"path": "..."}`,
+`{"url": "..."}`, or `{"artifact_id": "..."}` remain ordinary JSON unless the
+host artifact manager validates and mints the ref.
 
 ## Result Contract
 

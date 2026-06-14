@@ -85,8 +85,11 @@ Concrete workflow facades currently use these layers incrementally:
 2. `workflow_python(profile=node)` executes Python exports through the hosted
    workflow Python runtime and wraps results in the node response contract.
    Stream-open returns immediately and emits `started`, `log`, optional
-   `progress`, `result` or structured `error`, and `done`. Artifact storage is
-   still reported as unavailable until a store is designed.
+   `progress`, `result` or structured `error`, `canceled`, and `done`.
+   Dependency-bearing node execution requires an explicitly prepared and
+   verified runtime environment; normal execution does not install packages
+   implicitly. Artifact storage is still reported as unavailable until the
+   host-provisioned artifact data plane below is implemented.
 3. `workflow_js(profile=helper)` exposes environment spec, ensure, execute,
    resources, capacity, cancel, and request status through the JS runtime base
    and existing helper worker compatibility path.
@@ -97,6 +100,27 @@ Concrete workflow facades currently use these layers incrementally:
 Generic/model workers remain separate. They share IPC vocabulary ideas and
 proxy commands, but their model-worker semantics do not become workflow or
 toolbox semantics.
+
+## Workflow Artifact Boundary
+
+Artifact I/O is part of the node sandbox contract, but artifact authority stays
+with the host. A complete implementation must provide:
+
+1. A host-controlled storage root outside arbitrary sandbox paths.
+2. Stable artifact reference shape, including request/workflow/package identity.
+3. Read and write authorization rules for refs.
+4. Lifetime, expiry, cleanup, and garbage-collection policy.
+5. Size and count limits per request.
+6. Input-ref resolution into sandbox-visible read-only paths.
+7. Output-slot resolution into sandbox-visible writable paths.
+8. A brokered write API if path-based output slots are insufficient.
+9. Stream `artifact` events only for host-minted refs.
+10. Response `artifacts` entries only for host-validated output files.
+
+Sandboxed code may return ordinary JSON values that look like paths, URLs, or
+artifact IDs, but those values are not trusted artifact refs. The host only
+mints artifact refs after validating files from allowed output locations and
+registering them in host-controlled storage.
 
 ## Shared API
 
