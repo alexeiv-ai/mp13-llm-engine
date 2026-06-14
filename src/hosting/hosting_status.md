@@ -82,6 +82,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added node environment-key mismatch and incompatible-identity pool isolation tests.
 - Routed verified dependency-bearing node execution through selected runtime Python and added selection coverage.
 - Added node resource metrics coverage after success, error, timeout, and cancellation.
+- Added focused node request normalization and validation contract tests.
 
 ## Current Client Impact
 

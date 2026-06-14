@@ -209,7 +209,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 
 ### Verification
 
-- [ ] Add focused unit tests for node request normalization and validation.
+- [x] Add focused unit tests for node request normalization and validation.
 - [x] Add focused unit tests for node import policy.
 - [x] Add focused unit tests for node runtime environment policy.
 - [x] Add service-level sync execution tests for node success and failure.

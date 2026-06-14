@@ -39,6 +39,33 @@ def test_normalize_node_request_maps_export_and_operation() -> None:
     assert out["limits"]["timeout_ms"] == 1000
 
 
+def test_normalize_node_request_maps_operation_from_export_name() -> None:
+    out = normalize_workflow_python_node_request(
+        {
+            "request_id": "req",
+            "module_source": "def run(payload):\n    return payload\n",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "export_name": "run",
+            "payload": None,
+            "provenance": "bad",
+            "limits": "bad",
+            "policy": "bad",
+            "python": "bad",
+        }
+    )
+
+    assert out["operation"] == "run"
+    assert out["export_name"] == "run"
+    assert out["payload"] is None
+    assert out["provenance"] == {}
+    assert out["limits"] == {}
+    assert out["policy"] == {}
+    assert out["python"] == {}
+
+
 def test_validate_node_request_reports_missing_fields() -> None:
     out = validate_workflow_python_node_request({"operation": "run"})
 
@@ -50,6 +77,38 @@ def test_validate_node_request_reports_missing_fields() -> None:
         "workflow_id",
         "package_source_digest",
     ]
+
+
+def test_validate_node_request_requires_export_or_operation() -> None:
+    out = validate_workflow_python_node_request(
+        {
+            "module_source": "def run(payload):\n    return payload\n",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+        }
+    )
+
+    assert out["status"] == "error"
+    assert out["missing"] == ["export_name_or_operation"]
+
+
+def test_validate_node_request_accepts_payload_omission_as_empty_object() -> None:
+    out = validate_workflow_python_node_request(
+        {
+            "module_source": "def run(payload):\n    return payload\n",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+        }
+    )
+
+    assert out["status"] == "ok"
+    assert out["request"]["payload"] == {}
 
 
 def test_node_not_implemented_response_uses_node_envelope() -> None:
