@@ -215,7 +215,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Add service-level sync execution tests for node success and failure.
 - [x] Add service-level streaming tests for node events.
 - [x] Add service-level streaming tests for node cancellation.
-- [ ] Add CLI/channel payload forwarding tests for node sync and stream commands.
+- [x] Add CLI/channel payload forwarding tests for node sync and stream commands.
 - [x] Add resource/request-status tests for node metrics.
 - [x] Add regression tests proving helper-profile behavior remains unchanged.
 - [x] Run the focused hosting workflow test suite.

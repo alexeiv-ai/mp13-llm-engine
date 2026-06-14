@@ -954,6 +954,14 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
         engine_id="wf-py",
         request={"request_id": "req-1"},
     )
+    ch.execute_workflow_python(
+        profile="node",
+        environment_name="workflow-python-node",
+        environment_key="env-node",
+        engine_id="wf-node",
+        request={"request_id": "req-node", "operation": "run"},
+        capacity=2,
+    )
     ch.workflow_python_resources(profile="helper", environment_key="env-key", engine_id="wf-py")
     ch.set_workflow_python_capacity(profile="helper", environment_key="env-key", engine_id="wf-py", capacity=6)
     ch.cancel_workflow_python_request(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
@@ -1043,6 +1051,19 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
                 "engine_id": "wf-py",
                 "request": {"request_id": "req-1"},
                 "capacity": 1,
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-execute",
+            {
+                "profile": "node",
+                "environment_name": "workflow-python-node",
+                "environment_key": "env-node",
+                "engine_id": "wf-node",
+                "request": {"request_id": "req-node", "operation": "run"},
+                "capacity": 2,
                 "sandbox_policy": None,
                 "session_token": "tok-123",
             },
