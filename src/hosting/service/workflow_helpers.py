@@ -954,6 +954,38 @@ class WorkflowHelperMixin:
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         if prof == "node":
             pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(effective_key))
+            runtime_resources = self._workflow_python_node_runtime_registry().resources()
+            processes = []
+            total_cpu = 0.0
+            total_mem = 0.0
+            known_cpu = False
+            known_mem = False
+            snapshot_fn = getattr(self, "_process_resource_snapshot", None)
+            active_ids = set()
+            if pool is not None:
+                for worker in list(pool.resources().get("metrics", {}).get("workers", []) or []):
+                    for request_id in list(dict(worker or {}).get("active_request_ids") or []):
+                        active_ids.add(str(request_id or "").strip())
+            for proc in list(runtime_resources.get("processes") or []):
+                row = dict(proc or {})
+                request_id = str(row.get("request_id") or "").strip()
+                if active_ids and request_id not in active_ids:
+                    continue
+                pid = int(row.get("pid") or 0)
+                metrics: Dict[str, Any] = {}
+                if pid > 0 and callable(snapshot_fn):
+                    try:
+                        metrics = dict(snapshot_fn(pid) or {})
+                    except Exception:
+                        metrics = {}
+                if metrics.get("cpu_percent") is not None:
+                    known_cpu = True
+                    total_cpu += float(metrics.get("cpu_percent") or 0.0)
+                if metrics.get("memory_mb") is not None:
+                    known_mem = True
+                    total_mem += float(metrics.get("memory_mb") or 0.0)
+                row["resources"] = metrics
+                processes.append(row)
             return {
                 "status": "ok",
                 "profile": prof,
@@ -961,6 +993,12 @@ class WorkflowHelperMixin:
                 "environment_key": effective_key,
                 "environment": dict(env.get("environment") or {}),
                 "workflow_pool": pool.resources() if pool is not None else None,
+                "node_runtime": {
+                    **dict(runtime_resources or {}),
+                    "processes": processes,
+                    "cpu_percent": round(total_cpu, 1) if known_cpu else None,
+                    "memory_mb": round(total_mem, 1) if known_mem else None,
+                },
             }
         resources = self.workflow_python_helper_resources(engine_id=eid)
         pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(effective_key))

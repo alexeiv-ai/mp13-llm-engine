@@ -86,6 +86,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added channel/daemon forwarding coverage for node sync execution and node stream commands.
 - Documented the host-provisioned artifact boundary and requirements in sandbox architecture/workflow docs.
 - Updated remaining client-change notes to reflect enforced dependency-environment prechecks.
+- Added active node runtime process resource reporting with host CPU/RSS snapshots where available.
 
 ## Current Client Impact
 

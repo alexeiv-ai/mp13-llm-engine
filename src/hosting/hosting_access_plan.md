@@ -191,7 +191,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Report node resources by `environment_key`.
 - [x] Report node capacity, active calls, available slots, active request IDs, and process count.
 - [x] Report latency, timeout, cancellation, saturation, and error counters.
-- [ ] Report per-process CPU/RSS where the host can sample them.
+- [x] Report per-process CPU/RSS where the host can sample them.
 - [x] Add tests for stream cancellation.
 - [x] Add tests for host-level cancellation.
 - [x] Add tests for request status during active execution.

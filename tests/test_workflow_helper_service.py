@@ -1827,3 +1827,52 @@ def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) 
     assert recent["req-node-metrics-error"] == "error"
     assert recent["req-node-metrics-timeout"] == "timeout"
     assert recent["req-node-metrics-cancel"] == "canceled"
+
+
+def test_workflow_python_node_resources_include_active_process_metrics(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    monkeypatch.setattr(svc, "_process_resource_snapshot", lambda pid: {"pid": pid, "cpu_percent": 3.5, "memory_mb": 9.25})
+    source = "def run(payload):\n    while True:\n        pass\n"
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-active-resources",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"timeout_ms": 5000, "output_limit_bytes": 1024},
+            },
+        )
+        deadline = time.time() + 5.0
+        resources = {}
+        while time.time() < deadline:
+            resources = svc.workflow_python_resources(profile="node", environment_key=str(opened["environment_key"]))
+            if dict(resources.get("node_runtime") or {}).get("processes"):
+                break
+            time.sleep(0.05)
+    finally:
+        if opened:
+            svc.workflow_python_stream_send(
+                stream_id=str(opened.get("stream_id") or ""),
+                message={"action": "cancel", "reason": "test_done"},
+            )
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    runtime = dict(resources.get("node_runtime") or {})
+    processes = list(runtime.get("processes") or [])
+    assert runtime["active_count"] >= 1
+    assert runtime["cpu_percent"] == 3.5
+    assert runtime["memory_mb"] == 9.2
+    assert processes[0]["request_id"] == "req-node-active-resources"
+    assert processes[0]["pid"] > 0
+    assert processes[0]["resources"]["memory_mb"] == 9.25

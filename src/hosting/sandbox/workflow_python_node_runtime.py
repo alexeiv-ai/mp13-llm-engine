@@ -380,5 +380,26 @@ class WorkflowPythonNodeRuntimeRegistry:
             return {"status": "ok", "request_id": rid, "canceled": False, "reason": "request_not_found"}
         return {"status": "ok", "request_id": rid, "canceled": runtime.cancel(), "reason": "canceled"}
 
+    def resources(self) -> Dict[str, Any]:
+        with self._lock:
+            active = list(self._active.items())
+        processes = []
+        for request_id, runtime in active:
+            proc = runtime.proc
+            processes.append(
+                {
+                    "request_id": str(request_id or "").strip(),
+                    "pid": int(proc.pid or 0) or None,
+                    "alive": proc.poll() is None,
+                    "python_executable": runtime.python_executable,
+                    "canceled": bool(runtime._cancel_requested),
+                }
+            )
+        return {
+            "status": "ok",
+            "active_count": len(processes),
+            "processes": processes,
+        }
+
 
 __all__ = ["WorkflowPythonNodeRuntimeRegistry"]
