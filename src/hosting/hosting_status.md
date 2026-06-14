@@ -75,6 +75,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Clarified the artifact sandbox boundary: sandboxed code cannot mint trusted artifact refs by returning paths, URLs, or tokens; only the host artifact manager may create artifact refs after validating files from allowed output locations.
 - Changed node responses to drop sandbox-returned `artifacts` while the artifact manager is unavailable.
 - Added artifact-safety tests proving unavailable artifact behavior and preventing sandbox-returned refs from becoming stream `artifact` events.
+- Added focused node tests for output-limit errors and stdout/stderr log truncation.
 
 ## Current Client Impact
 

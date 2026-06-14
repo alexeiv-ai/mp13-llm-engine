@@ -1296,6 +1296,72 @@ def test_execute_workflow_python_node_reports_timeout(tmp_path: Path) -> None:
     assert out["metrics"]["request"]["reason"] == "workflow_sandbox_timeout"
 
 
+def test_execute_workflow_python_node_reports_output_limit(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': 'x' * 256}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        engine_id="wf-node-output-limit",
+        request={
+            "request_id": "req-node-output-limit",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "limits": {"timeout_ms": 1000, "output_limit_bytes": 32},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_sandbox_output_limit_exceeded"
+    assert out["error"]["detail"]["output_limit_bytes"] == 32
+    assert out["metrics"]["request"]["status"] == "error"
+
+
+def test_execute_workflow_python_node_truncates_stdout_and_stderr_logs(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    print('o' * 80)\n"
+        "    import sys\n"
+        "    print('e' * 80, file=sys.stderr)\n"
+        "    return {'output': {'ok': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        engine_id="wf-node-truncate",
+        request={
+            "request_id": "req-node-truncate",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["sys"]},
+            "limits": {"timeout_ms": 1000, "output_limit_bytes": 16},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["logs"]["stdout_truncated"] is True
+    assert out["logs"]["stderr_truncated"] is True
+    assert len(out["logs"]["stdout"].encode("utf-8")) == 16
+    assert len(out["logs"]["stderr"].encode("utf-8")) == 16
+
+
 def test_workflow_python_stream_cancel_routes_to_worker_cancel(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

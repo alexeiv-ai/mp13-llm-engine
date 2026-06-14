@@ -124,7 +124,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [x] Emit `done` exactly once for each stream.
 - [x] Keep stream queues bounded and enforce `max_items` on receive.
 - [x] Add tests proving progress can be observed before final result.
-- [ ] Add tests for stdout/stderr/log truncation.
+- [x] Add tests for stdout/stderr/log truncation.
 - [x] Add tests for terminal event ordering.
 
 ### Result Semantics
@@ -140,7 +140,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [x] Add tests for successful output/state patch.
 - [x] Add tests for structured runtime errors.
 - [x] Add tests for timeout.
-- [ ] Add tests for output limit.
+- [x] Add tests for output limit.
 
 ### Artifacts
 
