@@ -76,6 +76,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Changed node responses to drop sandbox-returned `artifacts` while the artifact manager is unavailable.
 - Added artifact-safety tests proving unavailable artifact behavior and preventing sandbox-returned refs from becoming stream `artifact` events.
 - Added focused node tests for output-limit errors and stdout/stderr log truncation.
+- Implemented structured node cancellation results for active runtime cancellation.
+- Added active host-level and stream-send cancellation tests, including request-status checks while execution is running.
 
 ## Current Client Impact
 

@@ -120,7 +120,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [ ] Emit `artifact` events when artifact refs are created.
 - [x] Emit `result` for successful terminal output.
 - [x] Emit `error` for structured terminal failures.
-- [ ] Emit `canceled` when cancellation wins.
+- [x] Emit `canceled` when cancellation wins.
 - [x] Emit `done` exactly once for each stream.
 - [x] Keep stream queues bounded and enforce `max_items` on receive.
 - [x] Add tests proving progress can be observed before final result.
@@ -183,18 +183,18 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 
 ### Cancellation, Status, And Resources
 
-- [ ] Make `workflow-python-stream-send` cancellation interrupt active node execution.
-- [ ] Make host-level `workflow-python-cancel-request` cancellation interrupt active node execution.
-- [ ] Record terminal request state for canceled node executions.
+- [x] Make `workflow-python-stream-send` cancellation interrupt active node execution.
+- [x] Make host-level `workflow-python-cancel-request` cancellation interrupt active node execution.
+- [x] Record terminal request state for canceled node executions.
 - [x] Report active node request status by `environment_key + request_id`.
 - [x] Report latest progress in node request status.
 - [x] Report node resources by `environment_key`.
 - [x] Report node capacity, active calls, available slots, active request IDs, and process count.
 - [x] Report latency, timeout, cancellation, saturation, and error counters.
 - [ ] Report per-process CPU/RSS where the host can sample them.
-- [ ] Add tests for stream cancellation.
-- [ ] Add tests for host-level cancellation.
-- [ ] Add tests for request status during active execution.
+- [x] Add tests for stream cancellation.
+- [x] Add tests for host-level cancellation.
+- [x] Add tests for request status during active execution.
 - [ ] Add tests for resource metrics after success, error, timeout, and cancel.
 
 ### Compatibility And Cleanup
@@ -214,7 +214,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [ ] Add focused unit tests for node runtime environment policy.
 - [x] Add service-level sync execution tests for node success and failure.
 - [x] Add service-level streaming tests for node events.
-- [ ] Add service-level streaming tests for node cancellation.
+- [x] Add service-level streaming tests for node cancellation.
 - [ ] Add CLI/channel payload forwarding tests for node sync and stream commands.
 - [x] Add resource/request-status tests for node metrics.
 - [x] Add regression tests proving helper-profile behavior remains unchanged.

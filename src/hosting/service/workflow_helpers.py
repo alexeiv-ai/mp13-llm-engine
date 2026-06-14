@@ -90,8 +90,9 @@ class WorkflowHelperMixin:
             stderr=str(result.get("stderr") or ""),
             max_bytes=int(limits.get("output_limit_bytes") or 4096),
         )
+        status = "ok" if ok else ("canceled" if reason == "workflow_sandbox_canceled" else "error")
         return {
-            "status": "ok" if ok else "error",
+            "status": status,
             "ok": ok,
             "profile": "node",
             "environment_key": str(environment_key or "").strip() or None,
@@ -749,6 +750,8 @@ class WorkflowHelperMixin:
             reason = str(result.get("reason") or "") or None
             if reason == "workflow_sandbox_timeout":
                 status = "timeout"
+            elif reason == "workflow_sandbox_canceled":
+                status = "canceled"
             output_bytes = None
             try:
                 output_bytes = len(json.dumps(result.get("output"), ensure_ascii=False).encode("utf-8"))
@@ -1109,6 +1112,34 @@ class WorkflowHelperMixin:
                 session.closed = True
             base.finish_request(environment_key=environment_key, request_id=str(request.get("request_id") or ""), status="ok")
             return
+        if str(response.get("reason") or "") == "workflow_sandbox_canceled":
+            session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+            if session is not None and bool(getattr(session, "closed", False)):
+                base.finish_request(
+                    environment_key=environment_key,
+                    request_id=str(request.get("request_id") or ""),
+                    status="canceled",
+                    reason=str(response.get("reason") or "workflow_sandbox_canceled"),
+                )
+                return
+            if session is not None and not bool(getattr(session, "canceled", False)):
+                base.stream_emit(
+                    stream_id=stream_id,
+                    event_type="canceled",
+                    payload={"request_id": str(request.get("request_id") or ""), "reason": "workflow_sandbox_canceled"},
+                )
+                session.canceled = True
+            base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "canceled", "reason": response.get("reason")})
+            session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+            if session is not None:
+                session.closed = True
+            base.finish_request(
+                environment_key=environment_key,
+                request_id=str(request.get("request_id") or ""),
+                status="canceled",
+                reason=str(response.get("reason") or "workflow_sandbox_canceled"),
+            )
+            return
         base.stream_emit(
             stream_id=stream_id,
             event_type="error",
@@ -1140,6 +1171,13 @@ class WorkflowHelperMixin:
                     environment_key=str(getattr(session, "environment_key", "") or ""),
                     request_id=str(getattr(session, "request_id", "") or ""),
                 )
+                if bool(dict(out.get("worker_cancel") or {}).get("canceled")) and not bool(getattr(session, "closed", False)):
+                    base.stream_emit(
+                        stream_id=stream_id,
+                        event_type="done",
+                        payload={"status": "canceled", "reason": "workflow_sandbox_canceled"},
+                    )
+                    session.closed = True
         return out
 
     def workflow_python_stream_close(self, *, stream_id: str) -> Dict[str, Any]:

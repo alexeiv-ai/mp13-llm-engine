@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import shutil
+import threading
 import time
 
 import pytest
@@ -1400,3 +1401,128 @@ def test_workflow_python_stream_cancel_routes_to_worker_cancel(tmp_path: Path, m
             "request_id": "req-node-cancel",
         }
     ]
+
+
+def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    while True:\n        pass\n"
+    env = svc.workflow_python_environment_spec(profile="node", environment_name="workflow-python-node", python={})
+    environment_key = str(env["environment_key"])
+    result: dict[str, object] = {}
+
+    def run_node() -> None:
+        result.update(
+            svc.execute_workflow_python(
+                profile="node",
+                environment_name="workflow-python-node",
+                request={
+                    "request_id": "req-node-active-cancel",
+                    "module_source": source,
+                    "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                    "package_id": "pkg",
+                    "workflow_id": "wf",
+                    "package_source_digest": "digest",
+                    "operation": "run",
+                    "payload": {},
+                    "limits": {"timeout_ms": 5000, "output_limit_bytes": 1024},
+                },
+            )
+        )
+
+    thread = threading.Thread(target=run_node, daemon=True)
+    thread.start()
+    saw_running = False
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        status = svc.workflow_python_request_status(
+            profile="node",
+            environment_key=environment_key,
+            request_id="req-node-active-cancel",
+        )
+        if dict(status.get("request") or {}).get("status") == "running":
+            saw_running = True
+            break
+        time.sleep(0.05)
+
+    canceled = svc.cancel_workflow_python_request(
+        profile="node",
+        environment_key=environment_key,
+        request_id="req-node-active-cancel",
+    )
+    thread.join(timeout=5.0)
+
+    assert saw_running is True
+    assert canceled["canceled"] is True
+    assert thread.is_alive() is False
+    assert result["status"] == "canceled"
+    assert dict(result["metrics"])["request"]["status"] == "canceled"
+
+
+def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    while True:\n        pass\n"
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-stream-active-cancel",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"timeout_ms": 5000, "output_limit_bytes": 1024},
+            },
+        )
+        saw_running = False
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            status = svc.workflow_python_request_status(
+                profile="node",
+                environment_key=str(opened["environment_key"]),
+                request_id="req-node-stream-active-cancel",
+            )
+            if dict(status.get("request") or {}).get("status") == "running":
+                saw_running = True
+                break
+            time.sleep(0.05)
+
+        sent = svc.workflow_python_stream_send(
+            stream_id=str(opened["stream_id"]),
+            message={"action": "cancel", "reason": "test_cancel"},
+        )
+        events = []
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            received = svc.workflow_python_stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
+            events.extend(list(received.get("events") or []))
+            if any(dict(row or {}).get("type") == "done" for row in events):
+                break
+            time.sleep(0.05)
+        status = svc.workflow_python_request_status(
+            profile="node",
+            environment_key=str(opened["environment_key"]),
+            request_id="req-node-stream-active-cancel",
+        )
+    finally:
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    event_types = [row["type"] for row in events]
+    done_events = [row for row in events if row["type"] == "done"]
+    assert saw_running is True
+    assert sent["accepted"] is True
+    assert sent["worker_cancel"]["canceled"] is True
+    assert "canceled" in event_types
+    assert done_events and done_events[-1]["payload"]["status"] == "canceled"
+    assert status["request"]["status"] == "canceled"

@@ -200,6 +200,7 @@ class WorkflowPythonNodeRuntime:
     proc: subprocess.Popen[Any]
     _events: "queue.Queue[Dict[str, Any]]" = field(default_factory=queue.Queue)
     _reader: Optional[threading.Thread] = None
+    _cancel_requested: bool = False
 
     @classmethod
     def start(cls, *, request: Dict[str, Any], python_executable: str) -> "WorkflowPythonNodeRuntime":
@@ -235,7 +236,7 @@ class WorkflowPythonNodeRuntime:
             except Exception as exc:
                 self._events.put({"type": "error", "reason": "workflow_sandbox_invalid_json_output", "detail": {"message": str(exc)}})
 
-    def cancel(self) -> bool:
+    def _kill(self) -> bool:
         if self.proc.poll() is not None:
             return False
         try:
@@ -244,6 +245,12 @@ class WorkflowPythonNodeRuntime:
         except Exception:
             return False
 
+    def cancel(self) -> bool:
+        self._cancel_requested = True
+        killed = self._kill()
+        self._events.put({"type": "canceled", "reason": "workflow_sandbox_canceled"})
+        return killed
+
     def wait(self, *, timeout_ms: int, on_event: Optional[NodeEventCallback] = None) -> Dict[str, Any]:
         deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
         last_stdout = ""
@@ -251,7 +258,7 @@ class WorkflowPythonNodeRuntime:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self.cancel()
+                self._kill()
                 return {
                     "ok": False,
                     "reason": "workflow_sandbox_timeout",
@@ -263,6 +270,14 @@ class WorkflowPythonNodeRuntime:
                 row = self._events.get(timeout=min(remaining, 0.05))
             except queue.Empty:
                 if self.proc.poll() is not None:
+                    if self._cancel_requested:
+                        return {
+                            "ok": False,
+                            "reason": "workflow_sandbox_canceled",
+                            "detail": {"message": "node runtime canceled"},
+                            "stdout": last_stdout,
+                            "stderr": last_stderr,
+                        }
                     stderr = ""
                     try:
                         if self.proc.stderr is not None:
@@ -283,6 +298,14 @@ class WorkflowPythonNodeRuntime:
                 if on_event is not None:
                     on_event("progress", payload)
                 continue
+            if event_type == "canceled":
+                return {
+                    "ok": False,
+                    "reason": "workflow_sandbox_canceled",
+                    "detail": {"message": "node runtime canceled"},
+                    "stdout": last_stdout,
+                    "stderr": last_stderr,
+                }
             if event_type == "result":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
