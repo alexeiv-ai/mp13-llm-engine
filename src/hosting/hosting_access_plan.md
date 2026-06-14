@@ -103,12 +103,12 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [x] Reject caller-supplied `environment_key` values that do not match host-derived identity.
 - [x] Ensure different dependency/import/runtime/sandbox-policy identities do not share node workers.
 - [ ] Ensure dependency-bearing node requests execute only against a selected verified runtime environment.
-- [ ] Return a structured environment error when required dependency environment preparation is missing.
-- [ ] Return a structured environment error when install receipt verification failed or is absent.
-- [ ] Keep normal node execution from installing dependencies implicitly.
-- [ ] Add tests for environment-key mismatch.
-- [ ] Add tests for dependency-bearing execution without verified environment.
-- [ ] Add tests proving incompatible identities do not share live workers or hot child pools.
+- [x] Return a structured environment error when required dependency environment preparation is missing.
+- [x] Return a structured environment error when install receipt verification failed or is absent.
+- [x] Keep normal node execution from installing dependencies implicitly.
+- [x] Add tests for environment-key mismatch.
+- [x] Add tests for dependency-bearing execution without verified environment.
+- [x] Add tests proving incompatible identities do not share live workers or hot child pools.
 
 ### Streaming And Events
 

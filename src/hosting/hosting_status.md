@@ -40,8 +40,8 @@ Purpose: record the current implementation state and the discrepancies against `
 
 ## Discrepancies
 
-- Dependency-bearing node execution still needs hard verified-environment enforcement.
-- Node dependency/runtime verification is not enforced as a hard execution precondition.
+- Dependency-bearing node execution now rejects missing preparation and missing install receipts.
+- Verified dependency runtime success still needs explicit selected-runtime execution coverage.
 - Artifact I/O is intended to be host-provisioned sandbox file access, but artifact storage is still unavailable; artifact contract fields remain present.
 - Node cancellation is wired through the node runtime registry, but still needs focused stream/host cancellation tests.
 - Node output-limit behavior is implemented, but still needs focused node-profile tests.
@@ -50,7 +50,7 @@ Purpose: record the current implementation state and the discrepancies against `
 
 ## Open Work
 
-- Enforce verified runtime environment selection for dependency-bearing node work.
+- Finish verified runtime environment selection for dependency-bearing node success paths.
 - Add unavailable-artifact behavior tests and document host-provisioned input/output artifact requirements.
 - Add focused node cancellation, output-limit, truncation, environment-policy, and artifact tests.
 - Revisit Python helper worker cleanup after node execution no longer depends on it.
@@ -78,6 +78,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added focused node tests for output-limit errors and stdout/stderr log truncation.
 - Implemented structured node cancellation results for active runtime cancellation.
 - Added active host-level and stream-send cancellation tests, including request-status checks while execution is running.
+- Added dependency-environment policy checks that reject node execution when preparation or install receipt verification is missing.
+- Added node environment-key mismatch and incompatible-identity pool isolation tests.
 
 ## Current Client Impact
 

@@ -1063,6 +1063,140 @@ def test_execute_workflow_python_node_enforces_import_allowlist(tmp_path: Path) 
     assert allowed["output"] == 3.0
 
 
+def test_execute_workflow_python_node_rejects_environment_key_mismatch(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'ok': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        environment_key="wrong-node-key",
+        request={
+            "request_id": "req-node-env-mismatch",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["reason"] == "environment_key_mismatch"
+    assert out["derived_environment_key"] != "wrong-node-key"
+
+
+def test_execute_workflow_python_node_rejects_dependency_execution_without_verified_environment(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'ok': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-unverified-env",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"package_pins": {"demo-dependency": "1.0.0"}},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_python_environment_not_prepared"
+    assert out["error"]["detail"]["environment_key"]
+    assert out["error"]["detail"]["install_status"]["install_plan_status"] == "missing"
+
+
+def test_execute_workflow_python_node_rejects_dependency_execution_without_install_receipt(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    python = {"package_pins": {"demo-dependency": "1.0.0"}}
+    spec = svc.workflow_python_environment_spec(
+        profile="node",
+        environment_name="workflow-python-node",
+        python=python,
+    )
+    prepared = svc.workflow_python_prepare_environment(
+        environment_name="workflow-python-node",
+        python=python,
+        package_id="pkg",
+        workflow_id="wf",
+    )
+    locked = svc.workflow_python_lock_environment(environment=dict(prepared["environment"]))
+    source = "def run(payload):\n    return {'output': {'ok': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        environment_key=str(spec["environment_key"]),
+        request={
+            "request_id": "req-node-missing-receipt",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": python,
+        },
+    )
+
+    assert locked["status"] == "ok"
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_python_environment_unverified"
+    assert out["error"]["detail"]["install_status"]["install_receipt_verification_status"] == "missing"
+
+
+def test_execute_workflow_python_node_uses_separate_pools_for_incompatible_identities(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'value': payload['value']}}\n"
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+    }
+
+    first = svc.execute_workflow_python(
+        profile="node",
+        request={**base_request, "request_id": "req-node-identity-a", "payload": {"value": "a"}},
+    )
+    second = svc.execute_workflow_python(
+        profile="node",
+        request={
+            **base_request,
+            "request_id": "req-node-identity-b",
+            "payload": {"value": "b"},
+            "python": {"import_allowlist": ["math"]},
+        },
+    )
+    pools = svc._workflow_python_pool_registry().resources()["pools"]
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["environment_key"] != second["environment_key"]
+    assert f"workflow_python/{first['environment_key']}" in pools
+    assert f"workflow_python/{second['environment_key']}" in pools
+
+
 def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

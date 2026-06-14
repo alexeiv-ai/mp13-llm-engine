@@ -132,6 +132,61 @@ class WorkflowHelperMixin:
             "contract": workflow_python_node_contract(),
         }
 
+    @staticmethod
+    def _workflow_python_node_has_dependency_intent(python: Dict[str, Any]) -> bool:
+        py = dict(python or {})
+        package_pins = {
+            str(key or "").strip(): str(value or "").strip()
+            for key, value in dict(py.get("package_pins") or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        return bool(package_pins or str(py.get("dependency_lock_hash") or "").strip())
+
+    def _workflow_python_node_dependency_environment_check(
+        self,
+        *,
+        request: Dict[str, Any],
+        python: Dict[str, Any],
+        environment: Dict[str, Any],
+        environment_key: str,
+        engine_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not self._workflow_python_node_has_dependency_intent(python):
+            return None
+        try:
+            verified = self.workflow_python_verify_install_receipt(environment=dict(environment or {}))
+            install_status = dict(verified.get("install_status") or {})
+        except Exception as exc:
+            install_status = {
+                "install_plan_status": "missing" if "install_plan_missing" in str(exc) else "error",
+                "install_receipt_verification_status": "not_checked",
+                "reason": str(exc),
+            }
+        if str(install_status.get("install_plan_status") or "").strip() in {"", "missing"}:
+            reason = "workflow_python_environment_not_prepared"
+        elif (
+            str(install_status.get("install_execution_status") or "").strip() != "ok"
+            or str(install_status.get("install_receipt_status") or "").strip() != "ok"
+            or str(install_status.get("install_receipt_verification_status") or "").strip() != "ok"
+        ):
+            reason = "workflow_python_environment_unverified"
+        else:
+            return None
+        return self._workflow_python_node_response_from_execution(
+            execution={
+                "ok": False,
+                "reason": reason,
+                "detail": {
+                    "message": "dependency-bearing workflow Python node requests require a prepared and verified runtime environment",
+                    "environment_key": str(environment_key or "").strip() or None,
+                    "install_status": install_status,
+                },
+            },
+            request={**dict(request or {}), "python": dict(python or {})},
+            environment_key=environment_key,
+            engine_id=engine_id,
+        )
+
     def workflow_python_environment_spec(
         self,
         *,
@@ -703,6 +758,15 @@ class WorkflowHelperMixin:
                 }
             effective_key = requested_key or derived_key
             eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
+            dependency_error = self._workflow_python_node_dependency_environment_check(
+                request=req,
+                python=py,
+                environment=dict(env.get("environment") or {}),
+                environment_key=effective_key,
+                engine_id=eid,
+            )
+            if dependency_error is not None:
+                return dependency_error
             pool = self._workflow_python_pool_registry().get_or_create(
                 self._workflow_python_pool_key(effective_key),
                 desired_capacity=capacity,
@@ -1024,6 +1088,15 @@ class WorkflowHelperMixin:
                     environment_key=effective_key,
                     engine_id=eid,
                 )
+            dependency_error = self._workflow_python_node_dependency_environment_check(
+                request={**req, "request_id": request_id},
+                python=py,
+                environment=dict(env.get("environment") or {}),
+                environment_key=effective_key,
+                engine_id=eid,
+            )
+            if dependency_error is not None:
+                return dependency_error
         base = self._workflow_python_stream_base()
         opened = base.stream_open(
             environment_key=effective_key,
