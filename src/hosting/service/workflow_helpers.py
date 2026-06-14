@@ -171,7 +171,12 @@ class WorkflowHelperMixin:
         ):
             reason = "workflow_python_environment_unverified"
         else:
-            return None
+            selected = self._workflow_python_runtime_manager().select_runtime_python(
+                environment=dict(environment or {}),
+                bootstrap_python_executable=str(python.get("bootstrap_python_executable") or python.get("python_executable") or "").strip() or None,
+                fallback_python_executable=str(python.get("fallback_python_executable") or python.get("python_executable") or "").strip() or None,
+            )
+            return {"status": "ok", "runtime": dict(selected or {}), "install_status": install_status}
         return self._workflow_python_node_response_from_execution(
             execution={
                 "ok": False,
@@ -766,7 +771,12 @@ class WorkflowHelperMixin:
                 engine_id=eid,
             )
             if dependency_error is not None:
-                return dependency_error
+                if str(dependency_error.get("status") or "") != "ok":
+                    return dependency_error
+                selected_runtime = dict(dependency_error.get("runtime") or {})
+                if str(selected_runtime.get("python_executable") or "").strip():
+                    py["python_executable"] = str(selected_runtime.get("python_executable") or "").strip()
+                    req["python"] = py
             pool = self._workflow_python_pool_registry().get_or_create(
                 self._workflow_python_pool_key(effective_key),
                 desired_capacity=capacity,
@@ -1096,7 +1106,11 @@ class WorkflowHelperMixin:
                 engine_id=eid,
             )
             if dependency_error is not None:
-                return dependency_error
+                if str(dependency_error.get("status") or "") != "ok":
+                    return dependency_error
+                selected_runtime = dict(dependency_error.get("runtime") or {})
+                if str(selected_runtime.get("python_executable") or "").strip():
+                    py["python_executable"] = str(selected_runtime.get("python_executable") or "").strip()
         base = self._workflow_python_stream_base()
         opened = base.stream_open(
             environment_key=effective_key,

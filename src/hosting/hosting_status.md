@@ -41,7 +41,7 @@ Purpose: record the current implementation state and the discrepancies against `
 ## Discrepancies
 
 - Dependency-bearing node execution now rejects missing preparation and missing install receipts.
-- Verified dependency runtime success still needs explicit selected-runtime execution coverage.
+- Verified dependency runtime success now selects the verified runtime interpreter before node execution.
 - Artifact I/O is intended to be host-provisioned sandbox file access, but artifact storage is still unavailable; artifact contract fields remain present.
 - Node cancellation is wired through the node runtime registry, but still needs focused stream/host cancellation tests.
 - Node output-limit behavior is implemented, but still needs focused node-profile tests.
@@ -50,7 +50,7 @@ Purpose: record the current implementation state and the discrepancies against `
 
 ## Open Work
 
-- Finish verified runtime environment selection for dependency-bearing node success paths.
+- Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add unavailable-artifact behavior tests and document host-provisioned input/output artifact requirements.
 - Add focused node cancellation, output-limit, truncation, environment-policy, and artifact tests.
 - Revisit Python helper worker cleanup after node execution no longer depends on it.
@@ -80,6 +80,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added active host-level and stream-send cancellation tests, including request-status checks while execution is running.
 - Added dependency-environment policy checks that reject node execution when preparation or install receipt verification is missing.
 - Added node environment-key mismatch and incompatible-identity pool isolation tests.
+- Routed verified dependency-bearing node execution through selected runtime Python and added selection coverage.
 
 ## Current Client Impact
 

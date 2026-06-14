@@ -102,7 +102,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [x] Derive node `environment_key` from environment name, runtime intent, import intent, dependency intent, and sandbox policy identity.
 - [x] Reject caller-supplied `environment_key` values that do not match host-derived identity.
 - [x] Ensure different dependency/import/runtime/sandbox-policy identities do not share node workers.
-- [ ] Ensure dependency-bearing node requests execute only against a selected verified runtime environment.
+- [x] Ensure dependency-bearing node requests execute only against a selected verified runtime environment.
 - [x] Return a structured environment error when required dependency environment preparation is missing.
 - [x] Return a structured environment error when install receipt verification failed or is absent.
 - [x] Keep normal node execution from installing dependencies implicitly.
@@ -211,7 +211,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 
 - [ ] Add focused unit tests for node request normalization and validation.
 - [x] Add focused unit tests for node import policy.
-- [ ] Add focused unit tests for node runtime environment policy.
+- [x] Add focused unit tests for node runtime environment policy.
 - [x] Add service-level sync execution tests for node success and failure.
 - [x] Add service-level streaming tests for node events.
 - [x] Add service-level streaming tests for node cancellation.
