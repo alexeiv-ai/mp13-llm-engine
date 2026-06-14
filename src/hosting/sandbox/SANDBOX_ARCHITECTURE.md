@@ -104,27 +104,30 @@ toolbox semantics.
 ## Workflow Artifact Boundary
 
 Artifact I/O is part of the node sandbox contract, but artifact authority stays
-with the host. The current implementation provides local host-controlled
-`workflow-artifact://...` refs for declared output files and resolves declared
-input refs into request-scoped input paths. The remaining durable-service
-concerns are explicit:
+with the host. The current implementation provides local host-controlled alias
+refs such as `@artifacts/...` for declared output files, supports
+policy-configured roots such as `@project/...`, resolves declared input refs
+into request-scoped input paths, and supports declared inline inputs/outputs.
+The remaining durable-service concerns are explicit:
 
 1. A host-controlled storage root outside arbitrary sandbox paths.
-2. Stable artifact reference shape, including request/workflow/package identity.
+2. Stable relative alias reference shape, including request/workflow/package identity.
 3. Read and write authorization rules for refs.
 4. Lifetime, expiry, cleanup, and garbage-collection policy.
 5. Size and count limits per request.
-6. Input-ref resolution into sandbox-visible input paths.
+6. Input-ref and inline-input resolution into sandbox-visible input paths.
 7. Output-slot resolution into exact sandbox-visible writable paths.
 8. A brokered write API if path-based output slots are insufficient.
 9. Stream `artifact` events only for host-minted refs.
-10. Response `artifacts` entries only for host-validated output files.
+10. Response `artifacts` entries only for host-validated output files or declared inline outputs.
 
 Sandboxed code may return ordinary JSON values that look like paths, URLs, or
 artifact IDs, but those values are not trusted artifact refs. The host only
-mints artifact refs after validating files from declared output locations and
-registering them in host-controlled storage. Stronger authorization, expiry,
-cleanup, and external artifact-read APIs remain future durable-service work.
+mints artifact refs after validating files from declared output locations,
+registering them in host-controlled storage, or accepting inline bytes for a
+declared inline output name. Input-side size/count/lifetime/encoding fields are
+advisory metadata. Stronger authorization, expiry, cleanup, and external
+artifact-read APIs remain future durable-service work.
 
 ## Shared API
 
@@ -137,10 +140,11 @@ Current fields:
 1. `enabled`: enables restricted launch where supported and enables broker checks
 2. `profile`: policy profile name, default `generic_worker_v1`
 3. `filesystem.rules`: brokered roots with `root_id`, `path`, and `access`
-4. `process`: `allow_subprocess`, `inherit_parent_handles`, and platform status metadata
-5. `network`: `mode`, `allow_hosts`, `allow_url_prefixes`, and platform status metadata
-6. `platform_policy.windows`: `restricted_token`, `integrity_level`, `job_object`
-7. `brokered_io`: `filesystem`, `http`, `subprocess`
+4. `artifact_roots`: alias-to-path mappings for refs such as `@project/...`
+5. `process`: `allow_subprocess`, `inherit_parent_handles`, and platform status metadata
+6. `network`: `mode`, `allow_hosts`, `allow_url_prefixes`, and platform status metadata
+7. `platform_policy.windows`: `restricted_token`, `integrity_level`, `job_object`
+8. `brokered_io`: `filesystem`, `http`, `subprocess`
 
 The policy object is deliberately pragmatic: it records platform support status in the policy shape, but only the implemented launch and broker paths enforce behavior.
 

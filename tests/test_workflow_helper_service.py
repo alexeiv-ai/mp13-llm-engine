@@ -335,10 +335,10 @@ def test_workflow_js_facade_isolates_pools_by_policy(tmp_path: Path, monkeypatch
 
     assert first["environment_key"] != second["environment_key"]
     pools = svc._workflow_python_pool_registry().resources()["pools"]
-    assert sorted(pools.keys()) == [
+    assert set(pools.keys()) == {
         f"workflow_js/{first['environment_key']}",
         f"workflow_js/{second['environment_key']}",
-    ]
+    }
 
 
 def test_old_js_helper_resource_alias_reports_workflow_pool_for_annotated_registration(tmp_path: Path, monkeypatch) -> None:
@@ -1357,13 +1357,15 @@ def test_execute_workflow_python_node_collects_declared_output_artifact(tmp_path
     assert out["artifacts"] == [
         {
             "name": "report",
+            "kind": "ref",
             "ref": out["artifacts"][0]["ref"],
             "filename": "report.txt",
             "media_type": "text/plain",
             "size_bytes": len("hello artifact"),
+            "encoding": None,
         }
     ]
-    assert out["artifacts"][0]["ref"].startswith("workflow-artifact://")
+    assert out["artifacts"][0]["ref"].startswith("@artifacts/")
 
 
 def test_execute_workflow_python_node_reads_declared_input_artifact_ref(tmp_path: Path) -> None:
@@ -1452,6 +1454,160 @@ def test_execute_workflow_python_node_rejects_undeclared_artifact_file_access(tm
     assert out["error"]["code"] == "workflow_sandbox_runtime_error"
     assert "artifact output path not allowed" in out["error"]["message"]
     assert out["artifacts"] == []
+
+
+def test_execute_workflow_python_node_reads_inline_input_artifact(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    f = open(artifact_inputs['seed'], 'r')\n"
+        "    text = f.read()\n"
+        "    f.close()\n"
+        "    return {'output': {'text': text}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-inline-input-artifact",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": [
+                {
+                    "name": "seed",
+                    "kind": "inline",
+                    "filename": "seed.txt",
+                    "text": "inline seed",
+                    "media_type": "text/plain",
+                    "encoding": "utf-8",
+                    "max_bytes": 1024,
+                    "ttl": "advisory",
+                }
+            ],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"text": "inline seed"}
+
+
+def test_execute_workflow_python_node_collects_declared_inline_output_artifact(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    return {\n"
+        "        'output': {'done': True},\n"
+        "        'artifacts': [{'name': 'summary', 'text': 'inline output', 'media_type': 'text/plain'}],\n"
+        "    }\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-inline-output-artifact",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_outputs": [{"name": "summary", "kind": "inline", "filename": "summary.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["artifacts"] == [
+        {
+            "name": "summary",
+            "kind": "inline",
+            "filename": "summary.txt",
+            "media_type": "text/plain",
+            "encoding": "utf-8",
+            "size_bytes": len("inline output"),
+            "text": "inline output",
+        }
+    ]
+
+
+def test_execute_workflow_python_node_uses_policy_artifact_root_refs(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    seed = project_root / "seed.txt"
+    seed.write_text("project seed", encoding="utf-8")
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    f = open(artifact_inputs['seed'], 'r')\n"
+        "    text = f.read()\n"
+        "    f.close()\n"
+        "    out = open(artifact_outputs['report'], 'w')\n"
+        "    out.write(text.upper())\n"
+        "    out.close()\n"
+        "    return {'output': {'done': True}}\n"
+    )
+    sandbox_policy = {"sandbox": {"artifact_roots": {"project": str(project_root)}}}
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-policy-artifact-root",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": [{"name": "seed", "ref": "@project/seed.txt"}],
+            "artifact_outputs": [{"name": "report", "ref": "@project/out/report.txt", "filename": "ignored.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["artifacts"][0]["ref"] == "@project/out/report.txt"
+    assert (project_root / "out" / "report.txt").read_text(encoding="utf-8") == "PROJECT SEED"
+
+
+def test_execute_workflow_python_node_rejects_non_alias_artifact_refs(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'done': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-bad-artifact-ref",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": [{"name": "seed", "ref": "workflow-artifact://old/seed.txt"}],
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_python_artifact_error"
 
 
 def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Path) -> None:
@@ -1637,7 +1793,7 @@ def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_pa
     assert event_types.index("artifact") < event_types.index("result")
     artifact_events = [row for row in events if row["type"] == "artifact"]
     result_events = [row for row in events if row["type"] == "result"]
-    assert artifact_events[0]["payload"]["ref"].startswith("workflow-artifact://")
+    assert artifact_events[0]["payload"]["ref"].startswith("@artifacts/")
     assert artifact_events[0]["payload"]["filename"] == "stream.txt"
     assert result_events[0]["payload"]["artifacts"] == [artifact_events[0]["payload"]]
 

@@ -32,7 +32,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 ## Current Discrepancies
 
-- Node-profile artifact refs are implemented as local host-controlled `workflow-artifact://...` refs, but authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
+- Node-profile artifact refs are implemented as local host-controlled alias refs such as `@artifacts/...`, but authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
 - Node-profile cancellation, output-limit, truncation, environment-policy, and artifact behavior now have focused coverage; broader integration coverage can still be added when real dependency installs and artifact consumers exist.
 - Cleanup is incomplete: the Python helper worker remains the actual execution substrate for helper-profile execution.
 
@@ -143,11 +143,11 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 ### Artifacts
 
-Decision: artifact I/O belongs in the first-class node sandbox contract, and this pass implements the local host-provisioned version. The node response keeps `artifacts` and `artifact_store` stable; `artifact_store.status=ok` is returned only when the host mints refs from declared output files, while requests with no declared output artifacts still report the store as unavailable for that response.
+Decision: artifact I/O belongs in the first-class node sandbox contract, and this pass implements the local host-provisioned version. The node response keeps `artifacts` and `artifact_store` stable; `artifact_store.status=ok` is returned only when the host mints refs from declared output files or declared inline outputs, while requests with no declared output artifacts still report the store as unavailable for that response.
 
-How artifacts fit the sandbox model: input artifacts are host-issued refs that the host resolves into sandbox-visible input paths before execution. Output artifacts are files written by sandboxed code only to exact host-provided output paths. After execution, the host validates those output paths, copies the bytes into host-controlled local artifact storage, and returns host-minted `workflow-artifact://...` refs. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
+How artifacts fit the sandbox model: input artifacts are either alias refs such as `@artifacts/...` or `@project/...`, or inline bytes/text that the host writes to sandbox-visible input paths before execution. Output artifacts are either files written by sandboxed code only to exact host-provided output paths, or inline outputs returned by sandboxed code only when a matching inline output declaration exists. After execution, the host validates declared output slots, copies file outputs into host-controlled local artifact storage or configured alias roots, and returns host-minted alias refs such as `@artifacts/...`. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
 
-Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which input refs are readable, which exact output files are writable, what crosses back out, and which refs clients may later read. Direct filesystem paths are not promoted as artifact refs.
+Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which configured alias refs are readable, which exact output files are writable, what inline bytes cross back out, and which refs clients may later read. Direct filesystem paths are not promoted as artifact refs.
 
 Untrusted artifact refs means any artifact-looking value produced by sandboxed code rather than by the host artifact manager. Examples include returned dicts such as `{"path": "/tmp/report.csv"}`, `{"url": "file:///..."}`, `{"artifact_id": "abc"}`, or `{"ref": "../other-run/output"}`. These values may be useful as ordinary JSON output if the workflow wants them, but the host must not treat them as authorized downloadable artifacts, emit them as `artifact` stream events, or store them in the response `artifacts` list until the host has verified the file came from an allowed output path and has created/registered the reference.
 
@@ -155,6 +155,12 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Choose host-provisioned artifact I/O as the intended sandbox model.
 - [x] Keep a deliberate structured unavailable response when no host-minted artifact refs exist for a response.
 - [x] Define request fields for input artifact refs and host-provided output artifact slots/directories.
+- [x] Support alias-ref artifact inputs with relative refs such as `@artifacts/...` or policy-configured roots such as `@project/...`.
+- [x] Support inline artifact inputs by writing declared bytes/text to sandbox input paths.
+- [x] Support alias-ref artifact outputs by returning host-minted or host-validated relative alias refs.
+- [x] Support declared inline artifact outputs without trusting undeclared sandbox artifact returns.
+- [x] Configure artifact root alias to physical path mappings through sandbox policy.
+- [x] Treat input-side size/count/lifetime/encoding metadata as optional advisory metadata.
 - [x] Resolve input artifact refs into sandbox-visible input paths before execution.
 - [x] Provide output artifact paths scoped to the current request.
 - [x] Collect only files written under host-provided output locations.

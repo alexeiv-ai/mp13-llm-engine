@@ -1816,6 +1816,16 @@ def _print_workflow_stream_events(result: Dict[str, Any]) -> None:
             summary = str(logs.get("summary") or "").strip() or f"limit={logs.get('output_limit_bytes')}"
         elif event.get("type") in {"progress", "metric"}:
             summary = str(payload.get("message") or payload.get("stage") or payload).strip()
+        elif event.get("type") == "artifact":
+            bits = [
+                str(payload.get("name") or "").strip(),
+                str(payload.get("kind") or "").strip(),
+                str(payload.get("ref") or "").strip(),
+                str(payload.get("filename") or "").strip(),
+            ]
+            summary = " ".join(bit for bit in bits if bit)
+            if payload.get("size_bytes") is not None:
+                summary = f"{summary} size={payload.get('size_bytes')}".strip()
         elif event.get("type") in {"result", "done", "canceled", "started"}:
             summary = str(payload.get("status") or payload.get("request_id") or "").strip()
         print(f"  - {event.get('type')}: {summary}")

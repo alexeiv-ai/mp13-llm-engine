@@ -18,6 +18,8 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
     assert "state_patch" in contract["response_fields"]
     assert "progress" in contract["stream_event_types"]
     assert "log" in contract["stream_event_types"]
+    assert contract["artifact_contract"]["ref_format"] == "@alias/relative/path"
+    assert "inline" in contract["artifact_contract"]["input_kinds"]
 
 
 def test_normalize_node_request_maps_export_and_operation() -> None:
@@ -31,7 +33,7 @@ def test_normalize_node_request_maps_export_and_operation() -> None:
             "export_name": "run",
             "payload": {"value": 1},
             "limits": {"timeout_ms": 1000},
-            "artifact_inputs": [{"name": "seed", "ref": "workflow-artifact://a/seed.txt"}],
+            "artifact_inputs": [{"name": "seed", "ref": "@artifacts/a/seed.txt"}],
             "artifact_outputs": [{"name": "report", "filename": "report.txt"}],
         }
     )
@@ -41,7 +43,7 @@ def test_normalize_node_request_maps_export_and_operation() -> None:
     assert out["export_name"] == "run"
     assert out["payload"] == {"value": 1}
     assert out["limits"]["timeout_ms"] == 1000
-    assert out["artifact_inputs"] == [{"name": "seed", "ref": "workflow-artifact://a/seed.txt"}]
+    assert out["artifact_inputs"] == [{"name": "seed", "ref": "@artifacts/a/seed.txt"}]
     assert out["artifact_outputs"] == [{"name": "report", "filename": "report.txt"}]
 
 

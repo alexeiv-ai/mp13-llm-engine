@@ -42,7 +42,7 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Dependency-bearing node execution now rejects missing preparation and missing install receipts.
 - Verified dependency runtime success now selects the verified runtime interpreter before node execution.
-- Artifact I/O is host-provisioned local sandbox file access: input refs are copied into request input paths, output slots become exact writable paths, and host-minted `workflow-artifact://...` refs are returned only for declared output files.
+- Artifact I/O is host-provisioned local sandbox file access: alias-ref and inline inputs are copied into request input paths, output slots become exact writable paths, inline outputs require matching declarations, and host-minted alias refs such as `@artifacts/...` are returned only for declared output files.
 - Artifact authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
@@ -88,9 +88,11 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added sync artifact tests for output collection, input-ref consumption, and rejection of undeclared file writes.
 - Added stream artifact-event coverage for host-minted refs.
 - Reviewed Python helper worker cleanup after node decoupling; no code removal is part of this node plan because `workflow_python(profile=helper)` still intentionally depends on that worker.
+- Expanded node artifacts to support inline inputs, declared inline outputs, and relative alias refs such as `@artifacts/...` and policy-configured `@project/...` roots.
+- Updated the interactive CLI stream event renderer to summarize artifact events.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
 - Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
-- Node-profile clients should pass input artifacts as host refs, write only to provided `artifact_outputs` paths, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
+- Node-profile clients should pass input artifacts as alias refs or inline payloads, write file outputs only to provided `artifact_outputs` paths, declare inline outputs before returning inline artifact payloads, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.

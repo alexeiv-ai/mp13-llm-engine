@@ -180,11 +180,13 @@ returns the node-profile envelope:
 
 Artifact references are part of the response contract. The current node
 implementation provides a local host-provisioned artifact store: input artifact
-refs resolve to request-scoped sandbox paths, output artifact slots resolve to
-exact writable sandbox paths, and only the host may register output files as
-`workflow-artifact://...` refs. Returned values such as `{"path": "..."}`,
-`{"url": "..."}`, or `{"artifact_id": "..."}` remain ordinary JSON unless the
-host artifact manager validates and mints the ref.
+refs such as `@artifacts/...` or policy-configured roots such as `@project/...`
+resolve to request-scoped sandbox paths, inline inputs are materialized as
+request input files, output artifact slots resolve to exact writable sandbox
+paths, and only the host may register output files as alias refs. Declared
+inline output artifacts can be returned inline. Returned values such as
+`{"path": "..."}`, `{"url": "..."}`, or `{"artifact_id": "..."}` remain ordinary
+JSON unless the host artifact manager validates and mints the ref.
 
 ## Result Contract
 

@@ -39,6 +39,21 @@ def _fs_access_list(items: Any) -> List[FsAccess]:
     return out
 
 
+def _artifact_roots(value: Any) -> Dict[str, str]:
+    if isinstance(value, dict):
+        rows = [{"name": key, "path": path} for key, path in value.items()]
+    else:
+        rows = [dict(row or {}) for row in list(value or []) if isinstance(row, dict)]
+    out: Dict[str, str] = {}
+    for row in rows:
+        raw_name = str(row.get("name") or row.get("root_id") or row.get("alias") or "").strip()
+        name = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw_name).strip("._")
+        path = str(row.get("path") or "").strip()
+        if name and path:
+            out[name] = path
+    return dict(sorted(out.items()))
+
+
 @dataclass
 class SandboxFsRule:
     path: str
@@ -213,6 +228,7 @@ class WorkerSandboxPolicy:
     enabled: bool = False
     profile: str = "generic_worker_v1"
     filesystem_rules: List[SandboxFsRule] = field(default_factory=list)
+    artifact_roots: Dict[str, str] = field(default_factory=dict)
     process: SandboxProcessPolicy = field(default_factory=SandboxProcessPolicy)
     network: SandboxNetworkPolicy = field(default_factory=SandboxNetworkPolicy)
     windows: WindowsSandboxPolicy = field(default_factory=WindowsSandboxPolicy)
@@ -232,6 +248,7 @@ class WorkerSandboxPolicy:
                 for item in list(filesystem.get("rules") or [])
                 if isinstance(item, dict)
             ],
+            artifact_roots=_artifact_roots(sandbox.get("artifact_roots")),
             process=SandboxProcessPolicy.from_mapping(sandbox.get("process")),
             network=SandboxNetworkPolicy.from_mapping(sandbox.get("network")),
             windows=WindowsSandboxPolicy.from_mapping(platform_policy.get("windows")),
@@ -250,6 +267,7 @@ class WorkerSandboxPolicy:
                     "default_access": "deny",
                     "rules": [item.to_dict() for item in self.filesystem_rules],
                 },
+                "artifact_roots": dict(self.artifact_roots),
                 "process": self.process.to_dict(),
                 "network": self.network.to_dict(),
                 "brokered_io": self.brokered_io.to_dict(),
@@ -261,6 +279,7 @@ class WorkerSandboxPolicy:
             "enabled": bool(self.enabled),
             "profile": self.profile,
             "filesystem_rules_count": len(self.filesystem_rules),
+            "artifact_roots": dict(self.artifact_roots),
             "brokered_filesystem": bool(self.brokered_io.filesystem),
             "brokered_http": bool(self.brokered_io.http),
             "allow_subprocess": bool(self.process.allow_subprocess),

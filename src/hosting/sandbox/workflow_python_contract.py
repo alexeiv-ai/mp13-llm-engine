@@ -75,6 +75,14 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "payload",
         ],
         "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb"],
+        "artifact_contract": {
+            "ref_format": "@alias/relative/path",
+            "default_roots": ["@artifacts"],
+            "policy_root_field": "sandbox.artifact_roots",
+            "input_kinds": ["ref", "inline"],
+            "output_kinds": ["ref", "inline"],
+            "input_metadata_advisory": ["max_bytes", "count", "ttl", "encoding"],
+        },
     }
 
 

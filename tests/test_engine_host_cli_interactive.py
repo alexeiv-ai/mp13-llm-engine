@@ -472,6 +472,8 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
                 "events": [
                     {"type": "started", "payload": {"request_id": "req-1"}},
                     {"type": "log", "payload": {"logs": {"output_limit_bytes": 4096, "summary": ""}}},
+                    {"type": "artifact", "payload": {"name": "report", "kind": "ref", "ref": "@artifacts/a/report.txt", "size_bytes": 12}},
+                    {"type": "artifact", "payload": {"name": "summary", "kind": "inline", "filename": "summary.txt", "size_bytes": 7}},
                     {"type": "error", "payload": {"error": {"code": "workflow_python_node_profile_not_implemented"}}},
                 ],
             }
@@ -490,6 +492,8 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
     assert ("workflow-python-stream-recv", {"stream_id": "stream-1", "max_items": 5}) in invocations
     out = capsys.readouterr().out
     assert "Stream Events" in out
+    assert "@artifacts/a/report.txt" in out
+    assert "summary inline summary.txt" in out
     assert "workflow_python_node_profile_not_implemented" in out
 
 

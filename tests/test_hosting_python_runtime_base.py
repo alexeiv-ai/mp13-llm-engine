@@ -69,6 +69,24 @@ def test_workflow_python_environment_key_changes_with_sandbox_policy(tmp_path: P
     assert enabled["environment_key"] != disabled["environment_key"]
 
 
+def test_workflow_python_environment_key_changes_with_artifact_roots(tmp_path: Path) -> None:
+    manager = HostedPythonRuntimeManager(tmp_path)
+
+    left = manager.environment_spec(
+        profile="node",
+        python_policy=_policy(),
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(tmp_path / "project-a")}}},
+    )
+    right = manager.environment_spec(
+        profile="node",
+        python_policy=_policy(),
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(tmp_path / "project-b")}}},
+    )
+
+    assert left["environment_key"] != right["environment_key"]
+    assert left["environment_identity"]["sandbox_policy_hash"] != right["environment_identity"]["sandbox_policy_hash"]
+
+
 def test_workflow_python_environment_key_changes_with_python_runtime_identity(tmp_path: Path) -> None:
     manager = HostedPythonRuntimeManager(tmp_path)
 
