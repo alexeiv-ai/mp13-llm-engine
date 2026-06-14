@@ -195,7 +195,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Add tests for stream cancellation.
 - [x] Add tests for host-level cancellation.
 - [x] Add tests for request status during active execution.
-- [ ] Add tests for resource metrics after success, error, timeout, and cancel.
+- [x] Add tests for resource metrics after success, error, timeout, and cancel.
 
 ### Compatibility And Cleanup
 

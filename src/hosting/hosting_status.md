@@ -81,6 +81,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added dependency-environment policy checks that reject node execution when preparation or install receipt verification is missing.
 - Added node environment-key mismatch and incompatible-identity pool isolation tests.
 - Routed verified dependency-bearing node execution through selected runtime Python and added selection coverage.
+- Added node resource metrics coverage after success, error, timeout, and cancellation.
 
 ## Current Client Impact
 

@@ -1715,3 +1715,78 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
     assert "canceled" in event_types
     assert done_events and done_events[-1]["payload"]["status"] == "canceled"
     assert status["request"]["status"] == "canceled"
+
+
+def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    env = svc.workflow_python_environment_spec(profile="node", environment_name="workflow-python-node", python={})
+    environment_key = str(env["environment_key"])
+
+    def request(source: str, request_id: str, *, timeout_ms: int = 1000) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "limits": {"timeout_ms": timeout_ms, "output_limit_bytes": 1024},
+        }
+
+    success_source = "def run(payload):\n    return {'output': {'ok': True}}\n"
+    error_source = "def run(payload):\n    raise ValueError('metric error')\n"
+    timeout_source = "def run(payload):\n    while True:\n        pass\n"
+    cancel_result: dict[str, object] = {}
+
+    success = svc.execute_workflow_python(profile="node", request=request(success_source, "req-node-metrics-ok"))
+    error = svc.execute_workflow_python(profile="node", request=request(error_source, "req-node-metrics-error"))
+    timeout = svc.execute_workflow_python(profile="node", request=request(timeout_source, "req-node-metrics-timeout", timeout_ms=50))
+
+    def run_cancel() -> None:
+        cancel_result.update(
+            svc.execute_workflow_python(
+                profile="node",
+                request=request(timeout_source, "req-node-metrics-cancel", timeout_ms=5000),
+            )
+        )
+
+    thread = threading.Thread(target=run_cancel, daemon=True)
+    thread.start()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        status = svc.workflow_python_request_status(
+            profile="node",
+            environment_key=environment_key,
+            request_id="req-node-metrics-cancel",
+        )
+        if dict(status.get("request") or {}).get("status") == "running":
+            break
+        time.sleep(0.05)
+    canceled = svc.cancel_workflow_python_request(
+        profile="node",
+        environment_key=environment_key,
+        request_id="req-node-metrics-cancel",
+    )
+    thread.join(timeout=5.0)
+    resources = svc.workflow_python_resources(profile="node", environment_key=environment_key)
+    metrics = resources["workflow_pool"]["metrics"]
+    recent = {row["request_id"]: row["status"] for row in metrics["recent_requests"]}
+
+    assert success["status"] == "ok"
+    assert error["status"] == "error"
+    assert timeout["error"]["code"] == "workflow_sandbox_timeout"
+    assert canceled["canceled"] is True
+    assert cancel_result["status"] == "canceled"
+    assert metrics["active_calls"] == 0
+    assert metrics["error_count"] >= 1
+    assert metrics["timeout_count"] >= 1
+    assert metrics["cancellation_count"] >= 1
+    assert recent["req-node-metrics-ok"] == "ok"
+    assert recent["req-node-metrics-error"] == "error"
+    assert recent["req-node-metrics-timeout"] == "timeout"
+    assert recent["req-node-metrics-cancel"] == "canceled"
