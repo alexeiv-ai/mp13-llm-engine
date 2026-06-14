@@ -236,3 +236,61 @@ Cleanup decision: the Python helper worker is no longer part of node-profile exe
 - Do not merge generic/model worker semantics into workflow runtime semantics.
 - Do not promise strong OS-level filesystem/network isolation beyond what the shared sandbox launcher and brokered I/O actually enforce.
 - Do not implement implicit dependency installation during normal workflow execution.
+
+## Next Phase: Python Node Runtime Generalization
+
+These items are intentionally separate from the completed first-class node contract above. They address the next concern: Python node should become a general hosted Python runtime for concurrent, long-running, snippet, and project execution while sharing more host-side sandbox management code.
+
+### Base Class Completeness
+
+Current assessment: `HostedProcessSandboxBase` is useful host-side bookkeeping, but it is not yet a complete worker/runtime base. It centralizes pool, request lifecycle, request status, stream queues, capacity, and cancellation bookkeeping. It does not yet own child process launch, hot process reuse, child protocol parsing, artifact preparation/collection, import policy, result normalization, project staging, or venv selection.
+
+- [ ] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
+- [ ] Move child process launch/cancel/stdout-protocol parsing behind that interface.
+- [ ] Move common active-process resource sampling behind that interface.
+- [ ] Move reusable artifact preparation/collection into a shared host-side component.
+- [ ] Make node runtime use the shared child-runtime interface.
+- [ ] Decide whether Python helper can use the same child-runtime implementation while preserving helper response compatibility.
+- [ ] Keep toolbox orchestration separate, but map toolbox executor resource/status reporting through the same normalized host pool/resource shapes where practical.
+- [ ] Add tests proving pool/request/status/cancel behavior is identical across helper-compatible and node runtimes.
+
+### Long-Running And Concurrent Node Jobs
+
+Target assumption: many different Python node jobs may run concurrently, and several instances of the same Python node code may run concurrently. Long-running node jobs are expected and should be managed explicitly by host pool capacity, request IDs, status, stream backpressure, cancellation, and resource reporting.
+
+- [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
+- [ ] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
+- [ ] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
+- [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
+- [ ] Add long-running progress heartbeat/status behavior.
+- [ ] Add tests for concurrent different node jobs.
+- [ ] Add tests for concurrent same-code node jobs.
+- [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
+
+### Snippets And Python Projects
+
+Target assumption: node execution should support both arbitrary Python snippets and Python projects made of multiple modules. `module_source` remains useful for single-file execution, but it is not enough for project execution.
+
+- [ ] Define request shape for snippet execution where source is arbitrary Python code and not necessarily a named workflow export.
+- [ ] Define request shape for project execution with a project root artifact/ref, entrypoint module, callable, argv, environment variables, and working directory.
+- [ ] Stage project files into a request/runtime workspace using artifact refs or configured alias roots.
+- [ ] Support multi-module imports from the staged project root without weakening global import policy.
+- [ ] Preserve source/package digest audit fields for staged projects.
+- [ ] Add tests for snippet execution.
+- [ ] Add tests for multi-module project execution.
+- [ ] Add tests that project import paths cannot escape the staged project root.
+
+### uv-Managed Environments
+
+Target assumption: Python node projects need deterministic, host-managed environments. Dependency installation remains explicit; normal execution must not install implicitly.
+
+- [ ] Add uv availability detection and version reporting.
+- [ ] Extend environment specs to represent uv-managed environments.
+- [ ] Support `pyproject.toml`, `uv.lock`, and dependency-group inputs.
+- [ ] Prepare deterministic uv install plans without executing them.
+- [ ] Lock/verify uv plans before execution.
+- [ ] Execute uv environment creation only through explicit prepare/install APIs.
+- [ ] Select the uv-managed Python interpreter for dependency-bearing node execution.
+- [ ] Record uv lock/install receipts and verify them before execution.
+- [ ] Add cleanup/GC for stale uv-managed runtime environments.
+- [ ] Add tests for missing uv, prepared uv plan, verified uv receipt, and selected uv runtime.

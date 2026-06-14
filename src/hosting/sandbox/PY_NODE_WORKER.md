@@ -264,7 +264,7 @@ Node stream event types:
 4. no node stream model
 5. no node response envelope
 
-The node runtime covers the richer Python workflow-node use case. It does not completely subsume the helper profile yet because helper clients may depend on the narrower operation allowlist, compatibility response shape, and existing long-lived helper worker process behavior. The correct migration path is to keep helper-profile compatibility until dependent projects explicitly move to `profile=node` or the helper facade is replaced by a compatibility adapter over the node runtime.
+The node runtime covers the richer Python workflow-node use case. It should eventually support long-running jobs, many different jobs concurrently, and multiple concurrent instances of the same node code. It does not completely subsume the helper profile yet because helper clients may depend on the narrower operation allowlist and compatibility response shape. The correct migration path is to keep helper-profile compatibility until dependent projects explicitly move to `profile=node` or the helper facade is replaced by a compatibility adapter over the node runtime.
 
 ### Toolbox Worker
 
@@ -290,10 +290,15 @@ The current shared base layer is useful but incomplete:
 4. Python helper still has separate IPC-worker internals because it remains a compatibility process for helper-profile clients.
 5. Python node has separate child-runtime internals because it is not a registered IPC worker and has node-specific artifact/import/result semantics.
 
+The incomplete part is not the pool concept. The pool concept is the right host-side shape for long-running and concurrent node work. The missing part is a shared child-runtime layer underneath the pool that can own launch, child protocol, hot reuse/recycling, cancellation, resource sampling, and result normalization across Python node and helper-compatible runtimes.
+
 Recommended future simplification:
 
 1. Extract a small hosted child-runtime interface for `execute`, `cancel`, and `resources` so Python node and helper child pools can share process lifecycle mechanics.
-2. Keep toolbox orchestration separate, but adapt toolbox executor registrations to report through the same normalized pool/resource models where possible.
-3. Replace Python helper internals with either a thin compatibility adapter over node runtime or a shared child-runtime implementation only after dependent helper-profile clients no longer require the current response and operation semantics.
+2. Add explicit long-running/concurrent node job support on top of the shared pool model.
+3. Add Python snippet and multi-module project execution modes.
+4. Add uv-managed environment preparation, lock/receipt verification, interpreter selection, and cleanup.
+5. Keep toolbox orchestration separate, but adapt toolbox executor registrations to report through the same normalized pool/resource models where possible.
+6. Replace Python helper internals with either a thin compatibility adapter over node runtime or a shared child-runtime implementation only after dependent helper-profile clients no longer require the current response and operation semantics.
 
-Do not delete the Python helper worker solely because node exists. It still has a compatibility niche for short helper-profile workflow calls and already migrated dependent projects that expect helper semantics.
+Do not delete the Python helper worker solely because node exists. It still has a compatibility niche for helper-profile workflow calls and already migrated dependent projects that expect helper semantics.

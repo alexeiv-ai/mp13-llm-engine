@@ -50,6 +50,8 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
+- Generalize the Python node runtime for long-running concurrent jobs, arbitrary snippets, multi-module Python projects, and uv-managed environments.
+- Complete the shared hosted child-runtime/base abstraction so node/helper-compatible runtimes can share launch, cancel, resources, and protocol mechanics.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
 
@@ -92,6 +94,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Updated the interactive CLI stream event renderer to summarize artifact events.
 - Added `sandbox/PY_NODE_WORKER.md` documenting the Python node execution API, artifact contract, and comparison with helper/toolbox workers.
 - Investigated worker architecture: Python node uses shared runtime/pool primitives but is not a registered IPC worker; toolbox and helper remain separate worker entrypoints with distinct orchestration and compatibility roles.
+- Added the next-phase plan for base-class completeness, long-running/concurrent node jobs, arbitrary snippets, multi-module project execution, and uv-managed runtime environments.
 
 ## Current Client Impact
 
