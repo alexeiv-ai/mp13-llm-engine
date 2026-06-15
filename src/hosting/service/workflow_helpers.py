@@ -348,6 +348,15 @@ class WorkflowHelperMixin:
         child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
         output_roots = sorted(str(key) for key in dict(child.get("outputs") or {}).keys())
+        sandbox = dict(dict(sandbox_policy or {}).get("sandbox") or sandbox_policy or {})
+        host_api_policy = sandbox.get("host_api") if isinstance(sandbox.get("host_api"), dict) else {}
+        namespace_policy = dict(host_api_policy.get("namespaces") or {})
+        artifact_fs_enabled = bool(host_api_policy.get("enabled", True))
+        for key in ("fs", "artifact_fs"):
+            if key in host_api_policy:
+                artifact_fs_enabled = bool(host_api_policy.get(key))
+            if key in namespace_policy:
+                artifact_fs_enabled = bool(namespace_policy.get(key))
         registry = HostApiRegistry(
             contract="hosting.workflow_python.node.host_api.v1",
             request_id=str(dict(request or {}).get("request_id") or ""),
@@ -356,7 +365,13 @@ class WorkflowHelperMixin:
                 "writable": output_roots,
             },
             policy={
-                "artifact_fs": True,
+                "artifact_fs": artifact_fs_enabled,
+                "namespaces": {
+                    "fs": artifact_fs_enabled,
+                    "http": False,
+                    "subprocess": False,
+                    "custom_functions": False,
+                },
                 "http": False,
                 "subprocess": False,
                 "custom_functions": False,
@@ -370,99 +385,100 @@ class WorkflowHelperMixin:
             target = self._workflow_python_node_host_path(root, relative_path)
             return root_id, root, target, relative_path
 
-        registry.register(
-            "fs.list",
-            namespace="fs",
-            description="List direct children under a declared artifact input or output root.",
-            args_schema=fs_root_args_schema(),
-            result_schema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                    "root_id": {"type": "string"},
-                    "relative_path": {"type": "string"},
-                    "entries": {"type": "array", "items": {"type": "object"}},
+        if artifact_fs_enabled:
+            registry.register(
+                "fs.list",
+                namespace="fs",
+                description="List direct children under a declared artifact input or output root.",
+                args_schema=fs_root_args_schema(),
+                result_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "root_id": {"type": "string"},
+                        "relative_path": {"type": "string"},
+                        "entries": {"type": "array", "items": {"type": "object"}},
+                    },
                 },
-            },
-            permissions=["artifact.read"],
-            handler=lambda args: _fs_list(args),
-        )
+                permissions=["artifact.read"],
+                handler=lambda args: _fs_list(args),
+            )
 
-        registry.register(
-            "fs.read_text",
-            namespace="fs",
-            description="Read UTF text from a declared artifact input or output root.",
-            args_schema=fs_root_args_schema(text=True),
-            result_schema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                    "root_id": {"type": "string"},
-                    "relative_path": {"type": "string"},
-                    "text": {"type": "string"},
-                    "encoding": {"type": "string"},
+            registry.register(
+                "fs.read_text",
+                namespace="fs",
+                description="Read UTF text from a declared artifact input or output root.",
+                args_schema=fs_root_args_schema(text=True),
+                result_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "root_id": {"type": "string"},
+                        "relative_path": {"type": "string"},
+                        "text": {"type": "string"},
+                        "encoding": {"type": "string"},
+                    },
                 },
-            },
-            permissions=["artifact.read"],
-            handler=lambda args: _fs_read_text(args),
-        )
+                permissions=["artifact.read"],
+                handler=lambda args: _fs_read_text(args),
+            )
 
-        registry.register(
-            "fs.write_text",
-            namespace="fs",
-            description="Write UTF text under a declared artifact output root.",
-            args_schema=fs_write_text_args_schema(),
-            result_schema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                    "root_id": {"type": "string"},
-                    "relative_path": {"type": "string"},
-                    "bytes": {"type": "integer"},
-                    "encoding": {"type": "string"},
+            registry.register(
+                "fs.write_text",
+                namespace="fs",
+                description="Write UTF text under a declared artifact output root.",
+                args_schema=fs_write_text_args_schema(),
+                result_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "root_id": {"type": "string"},
+                        "relative_path": {"type": "string"},
+                        "bytes": {"type": "integer"},
+                        "encoding": {"type": "string"},
+                    },
                 },
-            },
-            permissions=["artifact.write"],
-            handler=lambda args: _fs_write_text(args),
-        )
+                permissions=["artifact.write"],
+                handler=lambda args: _fs_write_text(args),
+            )
 
-        registry.register(
-            "fs.mkdir",
-            namespace="fs",
-            description="Create a directory under a declared artifact output root.",
-            args_schema=fs_root_args_schema(mkdir=True),
-            result_schema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                    "root_id": {"type": "string"},
-                    "relative_path": {"type": "string"},
+            registry.register(
+                "fs.mkdir",
+                namespace="fs",
+                description="Create a directory under a declared artifact output root.",
+                args_schema=fs_root_args_schema(mkdir=True),
+                result_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "root_id": {"type": "string"},
+                        "relative_path": {"type": "string"},
+                    },
                 },
-            },
-            permissions=["artifact.write"],
-            handler=lambda args: _fs_mkdir(args),
-        )
+                permissions=["artifact.write"],
+                handler=lambda args: _fs_mkdir(args),
+            )
 
-        registry.register(
-            "fs.stat",
-            namespace="fs",
-            description="Return metadata for a path under a declared artifact input or output root.",
-            args_schema=fs_root_args_schema(),
-            result_schema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                    "root_id": {"type": "string"},
-                    "relative_path": {"type": "string"},
-                    "exists": {"type": "boolean"},
-                    "type": {"type": "string"},
-                    "size": {"type": ["integer", "null"]},
-                    "mtime": {"type": "number"},
+            registry.register(
+                "fs.stat",
+                namespace="fs",
+                description="Return metadata for a path under a declared artifact input or output root.",
+                args_schema=fs_root_args_schema(),
+                result_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "root_id": {"type": "string"},
+                        "relative_path": {"type": "string"},
+                        "exists": {"type": "boolean"},
+                        "type": {"type": "string"},
+                        "size": {"type": ["integer", "null"]},
+                        "mtime": {"type": "number"},
+                    },
                 },
-            },
-            permissions=["artifact.read"],
-            handler=lambda args: _fs_stat(args),
-        )
+                permissions=["artifact.read"],
+                handler=lambda args: _fs_stat(args),
+            )
 
         def _fs_list(args: Dict[str, Any]) -> Dict[str, Any]:
             root_id, _root, target, relative_path = _root_and_target(args)

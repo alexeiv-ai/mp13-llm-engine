@@ -49,6 +49,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
+- Node host API built-in namespaces can now be disabled through node sandbox policy; the current built-in `fs`/`artifact_fs` namespace is omitted from discovery and dispatch when disabled.
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
 - Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Python node request lifecycle states are exposed as `submitted`, `running`, `ok`, `error`, `timeout`, and `canceled`; long-running node requests can opt into host-side `heartbeat` stream events with `limits.heartbeat_interval_ms`.
@@ -162,6 +163,14 @@ Purpose: record the current implementation state and the discrepancies against `
 - Verified broader hosting workflow tests after node host API, warm-worker lifecycle, heartbeat, code-revision routing, stream retention, and capacity-pressure changes: `189 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
+### 2026-06-15
+
+- Added node host API sandbox-policy controls for disabling built-in namespaces.
+- Disabled `fs.*` discovery and dispatch when `sandbox_policy.sandbox.host_api.namespaces.fs=false` or `sandbox_policy.sandbox.host_api.fs=false`.
+- Added host API namespace policy coverage for discovery and rejected filesystem host calls.
+- Verified focused host API tests: `3 passed`.
+- Verified workflow helper service tests: `76 passed`.
+
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
@@ -169,3 +178,4 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node-profile clients should pass input artifacts as alias refs, inline payloads, or inline zip payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, use `export_inline_zip` for many output files when ownership should stay with the producer, request `host_takeover` only when the host should own returned ref lifetime, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
 - Node-profile clients may use `execution_mode=snippet` for source snippets or `execution_mode=project` with `project.ref` / `project.entrypoint` / `project.callable` for staged projects.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.
+- Node-profile callers can disable the artifact filesystem host API namespace with `sandbox_policy.sandbox.host_api.namespaces.fs=false`; `host.describe` remains available so code can discover the effective policy.

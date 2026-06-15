@@ -199,6 +199,34 @@ The current dispatcher maps `fs.*` calls to declared artifact roots:
 4. output roots may be exact files or directories depending on the output declaration
 5. relative paths cannot escape the selected root
 
+The artifact filesystem namespace is enabled by default for compatibility. A node sandbox policy can disable it with either shape:
+
+```json
+{
+  "sandbox": {
+    "host_api": {
+      "namespaces": {
+        "fs": false
+      }
+    }
+  }
+}
+```
+
+or:
+
+```json
+{
+  "sandbox": {
+    "host_api": {
+      "fs": false
+    }
+  }
+}
+```
+
+When disabled, `host.describe()` remains available, reports `policy.artifact_fs=false`, and omits the `fs.*` methods. Calling a disabled method returns an unsupported-host-method error through the normal host response path.
+
 Single-file inline inputs resolve to the file itself. Directory-like inputs and outputs are created by masked/recursive declarations, inline zip inputs, or output declarations with `path_mask` / `mask`.
 
 The current node host dispatcher does not enable arbitrary HTTP, subprocess, or filesystem access. Those should be added only through the same policy-gated dispatcher shape used by toolbox cooperative brokered APIs.

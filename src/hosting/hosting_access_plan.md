@@ -311,7 +311,7 @@ Transport requirement: use async-capable framed messages with `host_call_id` cor
 - [x] Include method descriptions, argument schemas, result schemas, and permissions in sandbox-visible `host.describe` discovery.
 - [ ] Support async-capable framed host API messages with `host_call_id` correlation and out-of-order-safe responses.
 - [x] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
-- [ ] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
+- [x] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
 - [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
 - [x] Add a long-lived worker transport loop that reuses the same host API protocol across sequential compatible requests and avoids per-request cold-start cost for warm hits.
 - [x] Add tests for host API discovery, artifact-root read/write, and rejected input-root writes.

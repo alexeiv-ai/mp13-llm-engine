@@ -1914,6 +1914,71 @@ def test_execute_workflow_python_node_host_api_rejects_input_writes(tmp_path: Pa
     assert "artifact_root_unavailable:seed" in out["error"]["detail"]["message"]
 
 
+def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    describe_source = (
+        "def run(payload):\n"
+        "    described = host.describe()\n"
+        "    return {'output': {'methods': described['methods'], 'policy': described['policy']}}\n"
+    )
+    read_source = (
+        "def run(payload):\n"
+        "    return {'output': host.fs_read_text('seed')}\n"
+    )
+    sandbox_policy = {"sandbox": {"host_api": {"namespaces": {"fs": False}}}}
+    artifact_inputs = [
+        {
+            "name": "seed",
+            "kind": "inline",
+            "filename": "seed.txt",
+            "text": "disabled fs",
+            "media_type": "text/plain",
+        }
+    ]
+
+    described = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-host-api-fs-disabled-describe",
+            "module_source": describe_source,
+            "module_sha256": hashlib.sha256(describe_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": artifact_inputs,
+        },
+    )
+    rejected = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-host-api-fs-disabled-read",
+            "module_source": read_source,
+            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": artifact_inputs,
+        },
+    )
+
+    assert described["status"] == "ok"
+    assert described["output"]["methods"] == ["host.describe"]
+    assert described["output"]["policy"]["artifact_fs"] is False
+    assert described["output"]["policy"]["namespaces"]["fs"] is False
+    assert rejected["status"] == "error"
+    assert rejected["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "unsupported_host_method:fs.read_text" in rejected["error"]["detail"]["message"]
+
+
 def test_execute_workflow_python_node_collects_declared_inline_output_artifact(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
