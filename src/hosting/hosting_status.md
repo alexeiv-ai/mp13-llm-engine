@@ -43,6 +43,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Shared host artifact manager for artifact prepare, collect, zip, ownership, and request-local cleanup.
 - Snippet execution with `execution_mode=snippet`, using `module_source` directly and no required export.
 - Multi-module project execution with `execution_mode=project`, staged project refs, entrypoint module/callable selection, working directory, environment variables, and project-local import allowance.
+- uv availability/version reporting and uv intent in Python environment specs.
+- Deterministic non-executing uv install plans from `pyproject_toml`, `uv_lock`, and dependency groups.
 
 ## Discrepancies
 
@@ -118,6 +120,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added project-local import handling so staged modules can import each other without allowing unlisted global imports.
 - Added snippet, multi-module project, and project import-escape tests.
 - Verified broader hosting workflow tests: `170 passed`.
+- Fixed leaked workflow Python node child processes by reaping/killing children after terminal results and registering an interpreter-exit cleanup hook. Cleaned up orphaned node child processes found during investigation.
+- Added uv availability/version detection, uv intent identity, and deterministic uv install-plan metadata without executing uv.
+- Added uv environment-spec and prepare-plan tests.
 
 ## Current Client Impact
 

@@ -6,6 +6,7 @@ terminology so new workflow APIs do not need to expose toolbox IDs or tool keys.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -40,6 +41,61 @@ def _imports(policy: Optional[Dict[str, Any]]) -> list[str]:
 
 def _pinned_packages(policy: Optional[Dict[str, Any]]) -> list[str]:
     return [f"{name}=={version}" for name, version in sorted(_pins(policy).items())]
+
+
+def _uv_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    row = dict(policy or {})
+    uv = dict(row.get("uv") or {}) if isinstance(row.get("uv"), dict) else {}
+    pyproject = _clean(uv.get("pyproject_toml") or row.get("pyproject_toml"))
+    uv_lock = _clean(uv.get("uv_lock") or row.get("uv_lock"))
+    groups = []
+    seen: set[str] = set()
+    for item in list(uv.get("dependency_groups") or row.get("dependency_groups") or []):
+        value = _clean(item)
+        if value and value not in seen:
+            seen.add(value)
+            groups.append(value)
+    enabled = bool(uv or pyproject or uv_lock or groups or row.get("uv_enabled"))
+    return {
+        "enabled": enabled,
+        "uv_executable": _clean(uv.get("uv_executable") or row.get("uv_executable")) or "uv",
+        "pyproject_toml": pyproject or None,
+        "uv_lock": uv_lock or None,
+        "dependency_groups": groups,
+    }
+
+
+def _uv_intent_hash(policy: Optional[Dict[str, Any]]) -> Optional[str]:
+    uv = _uv_policy(policy)
+    if not uv["enabled"]:
+        return None
+    explicit = _clean(dict(policy or {}).get("dependency_lock_hash"))
+    return explicit or stable_hash({"uv": uv})
+
+
+def _uv_availability(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    uv = _uv_policy(policy)
+    executable = _clean(uv.get("uv_executable")) or "uv"
+    path = shutil.which(executable)
+    version = None
+    if path:
+        try:
+            proc = subprocess.run(
+                [path, "--version"],
+                text=True,
+                capture_output=True,
+                timeout=5.0,
+                check=False,
+            )
+            version = (proc.stdout or proc.stderr or "").strip() or None
+        except Exception:
+            version = None
+    return {
+        **uv,
+        "available": bool(path),
+        "resolved_executable": path,
+        "version": version,
+    }
 
 
 def _runtime_hash(default_hash: str, policy: Optional[Dict[str, Any]]) -> str:
@@ -89,7 +145,7 @@ class HostedPythonRuntimeBase(HostedProcessSandboxBase):
             sandbox_policy=dict(sandbox_policy or {}),
             required_imports=_imports(python_policy),
             package_pins=_pins(python_policy),
-            dependency_lock_hash=None,
+            dependency_lock_hash=_uv_intent_hash(python_policy),
         )
 
 
@@ -116,9 +172,12 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             sandbox_policy=sandbox_policy,
             runtime_hash=_runtime_hash(spec.toolbox_runtime_hash, python_policy),
         )
+        uv = _uv_availability(python_policy)
+        env = spec.to_dict()
+        env["uv"] = uv
         return {
             "status": "ok",
-            "environment": spec.to_dict(),
+            "environment": env,
             "environment_key": key_spec.short_key(),
             "environment_key_full": key_spec.full_key(),
             "environment_identity": key_spec.to_dict(),
@@ -137,6 +196,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
 
     def _environment_description(self, spec: ToolboxEnvironmentSpec, *, python_policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         pinned = _pinned_packages(python_policy)
+        uv = _uv_policy(python_policy)
         return {
             "name": spec.environment_name,
             "extra_packages": pinned,
@@ -144,6 +204,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             "allow_online_install": False,
             "effective_allow_online_install": False,
             "lineage": [spec.environment_name],
+            "uv": uv,
         }
 
     def _install_status_summary(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -155,6 +216,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         receipt = dict(row.get("install_receipt") or {})
         receipt_verification = dict(row.get("install_receipt_verification") or {})
         resolved_lock = dict(row.get("resolved_install_lock") or {})
+        uv_plan = dict(row.get("uv_install_plan") or {})
         return {
             "install_plan_status": str(plan.get("status") or ("planned" if plan else "missing")),
             "install_lock_status": str(lock.get("status") or "missing"),
@@ -166,6 +228,8 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             "install_lock_hash": str(lock.get("install_lock_hash") or lock_verification.get("install_lock_hash") or "").strip() or None,
             "resolved_lock_hash": str(resolved_lock.get("resolved_lock_hash") or lock_verification.get("resolved_lock_hash") or "").strip() or None,
             "receipt_packages_hash": str(receipt.get("packages_hash") or "").strip() or None,
+            "uv_install_plan_status": str(uv_plan.get("status") or "missing"),
+            "uv_plan_hash": str(uv_plan.get("plan_hash") or "").strip() or None,
             "reason": str(
                 receipt_verification.get("reason")
                 or execution.get("reason")
@@ -201,7 +265,9 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             sandbox_profile_id=_clean(workflow_id) or "workflow_python",
             tool_keys=[],
         )
-        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
+        env = spec.to_dict()
+        env["uv"] = _uv_availability(python_policy)
+        return self._with_install_summary(status="ok", environment=env, metadata=metadata)
 
     def prepare_install(
         self,
@@ -221,6 +287,25 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             sandbox_profile_id=_clean(workflow_id) or "workflow_python",
             tool_keys=[],
         )
+        uv = _uv_availability(python_policy)
+        if bool(uv.get("enabled")):
+            metadata["uv_install_plan"] = {
+                "status": "planned" if bool(uv.get("available")) else "missing_uv",
+                "tool": "uv",
+                "uv": uv,
+                "pyproject_toml": uv.get("pyproject_toml"),
+                "uv_lock": uv.get("uv_lock"),
+                "dependency_groups": list(uv.get("dependency_groups") or []),
+                "allow_execution": False,
+                "plan_hash": stable_hash(
+                    {
+                        "tool": "uv",
+                        "pyproject_toml": uv.get("pyproject_toml"),
+                        "uv_lock": uv.get("uv_lock"),
+                        "dependency_groups": list(uv.get("dependency_groups") or []),
+                    }
+                ),
+            }
         return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def lock_install(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:

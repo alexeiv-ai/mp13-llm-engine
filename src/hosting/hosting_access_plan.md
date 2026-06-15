@@ -300,10 +300,10 @@ Target assumption: node execution should support both arbitrary Python snippets 
 
 Target assumption: Python node projects need deterministic, host-managed environments. Dependency installation remains explicit; normal execution must not install implicitly.
 
-- [ ] Add uv availability detection and version reporting.
-- [ ] Extend environment specs to represent uv-managed environments.
-- [ ] Support `pyproject.toml`, `uv.lock`, and dependency-group inputs.
-- [ ] Prepare deterministic uv install plans without executing them.
+- [x] Add uv availability detection and version reporting.
+- [x] Extend environment specs to represent uv-managed environments.
+- [x] Support `pyproject.toml`, `uv.lock`, and dependency-group inputs.
+- [x] Prepare deterministic uv install plans without executing them.
 - [ ] Lock/verify uv plans before execution.
 - [ ] Execute uv environment creation only through explicit prepare/install APIs.
 - [ ] Select the uv-managed Python interpreter for dependency-bearing node execution.

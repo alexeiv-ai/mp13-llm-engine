@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 from hosting.sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 
@@ -183,3 +184,62 @@ def test_workflow_python_runtime_gc_removes_unreferenced_runtime_envs(tmp_path: 
     assert out["removed_environment_keys"] == [str(stale["venv_key"])]
     assert Path(keep["venv_path"]).exists()
     assert not Path(stale["venv_path"]).exists()
+
+
+def test_workflow_python_environment_spec_reports_missing_uv(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: None)
+    manager = HostedPythonRuntimeManager(tmp_path)
+
+    out = manager.environment_spec(
+        profile="node",
+        python_policy={
+            "uv": {
+                "pyproject_toml": "[project]\nname='demo'\n",
+                "uv_lock": "lock-data",
+                "dependency_groups": ["dev"],
+            }
+        },
+    )
+
+    assert out["environment"]["uv"]["enabled"] is True
+    assert out["environment"]["uv"]["available"] is False
+    assert out["environment_identity"]["dependency_lock_hash"]
+
+
+def test_workflow_python_environment_spec_reports_uv_version(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(["uv", "--version"], 0, stdout="uv 0.7.1\n", stderr="")
+
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: "C:/Tools/uv.exe")
+    monkeypatch.setattr("hosting.sandbox.python_runtime.subprocess.run", fake_run)
+    manager = HostedPythonRuntimeManager(tmp_path)
+
+    out = manager.environment_spec(profile="node", python_policy={"uv": {"enabled": True}})
+
+    assert out["environment"]["uv"]["available"] is True
+    assert out["environment"]["uv"]["resolved_executable"] == "C:/Tools/uv.exe"
+    assert out["environment"]["uv"]["version"] == "uv 0.7.1"
+
+
+def test_workflow_python_prepare_install_adds_deterministic_uv_plan(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: "C:/Tools/uv.exe")
+    monkeypatch.setattr(
+        "hosting.sandbox.python_runtime.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["uv", "--version"], 0, stdout="uv 0.7.1\n", stderr=""),
+    )
+    manager = HostedPythonRuntimeManager(tmp_path)
+    policy = {
+        "uv": {
+            "pyproject_toml": "[project]\nname='demo'\n",
+            "uv_lock": "lock-data",
+            "dependency_groups": ["dev", "test"],
+        }
+    }
+
+    left = manager.prepare_install(python_policy=policy)
+    right = manager.prepare_install(python_policy=policy)
+
+    assert left["metadata"]["uv_install_plan"]["status"] == "planned"
+    assert left["metadata"]["uv_install_plan"]["allow_execution"] is False
+    assert left["install_status"]["uv_install_plan_status"] == "planned"
+    assert left["install_status"]["uv_plan_hash"] == right["install_status"]["uv_plan_hash"]
