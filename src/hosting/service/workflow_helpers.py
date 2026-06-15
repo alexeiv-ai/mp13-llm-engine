@@ -1218,6 +1218,7 @@ class WorkflowHelperMixin:
                     artifact_context=artifact_context,
                     sandbox_policy=sandbox_policy,
                 ),
+                max_idle=int(pool.resources().get("metrics", {}).get("desired_capacity") or capacity or 1),
             )
             if artifact_context is not None and bool(result.get("ok", False)):
                 try:
@@ -1257,6 +1258,10 @@ class WorkflowHelperMixin:
                 reason=reason,
                 output_bytes=output_bytes,
             )
+            node_runtime_trim = self._workflow_python_node_runtime_registry().trim_idle(
+                environment_key=effective_key,
+                max_idle=int(pool.resources().get("metrics", {}).get("desired_capacity") or capacity or 1),
+            )
             return self._workflow_python_node_response_from_execution(
                 execution=result,
                 request={**dict(request or {}), "request_id": lifecycle.request_id, "python": py},
@@ -1265,6 +1270,7 @@ class WorkflowHelperMixin:
                 metrics={
                     "workflow_pool": pool.resources(),
                     "request": dict(finished.get("request") or lifecycle.to_dict()),
+                    "node_runtime_trim": node_runtime_trim,
                 },
             )
         ensured = self.ensure_workflow_python(

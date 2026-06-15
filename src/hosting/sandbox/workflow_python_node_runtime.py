@@ -460,11 +460,17 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
     def _runtime_key(request: Dict[str, Any], executable: str) -> str:
         py = dict(request.get("python") or {})
         environment_key = _clean(request.get("environment_key")) or _clean(py.get("environment_key")) or _clean(py.get("environment_name")) or "workflow-python-node"
+        execution_mode = _clean(request.get("execution_mode") or "module").lower() or "module"
+        code_revision = _clean(request.get("code_revision")) or _clean(request.get("module_sha256")).lower() or _sha256_text(str(request.get("module_source") or ""))
+        package_revision = _clean(request.get("package_source_digest"))
         return "|".join(
             [
                 _clean(executable),
                 environment_key,
                 ",".join(_import_allowlist(request)),
+                execution_mode,
+                code_revision,
+                package_revision,
             ]
         )
 
@@ -541,6 +547,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         python_executable: Optional[str] = None,
         on_event: Optional[NodeEventCallback] = None,
         host_dispatcher: Optional[Any] = None,
+        max_idle: Optional[int] = None,
     ) -> Dict[str, Any]:
         req = dict(request or {})
         request_id = _clean(req.get("request_id"))
@@ -563,7 +570,19 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         reusable = self._warm_reusable(child_req)
         runtime = self._take_idle(runtime_key) if reusable else None
         if runtime is None:
-            runtime = WorkflowPythonNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+            if reusable and max_idle is not None:
+                self.trim_idle(environment_key=self._runtime_key_environment(runtime_key), max_idle=max(0, int(max_idle or 0) - 1))
+            last_exc: Optional[Exception] = None
+            for _attempt in range(2):
+                try:
+                    runtime = WorkflowPythonNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+                    break
+                except RuntimeError as exc:
+                    last_exc = exc
+                    if "workflow_python_node_worker_ipc_connect_timeout" not in str(exc):
+                        raise
+            if runtime is None:
+                raise last_exc or RuntimeError("workflow_python_node_worker_start_failed")
         try:
             runtime.send_request(child_req)
         except Exception:

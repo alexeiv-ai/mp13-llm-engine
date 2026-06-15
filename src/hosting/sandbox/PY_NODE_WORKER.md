@@ -432,35 +432,34 @@ Filesystem access outside artifact paths is not a node-profile API feature.
 Node stream event types:
 
 1. `started`
-2. `log`
-3. `stdout`
-4. `stderr`
-5. `progress`
-6. `artifact`
-7. `result`
-8. `error`
-9. `canceled`
-10. `done`
+2. `heartbeat`
+3. `log`
+4. `stdout`
+5. `stderr`
+6. `progress`
+7. `artifact`
+8. `result`
+9. `error`
+10. `canceled`
+11. `done`
 
 `artifact` events are emitted only for host-minted or host-accepted artifacts, before the terminal `result` event.
 
 ## Long-Lived Workers And Code Edits
 
-Current implementation: the host keeps warm child harness processes for compatible sequential module/snippet requests under the same environment/import identity. A fixed `module_source` plus `module_sha256` is still the source revision identity for each request, and corrected snippets/modules should be submitted as new requests with new digests. Project requests remain one-shot for now because they can mutate `cwd`, `sys.path`, environment variables, and import caches. The next runtime step is explicit recycling/revision policy for projects and code edits, plus capacity-shrink cleanup for idle warm workers.
+Current implementation: the host keeps warm child harness processes for compatible sequential module/snippet requests under the same environment/import/revision identity. A fixed `module_source` plus `module_sha256` is the default source revision identity for each request; callers may pass explicit `code_revision` when they need a host-defined revision label. Corrected snippets/modules should be submitted as new requests with new digests or revision labels. Those requests route to a different warm worker instead of mutating already-loaded code in place. In-flight requests keep their original revision, and idle workers from older revisions are trimmed back to configured capacity after completion. Project requests remain one-shot for now because they can mutate `cwd`, `sys.path`, environment variables, and import caches.
 
 For a future long-lived Python node worker, code updates should not rely on uv. uv manages dependencies and interpreter environments; it is not the right mechanism for hot-editing workflow source modules.
 
-Recommended long-lived model:
+Implemented module/snippet model:
 
 1. Every loaded snippet/project/module gets a code revision identity such as `module_sha256`, `package_source_digest`, or an explicit `code_revision`.
 2. The worker routes execution by `(environment_key, code_revision, entrypoint)` rather than only by environment.
-3. When code changes, the host either:
-   - starts/reuses a worker for the new revision and lets old in-flight requests finish, or
-   - sends an explicit `unload/reload` command that removes affected modules from `sys.modules`, invalidates import caches, and reloads from the staged revision root.
+3. When module/snippet code changes, the host starts or reuses a worker for the new revision and lets old in-flight requests finish.
 4. In-flight requests keep their original revision.
 5. Failed snippets are fixed by submitting a new revision; the old revision is not mutated in place.
 
-The restart/reroute approach used by toolbox remains the conservative default for correctness. A hot-reload path is useful later, but it must be explicit and revision-scoped; otherwise Python import caches and module globals will make bug-fix behavior ambiguous.
+The restart/reroute approach used by toolbox remains the conservative default for correctness. A hot-reload path is still future work, and it must be explicit and revision-scoped; otherwise Python import caches and module globals will make bug-fix behavior ambiguous.
 
 ## Relationship To Helper And Toolbox Workers
 

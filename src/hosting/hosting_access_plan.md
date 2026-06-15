@@ -337,13 +337,14 @@ Warm-worker obstacles to solve:
 - [x] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
 - [x] Add explicit capacity-shrink cleanup for idle warm workers.
 - [ ] Add worker recycling for changed environment identity, unhealthy workers, and policy changes.
-- [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
-- [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
+- [x] Define code revision lifecycle for long-lived module/snippet workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
+- [x] Implement restart/reroute semantics for module/snippet code edits; keep explicit unload/reload as future project-mode work.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
 - [x] Add opt-in long-running heartbeat/status behavior.
 - [x] Add tests for concurrent different node jobs.
 - [x] Add tests for concurrent same-code node jobs.
 - [x] Add tests for warm worker reuse across compatible sequential requests.
+- [x] Add tests for edited module/snippet source routing to a new revision worker.
 - [x] Add tests for opt-in long-running heartbeat stream events.
 - [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
 

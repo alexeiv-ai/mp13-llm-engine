@@ -1528,6 +1528,41 @@ def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequenti
     svc._workflow_python_node_runtime_registry().shutdown()
 
 
+def test_execute_workflow_python_node_routes_edited_code_to_new_revision_worker(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source_a = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid(), 'version': 'a'}}\n"
+    source_b = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid(), 'version': 'b'}}\n"
+
+    def request(source: str, request_id: str) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["os"]},
+            "limits": {"timeout_ms": 2000},
+        }
+
+    first = svc.execute_workflow_python(profile="node", capacity=1, request=request(source_a, "req-node-revision-a"))
+    second = svc.execute_workflow_python(profile="node", capacity=1, request=request(source_b, "req-node-revision-b"))
+    resources = svc.workflow_python_resources(profile="node", environment_key=first["environment_key"])
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"]["version"] == "a"
+    assert second["output"]["version"] == "b"
+    assert first["output"]["pid"] != second["output"]["pid"]
+    assert resources["workflow_python_idle_process_count"] == 1
+    svc._workflow_python_node_runtime_registry().shutdown()
+
+
 def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

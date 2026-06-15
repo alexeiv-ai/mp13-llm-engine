@@ -13,6 +13,7 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
 
     assert contract["profile"] == "node"
     assert "module_source" in contract["request_fields"]
+    assert "code_revision" in contract["request_fields"]
     assert "execution_mode" in contract["request_fields"]
     assert "project" in contract["request_fields"]
     assert "snippet" in contract["execution_modes"]
@@ -48,6 +49,7 @@ def test_normalize_node_request_maps_export_and_operation() -> None:
     assert out["request_id"].startswith("workflow-python-node-")
     assert out["operation"] == "run"
     assert out["export_name"] == "run"
+    assert out["code_revision"] == ""
     assert out["payload"] == {"value": 1}
     assert out["limits"]["timeout_ms"] == 1000
     assert out["artifact_inputs"] == [{"name": "seed", "ref": "@artifacts/a/seed.txt"}]

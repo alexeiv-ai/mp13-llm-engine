@@ -50,6 +50,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
+- Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Python node request lifecycle states are exposed as `submitted`, `running`, `ok`, `error`, `timeout`, and `canceled`; long-running node requests can opt into host-side `heartbeat` stream events with `limits.heartbeat_interval_ms`.
 - Pending-cancel handling in the shared active child runtime registry so host cancellation is not lost while a node harness child is still starting.
 
@@ -68,8 +69,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
 - Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior and uv-managed environments.
-- Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including project/code-revision recycling.
-- Add worker recycling for warm node workers, including explicit unhealthy-worker, policy-change, and project/code-revision invalidation behavior.
+- Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including project-mode recycling.
+- Add worker recycling for warm node workers, including explicit unhealthy-worker, policy-change, and project invalidation behavior.
 - Decide whether helper-compatible runtimes should adopt the shared child-runtime/artifact helpers without changing helper response compatibility.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
@@ -153,8 +154,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added warm node harness reuse across compatible sequential requests and resource reporting for idle warm workers.
 - Added capacity-shrink cleanup for idle warm node workers through the node capacity API.
 - Added explicit node lifecycle states and opt-in heartbeat stream events for long-running node requests.
+- Added module/snippet code-revision routing for warm workers and post-run idle trimming to capacity.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
-- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, and heartbeat changes: `185 passed`.
+- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, heartbeat, and code-revision routing changes: `186 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
 ## Current Client Impact
