@@ -259,7 +259,7 @@ These items are intentionally separate from the completed first-class node contr
 
 ### Base Class Completeness
 
-Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Runtime-specific code still owns child process launch details, stdout protocol parsing, import policy, result normalization, hot process reuse, project staging, and venv selection.
+Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Toolbox executor runtime calls now also record execute/cancel/request-status/resource accounting through the shared hosted pool layer. Runtime-specific code still owns child process launch details, stdout protocol parsing, import policy, result normalization, hot process reuse, project staging, venv selection, and toolbox registration/repair/GC orchestration.
 
 - [x] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
 - [x] Move active child cancel/resource tracking behind the shared child-runtime base.
@@ -267,7 +267,8 @@ Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact he
 - [x] Make node runtime use the shared child-runtime interface.
 - [x] Keep child process launch/stdout protocol parsing runtime-specific for now.
 - [ ] Decide whether Python helper can use the same child-runtime implementation while preserving helper response compatibility.
-- [ ] Keep toolbox orchestration separate, but map toolbox executor resource/status reporting through the same normalized host pool/resource shapes where practical.
+- [x] Route toolbox executor execute/cancel/request-status/resource accounting through the same normalized host pool/resource shapes while preserving toolbox registration/repair orchestration.
+- [ ] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific.
 - [x] Add base-layer tests for pool/request/status/cancel behavior and active child resource/cancel tracking.
 
 ### Long-Running And Concurrent Node Jobs

@@ -46,6 +46,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - uv availability/version reporting and uv intent in Python environment specs.
 - Deterministic non-executing uv install plans from `pyproject_toml`, `uv_lock`, and dependency groups.
 - uv install plan locking/verification, explicit uv execution through install APIs, uv install receipts, uv receipt verification, and uv-managed interpreter selection for dependency-bearing node execution.
+- Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
 
 ## Discrepancies
 
@@ -129,6 +130,10 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added uv lifecycle tests for missing uv, deterministic prepare plans, lock verification, blocked execution, verified receipt/runtime selection, service-side uv dependency routing, and uv-shaped runtime GC.
 - Verified focused runtime/service tests: `83 passed`.
 - Verified broader hosting workflow tests: `180 passed`.
+- Migrated toolbox executor runtime calls onto the shared hosted pool lifecycle for execute, cancel, request status, and resource reporting.
+- Added toolbox hosted-pool tests for execute lifecycle recording and cancellation lifecycle recording.
+- Verified full toolbox sandbox tests: `124 passed`.
+- Verified broader hosting workflow tests after toolbox lifecycle migration: `180 passed`.
 
 ## Current Client Impact
 

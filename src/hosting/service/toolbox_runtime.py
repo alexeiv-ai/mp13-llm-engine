@@ -236,6 +236,79 @@ class ToolboxRuntimeMixin:
             raise ValueError(f"{command_label} is only supported for toolbox executors")
         return reg
 
+    def _toolbox_runtime_base(self) -> HostedToolboxRuntimeBase:
+        from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
+
+        base = getattr(self, "_hosted_toolbox_runtime_base", None)
+        if not isinstance(base, HostedToolboxRuntimeBase):
+            base = HostedToolboxRuntimeBase()
+            setattr(self, "_hosted_toolbox_runtime_base", base)
+        return base
+
+    @staticmethod
+    def _toolbox_registration_environment_key(reg: Dict[str, Any]) -> str:
+        env = dict(dict(reg or {}).get("environment") or {})
+        caps = dict(dict(reg or {}).get("capabilities") or {})
+        return str(env.get("environment_key") or caps.get("environment_key") or dict(reg or {}).get("engine_id") or "").strip()
+
+    @staticmethod
+    def _toolbox_registration_capacity(reg: Dict[str, Any]) -> int:
+        caps = dict(dict(reg or {}).get("capabilities") or {})
+        for key in ("capacity", "max_concurrency", "max_parallel_calls"):
+            try:
+                value = int(caps.get(key) or 0)
+            except Exception:
+                value = 0
+            if value > 0:
+                return max(1, min(value, 1024))
+        return 256
+
+    def _toolbox_worker_slot(self, *, reg: Dict[str, Any], environment_key: str, capacity: int) -> Any:
+        from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
+
+        return HostedToolboxRuntimeBase.worker_slot(
+            engine_id=str(dict(reg or {}).get("engine_id") or "").strip(),
+            environment_key=str(environment_key or "").strip(),
+            capacity=capacity,
+            pid=int(dict(reg or {}).get("pid") or 0) or None,
+            status="registered",
+        )
+
+    def _toolbox_pool_resources(self, reg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        environment_key = self._toolbox_registration_environment_key(reg)
+        if not environment_key:
+            return None
+        resources = self._toolbox_runtime_base().resources(environment_key)
+        return dict(resources or {}) if str(dict(resources or {}).get("status") or "") != "not_found" else None
+
+    def toolbox_request_status(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str = "",
+        request_id: str,
+    ) -> Dict[str, Any]:
+        rid = str(request_id or "").strip()
+        if not rid:
+            raise ValueError("request_id is required")
+        eid = str(engine_id or "").strip()
+        tid = str(toolbox_id or "").strip()
+        if tid and not eid:
+            reg = self._route_toolbox_registration(toolbox_id=tid, tool_name=tool_name, command_label="toolbox-request-status")
+            eid = str(reg.get("engine_id") or "").strip()
+        else:
+            reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-request-status")
+        environment_key = self._toolbox_registration_environment_key(reg)
+        out = dict(self._toolbox_runtime_base().request_status(environment_key=environment_key, request_id=rid))
+        return {
+            **out,
+            "engine_id": eid or None,
+            "toolbox_id": tid or self._registration_toolbox_id(reg) or None,
+            "tool_name": str(tool_name or "").strip() or None,
+            "environment_key": environment_key or None,
+        }
+
     def toolbox_describe(
         self,
         *,
@@ -258,8 +331,13 @@ class ToolboxRuntimeMixin:
             hidden_allowed_tool_names: set[str] = set()
             sandbox_profile_ids: set[str] = set()
             engine_ids: List[str] = []
+            hosted_pools: Dict[str, Any] = {}
             for reg in regs:
-                engine_ids.append(str(reg.get("engine_id") or ""))
+                reg_engine_id = str(reg.get("engine_id") or "")
+                engine_ids.append(reg_engine_id)
+                pool = self._toolbox_pool_resources(reg)
+                if pool is not None and reg_engine_id:
+                    hosted_pools[reg_engine_id] = pool
                 for name in list(self._registration_allowed_tool_names(reg) or set()):
                     tool_names.add(name)
                 for name in list(self._registration_advertised_tool_names(reg) or set()):
@@ -283,6 +361,7 @@ class ToolboxRuntimeMixin:
                     "async_within_executor": True,
                     "sandbox_pool": len(engine_ids) > 1,
                 },
+                "hosted_pools": hosted_pools,
             }
         reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-describe")
         out = self._ipc_call(
@@ -301,6 +380,10 @@ class ToolboxRuntimeMixin:
         result.setdefault("allowed_tool_names", sorted(list(self._registration_allowed_tool_names(reg) or set())))
         result.setdefault("advertised_tool_names", sorted(list(self._registration_advertised_tool_names(reg) or set())))
         result.setdefault("hidden_allowed_tool_names", sorted(list(self._registration_hidden_allowed_tool_names(reg) or set())))
+        pool = self._toolbox_pool_resources(reg)
+        if pool is not None:
+            result.setdefault("hosted_pool", pool)
+            result.setdefault("toolbox_pool", pool)
         result.pop("tool_names", None)
         return result
 
@@ -457,24 +540,66 @@ class ToolboxRuntimeMixin:
                 raise PermissionError(f"gated_requires_confirmation:{tool_name}")
             if view is not None and allowed_tool_names is not None and tool_name in allowed_tool_names and not view.is_allowed(tool_name):
                 raise PermissionError(f"blocked_in_scope:{tool_name}")
-        out = self._ipc_call(
-            reg=reg,
-            payload={
-                "kind": "rpc_call",
-                "engine_id": eid,
-                "method": "toolbox.execute",
-                "params": {
-                    "tool_call": call,
-                    "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
-                },
-            },
-            timeout_seconds=float(timeout_seconds or 30.0),
+        environment_key = self._toolbox_registration_environment_key(reg)
+        capacity = self._toolbox_registration_capacity(reg)
+        request_id = str(call.get("id") or call.get("tool_call_id") or "").strip() or f"toolbox-{tool_name}-{int(time.time() * 1000)}"
+        base = self._toolbox_runtime_base()
+        scheduled = base.submit_request(
+            environment_key=environment_key,
+            request_id=request_id,
+            profile=self._registration_sandbox_profile_id(reg),
+            factory=lambda _key, cap: self._toolbox_worker_slot(reg=reg, environment_key=environment_key, capacity=cap),
+            desired_capacity=capacity,
+            operation_id=tool_name,
+            input_bytes=len(json.dumps(call, ensure_ascii=False).encode("utf-8", errors="replace")),
         )
-        if str(out.get("status") or "").strip().lower() == "error":
-            raise RuntimeError(str(out.get("message") or "toolbox_execute_failed"))
-        result = dict(out or {})
-        result.setdefault("engine_id", eid)
-        return result
+        if str(scheduled.get("status") or "") != "ok":
+            return {
+                "status": "error",
+                "reason": str(scheduled.get("reason") or "capacity_exceeded"),
+                "engine_id": eid,
+                "toolbox_id": tid or self._registration_toolbox_id(reg),
+                "tool_name": tool_name,
+                "tool_call_id": request_id,
+                "environment_key": environment_key,
+                "hosted_pool": base.resources(environment_key),
+            }
+        finished = False
+        try:
+            out = self._ipc_call(
+                reg=reg,
+                payload={
+                    "kind": "rpc_call",
+                    "engine_id": eid,
+                    "method": "toolbox.execute",
+                    "params": {
+                        "tool_call": call,
+                        "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
+                    },
+                },
+                timeout_seconds=float(timeout_seconds or 30.0),
+            )
+            if str(out.get("status") or "").strip().lower() == "error":
+                reason = str(out.get("message") or "toolbox_execute_failed")
+                base.finish_request(environment_key=environment_key, request_id=request_id, status="error", reason=reason)
+                finished = True
+                raise RuntimeError(reason)
+            result = dict(out or {})
+            output_bytes = len(json.dumps(result, ensure_ascii=False, default=str).encode("utf-8", errors="replace"))
+            base.finish_request(environment_key=environment_key, request_id=request_id, status="ok", output_bytes=output_bytes)
+            finished = True
+            result.setdefault("engine_id", eid)
+            result.setdefault("toolbox_id", tid or self._registration_toolbox_id(reg))
+            result.setdefault("tool_name", tool_name)
+            result.setdefault("tool_call_id", request_id)
+            result.setdefault("environment_key", environment_key)
+            result.setdefault("hosted_pool", base.resources(environment_key))
+            result.setdefault("toolbox_pool", result["hosted_pool"])
+            return result
+        except Exception as exc:
+            if not finished:
+                base.finish_request(environment_key=environment_key, request_id=request_id, status="error", reason=str(exc) or "toolbox_execute_failed")
+            raise
 
     def toolbox_cancel(
         self,
@@ -539,11 +664,32 @@ class ToolboxRuntimeMixin:
         canceled_engine_ids: List[str] = []
         failed_engine_ids: List[str] = []
         shutdown_results: Dict[str, Dict[str, Any]] = {}
+        hosted_pool_cancels: Dict[str, Dict[str, Any]] = {}
         target_toolbox_ids: set[str] = set()
+        base = self._toolbox_runtime_base()
         for reg in target_regs:
             target_engine_id = str(dict(reg or {}).get("engine_id") or "").strip()
             if not target_engine_id:
                 continue
+            environment_key = self._toolbox_registration_environment_key(dict(reg or {}))
+            if environment_key and call_id:
+                hosted_pool_cancels[target_engine_id] = dict(base.cancel_request(environment_key=environment_key, request_id=call_id))
+            elif environment_key:
+                pool = base.pool_registry.get(base.pool_key(environment_key))
+                canceled_requests: List[str] = []
+                if pool is not None:
+                    for worker in list(pool.workers or []):
+                        if str(worker.engine_id or "").strip() != target_engine_id:
+                            continue
+                        for active_request_id in list(worker.active_request_ids or []):
+                            cancel_out = dict(base.cancel_request(environment_key=environment_key, request_id=str(active_request_id or "")))
+                            if str(cancel_out.get("status") or "") == "ok":
+                                canceled_requests.append(str(active_request_id or ""))
+                hosted_pool_cancels[target_engine_id] = {
+                    "status": "ok" if canceled_requests else "not_found",
+                    "environment_key": environment_key,
+                    "canceled_request_ids": canceled_requests,
+                }
             reg_toolbox_id = self._registration_toolbox_id(dict(reg or {}))
             if reg_toolbox_id:
                 target_toolbox_ids.add(reg_toolbox_id)
@@ -621,6 +767,7 @@ class ToolboxRuntimeMixin:
             "failed_engine_ids": sorted(failed_engine_ids),
             "repaired_toolbox_ids": sorted(repaired_toolbox_ids),
             "shutdown_results": shutdown_results,
+            "hosted_pool_cancels": hosted_pool_cancels,
             "repair": repair_out,
         }
 

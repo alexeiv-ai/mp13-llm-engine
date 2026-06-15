@@ -1807,6 +1807,106 @@ def test_toolbox_orchestrator_spawn_uses_shared_environment_identity(monkeypatch
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _scratch_dir("toolbox-hosted-pool-")
+    svc = EngineHostService(
+        engines_state_file=root / "managed_engines.json",
+        control_state_file=root / "access_control.json",
+    )
+    reg = svc.spawn(
+        engine_id="toolbox-hosted-pool",
+        command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        worker_profile_class="generic",
+        executor_kind="toolbox_executor",
+        bundle={"toolbox_id": "toolbox-hosted", "sandbox_profile_id": "default"},
+        environment={"environment_key": "toolbox-env-key"},
+        tool_access={"allowed_tool_names": ["demo_tool"], "advertised_tool_names": ["demo_tool"]},
+        capabilities={"capacity": 2},
+    )
+
+    def fake_ipc_call(**_kwargs):
+        return {"status": "ok", "tool_call": {"id": "call-demo-1", "result": "demo-ok"}}
+
+    monkeypatch.setattr(svc, "_ipc_call", fake_ipc_call)
+    try:
+        out = svc.toolbox_execute(
+            engine_id="toolbox-hosted-pool",
+            tool_call={"id": "call-demo-1", "name": "demo_tool", "arguments": {}},
+            timeout_seconds=2.0,
+        )
+        status = svc.toolbox_request_status(
+            engine_id="toolbox-hosted-pool",
+            request_id="call-demo-1",
+        )
+    finally:
+        svc.shutdown("toolbox-hosted-pool", timeout_seconds=2.0)
+        svc.remove_registration("toolbox-hosted-pool")
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert int(reg.get("pid") or 0)
+    assert out["status"] == "ok"
+    assert out["environment_key"] == "toolbox-env-key"
+    assert out["hosted_pool"]["metrics"]["desired_capacity"] == 2
+    assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["request_id"] == "call-demo-1"
+    assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["operation_id"] == "demo_tool"
+    assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["status"] == "ok"
+    assert status["status"] == "ok"
+    assert status["request"]["status"] == "ok"
+    assert status["source"] in {"active", "recent"}
+
+
+def test_toolbox_cancel_marks_shared_hosted_pool_request_canceled() -> None:
+    root = _scratch_dir("toolbox-hosted-cancel-")
+    svc = EngineHostService(
+        engines_state_file=root / "managed_engines.json",
+        control_state_file=root / "access_control.json",
+    )
+    svc.spawn(
+        engine_id="toolbox-hosted-cancel",
+        command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        worker_profile_class="generic",
+        executor_kind="toolbox_executor",
+        bundle={"toolbox_id": "toolbox-hosted-cancel", "sandbox_profile_id": "default"},
+        environment={"environment_key": "toolbox-cancel-env"},
+        tool_access={"allowed_tool_names": ["demo_tool"], "advertised_tool_names": ["demo_tool"]},
+        capabilities={"capacity": 2},
+    )
+    base = svc._toolbox_runtime_base()
+    base.submit_request(
+        environment_key="toolbox-cancel-env",
+        request_id="call-cancel-1",
+        profile="default",
+        factory=lambda _key, cap: HostedToolboxRuntimeBase.worker_slot(
+            engine_id="toolbox-hosted-cancel",
+            environment_key="toolbox-cancel-env",
+            capacity=cap,
+            status="registered",
+        ),
+        desired_capacity=2,
+        operation_id="demo_tool",
+    )
+
+    try:
+        out = svc.toolbox_cancel(
+            engine_id="toolbox-hosted-cancel",
+            tool_name="demo_tool",
+            tool_call_id="call-cancel-1",
+            timeout_seconds=2.0,
+            respawn=False,
+        )
+        status = base.request_status(environment_key="toolbox-cancel-env", request_id="call-cancel-1")
+    finally:
+        svc.shutdown("toolbox-hosted-cancel", timeout_seconds=2.0)
+        svc.remove_registration("toolbox-hosted-cancel")
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert out["outcome"] == "canceled"
+    assert out["hosted_pool_cancels"]["toolbox-hosted-cancel"]["status"] == "ok"
+    assert status["status"] == "ok"
+    assert status["request"]["status"] == "canceled"
+    assert status["source"] in {"active", "recent"}
+
+
 def test_load_toolbox_from_manifest_supports_auto_callable_discovery() -> None:
     root = _scratch_dir("load-auto-")
     try:
