@@ -45,6 +45,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Multi-module project execution with `execution_mode=project`, staged project refs, entrypoint module/callable selection, working directory, environment variables, and project-local import allowance.
 - uv availability/version reporting and uv intent in Python environment specs.
 - Deterministic non-executing uv install plans from `pyproject_toml`, `uv_lock`, and dependency groups.
+- uv install plan locking/verification, explicit uv execution through install APIs, uv install receipts, uv receipt verification, and uv-managed interpreter selection for dependency-bearing node execution.
 
 ## Discrepancies
 
@@ -123,6 +124,11 @@ Purpose: record the current implementation state and the discrepancies against `
 - Fixed leaked workflow Python node child processes by reaping/killing children after terminal results and registering an interpreter-exit cleanup hook. Cleaned up orphaned node child processes found during investigation.
 - Added uv availability/version detection, uv intent identity, and deterministic uv install-plan metadata without executing uv.
 - Added uv environment-spec and prepare-plan tests.
+- Added uv install lock/verify/execute/receipt lifecycle metadata and kept uv execution blocked unless explicitly requested through install APIs.
+- Updated node dependency-environment checks so uv intent uses uv plan/execution/receipt verification fields and can select a verified uv runtime interpreter.
+- Added uv lifecycle tests for missing uv, deterministic prepare plans, lock verification, blocked execution, verified receipt/runtime selection, service-side uv dependency routing, and uv-shaped runtime GC.
+- Verified focused runtime/service tests: `83 passed`.
+- Verified broader hosting workflow tests: `180 passed`.
 
 ## Current Client Impact
 

@@ -5,8 +5,11 @@ terminology so new workflow APIs do not need to expose toolbox IDs or tool keys.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -96,6 +99,12 @@ def _uv_availability(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "resolved_executable": path,
         "version": version,
     }
+
+
+def _uv_python_executable(env_root: Path) -> Path:
+    if sys.platform == "win32":
+        return env_root / ".venv" / "Scripts" / "python.exe"
+    return env_root / ".venv" / "bin" / "python"
 
 
 def _runtime_hash(default_hash: str, policy: Optional[Dict[str, Any]]) -> str:
@@ -189,8 +198,12 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         environment_name: str,
         python_policy: Optional[Dict[str, Any]] = None,
     ) -> ToolboxEnvironmentSpec:
+        policy = dict(python_policy or {})
+        uv_dependency_hash = _uv_intent_hash(policy)
+        if uv_dependency_hash and not _clean(policy.get("dependency_lock_hash")):
+            policy["dependency_lock_hash"] = uv_dependency_hash
         return self.environment_manager.workflow_python_helper_environment_spec(
-            policy=dict(python_policy or {}),
+            policy=policy,
             environment_name=_clean(environment_name) or "workflow-python-helper",
         )
 
@@ -217,6 +230,11 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         receipt_verification = dict(row.get("install_receipt_verification") or {})
         resolved_lock = dict(row.get("resolved_install_lock") or {})
         uv_plan = dict(row.get("uv_install_plan") or {})
+        uv_lock = dict(row.get("uv_install_lock") or {})
+        uv_lock_verification = dict(row.get("uv_install_lock_verification") or {})
+        uv_execution = dict(row.get("uv_install_execution") or {})
+        uv_receipt = dict(row.get("uv_install_receipt") or {})
+        uv_receipt_verification = dict(row.get("uv_install_receipt_verification") or {})
         return {
             "install_plan_status": str(plan.get("status") or ("planned" if plan else "missing")),
             "install_lock_status": str(lock.get("status") or "missing"),
@@ -230,8 +248,18 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             "receipt_packages_hash": str(receipt.get("packages_hash") or "").strip() or None,
             "uv_install_plan_status": str(uv_plan.get("status") or "missing"),
             "uv_plan_hash": str(uv_plan.get("plan_hash") or "").strip() or None,
+            "uv_install_lock_status": str(uv_lock.get("status") or "missing"),
+            "uv_install_lock_verification_status": str(uv_lock_verification.get("status") or "not_checked"),
+            "uv_install_execution_status": str(uv_execution.get("status") or "not_executed"),
+            "uv_install_receipt_status": str(uv_receipt.get("status") or "missing"),
+            "uv_install_receipt_verification_status": str(uv_receipt_verification.get("status") or "not_checked"),
+            "uv_lock_hash": str(uv_lock.get("uv_lock_hash") or uv_lock_verification.get("uv_lock_hash") or "").strip() or None,
+            "uv_receipt_hash": str(uv_receipt.get("uv_receipt_hash") or "").strip() or None,
             "reason": str(
-                receipt_verification.get("reason")
+                uv_receipt_verification.get("reason")
+                or uv_execution.get("reason")
+                or uv_lock_verification.get("reason")
+                or receipt_verification.get("reason")
                 or execution.get("reason")
                 or lock_verification.get("reason")
                 or ""
@@ -246,6 +274,188 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
             "metadata": dict(metadata or {}),
             "install_status": self._install_status_summary(metadata),
         }
+
+    def _spec_and_metadata(self, environment: Dict[str, Any]) -> tuple[ToolboxEnvironmentSpec, Path, Dict[str, Any]]:
+        spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
+        ensured = self.environment_manager.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        return ensured, env_root, self.environment_manager.read_environment_metadata(ensured)
+
+    @staticmethod
+    def _write_metadata(env_root: Path, metadata: Dict[str, Any]) -> None:
+        (env_root / "environment.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _environment_with_uv(spec: ToolboxEnvironmentSpec, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        env = spec.to_dict()
+        uv = dict(dict(metadata or {}).get("uv_install_plan") or {}).get("uv")
+        if isinstance(uv, dict):
+            env["uv"] = dict(uv)
+        return env
+
+    def _lock_uv_plan(self, *, spec: ToolboxEnvironmentSpec, env_root: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        uv_plan = dict(metadata.get("uv_install_plan") or {})
+        if not uv_plan:
+            return metadata
+        lock_payload = {
+            "venv_key": str(spec.venv_key or ""),
+            "environment_name": str(spec.environment_name or ""),
+            "uv_plan_hash": str(uv_plan.get("plan_hash") or ""),
+            "pyproject_toml": uv_plan.get("pyproject_toml"),
+            "uv_lock": uv_plan.get("uv_lock"),
+            "dependency_groups": list(uv_plan.get("dependency_groups") or []),
+        }
+        lock_hash = stable_hash(lock_payload)[:16]
+        metadata["uv_install_lock"] = {
+            "status": "locked",
+            "locked_at": time.time(),
+            "uv_lock_hash": lock_hash,
+            "source_uv_plan_hash": str(uv_plan.get("plan_hash") or ""),
+            "dependency_groups": list(uv_plan.get("dependency_groups") or []),
+        }
+        self._write_metadata(env_root, metadata)
+        return metadata
+
+    def _verify_uv_lock(self, *, env_root: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        uv_plan = dict(metadata.get("uv_install_plan") or {})
+        uv_lock = dict(metadata.get("uv_install_lock") or {})
+        if not uv_plan:
+            return metadata
+        status = "ok"
+        reason = None
+        expected = stable_hash(
+            {
+                "venv_key": str(metadata.get("venv_key") or ""),
+                "environment_name": str(metadata.get("environment_name") or ""),
+                "uv_plan_hash": str(uv_plan.get("plan_hash") or ""),
+                "pyproject_toml": uv_plan.get("pyproject_toml"),
+                "uv_lock": uv_plan.get("uv_lock"),
+                "dependency_groups": list(uv_plan.get("dependency_groups") or []),
+            }
+        )[:16]
+        actual = str(uv_lock.get("uv_lock_hash") or "").strip()
+        if not uv_lock:
+            status = "missing"
+            reason = "uv_install_lock_missing"
+        elif actual != expected:
+            status = "stale"
+            reason = "uv_install_lock_hash_mismatch"
+        metadata["uv_install_lock_verification"] = {
+            "status": status,
+            "verified_at": time.time(),
+            "uv_lock_hash": actual or None,
+            "expected_uv_lock_hash": expected,
+            "reason": reason,
+        }
+        self._write_metadata(env_root, metadata)
+        return metadata
+
+    def _execute_uv_install(self, *, spec: ToolboxEnvironmentSpec, env_root: Path, metadata: Dict[str, Any], allow_execution: bool) -> Dict[str, Any]:
+        uv_plan = dict(metadata.get("uv_install_plan") or {})
+        if not uv_plan:
+            return metadata
+        uv = dict(uv_plan.get("uv") or {})
+        if not allow_execution:
+            metadata["uv_install_execution"] = {
+                "status": "blocked",
+                "executed": False,
+                "reason": "execution_not_enabled",
+                "executed_at": time.time(),
+            }
+            self._write_metadata(env_root, metadata)
+            return metadata
+        verification = dict(self._verify_uv_lock(env_root=env_root, metadata=metadata).get("uv_install_lock_verification") or {})
+        if str(verification.get("status") or "") != "ok":
+            metadata = self.environment_manager.read_environment_metadata(spec)
+            metadata["uv_install_execution"] = {
+                "status": "blocked",
+                "executed": False,
+                "reason": str(verification.get("reason") or "uv_install_lock_invalid"),
+                "executed_at": time.time(),
+            }
+            self._write_metadata(env_root, metadata)
+            return metadata
+        if not bool(uv.get("available")) or not str(uv.get("resolved_executable") or "").strip():
+            metadata["uv_install_execution"] = {
+                "status": "blocked",
+                "executed": False,
+                "reason": "uv_missing",
+                "executed_at": time.time(),
+            }
+            self._write_metadata(env_root, metadata)
+            return metadata
+        pyproject = str(uv_plan.get("pyproject_toml") or "").strip()
+        uv_lock = str(uv_plan.get("uv_lock") or "").strip()
+        if pyproject:
+            (env_root / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+        if uv_lock:
+            (env_root / "uv.lock").write_text(uv_lock, encoding="utf-8")
+        command = [str(uv.get("resolved_executable")), "sync", "--project", str(env_root), "--frozen"]
+        for group in list(uv_plan.get("dependency_groups") or []):
+            command.extend(["--group", str(group)])
+        result = subprocess.run(
+            command,
+            cwd=str(env_root),
+            text=True,
+            capture_output=True,
+            timeout=300,
+            check=False,
+        )
+        uv_python = str(_uv_python_executable(env_root))
+        metadata["uv_install_execution"] = {
+            "status": "ok" if int(result.returncode or 0) == 0 else "failed",
+            "executed": True,
+            "executed_at": time.time(),
+            "returncode": int(result.returncode or 0),
+            "stdout": str(result.stdout or ""),
+            "stderr": str(result.stderr or ""),
+            "command": command,
+            "uv_python_executable": uv_python,
+            "uv_lock_hash": str(dict(metadata.get("uv_install_lock") or {}).get("uv_lock_hash") or "").strip() or None,
+        }
+        if int(result.returncode or 0) == 0:
+            receipt_payload = {
+                "status": "ok",
+                "captured_at": time.time(),
+                "uv_python_executable": uv_python,
+                "uv_lock_hash": str(dict(metadata.get("uv_install_lock") or {}).get("uv_lock_hash") or "").strip() or None,
+                "uv_plan_hash": str(uv_plan.get("plan_hash") or "").strip() or None,
+                "dependency_groups": list(uv_plan.get("dependency_groups") or []),
+            }
+            receipt_payload["uv_receipt_hash"] = stable_hash(receipt_payload)[:16]
+            metadata["uv_install_receipt"] = receipt_payload
+        self._write_metadata(env_root, metadata)
+        return self._verify_uv_receipt(env_root=env_root, metadata=metadata)
+
+    def _verify_uv_receipt(self, *, env_root: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        uv_plan = dict(metadata.get("uv_install_plan") or {})
+        if not uv_plan:
+            return metadata
+        receipt = dict(metadata.get("uv_install_receipt") or {})
+        lock_verification = dict(metadata.get("uv_install_lock_verification") or {})
+        status = "ok"
+        reason = None
+        if str(lock_verification.get("status") or "") != "ok":
+            status = "stale"
+            reason = str(lock_verification.get("reason") or "uv_install_lock_invalid")
+        elif not receipt:
+            status = "missing"
+            reason = "uv_install_receipt_missing"
+        elif str(receipt.get("uv_plan_hash") or "") != str(uv_plan.get("plan_hash") or ""):
+            status = "stale"
+            reason = "uv_receipt_plan_hash_mismatch"
+        elif str(receipt.get("uv_lock_hash") or "") != str(dict(metadata.get("uv_install_lock") or {}).get("uv_lock_hash") or ""):
+            status = "stale"
+            reason = "uv_receipt_lock_hash_mismatch"
+        metadata["uv_install_receipt_verification"] = {
+            "status": status,
+            "verified_at": time.time(),
+            "reason": reason,
+            "uv_receipt_hash": str(receipt.get("uv_receipt_hash") or "").strip() or None,
+            "uv_python_executable": str(receipt.get("uv_python_executable") or "").strip() or None,
+        }
+        self._write_metadata(env_root, metadata)
+        return metadata
 
     def realize_environment(
         self,
@@ -306,17 +516,22 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
                     }
                 ),
             }
-        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
+            self._write_metadata(Path(spec.venv_path).expanduser().resolve(), metadata)
+        return self._with_install_summary(status="ok", environment=self._environment_with_uv(spec, metadata), metadata=metadata)
 
     def lock_install(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.lock_install_plan(spec)
-        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
+        ensured, env_root, metadata = self._spec_and_metadata(environment)
+        metadata = self._lock_uv_plan(spec=ensured, env_root=env_root, metadata=metadata)
+        return self._with_install_summary(status="ok", environment=self._environment_with_uv(ensured, metadata), metadata=metadata)
 
     def verify_install_lock(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.verify_install_lock(spec)
-        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
+        ensured, env_root, metadata = self._spec_and_metadata(environment)
+        metadata = self._verify_uv_lock(env_root=env_root, metadata=metadata)
+        return self._with_install_summary(status="ok", environment=self._environment_with_uv(ensured, metadata), metadata=metadata)
 
     def resolve_install_lock(self, *, environment: Dict[str, Any], allow_resolution: bool = False) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
@@ -326,12 +541,17 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
     def execute_install(self, *, environment: Dict[str, Any], allow_execution: bool = False) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.execute_install_plan(spec, allow_execution=bool(allow_execution))
-        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
+        ensured, env_root, metadata = self._spec_and_metadata(environment)
+        metadata = self._execute_uv_install(spec=ensured, env_root=env_root, metadata=metadata, allow_execution=bool(allow_execution))
+        return self._with_install_summary(status="ok", environment=self._environment_with_uv(ensured, metadata), metadata=metadata)
 
     def verify_install_receipt(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.verify_install_receipt(spec)
-        return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
+        ensured, env_root, metadata = self._spec_and_metadata(environment)
+        metadata = self._verify_uv_lock(env_root=env_root, metadata=metadata)
+        metadata = self._verify_uv_receipt(env_root=env_root, metadata=metadata)
+        return self._with_install_summary(status="ok", environment=self._environment_with_uv(ensured, metadata), metadata=metadata)
 
     def select_runtime_python(
         self,
@@ -341,6 +561,17 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         fallback_python_executable: Optional[str] = None,
     ) -> Dict[str, Any]:
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
+        metadata = self.environment_manager.read_environment_metadata(spec)
+        uv_receipt_verification = dict(metadata.get("uv_install_receipt_verification") or {})
+        uv_receipt = dict(metadata.get("uv_install_receipt") or {})
+        uv_python = str(uv_receipt.get("uv_python_executable") or "").strip()
+        if str(uv_receipt_verification.get("status") or "") == "ok" and uv_python:
+            return {
+                "status": "ok",
+                "environment": spec.to_dict(),
+                "python_executable": uv_python,
+                "python_source": "uv",
+            }
         executable = self.environment_manager.runtime_python_executable(
             spec,
             bootstrap_python_executable=bootstrap_python_executable,

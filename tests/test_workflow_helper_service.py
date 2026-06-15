@@ -1186,6 +1186,33 @@ def test_execute_workflow_python_node_rejects_dependency_execution_without_verif
     assert out["error"]["detail"]["install_status"]["install_plan_status"] == "missing"
 
 
+def test_execute_workflow_python_node_rejects_uv_execution_without_verified_environment(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'ok': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-unverified-uv-env",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"uv": {"pyproject_toml": "[project]\nname='demo'\nversion='0.0.0'\n"}},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_python_environment_not_prepared"
+    assert out["error"]["detail"]["install_status"]["uv_install_plan_status"] == "missing"
+
+
 def test_execute_workflow_python_node_rejects_dependency_execution_without_install_receipt(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1273,6 +1300,60 @@ def test_execute_workflow_python_node_uses_selected_verified_dependency_runtime(
             "operation": "run",
             "payload": {},
             "python": {"package_pins": {"demo-dependency": "1.0.0"}},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert calls
+    assert calls[0]["environment"]["environment_name"] == "workflow-python-node"
+    assert out["audit"]["runtime"]["python_executable"] == sys.executable
+
+
+def test_execute_workflow_python_node_uses_selected_verified_uv_runtime(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    selected = {"python_executable": sys.executable, "python_source": "uv"}
+    calls = []
+    real_runtime_manager = svc._workflow_python_runtime_manager()
+
+    class FakeRuntimeManager:
+        def environment_spec(self, **kwargs):
+            return real_runtime_manager.environment_spec(**kwargs)
+
+        def select_runtime_python(self, **kwargs):
+            calls.append(dict(kwargs))
+            return selected
+
+    monkeypatch.setattr(
+        svc,
+        "workflow_python_verify_install_receipt",
+        lambda **_kwargs: {
+            "status": "ok",
+            "install_status": {
+                "uv_install_plan_status": "planned",
+                "uv_install_execution_status": "ok",
+                "uv_install_receipt_status": "ok",
+                "uv_install_receipt_verification_status": "ok",
+            },
+        },
+    )
+    monkeypatch.setattr(svc, "_workflow_python_runtime_manager", lambda: FakeRuntimeManager())
+    source = "def run(payload):\n    return {'output': {'ok': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-verified-uv-env",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"uv": {"pyproject_toml": "[project]\nname='demo'\nversion='0.0.0'\n"}},
         },
     )
 

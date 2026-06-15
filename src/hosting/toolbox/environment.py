@@ -246,7 +246,8 @@ class ToolboxEnvironmentManager:
             name=env_name,
         )
         env_desc_hash = self.environment_description_hash(env_desc, name=env_name)
-        dependency_lock_hash = (
+        explicit_dependency_lock_hash = str(policy_row.get("dependency_lock_hash") or "").strip() or None
+        dependency_lock_hash = explicit_dependency_lock_hash or (
             self._fingerprint_payload({"package_pins": package_pins})[:16]
             if package_pins
             else None

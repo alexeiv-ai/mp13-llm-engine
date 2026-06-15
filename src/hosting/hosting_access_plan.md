@@ -304,9 +304,9 @@ Target assumption: Python node projects need deterministic, host-managed environ
 - [x] Extend environment specs to represent uv-managed environments.
 - [x] Support `pyproject.toml`, `uv.lock`, and dependency-group inputs.
 - [x] Prepare deterministic uv install plans without executing them.
-- [ ] Lock/verify uv plans before execution.
-- [ ] Execute uv environment creation only through explicit prepare/install APIs.
-- [ ] Select the uv-managed Python interpreter for dependency-bearing node execution.
-- [ ] Record uv lock/install receipts and verify them before execution.
-- [ ] Add cleanup/GC for stale uv-managed runtime environments.
-- [ ] Add tests for missing uv, prepared uv plan, verified uv receipt, and selected uv runtime.
+- [x] Lock/verify uv plans before execution.
+- [x] Execute uv environment creation only through explicit prepare/install APIs.
+- [x] Select the uv-managed Python interpreter for dependency-bearing node execution.
+- [x] Record uv lock/install receipts and verify them before execution.
+- [x] Add cleanup/GC for stale uv-managed runtime environments.
+- [x] Add tests for missing uv, prepared uv plan, verified uv receipt, selected uv runtime, and uv-shaped runtime GC.

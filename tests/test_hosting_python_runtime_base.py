@@ -243,3 +243,91 @@ def test_workflow_python_prepare_install_adds_deterministic_uv_plan(tmp_path: Pa
     assert left["metadata"]["uv_install_plan"]["allow_execution"] is False
     assert left["install_status"]["uv_install_plan_status"] == "planned"
     assert left["install_status"]["uv_plan_hash"] == right["install_status"]["uv_plan_hash"]
+
+
+def test_workflow_python_uv_lock_and_verify_missing_receipt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: None)
+    manager = HostedPythonRuntimeManager(tmp_path)
+    prepared = manager.prepare_install(
+        python_policy={"uv": {"pyproject_toml": "[project]\nname='demo'\n"}}
+    )
+
+    locked = manager.lock_install(environment=prepared["environment"])
+    verified = manager.verify_install_lock(environment=prepared["environment"])
+    receipt = manager.verify_install_receipt(environment=prepared["environment"])
+
+    assert locked["install_status"]["uv_install_lock_status"] == "locked"
+    assert verified["install_status"]["uv_install_lock_verification_status"] == "ok"
+    assert receipt["install_status"]["uv_install_receipt_verification_status"] == "missing"
+    assert receipt["install_status"]["reason"] == "uv_install_receipt_missing"
+
+
+def test_workflow_python_uv_execute_is_blocked_without_explicit_execution(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: "C:/Tools/uv.exe")
+    monkeypatch.setattr(
+        "hosting.sandbox.python_runtime.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["uv", "--version"], 0, stdout="uv 0.7.1\n", stderr=""),
+    )
+    manager = HostedPythonRuntimeManager(tmp_path)
+    prepared = manager.prepare_install(python_policy={"uv": {"pyproject_toml": "[project]\nname='demo'\n"}})
+    manager.lock_install(environment=prepared["environment"])
+
+    out = manager.execute_install(environment=prepared["environment"], allow_execution=False)
+
+    assert out["install_status"]["uv_install_execution_status"] == "blocked"
+    assert out["install_status"]["reason"] == "execution_not_enabled"
+
+
+def test_workflow_python_uv_execute_records_receipt_and_selects_uv_python(tmp_path: Path, monkeypatch) -> None:
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(list(command))
+        if "--version" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="uv 0.7.1\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="synced\n", stderr="")
+
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: "C:/Tools/uv.exe")
+    monkeypatch.setattr("hosting.sandbox.python_runtime.subprocess.run", fake_run)
+    manager = HostedPythonRuntimeManager(tmp_path)
+    prepared = manager.prepare_install(
+        python_policy={
+            "uv": {
+                "pyproject_toml": "[project]\nname='demo'\n",
+                "uv_lock": "lock-data",
+                "dependency_groups": ["dev"],
+            }
+        }
+    )
+    manager.lock_install(environment=prepared["environment"])
+
+    executed = manager.execute_install(environment=prepared["environment"], allow_execution=True)
+    verified = manager.verify_install_receipt(environment=prepared["environment"])
+    selected = manager.select_runtime_python(environment=prepared["environment"], bootstrap_python_executable="python-bootstrap")
+
+    assert executed["install_status"]["uv_install_execution_status"] == "ok"
+    assert verified["install_status"]["uv_install_receipt_verification_status"] == "ok"
+    assert selected["python_source"] == "uv"
+    assert selected["python_executable"].endswith("python.exe") or selected["python_executable"].endswith("/python")
+    assert any(command[:2] == ["C:/Tools/uv.exe", "sync"] for command in commands)
+
+
+def test_workflow_python_runtime_gc_removes_unreferenced_uv_envs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("hosting.sandbox.python_runtime.shutil.which", lambda _name: None)
+    manager = HostedPythonRuntimeManager(tmp_path)
+    keep = manager.realize_environment(
+        python_policy={"uv": {"pyproject_toml": "[project]\nname='keep'\n"}}
+    )["environment"]
+    stale = manager.realize_environment(
+        python_policy={"uv": {"pyproject_toml": "[project]\nname='stale'\n"}}
+    )["environment"]
+    Path(keep["venv_path"]).mkdir(parents=True, exist_ok=True)
+    Path(stale["venv_path"]).mkdir(parents=True, exist_ok=True)
+
+    out = manager.gc_runtime_environments(
+        referenced_environment_keys=[str(keep["venv_key"])],
+    )
+
+    assert out["removed_environment_keys"] == [str(stale["venv_key"])]
+    assert Path(keep["venv_path"]).exists()
+    assert not Path(stale["venv_path"]).exists()

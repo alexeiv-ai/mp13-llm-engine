@@ -152,7 +152,15 @@ class WorkflowHelperMixin:
             for key, value in dict(py.get("package_pins") or {}).items()
             if str(key or "").strip() and str(value or "").strip()
         }
-        return bool(package_pins or str(py.get("dependency_lock_hash") or "").strip())
+        uv = py.get("uv")
+        uv_intent = bool(uv) if isinstance(uv, dict) else bool(py.get("uv_enabled") or py.get("pyproject_toml") or py.get("uv_lock"))
+        return bool(package_pins or str(py.get("dependency_lock_hash") or "").strip() or uv_intent)
+
+    @staticmethod
+    def _workflow_python_node_has_uv_intent(python: Dict[str, Any]) -> bool:
+        py = dict(python or {})
+        uv = py.get("uv")
+        return bool(uv) if isinstance(uv, dict) else bool(py.get("uv_enabled") or py.get("pyproject_toml") or py.get("uv_lock"))
 
     @staticmethod
     def _workflow_python_with_project_artifact_input(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -198,9 +206,24 @@ class WorkflowHelperMixin:
             install_status = {
                 "install_plan_status": "missing" if "install_plan_missing" in str(exc) else "error",
                 "install_receipt_verification_status": "not_checked",
+                "uv_install_plan_status": "missing" if "install_plan_missing" in str(exc) else "error",
+                "uv_install_execution_status": "not_executed",
+                "uv_install_receipt_status": "missing",
+                "uv_install_receipt_verification_status": "not_checked",
                 "reason": str(exc),
             }
-        if str(install_status.get("install_plan_status") or "").strip() in {"", "missing"}:
+        if self._workflow_python_node_has_uv_intent(python):
+            if str(install_status.get("uv_install_plan_status") or "").strip() in {"", "missing"}:
+                reason = "workflow_python_environment_not_prepared"
+            elif (
+                str(install_status.get("uv_install_execution_status") or "").strip() != "ok"
+                or str(install_status.get("uv_install_receipt_status") or "").strip() != "ok"
+                or str(install_status.get("uv_install_receipt_verification_status") or "").strip() != "ok"
+            ):
+                reason = "workflow_python_environment_unverified"
+            else:
+                reason = ""
+        elif str(install_status.get("install_plan_status") or "").strip() in {"", "missing"}:
             reason = "workflow_python_environment_not_prepared"
         elif (
             str(install_status.get("install_execution_status") or "").strip() != "ok"
@@ -209,6 +232,8 @@ class WorkflowHelperMixin:
         ):
             reason = "workflow_python_environment_unverified"
         else:
+            reason = ""
+        if not reason:
             selected = self._workflow_python_runtime_manager().select_runtime_python(
                 environment=dict(environment or {}),
                 bootstrap_python_executable=str(python.get("bootstrap_python_executable") or python.get("python_executable") or "").strip() or None,

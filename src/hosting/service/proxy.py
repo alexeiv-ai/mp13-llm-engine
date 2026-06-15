@@ -347,10 +347,11 @@ class ProxyMixin:
         reg = self._require_ipc_registration(eid, command_label="proxy-rpc")
         worker_engine_id = self._route_model_instance_id(reg, eid)
         rpc_params = dict(params or {})
+        workflow_python_facade_execute = bool(rpc_params.pop("_workflow_python_facade_execute", False))
         if (
             str(reg.get("executor_kind") or "").strip() == "workflow_python_helper"
             and meth == "execute_workflow_python_helper"
-            and not bool(rpc_params.pop("_workflow_python_facade_execute", False))
+            and not workflow_python_facade_execute
         ):
             capacity = int(dict(reg.get("capabilities") or {}).get("capacity") or 1)
             facade = self.execute_workflow_python(
