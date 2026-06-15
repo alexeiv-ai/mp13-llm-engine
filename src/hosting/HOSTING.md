@@ -258,8 +258,9 @@ Stream-open returns immediately and background execution emits `started`,
 
 Workflow JS node profile exposes the same environment-keyed management shape:
 `workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-execute`,
-`workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-request-status`, and
-`workflow-js-cancel-request`.
+`workflow-js-stream-open`, `workflow-js-stream-recv`, `workflow-js-stream-send`,
+`workflow-js-stream-close`, `workflow-js-resources`, `workflow-js-set-capacity`,
+`workflow-js-request-status`, and `workflow-js-cancel-request`.
 
 ### 2.6 Proxying Worker Requests (RPC & Streams)
 
@@ -327,7 +328,7 @@ Execute Python helper-profile code through the workflow facade:
 }'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-execute
 ```
 
-Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs.
+Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-stream-open`, `workflow-js-stream-recv`, `workflow-js-stream-send`, `workflow-js-stream-close`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs. `host_call_id` values are scoped to a worker/request IPC conversation and are not global daemon-channel routes.
 
 ## 3. Diagnostics and Auditing
 

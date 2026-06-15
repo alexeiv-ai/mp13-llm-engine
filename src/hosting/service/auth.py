@@ -61,12 +61,17 @@ _WORKFLOW_JS_COMMANDS = {
     "workflow-js-set-capacity",
     "workflow-js-cancel-request",
     "workflow-js-request-status",
+    "workflow-js-stream-open",
+    "workflow-js-stream-recv",
+    "workflow-js-stream-send",
+    "workflow-js-stream-close",
 }
 
 _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-resources",
     "workflow-js-request-status",
+    "workflow-js-stream-recv",
 }
 
 

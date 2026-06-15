@@ -33,6 +33,11 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 - Node-profile host callers may use capacity APIs during runtime to trim or expand reserved workers for a pool.
 - Node-profile clients must not rely on helper-shaped nested result payloads. They should consume the node response envelope directly.
 - Node-profile clients must stop assuming `artifact_store.status=unavailable`. They must pass input artifacts as relative alias refs such as `@artifacts/...`, declared inline payloads, or inline zip payloads; configure any non-default artifact roots such as `@project` through sandbox policy; write file outputs only to host-provided artifact output paths or output directories; declare inline outputs before returning inline artifact payloads; consume host-minted alias refs; and handle missing-artifact or unavailable-artifact responses when no refs are produced.
+- `@artifacts/...` refs are currently local host artifact aliases, not a stable
+  external download API. Dependent backends that need downloads should project
+  returned artifact rows into their own artifact model or wait for a parent
+  artifact read/download route with explicit auth, metadata, range, lifetime,
+  and error semantics.
 - Node-profile clients should prefer artifact helper constructors in `hosting.sandbox.artifacts` for common artifact input/output rows instead of hand-authoring every low-level artifact field.
 - Node-profile clients may select multiple artifact files with `path_mask` or `mask` and `recursive` on input or output artifact declarations. Masked inputs are exposed to Python code as directories containing matched files. Masked outputs are exposed as writable directories and return one host-minted ref per collected file, with `relative_path` populated.
 - Node-profile clients may use `export_inline_zip` to export many output files as one inline zip without changing ownership. They may use `host_takeover` when the host should copy a ref output into `@artifacts/...` and own its lifetime; otherwise explicit output refs remain producer-managed.
@@ -110,6 +115,17 @@ Streaming clients should consume node stream events directly. The JS node
 runtime can emit `started`, `stdout`, `log`, `progress`, `artifact`, `result`,
 `error`, `canceled`, and `done`; stream receives are bounded and include
 drop-count metadata so clients can detect backpressure loss.
+
+`host_call_id` values are per worker/request IPC correlation IDs. They are not
+globally routable callback IDs across daemon control channels. Cross-channel
+callback routing would require a separate protocol for session/channel identity,
+worker ownership, auth/capabilities, cancellation, close semantics,
+backpressure, and response routing.
+
+QuickJS can run bundled single-file JavaScript, but it should not be treated as
+Node.js. If clients want ESM-style authoring, bundle or transform modules before
+submission into one deterministic `module_source` that assigns `exports.run`;
+then submit the matching `module_sha256`.
 
 Error handling should move from helper-shaped nested results to the direct node
 response envelope. Terminal failures use structured reasons such as

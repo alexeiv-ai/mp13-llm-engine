@@ -102,6 +102,7 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             "workflow-js-environment-spec",
             "workflow-js-resources",
             "workflow-js-request-status",
+            "workflow-js-stream-recv",
             "sandbox-fs-list",
             "sandbox-fs-read-text",
             "sandbox-fs-stat",
@@ -149,6 +150,9 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             "workflow-js-execute",
             "workflow-js-set-capacity",
             "workflow-js-cancel-request",
+            "workflow-js-stream-open",
+            "workflow-js-stream-send",
+            "workflow-js-stream-close",
         ]:
             with pytest.raises(PermissionError, match="insufficient_role"):
                 svc.authorize_command(cmd, {"session_token": token})
@@ -210,6 +214,10 @@ def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
             "workflow-js-set-capacity",
             "workflow-js-cancel-request",
             "workflow-js-request-status",
+            "workflow-js-stream-open",
+            "workflow-js-stream-recv",
+            "workflow-js-stream-send",
+            "workflow-js-stream-close",
         ]:
             svc.authorize_command(cmd, {"session_token": token})
 

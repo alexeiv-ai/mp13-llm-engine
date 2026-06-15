@@ -238,6 +238,22 @@ def test_cli_local_workflow_js_facade_commands(
             calls.append(("status", dict(kwargs)))
             return {"status": "ok", "request_id": kwargs.get("request_id")}
 
+        def workflow_js_stream_open(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("stream_open", dict(kwargs)))
+            return {"status": "ok", "stream_id": "js-stream-1"}
+
+        def workflow_js_stream_recv(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("stream_recv", dict(kwargs)))
+            return {"status": "ok", "events": []}
+
+        def workflow_js_stream_send(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("stream_send", dict(kwargs)))
+            return {"status": "ok", "accepted": True}
+
+        def workflow_js_stream_close(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("stream_close", dict(kwargs)))
+            return {"status": "ok", "closed": True}
+
     monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
 
@@ -269,11 +285,52 @@ def test_cli_local_workflow_js_facade_commands(
             "workflow-js-request-status",
         ]
     )
+    stream_open_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps(
+                {
+                    "environment_key": "env-js",
+                    "engine_id": "wf-js",
+                    "request": {"request_id": "req-js-stream"},
+                    "node": {"runtime_hash": "quickjs-demo"},
+                    "javascript": {"host_api": {"enabled": True}},
+                    "capacity": 3,
+                }
+            ),
+            "workflow-js-stream-open",
+        ]
+    )
+    stream_recv_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"stream_id": "js-stream-1", "max_items": 2}),
+            "workflow-js-stream-recv",
+        ]
+    )
+    stream_send_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"stream_id": "js-stream-1", "message": {"action": "cancel"}}),
+            "workflow-js-stream-send",
+        ]
+    )
+    stream_close_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"stream_id": "js-stream-1"}),
+            "workflow-js-stream-close",
+        ]
+    )
 
     assert resources_rc == 0
     assert resize_rc == 0
     assert cancel_rc == 0
     assert status_rc == 0
+    assert stream_open_rc == 0
+    assert stream_recv_rc == 0
+    assert stream_send_rc == 0
+    assert stream_close_rc == 0
     assert (
         "resources",
         {
@@ -288,6 +345,23 @@ def test_cli_local_workflow_js_facade_commands(
     assert ("capacity", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}) in calls
     assert ("cancel", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
     assert ("status", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
+    assert (
+        "stream_open",
+        {
+            "profile": "node",
+            "environment_name": "workflow-js-node",
+            "environment_key": "env-js",
+            "engine_id": "wf-js",
+            "request": {"request_id": "req-js-stream"},
+            "node": {"runtime_hash": "quickjs-demo"},
+            "javascript": {"host_api": {"enabled": True}},
+            "sandbox_policy": None,
+            "capacity": 3,
+        },
+    ) in calls
+    assert ("stream_recv", {"stream_id": "js-stream-1", "max_items": 2}) in calls
+    assert ("stream_send", {"stream_id": "js-stream-1", "message": {"action": "cancel"}}) in calls
+    assert ("stream_close", {"stream_id": "js-stream-1"}) in calls
     out = capsys.readouterr().out
     assert '"environment_key": "env-js"' in out
     assert '"request_id": "req-1"' in out

@@ -31,6 +31,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - QuickJS JS node stream service support for open/recv/send/close, including
   console/stdout, progress, artifact, result, error, cancel, done, and bounded
   retention/drop counts.
+- QuickJS JS node stream commands are exposed through the daemon, CLI, and
+  control channel with the same open/recv/send/close shape as Python node.
 - RBAC/daemon/channel/CLI support for the workflow command families.
 - Toolbox shared identity/process-base migration while preserving toolbox semantics.
 - Direct node-profile Python execution path that no longer calls `execute_workflow_python_helper`.
@@ -72,6 +74,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Inline zip inputs are expanded into request-scoped input directories. Multi-file outputs can be exported as inline zip without taking over artifact ownership. Explicit ref outputs remain producer-owned unless `host_takeover` is requested; takeover copies outputs into `@artifacts/...`.
 - Artifact row helper constructors now provide stable serializable templates for inline inputs, inline zip inputs, ref inputs, masked inputs, file outputs, host-takeover outputs, producer-owned outputs, and inline zip exports.
 - Artifact authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
+- `host_call_id` is worker/request IPC correlation only; cross-daemon-channel
+  callback routing is not part of the node worker protocol.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
 ## Open Work

@@ -1184,6 +1184,18 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
     ch.set_workflow_js_capacity(profile="node", environment_key="env-js", engine_id="wf-js", capacity=6)
     ch.cancel_workflow_js_request(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
     ch.workflow_js_request_status(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
+    ch.workflow_js_stream_open(
+        profile="node",
+        environment_key="env-js",
+        engine_id="wf-js",
+        request={"request_id": "req-js-stream"},
+        node={"runtime_hash": "quickjs-demo"},
+        javascript={"host_api": {"enabled": True}},
+        capacity=3,
+    )
+    ch.workflow_js_stream_recv(stream_id="js-stream-1", max_items=5)
+    ch.workflow_js_stream_send(stream_id="js-stream-1", message={"action": "cancel"})
+    ch.workflow_js_stream_close(stream_id="js-stream-1")
 
     assert fake.calls == [
         (
@@ -1269,6 +1281,44 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "request_id": "req-1",
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-stream-open",
+            {
+                "profile": "node",
+                "environment_name": "workflow-js-node",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "request": {"request_id": "req-js-stream"},
+                "node": {"runtime_hash": "quickjs-demo"},
+                "javascript": {"host_api": {"enabled": True}},
+                "sandbox_policy": None,
+                "capacity": 3,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-stream-recv",
+            {
+                "stream_id": "js-stream-1",
+                "max_items": 5,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-stream-send",
+            {
+                "stream_id": "js-stream-1",
+                "message": {"action": "cancel"},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-stream-close",
+            {
+                "stream_id": "js-stream-1",
                 "session_token": "tok-123",
             },
         ),

@@ -1,8 +1,8 @@
 # JavaScript Node Worker
 
 Date: 2026-06-15
-Scope: planned `workflow_js` node-profile execution contract for a
-QuickJS-backed hosted JavaScript runtime.
+Scope: `workflow_js` node-profile execution contract for a QuickJS-backed
+hosted JavaScript runtime.
 
 ## Purpose
 
@@ -196,6 +196,11 @@ Convenience methods on `api` may wrap dispatcher methods:
 Transport should reuse the framed host-call pattern from Python node: the child
 harness sends `host_call` messages with `host_call_id`, the host dispatcher
 evaluates them, and the host returns matching `host_response` messages.
+`host_call_id` is scoped to that worker/request IPC conversation. It correlates
+responses inside the child runtime; it is not a global route across arbitrary
+daemon control channels. Cross-channel callback routing would need an explicit
+session/channel/worker ownership protocol with auth, cancellation, close,
+backpressure, and response-routing rules.
 
 The dispatcher maps `fs.*` calls to declared artifact roots:
 
@@ -241,6 +246,19 @@ Initial v1 import policy:
 Future ESM authoring can be supported by bundling or transforming user modules
 into the single-script runtime contract before execution.
 
+A workable bundling path is host-side composition:
+
+1. Resolve allowed relative module refs or host-provided bridge refs.
+2. Rewrite imports to a private module table or inline bundle format.
+3. Emit one deterministic `module_source` that assigns `exports.run`.
+4. Hash that emitted source and submit the hash as `module_sha256`.
+
+This can support modern authoring syntax without claiming Node compatibility.
+QuickJS core can execute ES modules, but the Python binding used here does not
+provide the same loader, package resolution, built-ins, or event-loop behavior
+as Node. npm/ESM compatibility therefore belongs in a pre-execution bundling
+step, not in the QuickJS worker runtime.
+
 ## Artifact Contract
 
 Artifacts should match the Python node contract.
@@ -268,6 +286,13 @@ Sandboxed JS cannot mint trusted artifact refs. Returned values such as
 `{ ref: "../other-run/output" }`, `{ path: "/tmp/report.csv" }`, or
 `{ url: "file:///tmp/report.csv" }` remain ordinary output unless the host has
 validated a declared output slot and minted or accepted the artifact ref.
+
+`@artifacts/...` aliases are currently local host-controlled artifact refs.
+They can be consumed by later workflow requests as declared inputs, but they are
+not yet a durable public download API. A stable parent artifact read/download
+contract still needs explicit route/helper naming, authorization, metadata
+shape, range/streaming limits, expiry/cleanup semantics, and errors for missing,
+expired, unauthorized, or unavailable refs.
 
 ## Streaming
 
