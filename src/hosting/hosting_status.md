@@ -157,8 +157,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added explicit node lifecycle states and opt-in heartbeat stream events for long-running node requests.
 - Added module/snippet code-revision routing for warm workers and post-run idle trimming to capacity.
 - Added bounded stream retention metadata and dropped-event accounting for node streams.
+- Added long-running node stream capacity-pressure coverage for running status, saturation, cancellation, and recovery metrics.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
-- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, heartbeat, code-revision routing, and stream retention changes: `188 passed`.
+- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, heartbeat, code-revision routing, stream retention, and capacity-pressure changes: `189 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
 ## Current Client Impact

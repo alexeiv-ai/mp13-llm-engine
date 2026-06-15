@@ -347,7 +347,7 @@ Warm-worker obstacles to solve:
 - [x] Add tests for edited module/snippet source routing to a new revision worker.
 - [x] Add tests for opt-in long-running heartbeat stream events.
 - [x] Add tests for bounded stream retention and dropped-event accounting.
-- [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
+- [x] Add tests for long-running stream/status/cancel behavior under capacity pressure.
 
 ### Snippets And Python Projects
 

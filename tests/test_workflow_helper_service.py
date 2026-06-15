@@ -2936,6 +2936,93 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
     assert status["request"]["status"] == "canceled"
 
 
+def test_workflow_python_node_stream_reports_capacity_pressure_and_recovers_after_cancel(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    while True:\n        pass\n"
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            capacity=1,
+            request={
+                "request_id": "req-node-stream-pressure-active",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"timeout_ms": 5000, "output_limit_bytes": 1024},
+            },
+        )
+        environment_key = str(opened["environment_key"])
+        saw_running = False
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            status = svc.workflow_python_request_status(
+                profile="node",
+                environment_key=environment_key,
+                request_id="req-node-stream-pressure-active",
+            )
+            if dict(status.get("request") or {}).get("status") == "running":
+                saw_running = True
+                break
+            time.sleep(0.05)
+
+        saturated = svc.workflow_python_stream_open(
+            profile="node",
+            capacity=1,
+            environment_key=environment_key,
+            request={
+                "request_id": "req-node-stream-pressure-blocked",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"timeout_ms": 5000, "output_limit_bytes": 1024},
+            },
+        )
+        canceled = svc.workflow_python_stream_send(
+            stream_id=str(opened["stream_id"]),
+            message={"action": "cancel", "reason": "capacity_pressure_test_done"},
+        )
+        deadline = time.time() + 5.0
+        terminal_status = {}
+        while time.time() < deadline:
+            terminal_status = svc.workflow_python_request_status(
+                profile="node",
+                environment_key=environment_key,
+                request_id="req-node-stream-pressure-active",
+            )
+            if dict(terminal_status.get("request") or {}).get("status") == "canceled":
+                break
+            time.sleep(0.05)
+        resources = svc.workflow_python_resources(profile="node", environment_key=environment_key)
+    finally:
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    metrics = resources["workflow_pool"]["metrics"]
+    assert opened["status"] == "ok"
+    assert saw_running is True
+    assert saturated["status"] == "error"
+    assert saturated["reason"] == "capacity_exceeded"
+    assert canceled["accepted"] is True
+    assert canceled["worker_cancel"]["canceled"] is True
+    assert terminal_status["request"]["status"] == "canceled"
+    assert metrics["active_calls"] == 0
+    assert metrics["saturation_count"] >= 1
+    assert metrics["cancellation_count"] >= 1
+
+
 def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
