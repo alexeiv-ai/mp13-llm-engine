@@ -264,6 +264,42 @@ class WorkflowHelperMixin:
         return path
 
     @staticmethod
+    def _workflow_python_artifact_has_mask(value: str) -> bool:
+        text = str(value or "")
+        return any(ch in text for ch in ("*", "?", "["))
+
+    def _workflow_python_artifact_paths_from_ref(
+        self,
+        row: Dict[str, Any],
+        *,
+        roots: Dict[str, Path],
+    ) -> tuple[Optional[Path], list[Path]]:
+        ref = str(row.get("ref") or "").strip()
+        path_mask = str(row.get("path_mask") or row.get("mask") or "").strip()
+        recursive = bool(row.get("recursive", False))
+        parts = self._workflow_python_artifact_ref_parts(ref)
+        if parts is None:
+            return None, []
+        alias, rel = parts
+        root = roots.get(alias)
+        if root is None:
+            return None, []
+        if path_mask:
+            base = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
+            if base is None or not base.exists() or not base.is_dir():
+                return base, []
+            matches = list(base.rglob(path_mask) if recursive else base.glob(path_mask))
+            return base, sorted(path.resolve() for path in matches if path.is_file())
+        if self._workflow_python_artifact_has_mask(rel):
+            pattern = rel
+            if recursive and not pattern.startswith("**/"):
+                pattern = f"**/{pattern}"
+            matches = list(root.glob(pattern))
+            return root, sorted(path.resolve() for path in matches if path.is_file())
+        path = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
+        return path, [path] if path is not None and path.exists() and path.is_file() else []
+
+    @staticmethod
     def _workflow_python_inline_artifact_bytes(row: Dict[str, Any]) -> Optional[bytes]:
         if "base64" in row:
             return base64.b64decode(str(row.get("base64") or ""), validate=True)
@@ -301,16 +337,41 @@ class WorkflowHelperMixin:
             row = dict(spec or {})
             name = self._workflow_python_artifact_safe_name(row.get("name"), fallback=f"input_{index}")
             inline_bytes = self._workflow_python_inline_artifact_bytes(row)
-            source = None if inline_bytes is not None else self._workflow_python_artifact_path_from_ref(str(row.get("ref") or ""), roots=roots)
-            if inline_bytes is None and (source is None or not source.exists()):
+            source = None
+            matches: list[Path] = []
+            if inline_bytes is None:
+                source, matches = self._workflow_python_artifact_paths_from_ref(row, roots=roots)
+            if inline_bytes is None and not matches:
                 raise ValueError(f"artifact_input_unavailable:{name}")
-            filename = self._workflow_python_artifact_safe_name(row.get("filename") or (source.name if source is not None else name), fallback="artifact.bin")
-            target = (input_root / name / filename).resolve()
+            masked_input = inline_bytes is None and bool(
+                str(row.get("path_mask") or row.get("mask") or "").strip()
+                or self._workflow_python_artifact_has_mask(str(row.get("ref") or ""))
+            )
+            filename = self._workflow_python_artifact_safe_name(row.get("filename") or (matches[0].name if matches else name), fallback="artifact.bin")
+            target = ((input_root / name) if masked_input else (input_root / name / filename)).resolve()
             target.parent.mkdir(parents=True, exist_ok=True)
             if inline_bytes is not None:
                 target.write_bytes(inline_bytes)
+            elif masked_input:
+                target.mkdir(parents=True, exist_ok=True)
+                base = source if source is not None and source.is_dir() else (source.parent if source is not None else matches[0].parent)
+                files = []
+                for match in matches:
+                    try:
+                        rel = match.relative_to(base)
+                    except ValueError:
+                        rel = Path(match.name)
+                    out_path = (target / rel).resolve()
+                    try:
+                        out_path.relative_to(target)
+                    except ValueError as exc:
+                        raise ValueError(f"artifact_input_path_invalid:{name}") from exc
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(match, out_path)
+                    files.append({"source": str(match), "path": str(out_path), "relative_path": str(rel).replace("\\", "/")})
             else:
-                shutil.copyfile(source, target)
+                shutil.copyfile(matches[0], target)
+                files = [{"source": str(matches[0]), "path": str(target), "relative_path": filename}]
             child_inputs[name] = str(target)
             inputs.append(
                 {
@@ -319,6 +380,9 @@ class WorkflowHelperMixin:
                     "ref": str(row.get("ref") or "") or None,
                     "path": str(target),
                     "filename": filename,
+                    "path_mask": str(row.get("path_mask") or row.get("mask") or "").strip() or None,
+                    "recursive": bool(row.get("recursive", False)),
+                    "files": [] if inline_bytes is not None else files,
                     "media_type": str(row.get("media_type") or row.get("content_type") or "application/octet-stream"),
                     "encoding": str(row.get("encoding") or "").strip() or None,
                     "max_bytes": row.get("max_bytes"),
@@ -349,12 +413,17 @@ class WorkflowHelperMixin:
                     }
                 )
                 continue
-            target = (output_root / name / filename).resolve()
+            path_mask = str(row.get("path_mask") or row.get("mask") or "").strip()
+            recursive = bool(row.get("recursive", False))
+            target = ((output_root / name) if path_mask else (output_root / name / filename)).resolve()
             try:
                 target.relative_to(output_root)
             except ValueError as exc:
                 raise ValueError(f"artifact_output_path_invalid:{name}") from exc
-            target.parent.mkdir(parents=True, exist_ok=True)
+            if path_mask:
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
             child_outputs[name] = str(target)
             output_ref = str(row.get("ref") or "").strip() or None
             if output_ref and self._workflow_python_artifact_path_from_ref(output_ref, roots=roots) is None:
@@ -366,6 +435,8 @@ class WorkflowHelperMixin:
                     "filename": filename,
                     "path": str(target),
                     "ref": output_ref,
+                    "path_mask": path_mask or None,
+                    "recursive": recursive,
                     "media_type": str(row.get("media_type") or row.get("content_type") or "application/octet-stream"),
                     "encoding": str(row.get("encoding") or "").strip() or None,
                     "max_bytes": row.get("max_bytes"),
@@ -430,33 +501,52 @@ class WorkflowHelperMixin:
                 out.append(artifact)
                 continue
             source = Path(str(spec.get("path") or "")).expanduser().resolve()
-            if not source.exists() or not source.is_file():
-                continue
-            artifact_id = self._workflow_python_artifact_safe_name(f"{request_id}-{spec.get('name')}-{int(time.time() * 1000)}", fallback="artifact")
-            filename = self._workflow_python_artifact_safe_name(spec.get("filename") or source.name, fallback="artifact.bin")
-            ref = str(spec.get("ref") or "").strip()
-            if ref:
-                target = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
-                if target is None:
-                    raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
+            path_mask = str(spec.get("path_mask") or "").strip()
+            recursive = bool(spec.get("recursive", False))
+            if path_mask and source.exists() and source.is_dir():
+                sources = sorted(path.resolve() for path in (source.rglob(path_mask) if recursive else source.glob(path_mask)) if path.is_file())
             else:
-                ref = f"@artifacts/{artifact_id}/{filename}"
-                target = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
-                if target is None:
-                    raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            out.append(
-                {
+                sources = [source] if source.exists() and source.is_file() else []
+            if not sources:
+                continue
+            for source_file in sources:
+                try:
+                    rel = source_file.relative_to(source) if source.is_dir() else Path(source_file.name)
+                except ValueError:
+                    rel = Path(source_file.name)
+                artifact_id = self._workflow_python_artifact_safe_name(f"{request_id}-{spec.get('name')}-{int(time.time() * 1000)}", fallback="artifact")
+                filename = self._workflow_python_artifact_safe_name((str(rel).replace("\\", "_") if path_mask else spec.get("filename")) or source_file.name, fallback="artifact.bin")
+                ref = str(spec.get("ref") or "").strip()
+                if ref:
+                    target_base = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
+                    if target_base is None:
+                        raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
+                    target = (target_base / rel).resolve() if path_mask else target_base
+                    try:
+                        target.relative_to(target_base if path_mask else target.parent)
+                    except ValueError as exc:
+                        raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}") from exc
+                    rel_ref = str(rel).replace("\\", "/")
+                    out_ref = f"{ref.rstrip('/')}/{rel_ref}" if path_mask else ref
+                else:
+                    out_ref = f"@artifacts/{artifact_id}/{filename}"
+                    target = self._workflow_python_artifact_path_from_ref(out_ref, roots=roots)
+                    if target is None:
+                        raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source_file, target)
+                artifact = {
                     "name": str(spec.get("name") or "").strip() or None,
                     "kind": "ref",
-                    "ref": ref,
+                    "ref": out_ref,
                     "filename": filename,
                     "media_type": str(spec.get("media_type") or "application/octet-stream"),
                     "size_bytes": int(target.stat().st_size),
                     "encoding": str(spec.get("encoding") or "").strip() or None,
                 }
-            )
+                if path_mask:
+                    artifact["relative_path"] = str(rel).replace("\\", "/")
+                out.append(artifact)
         return out
 
     def _workflow_python_node_artifact_error(
@@ -1322,19 +1412,38 @@ class WorkflowHelperMixin:
                     total_mem += float(metrics.get("memory_mb") or 0.0)
                 row["resources"] = metrics
                 processes.append(row)
+            pool_resources = pool.resources() if pool is not None else None
+            pool_metrics = dict(dict(pool_resources or {}).get("metrics") or {})
+            active_request_ids = []
+            for worker_row in list(pool_metrics.get("workers") or []):
+                for item in list(dict(worker_row or {}).get("active_request_ids") or []):
+                    value = str(item or "").strip()
+                    if value and value not in active_request_ids:
+                        active_request_ids.append(value)
             return {
                 "status": "ok",
                 "profile": prof,
                 "engine_id": eid,
                 "environment_key": effective_key,
                 "environment": dict(env.get("environment") or {}),
-                "workflow_pool": pool.resources() if pool is not None else None,
+                "workflow_pool": pool_resources,
                 "node_runtime": {
                     **dict(runtime_resources or {}),
                     "processes": processes,
                     "cpu_percent": round(total_cpu, 1) if known_cpu else None,
                     "memory_mb": round(total_mem, 1) if known_mem else None,
                 },
+                "workflow_python_capacity": int(pool_metrics.get("desired_capacity") or 0),
+                "workflow_python_active_calls": int(pool_metrics.get("active_calls") or 0),
+                "workflow_python_available_slots": int(pool_metrics.get("available_slots") or 0),
+                "workflow_python_active_request_ids": active_request_ids,
+                "workflow_python_process_count": len(processes),
+                "workflow_python_active_process_count": len([row for row in processes if bool(dict(row or {}).get("alive"))]),
+                "workflow_python_idle_process_count": 0,
+                "workflow_python_pids": [int(dict(row or {}).get("pid") or 0) for row in processes if int(dict(row or {}).get("pid") or 0) > 0],
+                "workflow_python_processes": processes,
+                "workflow_python_cpu_percent": round(total_cpu, 1) if known_cpu else None,
+                "workflow_python_memory_mb": round(total_mem, 1) if known_mem else None,
             }
         resources = self.workflow_python_helper_resources(engine_id=eid)
         pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(effective_key))

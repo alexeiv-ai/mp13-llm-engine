@@ -1289,6 +1289,97 @@ def test_execute_workflow_python_node_uses_separate_pools_for_incompatible_ident
     assert f"workflow_python/{second['environment_key']}" in pools
 
 
+def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import time\n\ndef run(payload):\n    progress({'slot': payload['slot']})\n    time.sleep(0.35)\n    return {'output': {'slot': payload['slot']}}\n"
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "python": {"import_allowlist": ["time"]},
+        "limits": {"timeout_ms": 2000},
+    }
+    results: dict[str, dict] = {}
+
+    def call(slot: str) -> None:
+        results[slot] = svc.execute_workflow_python(
+            profile="node",
+            capacity=2,
+            request={**base_request, "request_id": f"req-node-concurrent-{slot}", "payload": {"slot": slot}},
+        )
+
+    first = threading.Thread(target=call, args=("a",))
+    second = threading.Thread(target=call, args=("b",))
+    started_at = time.monotonic()
+    first.start()
+    second.start()
+    deadline = time.time() + 2.0
+    active_snapshot = {}
+    while time.time() < deadline:
+        resources = svc.workflow_python_resources(profile="node", python={"import_allowlist": ["time"]})
+        if int(resources.get("workflow_python_active_calls") or 0) >= 2 and int(resources.get("workflow_python_active_process_count") or 0) >= 2:
+            active_snapshot = resources
+            break
+        time.sleep(0.02)
+    first.join(timeout=3.0)
+    second.join(timeout=3.0)
+    elapsed = time.monotonic() - started_at
+
+    assert active_snapshot["workflow_python_active_calls"] == 2
+    assert active_snapshot["workflow_python_active_process_count"] == 2
+    assert results["a"]["status"] == "ok"
+    assert results["b"]["status"] == "ok"
+    assert {results["a"]["output"]["slot"], results["b"]["output"]["slot"]} == {"a", "b"}
+    assert elapsed < 0.65
+
+
+def test_execute_workflow_python_node_routes_different_jobs_through_same_capacity_pool(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source_a = "import time\n\ndef run(payload):\n    time.sleep(0.25)\n    return {'output': {'job': 'a'}}\n"
+    source_b = "import time\n\ndef run(payload):\n    time.sleep(0.25)\n    return {'output': {'job': 'b'}}\n"
+
+    def request(source: str, request_id: str) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["time"]},
+            "limits": {"timeout_ms": 2000},
+        }
+
+    results: dict[str, dict] = {}
+    threads = [
+        threading.Thread(target=lambda: results.update(a=svc.execute_workflow_python(profile="node", capacity=2, request=request(source_a, "req-node-route-a")))),
+        threading.Thread(target=lambda: results.update(b=svc.execute_workflow_python(profile="node", capacity=2, request=request(source_b, "req-node-route-b")))),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3.0)
+    resources = svc.workflow_python_resources(profile="node", environment_key=results["a"]["environment_key"])
+
+    assert results["a"]["environment_key"] == results["b"]["environment_key"]
+    assert results["a"]["output"] == {"job": "a"}
+    assert results["b"]["output"] == {"job": "b"}
+    assert resources["workflow_pool"]["metrics"]["desired_capacity"] == 2
+    recent_request_ids = {row["request_id"] for row in resources["workflow_pool"]["metrics"]["recent_requests"][-2:]}
+    assert recent_request_ids == {"req-node-route-a", "req-node-route-b"}
+
+
 def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1582,6 +1673,90 @@ def test_execute_workflow_python_node_uses_policy_artifact_root_refs(tmp_path: P
     assert out["status"] == "ok"
     assert out["artifacts"][0]["ref"] == "@project/out/report.txt"
     assert (project_root / "out" / "report.txt").read_text(encoding="utf-8") == "PROJECT SEED"
+
+
+def test_execute_workflow_python_node_reads_recursive_masked_input_artifacts(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "data" / "nested").mkdir(parents=True)
+    (project_root / "data" / "a.txt").write_text("a", encoding="utf-8")
+    (project_root / "data" / "nested" / "b.txt").write_text("b", encoding="utf-8")
+    (project_root / "data" / "skip.bin").write_text("skip", encoding="utf-8")
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "import os\n\n"
+        "def run(payload):\n"
+        "    found = []\n"
+        "    for root, dirs, files in os.walk(artifact_inputs['dataset']):\n"
+        "        for name in files:\n"
+        "            rel = os.path.relpath(os.path.join(root, name), artifact_inputs['dataset']).replace('\\\\', '/')\n"
+        "            found.append(rel)\n"
+        "    return {'output': {'files': sorted(found)}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-node-masked-inputs",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["os"]},
+            "artifact_inputs": [{"name": "dataset", "ref": "@project/data", "path_mask": "*.txt", "recursive": True}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"files": ["a.txt", "nested/b.txt"]}
+
+
+def test_execute_workflow_python_node_collects_recursive_masked_output_artifacts(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "import os\n\n"
+        "def run(payload):\n"
+        "    root = artifact_outputs['reports']\n"
+        "    os.makedirs(os.path.join(root, 'nested'), exist_ok=True)\n"
+        "    open(os.path.join(root, 'a.txt'), 'w').write('a')\n"
+        "    open(os.path.join(root, 'nested', 'b.txt'), 'w').write('b')\n"
+        "    open(os.path.join(root, 'skip.bin'), 'w').write('skip')\n"
+        "    return {'output': {'done': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-node-masked-outputs",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["os"]},
+            "artifact_outputs": [{"name": "reports", "ref": "@project/out", "path_mask": "*.txt", "recursive": True, "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert [row["relative_path"] for row in out["artifacts"]] == ["a.txt", "nested/b.txt"]
+    assert [row["ref"] for row in out["artifacts"]] == ["@project/out/a.txt", "@project/out/nested/b.txt"]
+    assert (project_root / "out" / "a.txt").read_text(encoding="utf-8") == "a"
+    assert (project_root / "out" / "nested" / "b.txt").read_text(encoding="utf-8") == "b"
 
 
 def test_execute_workflow_python_node_rejects_non_alias_artifact_refs(tmp_path: Path) -> None:

@@ -28,7 +28,8 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
   - Its stream API routes execution through the node runtime and emits node events through the shared stream/session plumbing.
 - `workflow_js(profile=helper)` exists as a public facade over the JS helper implementation.
 - Host-side environment-key routing and pool/request accounting exist for the workflow facades.
-- Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots. It returns `artifact_store.status=ok` only when refs are minted from declared output files.
+- Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path collection. It returns `artifact_store.status=ok` only when refs are minted from declared output files or declared inline outputs.
+- Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs.
 
 ## Current Discrepancies
 
@@ -101,6 +102,8 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - [x] Derive node `environment_key` from environment name, runtime intent, import intent, dependency intent, and sandbox policy identity.
 - [x] Reject caller-supplied `environment_key` values that do not match host-derived identity.
 - [x] Ensure different dependency/import/runtime/sandbox-policy identities do not share node workers.
+- [x] Ensure compatible node requests route through the same environment-keyed worker pool.
+- [x] Ensure host runtime capacity controls trim or expand the reserved slots for a node pool.
 - [x] Ensure dependency-bearing node requests execute only against a selected verified runtime environment.
 - [x] Return a structured environment error when required dependency environment preparation is missing.
 - [x] Return a structured environment error when install receipt verification failed or is absent.
@@ -156,8 +159,12 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Keep a deliberate structured unavailable response when no host-minted artifact refs exist for a response.
 - [x] Define request fields for input artifact refs and host-provided output artifact slots/directories.
 - [x] Support alias-ref artifact inputs with relative refs such as `@artifacts/...` or policy-configured roots such as `@project/...`.
+- [x] Support input artifact file masks with `path_mask` or `mask`.
+- [x] Support recursive input artifact matching with `recursive=true`.
 - [x] Support inline artifact inputs by writing declared bytes/text to sandbox input paths.
 - [x] Support alias-ref artifact outputs by returning host-minted or host-validated relative alias refs.
+- [x] Support output artifact file masks with `path_mask` or `mask`.
+- [x] Support recursive output artifact collection with `recursive=true`.
 - [x] Support declared inline artifact outputs without trusting undeclared sandbox artifact returns.
 - [x] Configure artifact root alias to physical path mappings through sandbox policy.
 - [x] Treat input-side size/count/lifetime/encoding metadata as optional advisory metadata.
@@ -171,7 +178,9 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Add tests for no-host-minted-artifact behavior on successful node execution.
 - [x] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
 - [x] Add tests for input artifact ref resolution to sandbox paths.
+- [x] Add tests for recursive masked input artifact refs.
 - [x] Add tests for output artifact collection from allowed output paths.
+- [x] Add tests for recursive masked output artifact collection.
 - [x] Add tests rejecting artifact collection from paths outside host-provided output locations.
 - [x] Document the artifact-storage requirements before enabling artifacts:
   - [x] host-controlled storage root
@@ -245,11 +254,11 @@ These items are intentionally separate from the completed first-class node contr
 
 Current assessment: `HostedProcessSandboxBase` is useful host-side bookkeeping, but it is not yet a complete worker/runtime base. It centralizes pool, request lifecycle, request status, stream queues, capacity, and cancellation bookkeeping. It does not yet own child process launch, hot process reuse, child protocol parsing, artifact preparation/collection, import policy, result normalization, project staging, or venv selection.
 
-- [ ] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
+- [x] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
 - [ ] Move child process launch/cancel/stdout-protocol parsing behind that interface.
 - [ ] Move common active-process resource sampling behind that interface.
 - [ ] Move reusable artifact preparation/collection into a shared host-side component.
-- [ ] Make node runtime use the shared child-runtime interface.
+- [x] Make node runtime use the shared child-runtime interface.
 - [ ] Decide whether Python helper can use the same child-runtime implementation while preserving helper response compatibility.
 - [ ] Keep toolbox orchestration separate, but map toolbox executor resource/status reporting through the same normalized host pool/resource shapes where practical.
 - [ ] Add tests proving pool/request/status/cancel behavior is identical across helper-compatible and node runtimes.
@@ -259,12 +268,12 @@ Current assessment: `HostedProcessSandboxBase` is useful host-side bookkeeping, 
 Target assumption: many different Python node jobs may run concurrently, and several instances of the same Python node code may run concurrently. Long-running node jobs are expected and should be managed explicitly by host pool capacity, request IDs, status, stream backpressure, cancellation, and resource reporting.
 
 - [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
-- [ ] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
-- [ ] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
+- [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
+- [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
 - [ ] Add long-running progress heartbeat/status behavior.
-- [ ] Add tests for concurrent different node jobs.
-- [ ] Add tests for concurrent same-code node jobs.
+- [x] Add tests for concurrent different node jobs.
+- [x] Add tests for concurrent same-code node jobs.
 - [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
 
 ### Snippets And Python Projects

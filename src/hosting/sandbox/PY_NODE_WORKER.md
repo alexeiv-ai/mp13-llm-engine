@@ -72,8 +72,8 @@ The host verifies `sha256(module_source) == module_sha256` before execution. The
 Node Python code can use these globals:
 
 1. `progress(payload)` or `emit_progress(payload)`: emits a stream progress event.
-2. `artifact_inputs`: mapping from declared input artifact name to a sandbox-visible file path.
-3. `artifact_outputs`: mapping from declared file output artifact name to an exact writable file path.
+2. `artifact_inputs`: mapping from declared input artifact name to a sandbox-visible file path or directory path.
+3. `artifact_outputs`: mapping from declared file output artifact name to an exact writable file path or directory path.
 
 Example:
 
@@ -100,11 +100,13 @@ Artifact input kinds:
 
 1. `ref`: host resolves an alias ref into a request-scoped input file.
 2. `inline`: host writes declared inline text/base64/data into a request-scoped input file.
+3. masked `ref`: host copies matching files into a request-scoped input directory and preserves relative paths.
 
 Artifact output kinds:
 
 1. `ref`: host exposes an exact writable path, validates the written file, and returns a host-minted or host-validated alias ref.
 2. `inline`: sandboxed code returns inline bytes/text in `artifacts`, and the host promotes it only when a matching output declaration exists.
+3. masked `ref`: host exposes a writable output directory, collects matching files after execution, and returns one ref per collected file.
 
 Alias ref format:
 
@@ -181,6 +183,36 @@ Explicit output ref declaration:
 }
 ```
 
+Masked input declaration:
+
+```json
+{
+  "name": "dataset",
+  "kind": "ref",
+  "ref": "@project/input",
+  "path_mask": "*.txt",
+  "recursive": true,
+  "media_type": "text/plain"
+}
+```
+
+For masked inputs, `artifact_inputs["dataset"]` is a request-scoped directory containing only matched files. Relative paths under the declared base directory are preserved.
+
+Masked output declaration:
+
+```json
+{
+  "name": "reports",
+  "kind": "ref",
+  "ref": "@project/output",
+  "path_mask": "*.txt",
+  "recursive": true,
+  "media_type": "text/plain"
+}
+```
+
+For masked outputs, `artifact_outputs["reports"]` is a request-scoped writable directory. The host collects files matching `path_mask` after execution. With `recursive=true`, nested matches are included and returned with `relative_path`; explicit refs are expanded by appending the relative path, for example `@project/output/nested/report.txt`.
+
 Inline output declaration:
 
 ```json
@@ -204,7 +236,7 @@ def run(payload):
     }
 ```
 
-Input-side `max_bytes`, `count`, `ttl`, `lifetime`, `expires_at`, and `encoding` metadata are accepted as optional advisory metadata. The current local implementation carries this metadata where useful, but it does not implement a durable artifact authorization, expiry, cleanup, or external read API.
+Input-side `max_bytes`, `count`, `ttl`, `lifetime`, `expires_at`, and `encoding` metadata are accepted as optional advisory metadata. `path_mask` / `mask` and `recursive` are also accepted on input refs to select files from a configured alias root. The current local implementation carries metadata where useful, but it does not implement a durable artifact authorization, expiry, cleanup, or external read API.
 
 ## Trust Boundary
 
@@ -229,8 +261,8 @@ Imports are default-deny. Node code may import only root modules listed in `pyth
 
 The child runtime provides a small safe builtin set. `open` is available only when artifact inputs or outputs are declared, and it is guarded:
 
-1. Read mode is allowed only for declared input paths and declared output paths.
-2. Write mode is allowed only for declared output paths.
+1. Read mode is allowed only for declared input paths, declared output paths, and descendants of declared masked input/output directories.
+2. Write mode is allowed only for declared output paths or descendants of declared masked output directories.
 3. Any other path raises `PermissionError`.
 
 Filesystem access outside artifact paths is not a node-profile API feature.

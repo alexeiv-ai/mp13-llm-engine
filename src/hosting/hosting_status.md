@@ -11,7 +11,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
-- Node artifact store: local host-provisioned refs implemented for declared input refs and output slots.
+- Node artifact store: local host-provisioned refs implemented for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path matching.
 - Python helper worker cleanup: reviewed; it remains intentionally required for helper-profile execution.
 
 ## Implemented
@@ -37,12 +37,15 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node runtime progress events during execution through `progress(...)` / `emit_progress(...)`.
 - Node stdout/stderr capture and stream emission.
 - Node resource, request-status, capacity, and metrics reporting through the workflow pool.
+- Node compatible-work routing through environment-keyed pools, with runtime capacity controls for reserved slots.
+- Node artifact file-mask and recursive input/output collection support.
 
 ## Discrepancies
 
 - Dependency-bearing node execution now rejects missing preparation and missing install receipts.
 - Verified dependency runtime success now selects the verified runtime interpreter before node execution.
 - Artifact I/O is host-provisioned local sandbox file access: alias-ref and inline inputs are copied into request input paths, output slots become exact writable paths, inline outputs require matching declarations, and host-minted alias refs such as `@artifacts/...` are returned only for declared output files.
+- File-mask artifact I/O is supported for local alias roots. Input masks copy matching files into a request-scoped input directory, and output masks collect matching files from a request-scoped output directory while preserving relative paths in returned refs.
 - Artifact authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
@@ -50,8 +53,8 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
-- Generalize the Python node runtime for long-running concurrent jobs, arbitrary snippets, multi-module Python projects, and uv-managed environments.
-- Complete the shared hosted child-runtime/base abstraction so node/helper-compatible runtimes can share launch, cancel, resources, and protocol mechanics.
+- Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior, arbitrary snippets, multi-module Python projects, and uv-managed environments.
+- Continue the shared hosted child-runtime/base abstraction so helper-compatible runtimes can share launch, cancel, resources, and protocol mechanics.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
 
@@ -95,9 +98,15 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added `sandbox/PY_NODE_WORKER.md` documenting the Python node execution API, artifact contract, and comparison with helper/toolbox workers.
 - Investigated worker architecture: Python node uses shared runtime/pool primitives but is not a registered IPC worker; toolbox and helper remain separate worker entrypoints with distinct orchestration and compatibility roles.
 - Added the next-phase plan for base-class completeness, long-running/concurrent node jobs, arbitrary snippets, multi-module project execution, and uv-managed runtime environments.
+- Added `hosting.sandbox.child_runtime.HostedChildRuntime` and made the Python node runtime registry implement the shared `execute` / `cancel` / `resources` interface.
+- Added node pool routing coverage proving compatible but different jobs share capacity and incompatible identities remain isolated.
+- Added same-code concurrency coverage proving multiple instances of one `module_sha256` can run concurrently up to configured capacity.
+- Added artifact input/output `path_mask` / `mask` and `recursive` support for alias refs, including tests for recursive masked input consumption and recursive masked output collection.
+- Verified broader hosting workflow tests: `161 passed`.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
 - Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
-- Node-profile clients should pass input artifacts as alias refs or inline payloads, write file outputs only to provided `artifact_outputs` paths, declare inline outputs before returning inline artifact payloads, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
+- Node-profile clients should pass input artifacts as alias refs or inline payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
+- Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.

@@ -27,9 +27,11 @@ Purpose: track only remaining dependent-project changes. Previously completed he
   - `done`
 - Node-profile clients must handle structured terminal errors for environment problems, import-policy failures, timeout, cancellation, runtime errors, and output/artifact limits.
 - Node-profile clients must pass stable `request_id` values for cancellation and request-status lookup.
-- Node-profile clients must use host-derived `environment_key` for resources, capacity, cancellation, and request status.
+- Node-profile clients must use host-derived `environment_key` for resources, capacity, cancellation, and request status. Compatible node jobs route through the same environment-keyed pool; incompatible runtime/import/dependency/sandbox identities route to separate pools.
+- Node-profile host callers may use capacity APIs during runtime to trim or expand reserved workers for a pool.
 - Node-profile clients must not rely on helper-shaped nested result payloads. They should consume the node response envelope directly.
-- Node-profile clients must stop assuming `artifact_store.status=unavailable`. They must pass input artifacts as relative alias refs such as `@artifacts/...` or as declared inline payloads, configure any non-default artifact roots such as `@project` through sandbox policy, write file outputs only to host-provided artifact output paths, declare inline outputs before returning inline artifact payloads, consume host-minted alias refs, and handle missing-artifact or unavailable-artifact responses when no refs are produced.
+- Node-profile clients must stop assuming `artifact_store.status=unavailable`. They must pass input artifacts as relative alias refs such as `@artifacts/...` or as declared inline payloads, configure any non-default artifact roots such as `@project` through sandbox policy, write file outputs only to host-provided artifact output paths or output directories, declare inline outputs before returning inline artifact payloads, consume host-minted alias refs, and handle missing-artifact or unavailable-artifact responses when no refs are produced.
+- Node-profile clients may select multiple artifact files with `path_mask` or `mask` and `recursive` on input or output artifact declarations. Masked inputs are exposed to Python code as directories containing matched files. Masked outputs are exposed as writable directories and return one host-minted ref per collected file, with `relative_path` populated.
 - Clients that provide dependency-management UI or orchestration must call host-controlled prepare/lock/verify/install/receipt APIs explicitly before dependency-bearing execution. Normal workflow execution does not install dependencies implicitly.
 
 ## No Remaining Action For Already Migrated Helper Clients

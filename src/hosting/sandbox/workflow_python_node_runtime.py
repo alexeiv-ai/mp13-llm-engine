@@ -14,12 +14,13 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from .._process_utils import hidden_subprocess_kwargs
+from .child_runtime import ChildRuntimeEventCallback, HostedChildRuntime
 
 
-NodeEventCallback = Callable[[str, Dict[str, Any]], None]
+NodeEventCallback = ChildRuntimeEventCallback
 
 
 def _clean(value: Any) -> str:
@@ -117,14 +118,21 @@ def normalize_result(value):
 def make_artifact_open(inputs, outputs):
     readable = {os.path.abspath(str(path)) for path in dict(inputs or {}).values() if str(path or "")}
     writable = {os.path.abspath(str(path)) for path in dict(outputs or {}).values() if str(path or "")}
+    def under_any(target, roots):
+        for root in roots:
+            if target == root:
+                return True
+            if os.path.isdir(root) and target.startswith(root + os.sep):
+                return True
+        return False
 
     def guarded_open(path, mode="r", *args, **kwargs):
         target = os.path.abspath(str(path or ""))
         write_mode = any(flag in str(mode or "") for flag in ("w", "a", "x", "+"))
         if write_mode:
-            if target not in writable:
+            if not under_any(target, writable):
                 raise PermissionError(f"artifact output path not allowed: {path}")
-        elif target not in readable and target not in writable:
+        elif not under_any(target, readable) and not under_any(target, writable):
             raise PermissionError(f"artifact input path not allowed: {path}")
         return builtins.open(target, mode, *args, **kwargs)
 
@@ -354,7 +362,7 @@ class WorkflowPythonNodeRuntime:
                 }
 
 
-class WorkflowPythonNodeRuntimeRegistry:
+class WorkflowPythonNodeRuntimeRegistry(HostedChildRuntime):
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active: Dict[str, WorkflowPythonNodeRuntime] = {}
