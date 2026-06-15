@@ -6,6 +6,7 @@ node-shaped execution data plus streamable events.
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import queue
@@ -16,11 +17,37 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from .._process_utils import hidden_subprocess_kwargs
+from .._process_utils import hidden_subprocess_kwargs, terminate_process_tree
 from .child_runtime import ChildRuntimeEventCallback, HostedActiveChildRuntimeRegistry
 
 
 NodeEventCallback = ChildRuntimeEventCallback
+_ACTIVE_NODE_PROCS: set[subprocess.Popen[Any]] = set()
+_ACTIVE_NODE_PROCS_LOCK = threading.Lock()
+
+
+def _remember_proc(proc: subprocess.Popen[Any]) -> None:
+    with _ACTIVE_NODE_PROCS_LOCK:
+        _ACTIVE_NODE_PROCS.add(proc)
+
+
+def _forget_proc(proc: subprocess.Popen[Any]) -> None:
+    with _ACTIVE_NODE_PROCS_LOCK:
+        _ACTIVE_NODE_PROCS.discard(proc)
+
+
+def _kill_active_node_procs() -> None:
+    with _ACTIVE_NODE_PROCS_LOCK:
+        procs = list(_ACTIVE_NODE_PROCS)
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
+        except Exception:
+            pass
+
+
+atexit.register(_kill_active_node_procs)
 
 
 def _clean(value: Any) -> str:
@@ -333,6 +360,7 @@ class WorkflowPythonNodeRuntime:
             bufsize=1,
             **hidden_subprocess_kwargs(),
         )
+        _remember_proc(proc)
         runtime = cls(request_id=_clean(request.get("request_id")), python_executable=python_executable, proc=proc)
         runtime._reader = threading.Thread(target=runtime._read_stdout, daemon=True, name=f"workflow-python-node-{int(proc.pid or 0)}")
         runtime._reader.start()
@@ -357,12 +385,39 @@ class WorkflowPythonNodeRuntime:
 
     def _kill(self) -> bool:
         if self.proc.poll() is not None:
+            _forget_proc(self.proc)
             return False
         try:
-            self.proc.kill()
-            return True
+            result = terminate_process_tree(int(self.proc.pid or 0), timeout_seconds=2.0)
+            return not bool(result.get("alive"))
         except Exception:
-            return False
+            try:
+                self.proc.kill()
+                return True
+            except Exception:
+                return False
+        finally:
+            _forget_proc(self.proc)
+
+    def ensure_stopped(self) -> None:
+        if self.proc.poll() is None:
+            self._kill()
+        else:
+            _forget_proc(self.proc)
+
+    def _wait_for_exit(self, *, timeout_seconds: float = 1.0) -> None:
+        try:
+            if self.proc.poll() is None:
+                self.proc.wait(timeout=max(0.05, float(timeout_seconds or 1.0)))
+        except Exception:
+            self._kill()
+            try:
+                self.proc.wait(timeout=0.5)
+            except Exception:
+                pass
+        finally:
+            if self.proc.poll() is not None:
+                _forget_proc(self.proc)
 
     def cancel(self) -> bool:
         self._cancel_requested = True
@@ -376,17 +431,11 @@ class WorkflowPythonNodeRuntime:
         last_stderr = ""
         last_progress: Optional[Dict[str, Any]] = None
 
-        def wait_for_exit() -> None:
-            try:
-                if self.proc.poll() is None:
-                    self.proc.wait(timeout=1.0)
-            except Exception:
-                pass
-
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self._kill()
+                self._wait_for_exit(timeout_seconds=0.5)
                 return {
                     "ok": False,
                     "reason": "workflow_sandbox_timeout",
@@ -428,7 +477,7 @@ class WorkflowPythonNodeRuntime:
                     on_event("progress", payload)
                 continue
             if event_type == "canceled":
-                wait_for_exit()
+                self._wait_for_exit()
                 return {
                     "ok": False,
                     "reason": "workflow_sandbox_canceled",
@@ -439,7 +488,7 @@ class WorkflowPythonNodeRuntime:
             if event_type == "result":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
-                wait_for_exit()
+                self._wait_for_exit()
                 return {
                     "ok": True,
                     "output": row.get("output"),
@@ -452,7 +501,7 @@ class WorkflowPythonNodeRuntime:
             if event_type == "error":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
-                wait_for_exit()
+                self._wait_for_exit()
                 return {
                     "ok": False,
                     "reason": _clean(row.get("reason")) or "workflow_sandbox_runtime_error",
@@ -492,6 +541,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         try:
             return runtime.wait(timeout_ms=timeout_ms, on_event=on_event)
         finally:
+            runtime.ensure_stopped()
             self.unregister_active(request_id)
 
 

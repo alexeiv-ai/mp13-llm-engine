@@ -1034,6 +1034,33 @@ def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) 
     assert "progress" in out["contract"]["stream_event_types"]
 
 
+def test_execute_workflow_python_node_reaps_child_process_after_success(tmp_path: Path) -> None:
+    from hosting.sandbox.workflow_python_node_runtime import _ACTIVE_NODE_PROCS
+
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    return {'output': {'done': True}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-reap",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert list(_ACTIVE_NODE_PROCS) == []
+
+
 def test_execute_workflow_python_node_does_not_call_helper_proxy(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
