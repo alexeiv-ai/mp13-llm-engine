@@ -163,10 +163,10 @@ exports.run = function(input, api) {
       producer-owned refs, inline outputs, and inline zip exports.
 - [x] Keep sandbox-returned artifact-looking data as ordinary output unless it
       matches a declared output and the host validates it.
-- [ ] Emit stream events: `started`, `heartbeat`, `log`, `stdout` or
+- [x] Emit stream events: `started`, `heartbeat`, `log`, `stdout` or
       `console`, `progress`, `artifact`, `result`, `error`, `canceled`, and
       `done`.
-- [ ] Keep stream retention bounded and report dropped event counts as Python
+- [x] Keep stream retention bounded and report dropped event counts as Python
       node does.
 - [x] Return the same top-level response envelope and artifact-store semantics
       as Python node.

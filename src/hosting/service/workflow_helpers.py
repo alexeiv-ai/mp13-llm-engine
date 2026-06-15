@@ -48,6 +48,14 @@ class WorkflowHelperMixin:
             setattr(self, "_workflow_python_stream_base_runtime", base)
         return base
 
+    def _workflow_js_stream_base(self) -> HostedJsRuntimeBase:
+        base = getattr(self, "_workflow_js_stream_base_runtime", None)
+        if base is None:
+            base = HostedJsRuntimeBase(self.hosting_root)
+            base.pool_registry = self._workflow_python_pool_registry()
+            setattr(self, "_workflow_js_stream_base_runtime", base)
+        return base
+
     def _workflow_python_node_runtime_registry(self) -> WorkflowPythonNodeRuntimeRegistry:
         registry = getattr(self, "_workflow_python_node_runtime_registry_instance", None)
         if registry is None:
@@ -1244,6 +1252,256 @@ class WorkflowHelperMixin:
                 "request": dict(finished.get("request") or lifecycle.to_dict()),
             },
         )
+
+    def workflow_js_stream_open(
+        self,
+        *,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        req = dict(request or {})
+        js = {**dict(javascript or {}), **dict(req.get("javascript") or {})}
+        ensured = self.ensure_workflow_js(
+            profile=prof,
+            environment_name=environment_name,
+            environment_key=environment_key,
+            node=dict(node or req.get("node") or {}),
+            javascript=js,
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            engine_id=engine_id,
+        )
+        if str(ensured.get("status") or "") != "ok":
+            return ensured
+        request_id = str(req.get("request_id") or "").strip() or f"workflow-js-stream-{int(time.time() * 1000)}"
+        limits = dict(req.get("limits") or {})
+        try:
+            max_events = max(1, min(int(limits.get("stream_max_events") or 256), 10000))
+        except Exception:
+            max_events = 256
+        base = self._workflow_js_stream_base()
+        opened = base.stream_open(
+            environment_key=str(ensured.get("environment_key") or ""),
+            request_id=request_id,
+            profile=prof,
+            desired_capacity=capacity,
+            max_events=max_events,
+            factory=lambda _key, cap: HostedWorkerSlot(
+                engine_id=str(ensured["engine_id"]),
+                environment_key=str(ensured.get("environment_key") or ""),
+                capacity=cap,
+                status="node_runtime",
+            ),
+        )
+        if str(opened.get("status") or "") != "ok":
+            return {**dict(opened or {}), "profile": prof, "environment_key": str(ensured.get("environment_key") or "")}
+        thread = threading.Thread(
+            target=self._workflow_js_run_node_stream,
+            kwargs={
+                "stream_id": str(opened.get("stream_id") or ""),
+                "environment_key": str(ensured.get("environment_key") or ""),
+                "engine_id": str(ensured["engine_id"]),
+                "request": {**req, "request_id": request_id, "javascript": js},
+                "sandbox_policy": sandbox_policy,
+            },
+            name=f"workflow-js-node-stream-{request_id}",
+            daemon=True,
+        )
+        thread.start()
+        return {
+            **dict(opened or {}),
+            "profile": prof,
+            "engine_id": str(ensured["engine_id"]),
+            "environment": dict(ensured.get("environment") or {}),
+        }
+
+    def _workflow_js_run_node_stream(
+        self,
+        *,
+        stream_id: str,
+        environment_key: str,
+        engine_id: str,
+        request: Dict[str, Any],
+        sandbox_policy: Optional[Dict[str, Any]],
+    ) -> None:
+        base = self._workflow_js_stream_base()
+
+        def _emit_js_event(event_type: str, payload: Dict[str, Any]) -> None:
+            if event_type == "console":
+                base.stream_emit(
+                    stream_id=stream_id,
+                    event_type="stdout",
+                    payload={
+                        "text": str(dict(payload or {}).get("message") or ""),
+                        "level": str(dict(payload or {}).get("level") or "log"),
+                    },
+                )
+                return
+            if event_type == "host_call":
+                base.stream_emit(stream_id=stream_id, event_type="log", payload={"host_call": dict(payload or {})})
+                return
+            base.stream_emit(stream_id=stream_id, event_type=event_type, payload=dict(payload or {}))
+
+        artifact_context: Optional[Dict[str, Any]] = None
+        if request.get("artifact_inputs") or request.get("artifact_outputs"):
+            try:
+                artifact_context = self._workflow_python_prepare_node_artifacts(
+                    request=request,
+                    request_id=str(request.get("request_id") or ""),
+                    sandbox_policy=sandbox_policy,
+                )
+            except Exception as exc:
+                response = self._workflow_js_node_response_from_execution(
+                    execution={"ok": False, "reason": "workflow_js_artifact_error", "detail": {"message": str(exc)}},
+                    request=request,
+                    environment_key=environment_key,
+                    engine_id=engine_id,
+                )
+                base.stream_emit(stream_id=stream_id, event_type="error", payload={"error": dict(response.get("error") or {}), "response": response})
+                base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "error", "reason": response.get("reason")})
+                session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+                if session is not None:
+                    session.closed = True
+                base.finish_request(environment_key=environment_key, request_id=str(request.get("request_id") or ""), status="error", reason="workflow_js_artifact_error")
+                return
+
+        result = self._workflow_js_node_runtime_registry().execute(
+            {
+                **dict(request or {}),
+                "environment_key": environment_key,
+                "artifact_context": dict((artifact_context or {}).get("child_context") or {}),
+            },
+            python_executable=str(dict(request.get("javascript") or {}).get("python_executable") or "").strip() or None,
+            on_event=_emit_js_event,
+            host_dispatcher=self._workflow_python_node_host_dispatcher(
+                request=dict(request or {}),
+                artifact_context=artifact_context,
+                sandbox_policy=sandbox_policy,
+            ),
+        )
+        if artifact_context is not None and bool(result.get("ok", False)):
+            try:
+                result["artifacts"] = self._workflow_python_collect_node_artifacts(
+                    artifact_context,
+                    request_id=str(request.get("request_id") or ""),
+                    runtime_artifacts=list(result.get("artifacts") or []),
+                    sandbox_policy=sandbox_policy,
+                )
+            except Exception as exc:
+                result = {
+                    "ok": False,
+                    "reason": "workflow_js_artifact_error",
+                    "detail": {"message": str(exc)},
+                    "stdout": str(result.get("stdout") or ""),
+                    "stderr": str(result.get("stderr") or ""),
+                    "artifacts": [],
+                }
+        else:
+            result["artifacts"] = []
+        if artifact_context is not None:
+            self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
+
+        status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))
+        response = self._workflow_js_node_response_from_execution(
+            execution=result,
+            request=request,
+            environment_key=environment_key,
+            engine_id=engine_id,
+            metrics={"request": dict(status_snapshot.get("request") or {})},
+        )
+        base.stream_emit(stream_id=stream_id, event_type="log", payload={"logs": dict(response.get("logs") or {})})
+        logs = dict(response.get("logs") or {})
+        if str(logs.get("stdout") or ""):
+            base.stream_emit(stream_id=stream_id, event_type="stdout", payload={"text": str(logs.get("stdout") or ""), "truncated": bool(logs.get("stdout_truncated"))})
+        if str(logs.get("stderr") or ""):
+            base.stream_emit(stream_id=stream_id, event_type="stderr", payload={"text": str(logs.get("stderr") or ""), "truncated": bool(logs.get("stderr_truncated"))})
+        if bool(response.get("ok", False)):
+            if isinstance(response.get("progress"), dict):
+                base.stream_emit(stream_id=stream_id, event_type="progress", payload=dict(response.get("progress") or {}))
+            for artifact in list(response.get("artifacts") or []):
+                if isinstance(artifact, dict):
+                    base.stream_emit(stream_id=stream_id, event_type="artifact", payload=dict(artifact or {}))
+            base.stream_emit(
+                stream_id=stream_id,
+                event_type="result",
+                payload={
+                    "output": response.get("output"),
+                    "state_patch": response.get("state_patch"),
+                    "artifacts": list(response.get("artifacts") or []),
+                    "metrics": dict(response.get("metrics") or {}),
+                },
+            )
+            base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "ok"})
+            session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+            if session is not None:
+                session.closed = True
+            base.finish_request(environment_key=environment_key, request_id=str(request.get("request_id") or ""), status="ok")
+            return
+        if str(response.get("reason") or "") == "workflow_sandbox_canceled":
+            session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+            if session is not None and bool(getattr(session, "closed", False)):
+                base.finish_request(
+                    environment_key=environment_key,
+                    request_id=str(request.get("request_id") or ""),
+                    status="canceled",
+                    reason=str(response.get("reason") or "workflow_sandbox_canceled"),
+                )
+                return
+            if session is not None and not bool(getattr(session, "canceled", False)):
+                base.stream_emit(
+                    stream_id=stream_id,
+                    event_type="canceled",
+                    payload={"request_id": str(request.get("request_id") or ""), "reason": "workflow_sandbox_canceled"},
+                )
+                session.canceled = True
+            base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "canceled", "reason": response.get("reason")})
+            if session is not None:
+                session.closed = True
+            base.finish_request(environment_key=environment_key, request_id=str(request.get("request_id") or ""), status="canceled", reason=str(response.get("reason") or "workflow_sandbox_canceled"))
+            return
+        base.stream_emit(stream_id=stream_id, event_type="error", payload={"error": dict(response.get("error") or {}), "response": response})
+        base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "error", "reason": response.get("reason")})
+        session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+        if session is not None:
+            session.closed = True
+        reason = str(response.get("reason") or "workflow_js_node_execution_failed")
+        base.finish_request(
+            environment_key=environment_key,
+            request_id=str(request.get("request_id") or ""),
+            status="timeout" if reason == "workflow_sandbox_timeout" else "error",
+            reason=reason,
+        )
+
+    def workflow_js_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        return dict(self._workflow_js_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
+
+    def workflow_js_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        base = self._workflow_js_stream_base()
+        msg = dict(message or {})
+        out = dict(base.stream_send(stream_id=stream_id, message=msg))
+        if bool(out.get("accepted")) and str(msg.get("action") or "").strip() == "cancel":
+            session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+            if session is not None:
+                out["worker_cancel"] = self.cancel_workflow_js_request(
+                    profile=str(getattr(session, "profile", "") or "node"),
+                    environment_key=str(getattr(session, "environment_key", "") or ""),
+                    request_id=str(getattr(session, "request_id", "") or ""),
+                )
+                if bool(dict(out.get("worker_cancel") or {}).get("canceled")) and not bool(getattr(session, "closed", False)):
+                    base.stream_emit(stream_id=stream_id, event_type="done", payload={"status": "canceled", "reason": "workflow_sandbox_canceled"})
+                    session.closed = True
+        return out
+
+    def workflow_js_stream_close(self, *, stream_id: str) -> Dict[str, Any]:
+        return dict(self._workflow_js_stream_base().stream_close(stream_id=stream_id))
 
     def ensure_workflow_python(
         self,

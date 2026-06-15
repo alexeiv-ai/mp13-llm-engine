@@ -1081,6 +1081,160 @@ def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> N
     assert recent["req-js-metrics-cancel"] == "canceled"
 
 
+def test_workflow_js_stream_emits_terminal_events_and_artifacts(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = """
+exports.run = function(input, api) {
+  console.log("stream start");
+  api.progress({step: "write"});
+  api.fs.writeText("report", "", "stream artifact");
+  return {output: {done: true}};
+};
+"""
+
+    opened = svc.workflow_js_stream_open(
+        profile="node",
+        request={
+            "request_id": "req-js-stream-ok",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "limits": {"stream_max_events": 32},
+            "artifact_outputs": [{"name": "report", "filename": "stream.txt", "media_type": "text/plain"}],
+        },
+    )
+    events: list[dict] = []
+    deadline = time.time() + 10.0
+    received = {}
+    while time.time() < deadline:
+        received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=8)
+        events.extend(list(received.get("events") or []))
+        if any(row["type"] == "done" for row in events):
+            break
+        time.sleep(0.05)
+    status = svc.workflow_js_request_status(
+        profile="node",
+        environment_key=opened["environment_key"],
+        request_id="req-js-stream-ok",
+    )
+    svc.workflow_js_stream_close(stream_id=opened["stream_id"])
+
+    event_types = [row["type"] for row in events]
+    assert opened["status"] == "ok"
+    assert "started" in event_types
+    assert "stdout" in event_types
+    assert "progress" in event_types
+    assert "artifact" in event_types
+    assert "result" in event_types
+    assert event_types[-1] == "done"
+    assert status["request"]["status"] == "ok"
+    assert status["request"]["stream_event_count"] >= len(events)
+    assert any(dict(row.get("payload") or {}).get("filename") == "stream.txt" for row in events if row["type"] == "artifact")
+
+
+def test_workflow_js_stream_retention_reports_dropped_events(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = """
+exports.run = function(input, api) {
+  for (let i = 0; i < 8; i++) {
+    api.progress({step: i});
+  }
+  return {output: {done: true}};
+};
+"""
+
+    opened = svc.workflow_js_stream_open(
+        profile="node",
+        request={
+            "request_id": "req-js-stream-retention",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "limits": {"stream_max_events": 3},
+        },
+    )
+    deadline = time.time() + 10.0
+    received = {}
+    while time.time() < deadline:
+        received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=10)
+        if bool(received.get("closed")):
+            break
+        time.sleep(0.05)
+    svc.workflow_js_stream_close(stream_id=opened["stream_id"])
+
+    assert opened["status"] == "ok"
+    assert received["max_events"] == 3
+    assert received["dropped_event_count"] > 0
+    assert len(received["events"]) <= 3
+
+
+def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "exports.run = function() { while (true) {} };"
+
+    opened = svc.workflow_js_stream_open(
+        profile="node",
+        request={
+            "request_id": "req-js-stream-cancel",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "limits": {"timeout_ms": 5000},
+        },
+    )
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        status = svc.workflow_js_request_status(
+            profile="node",
+            environment_key=opened["environment_key"],
+            request_id="req-js-stream-cancel",
+        )
+        if dict(status.get("request") or {}).get("status") == "running":
+            break
+        time.sleep(0.05)
+
+    sent = svc.workflow_js_stream_send(stream_id=opened["stream_id"], message={"action": "cancel"})
+    events: list[dict] = []
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=8)
+        events.extend(list(received.get("events") or []))
+        if any(row["type"] == "done" for row in events):
+            break
+        time.sleep(0.05)
+    status = svc.workflow_js_request_status(
+        profile="node",
+        environment_key=opened["environment_key"],
+        request_id="req-js-stream-cancel",
+    )
+    svc.workflow_js_stream_close(stream_id=opened["stream_id"])
+
+    event_types = [row["type"] for row in events]
+    assert sent["accepted"] is True
+    assert sent["worker_cancel"]["canceled"] is True
+    assert "canceled" in event_types
+    assert event_types[-1] == "done"
+    assert status["request"]["status"] == "canceled"
+
+
 def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

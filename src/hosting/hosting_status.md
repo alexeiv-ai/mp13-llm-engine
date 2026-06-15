@@ -28,6 +28,9 @@ Purpose: record the current implementation state and the discrepancies against `
   - `workflow-python-stream-close`
 - Shared stream/session plumbing for node-profile stream events.
 - `workflow_js(profile=node)` public facade and `workflow-js-execute` through QuickJS.
+- QuickJS JS node stream service support for open/recv/send/close, including
+  console/stdout, progress, artifact, result, error, cancel, done, and bounded
+  retention/drop counts.
 - RBAC/daemon/channel/CLI support for the workflow command families.
 - Toolbox shared identity/process-base migration while preserving toolbox semantics.
 - Direct node-profile Python execution path that no longer calls `execute_workflow_python_helper`.
