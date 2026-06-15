@@ -147,8 +147,9 @@ exports.run = function(input, api) {
 - [x] Add selected `crypto` helpers only when they are deterministic and
       policy-approved, starting with hashing.
 - [x] Decide whether host APIs are synchronous-only for v1 or promise-based.
-- [ ] If promise-based APIs are supported, implement QuickJS job pumping and
+- [x] If promise-based APIs are supported, implement QuickJS job pumping and
       host-call response correlation tests before exposing the public contract.
+      Not applicable for v1 because promise-based host APIs are not exposed.
 - [x] Ensure host API failures return structured JS node errors and stream
       events rather than raw Python exceptions.
 
@@ -204,7 +205,7 @@ exports.run = function(input, api) {
 - [x] Add tests for successful `exports.run` execution.
 - [x] Add tests for missing `exports.run` or requested export.
 - [x] Add tests for structured runtime errors with safe stack/message summaries.
-- [ ] Add timeout, cancellation, output-limit, and invalid-output tests.
+- [x] Add timeout, cancellation, output-limit, and invalid-output tests.
 - [x] Add environment-key tests for QuickJS runtime identity and sandbox policy
       isolation.
 - [x] Add host API discovery tests.
@@ -213,7 +214,7 @@ exports.run = function(input, api) {
 - [x] Add brokered HTTP allowed and denied tests.
 - [x] Add progress and console/log stream tests.
 - [x] Add artifact input/output collection tests matching Python node coverage.
-- [ ] Add resource/status/capacity tests for success, error, timeout, and
+- [x] Add resource/status/capacity tests for success, error, timeout, and
       canceled JS node requests.
 - [x] Add regression tests proving no Node executable is required for workflow
       JS execution.

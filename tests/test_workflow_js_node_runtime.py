@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+import time
 from typing import Any, Dict
 
 import pytest
@@ -131,6 +133,39 @@ def test_workflow_js_node_times_out_busy_loop() -> None:
     assert out["ok"] is False
     assert out["reason"] == "workflow_sandbox_timeout"
     assert out["detail"]["timeout_ms"] == 100
+
+
+def test_workflow_js_node_can_cancel_active_request() -> None:
+    source = "exports.run = function() { while (true) {} };"
+    registry = WorkflowJsNodeRuntimeRegistry()
+    result: Dict[str, Any] = {}
+
+    def run() -> None:
+        result.update(registry.execute(_request(source, request_id="req-js-cancel", limits={"timeout_ms": 5000})))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if int(registry.resources().get("active_count") or 0) > 0:
+            break
+        time.sleep(0.05)
+
+    canceled = registry.cancel("req-js-cancel")
+    thread.join(timeout=5.0)
+
+    assert canceled["canceled"] is True
+    assert result["ok"] is False
+    assert result["reason"] == "workflow_sandbox_canceled"
+
+
+def test_workflow_js_node_maps_invalid_output() -> None:
+    source = "exports.run = function() { return {output: 1n}; };"
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source))
+
+    assert out["ok"] is False
+    assert out["reason"] == "workflow_sandbox_invalid_output"
+    assert out["detail"]["message"]
 
 
 def test_workflow_js_node_preserves_host_api_failure_detail() -> None:

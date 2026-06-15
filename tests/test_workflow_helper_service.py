@@ -1007,6 +1007,80 @@ exports.run = function(input, api) {
     assert "unsupported_host_method:http.fetch" in denied["error"]["message"]
 
 
+def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    env = svc.workflow_js_environment_spec(profile="node", environment_name="workflow-js-node", javascript={})
+    environment_key = str(env["environment_key"])
+
+    def request(source: str, request_id: str, *, timeout_ms: int = 1000) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "limits": {"timeout_ms": timeout_ms, "output_limit_bytes": 1024},
+        }
+
+    success_source = "exports.run = function() { return {output: {ok: true}}; };"
+    error_source = "exports.run = function() { throw new Error('metric error'); };"
+    timeout_source = "exports.run = function() { while (true) {} };"
+    cancel_result: dict[str, object] = {}
+
+    success = svc.execute_workflow_js(profile="node", request=request(success_source, "req-js-metrics-ok"))
+    error = svc.execute_workflow_js(profile="node", request=request(error_source, "req-js-metrics-error"))
+    timeout = svc.execute_workflow_js(profile="node", request=request(timeout_source, "req-js-metrics-timeout", timeout_ms=50))
+
+    def run_cancel() -> None:
+        cancel_result.update(
+            svc.execute_workflow_js(
+                profile="node",
+                request=request(timeout_source, "req-js-metrics-cancel", timeout_ms=5000),
+            )
+        )
+
+    thread = threading.Thread(target=run_cancel, daemon=True)
+    thread.start()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        status = svc.workflow_js_request_status(
+            profile="node",
+            environment_key=environment_key,
+            request_id="req-js-metrics-cancel",
+        )
+        if dict(status.get("request") or {}).get("status") == "running":
+            break
+        time.sleep(0.05)
+    canceled = svc.cancel_workflow_js_request(
+        profile="node",
+        environment_key=environment_key,
+        request_id="req-js-metrics-cancel",
+    )
+    thread.join(timeout=5.0)
+    resources = svc.workflow_js_resources(profile="node", environment_key=environment_key)
+    metrics = resources["workflow_pool"]["metrics"]
+    recent = {row["request_id"]: row["status"] for row in metrics["recent_requests"]}
+
+    assert success["status"] == "ok"
+    assert error["status"] == "error"
+    assert timeout["error"]["code"] == "workflow_sandbox_timeout"
+    assert canceled["canceled"] is True
+    assert cancel_result["status"] == "canceled"
+    assert metrics["active_calls"] == 0
+    assert metrics["error_count"] >= 1
+    assert metrics["timeout_count"] >= 1
+    assert metrics["cancellation_count"] >= 1
+    assert recent["req-js-metrics-ok"] == "ok"
+    assert recent["req-js-metrics-error"] == "error"
+    assert recent["req-js-metrics-timeout"] == "timeout"
+    assert recent["req-js-metrics-cancel"] == "canceled"
+
+
 def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

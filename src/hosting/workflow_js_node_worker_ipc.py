@@ -274,7 +274,11 @@ globalThis.api = {
     }
     value = fn(globalThis.payload, globalThis.api);
   }
-  return JSON.stringify(normalize(value === undefined ? null : value));
+  try {
+    return JSON.stringify(normalize(value === undefined ? null : value));
+  } catch (err) {
+    return JSON.stringify({__workflow_error: {reason: "workflow_sandbox_invalid_output", detail: {message: String(err && err.message ? err.message : err)}}});
+  }
 })()
 """.replace("%EXECUTION_MODE%", execution_mode)
 

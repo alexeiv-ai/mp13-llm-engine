@@ -99,6 +99,8 @@ Purpose: record the current implementation state and the discrepancies against `
   propagation, request validation coverage, artifact filesystem method tests,
   read-only/writable root enforcement tests, and brokered HTTP allowed/denied
   coverage.
+- Added JS node cancellation, invalid-output, timeout/output-limit, and
+  terminal resource/status/capacity metric coverage.
 - Verified focused QuickJS workflow JS tests:
   `python -m pytest tests/test_workflow_js_node_runtime.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_hosting_js_runtime_base.py -q -k "workflow_js or js_runtime"`.
 
