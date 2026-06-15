@@ -29,7 +29,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - `workflow_js(profile=helper)` exists as a public facade over the JS helper implementation.
 - Host-side environment-key routing and pool/request accounting exist for the workflow facades.
 - Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path collection. It returns `artifact_store.status=ok` only when refs are minted from declared output files or declared inline outputs.
-- Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs.
+- Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs. The current node harness is still started per request; long-lived warm worker reuse is a next-phase implementation item.
 
 ## Current Discrepancies
 
@@ -259,13 +259,13 @@ These items are intentionally separate from the completed first-class node contr
 
 ### Base Class Completeness
 
-Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Toolbox executor runtime calls now also record execute/cancel/request-status/resource accounting through the shared hosted pool layer. Runtime-specific code still owns child process launch details, stdout protocol parsing, import policy, result normalization, hot process reuse, project staging, venv selection, and toolbox registration/repair/GC orchestration.
+Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, pending-cancel handling during child startup, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Toolbox executor runtime calls now also record execute/cancel/request-status/resource accounting through the shared hosted pool layer. Node execution now launches a built-in Python harness file with a dedicated control channel instead of using stdout as the host RPC transport. Runtime-specific code still owns child process launch details, control-channel protocol parsing, import policy, result normalization, warm process reuse, project staging, venv selection, and toolbox registration/repair/GC orchestration.
 
 - [x] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
 - [x] Move active child cancel/resource tracking behind the shared child-runtime base.
 - [x] Move reusable artifact preparation/collection/cleanup into a shared host-side component.
 - [x] Make node runtime use the shared child-runtime interface.
-- [x] Keep child process launch/stdout protocol parsing runtime-specific for now.
+- [x] Keep child process launch and control-channel protocol parsing runtime-specific for now.
 - [ ] Decide whether Python helper can use the same child-runtime implementation while preserving helper response compatibility.
 - [x] Route toolbox executor execute/cancel/request-status/resource accounting through the same normalized host pool/resource shapes while preserving toolbox registration/repair orchestration.
 - [ ] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific.
@@ -276,13 +276,17 @@ Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact he
 Target assumption: node workers may need cooperative host interactions like toolbox brokered filesystem/http callbacks, especially once node workers become long-lived. The host API should be discoverable from Python code and should use a dispatcher-based request/response protocol that can be reused by one-shot and future long-lived workers.
 
 - [x] Define a node host API contract exposed through `host.describe`.
-- [x] Add bidirectional child-process protocol messages for `host_call` and `host_response`.
+- [x] Add a built-in Python node worker harness with a dedicated control channel for node execution.
+- [x] Add bidirectional child-process protocol messages for `host_call` and `host_response` without using stdout as the host RPC transport.
+- [x] Route active node execution through the built-in harness control channel instead of the embedded `python -c` stdout event bridge.
+- [x] Launch the harness as an explicit worker file for fast cold-start while keeping stdout/stderr reserved for user logs.
+- [ ] Remove the legacy embedded `python -c` node runner after harness parity coverage remains stable.
 - [x] Expose a Python `host` object with `call`, `describe`, and filesystem convenience methods.
 - [x] Implement artifact-scoped `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat` through the host dispatcher.
 - [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
 - [x] Include host API metadata in the machine-readable node contract.
 - [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
-- [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests.
+- [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests and avoids per-request cold-start cost.
 - [x] Add tests for host API discovery, artifact-root read/write, and rejected input-root writes.
 
 ### Long-Running And Concurrent Node Jobs
@@ -292,6 +296,7 @@ Target assumption: many different Python node jobs may run concurrently, and sev
 - [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
 - [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
 - [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
+- [ ] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
 - [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.

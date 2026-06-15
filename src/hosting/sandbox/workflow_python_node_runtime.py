@@ -9,12 +9,19 @@ from __future__ import annotations
 import atexit
 import hashlib
 import json
+import os
+import posixpath
 import queue
+import re
+import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from multiprocessing.connection import Listener
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .._process_utils import hidden_subprocess_kwargs, terminate_process_tree
@@ -61,6 +68,16 @@ def _sha256_text(value: str) -> str:
 def _python_executable_from_request(request: Dict[str, Any], *, fallback: Optional[str] = None) -> str:
     py = dict(request.get("python") or {})
     return _clean(py.get("python_executable")) or _clean(fallback) or sys.executable
+
+
+def _allocate_node_ipc_address(request_id: str) -> tuple[str, str]:
+    raw = str(request_id or "workflow-python-node")
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_") or "workflow-python-node"
+    nonce = secrets.token_hex(6)
+    if os.name == "nt":
+        return "AF_PIPE", f"\\\\.\\pipe\\mp13-node-{safe[:36]}-{nonce}"
+    base = posixpath.abspath(posixpath.expanduser(str(tempfile.gettempdir() or "/tmp")))
+    return "AF_UNIX", posixpath.join(base, f"mp13-node-{safe[:24]}-{nonce}.sock")
 
 
 def _import_allowlist(request: Dict[str, Any]) -> list[str]:
@@ -408,33 +425,75 @@ class WorkflowPythonNodeRuntime:
     request_id: str
     python_executable: str
     proc: subprocess.Popen[Any]
+    conn: Any = None
     _events: "queue.Queue[Dict[str, Any]]" = field(default_factory=queue.Queue)
     _reader: Optional[threading.Thread] = None
     _cancel_requested: bool = False
 
     @classmethod
     def start(cls, *, request: Dict[str, Any], python_executable: str) -> "WorkflowPythonNodeRuntime":
+        family, address = _allocate_node_ipc_address(str(request.get("request_id") or "workflow-python-node"))
+        auth_token = secrets.token_urlsafe(24)
+        listener = Listener(address=address, family=family, authkey=auth_token.encode("utf-8"))
+        env = dict(os.environ)
+        src_root = str(Path(__file__).resolve().parents[2])
+        existing_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = src_root if not existing_pythonpath else os.pathsep.join([src_root, existing_pythonpath])
         proc = subprocess.Popen(
-            [python_executable, "-u", "-c", _child_source()],
+            [
+                python_executable,
+                "-u",
+                str(Path(__file__).resolve().parents[1] / "workflow_python_node_worker_ipc.py"),
+                "--ipc-family",
+                family,
+                "--ipc-address",
+                address,
+                "--auth-token",
+                auth_token,
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             bufsize=1,
+            env=env,
             **hidden_subprocess_kwargs(),
         )
         _remember_proc(proc)
-        runtime = cls(request_id=_clean(request.get("request_id")), python_executable=python_executable, proc=proc)
-        runtime._reader = threading.Thread(target=runtime._read_stdout, daemon=True, name=f"workflow-python-node-{int(proc.pid or 0)}")
+        accept_queue: "queue.Queue[Any]" = queue.Queue(maxsize=1)
+
+        def _accept() -> None:
+            try:
+                accept_queue.put(listener.accept())
+            except Exception as exc:
+                accept_queue.put(exc)
+            finally:
+                try:
+                    listener.close()
+                except Exception:
+                    pass
+
+        accept_thread = threading.Thread(target=_accept, daemon=True, name=f"workflow-python-node-accept-{int(proc.pid or 0)}")
+        accept_thread.start()
+        try:
+            accepted = accept_queue.get(timeout=10.0)
+        except Exception:
+            _forget_proc(proc)
+            terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
+            raise RuntimeError("workflow_python_node_worker_ipc_connect_timeout")
+        if isinstance(accepted, BaseException):
+            _forget_proc(proc)
+            terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
+            raise RuntimeError(f"workflow_python_node_worker_ipc_connect_failed:{accepted}") from accepted
+        runtime = cls(request_id=_clean(request.get("request_id")), python_executable=python_executable, proc=proc, conn=accepted)
+        runtime._reader = threading.Thread(target=runtime._read_events, daemon=True, name=f"workflow-python-node-{int(proc.pid or 0)}")
         runtime._reader.start()
-        assert proc.stdin is not None
-        proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-        proc.stdin.flush()
+        accepted.send(dict(request or {}))
         return runtime
 
     def respond_host_call(self, *, host_call_id: str, result: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None) -> bool:
-        if self.proc.poll() is not None or self.proc.stdin is None:
+        if self.proc.poll() is not None or self.conn is None:
             return False
         row: Dict[str, Any] = {
             "type": "host_response",
@@ -452,30 +511,41 @@ class WorkflowPythonNodeRuntime:
         else:
             row.update({"status": "ok", "result": dict(result or {})})
         try:
-            self.proc.stdin.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-            self.proc.stdin.flush()
+            self.conn.send(row)
             return True
         except Exception:
             return False
 
-    def _read_stdout(self) -> None:
-        stream = self.proc.stdout
-        if stream is None:
+    def _read_events(self) -> None:
+        if self.conn is None:
             return
-        for line in stream:
-            if not line.strip():
-                continue
+        while True:
             try:
-                row = json.loads(line)
+                row = self.conn.recv()
                 if isinstance(row, dict):
                     self._events.put(row)
             except Exception as exc:
-                self._events.put({"type": "error", "reason": "workflow_sandbox_invalid_json_output", "detail": {"message": str(exc)}})
+                if self._cancel_requested:
+                    self._events.put({"type": "canceled", "reason": "workflow_sandbox_canceled"})
+                elif self.proc.poll() is None:
+                    self._events.put({"type": "error", "reason": "workflow_sandbox_ipc_error", "detail": {"message": str(exc)}})
+                else:
+                    self._events.put({"type": "process_exit", "reason": "workflow_sandbox_process_exited"})
+                return
+
+    def _close_conn(self) -> None:
+        try:
+            if self.conn is not None:
+                self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
 
     def _kill(self) -> bool:
         if self.proc.poll() is not None:
             _forget_proc(self.proc)
             return False
+        self._close_conn()
         try:
             result = terminate_process_tree(int(self.proc.pid or 0), timeout_seconds=2.0)
             return not bool(result.get("alive"))
@@ -493,6 +563,7 @@ class WorkflowPythonNodeRuntime:
             self._kill()
         else:
             _forget_proc(self.proc)
+        self._close_conn()
 
     def _wait_for_exit(self, *, timeout_seconds: float = 1.0) -> None:
         try:
@@ -601,6 +672,22 @@ class WorkflowPythonNodeRuntime:
                     "ok": False,
                     "reason": "workflow_sandbox_canceled",
                     "detail": {"message": "node runtime canceled"},
+                    "stdout": last_stdout,
+                    "stderr": last_stderr,
+                }
+            if event_type == "process_exit":
+                if self._cancel_requested:
+                    return {
+                        "ok": False,
+                        "reason": "workflow_sandbox_canceled",
+                        "detail": {"message": "node runtime canceled"},
+                        "stdout": last_stdout,
+                        "stderr": last_stderr,
+                    }
+                return {
+                    "ok": False,
+                    "reason": _clean(row.get("reason")) or "workflow_sandbox_runtime_error",
+                    "detail": {"message": "node runtime exited without result"},
                     "stdout": last_stdout,
                     "stderr": last_stderr,
                 }

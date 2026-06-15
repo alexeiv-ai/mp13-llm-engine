@@ -28,7 +28,7 @@ The public entrypoints are the workflow facade commands and channel methods:
 8. `workflow-python-request-status`
 9. `workflow-python-cancel-request`
 
-The implementation lives in `hosting.sandbox.workflow_python_node_runtime` and is called by `WorkflowHelperMixin`. It is not an externally registered IPC worker module. The host starts a child Python process for execution and tracks it through the shared hosted workflow pool and request lifecycle.
+The implementation lives in `hosting.sandbox.workflow_python_node_runtime`, launches the built-in `hosting.workflow_python_node_worker_ipc` harness by file entrypoint, and is called by `WorkflowHelperMixin`. It is not an externally registered IPC worker module. The host starts a child Python harness process for execution and tracks it through the shared hosted workflow pool and request lifecycle.
 
 ## Host Lifecycle
 
@@ -168,7 +168,7 @@ Convenience methods on `host` call those dispatcher methods:
 6. `host.fs_stat(root_id, relative_path="")`
 7. `host.fs_mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
 
-Transport: the child writes a `host_call` JSON event to stdout, the host dispatcher evaluates it, and the host writes a matching `host_response` JSON line back to the child stdin. This is deliberately a bidirectional request/response protocol, not a one-way event, so it can be reused by a future long-lived node worker loop.
+Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. This is deliberately a bidirectional request/response protocol, not a one-way event, so it can be reused by a future long-lived node worker loop.
 
 The current dispatcher maps `fs.*` calls to declared artifact roots:
 
@@ -427,7 +427,7 @@ Node stream event types:
 
 ## Long-Lived Workers And Code Edits
 
-Current implementation: the host starts a child process per node request. That makes source edits simple and deterministic: a fixed `module_source` plus `module_sha256` is executed in a fresh process, so a corrected snippet or module is just a new request with a new digest. There is no stale module cache to invalidate.
+Current implementation: the host starts a child harness process per node request. That makes source edits simple and deterministic: a fixed `module_source` plus `module_sha256` is executed in a fresh process, so a corrected snippet or module is just a new request with a new digest. There is no stale module cache to invalidate. The next runtime step is warm, long-lived harness workers per environment-keyed pool so capacity reserves reusable processes while preserving explicit source revision identity.
 
 For a future long-lived Python node worker, code updates should not rely on uv. uv manages dependencies and interpreter environments; it is not the right mechanism for hot-editing workflow source modules.
 

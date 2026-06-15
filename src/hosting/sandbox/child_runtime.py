@@ -36,13 +36,21 @@ class HostedActiveChildRuntimeRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active: Dict[str, Any] = {}
+        self._pending_cancel: set[str] = set()
 
     def register_active(self, request_id: str, runtime: Any) -> None:
         rid = str(request_id or "").strip()
         if not rid:
             return
+        cancel_now = False
         with self._lock:
             self._active[rid] = runtime
+            cancel_now = rid in self._pending_cancel
+            self._pending_cancel.discard(rid)
+        if cancel_now:
+            cancel = getattr(runtime, "cancel", None)
+            if callable(cancel):
+                cancel()
 
     def unregister_active(self, request_id: str) -> None:
         rid = str(request_id or "").strip()
@@ -62,7 +70,9 @@ class HostedActiveChildRuntimeRegistry:
             return {"status": "error", "reason": "request_id_required", "canceled": False}
         runtime = self.active_runtime(rid)
         if runtime is None:
-            return {"status": "ok", "request_id": rid, "canceled": False, "reason": "request_not_found"}
+            with self._lock:
+                self._pending_cancel.add(rid)
+            return {"status": "ok", "request_id": rid, "canceled": True, "reason": "cancel_pending"}
         cancel = getattr(runtime, "cancel", None)
         if not callable(cancel):
             return {"status": "ok", "request_id": rid, "canceled": False, "reason": "cancel_not_supported"}
