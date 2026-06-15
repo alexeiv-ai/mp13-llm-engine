@@ -37,6 +37,7 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
     assert contract["artifact_contract"]["ref_format"] == "@alias/relative/path"
     assert "inline" in contract["artifact_contract"]["input_kinds"]
     assert contract["host_api"]["http"] == "policy_gated_brokered_http"
+    assert contract["host_api"]["transport_capabilities"]["out_of_order_responses"] is True
 
 
 def test_build_module_request_fills_source_hash_and_defaults() -> None:

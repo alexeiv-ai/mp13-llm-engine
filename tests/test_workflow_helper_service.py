@@ -15,6 +15,7 @@ from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
 from hosting.sandbox.workflow_python_contract import build_workflow_python_node_snippet_request
+from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
 
 
 def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
@@ -1958,10 +1959,73 @@ def test_execute_workflow_python_node_host_api_reads_and_writes_artifact_roots(t
     assert out["output"]["schemas"]["fs.write_text"]["properties"]["text"]["type"] == "string"
     assert out["output"]["transport"]["async_capable"] is True
     assert out["output"]["transport"]["host_call_id"] is True
+    assert out["output"]["transport"]["out_of_order_responses"] is True
     assert out["output"]["seed"] == "host api seed"
     assert out["output"]["bytes"] == len("HOST API SEED")
     assert out["output"]["size"] == len("HOST API SEED")
     assert out["artifacts"][0]["ref"]
+
+
+def test_workflow_python_node_host_api_matches_out_of_order_responses() -> None:
+    registry = WorkflowPythonNodeRuntimeRegistry()
+    completed: list[str] = []
+    completed_lock = threading.Lock()
+    source = (
+        "import threading\n"
+        "import time\n"
+        "def run(payload):\n"
+        "    results = {}\n"
+        "    errors = []\n"
+        "    def invoke(name, delay):\n"
+        "        try:\n"
+        "            results[name] = host.call('test.delay', {'name': name, 'delay': delay})\n"
+        "        except Exception as exc:\n"
+        "            errors.append(str(exc))\n"
+        "    slow = threading.Thread(target=invoke, args=('slow', 0.20))\n"
+        "    fast = threading.Thread(target=invoke, args=('fast', 0.01))\n"
+        "    slow.start()\n"
+        "    time.sleep(0.02)\n"
+        "    fast.start()\n"
+        "    slow.join()\n"
+        "    fast.join()\n"
+        "    if errors:\n"
+        "        raise Exception(';'.join(errors))\n"
+        "    return {'output': results}\n"
+    )
+
+    def dispatch(call: dict) -> dict:
+        args = dict(call.get("arguments") or {})
+        time.sleep(float(args.get("delay") or 0.0))
+        name = str(args.get("name") or "")
+        with completed_lock:
+            completed.append(name)
+        return {"name": name, "host_call_id": str(call.get("host_call_id") or "")}
+
+    try:
+        out = registry.execute(
+            {
+                "request_id": "req-node-host-api-out-of-order",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "python": {"import_allowlist": ["threading", "time"]},
+                "limits": {"timeout_ms": 5000},
+            },
+            python_executable=sys.executable,
+            host_dispatcher=dispatch,
+        )
+    finally:
+        registry.shutdown()
+
+    assert out["ok"] is True
+    assert completed == ["fast", "slow"]
+    assert out["output"]["slow"]["name"] == "slow"
+    assert out["output"]["fast"]["name"] == "fast"
+    assert out["output"]["slow"]["host_call_id"] != out["output"]["fast"]["host_call_id"]
 
 
 def test_execute_workflow_python_node_host_api_rejects_input_writes(tmp_path: Path) -> None:

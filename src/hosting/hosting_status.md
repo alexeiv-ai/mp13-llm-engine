@@ -47,10 +47,11 @@ Purpose: record the current implementation state and the discrepancies against `
 - Deterministic non-executing uv install plans from `pyproject_toml`, `uv_lock`, and dependency groups.
 - uv install plan locking/verification, explicit uv execution through install APIs, uv install receipts, uv receipt verification, and uv-managed interpreter selection for dependency-bearing node execution.
 - Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
-- Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
+- Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, including artifact-root filesystem operations and policy-gated brokered HTTP.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
 - Node host API built-in namespaces can now be disabled through node sandbox policy; the current built-in `fs`/`artifact_fs` namespace is omitted from discovery and dispatch when disabled.
 - Node host API now supports policy-gated brokered HTTP through `http.fetch` / `host.http_fetch(...)` when sandbox policy enables brokered HTTP.
+- Node host API transport now correlates concurrent host responses by `host_call_id` and advertises out-of-order-safe responses.
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
 - Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Warm node worker recycling now stops idle workers for superseded derived environment identities, capacity-trimmed idle workers, and unhealthy idle workers discovered during resource inspection.
@@ -194,6 +195,12 @@ Purpose: record the current implementation state and the discrepancies against `
 - Documented that artifact access control uses existing hosting roles plus sandbox policy unless a future external artifact API requires more.
 - Verified artifact helper tests: `3 passed`.
 - Verified existing workflow service artifact tests after helper changes: `14 passed`.
+- Added out-of-order-safe node host API response handling for concurrent worker calls using `host_call_id` correlation.
+- Host dispatch now runs host-call handlers off the node runtime wait loop and serializes response writes back to the worker.
+- Updated node host API transport capabilities, worker docs, and client-change notes for out-of-order-safe host responses.
+- Verified focused host API tests after out-of-order response support: `6 passed`.
+- Verified workflow Python contract tests after transport capability update: `13 passed`.
+- Verified workflow helper service tests after host-call dispatch changes: `82 passed`.
 
 ## Current Client Impact
 
@@ -207,3 +214,4 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node-profile callers may see `node_runtime_recycle` metrics when a request causes stale idle workers from a prior derived environment identity to be stopped.
 - Node-profile callers can disable the artifact filesystem host API namespace with `sandbox_policy.sandbox.host_api.namespaces.fs=false`; `host.describe` remains available so code can discover the effective policy.
 - Node-profile callers can enable brokered HTTP host calls with the existing sandbox HTTP policy; code should discover `http.fetch` before calling it because it is policy-gated.
+- Node-profile callers and custom host API transports should correlate host responses by `host_call_id`; response arrival order is no longer part of the contract.

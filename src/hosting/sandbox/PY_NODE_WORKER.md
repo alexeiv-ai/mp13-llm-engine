@@ -200,7 +200,7 @@ Convenience methods on `host` call those dispatcher methods:
 7. `host.fs_mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
 8. `host.http_fetch(url, method="GET", headers=None, body_b64="", timeout_seconds=30.0, max_response_bytes=1048576)`
 
-Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. The current worker call path waits for each response; out-of-order concurrent host responses are reserved for the future long-lived worker transport loop.
+Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. Worker host calls correlate responses by `host_call_id`, so concurrent blocking calls can receive out-of-order host responses safely.
 
 The current dispatcher maps `fs.*` calls to declared artifact roots:
 

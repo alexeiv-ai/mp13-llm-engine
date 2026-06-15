@@ -7,7 +7,9 @@ node-shaped execution data plus streamable events.
 from __future__ import annotations
 
 import atexit
+import asyncio
 import hashlib
+import inspect
 import os
 import posixpath
 import queue
@@ -110,6 +112,7 @@ class WorkflowPythonNodeRuntime:
     _busy: bool = False
     _closed: bool = False
     _heartbeat_interval_ms: int = 0
+    _send_lock: threading.Lock = field(default_factory=threading.Lock)
 
     @classmethod
     def start(cls, *, runtime_key: str, python_executable: str) -> "WorkflowPythonNodeRuntime":
@@ -193,7 +196,8 @@ class WorkflowPythonNodeRuntime:
                 self._events.get_nowait()
             except queue.Empty:
                 break
-        self.conn.send({"kind": "execute", "request": dict(request or {})})
+        with self._send_lock:
+            self.conn.send({"kind": "execute", "request": dict(request or {})})
 
     def respond_host_call(self, *, host_call_id: str, result: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None) -> bool:
         if self.proc.poll() is not None or self.conn is None:
@@ -214,10 +218,29 @@ class WorkflowPythonNodeRuntime:
         else:
             row.update({"status": "ok", "result": dict(result or {})})
         try:
-            self.conn.send(row)
+            with self._send_lock:
+                self.conn.send(row)
             return True
         except Exception:
             return False
+
+    def _dispatch_host_call(self, payload: Dict[str, Any], host_dispatcher: Optional[Any]) -> None:
+        if not callable(host_dispatcher):
+            self.respond_host_call(
+                host_call_id=str(payload.get("host_call_id") or ""),
+                error={"reason": "host_dispatcher_unavailable", "message": "host dispatcher is not available"},
+            )
+            return
+        try:
+            dispatched = host_dispatcher(dict(payload or {}))
+            if inspect.isawaitable(dispatched):
+                dispatched = asyncio.run(dispatched)
+            self.respond_host_call(host_call_id=str(payload.get("host_call_id") or ""), result=dict(dispatched or {}))
+        except Exception as exc:
+            self.respond_host_call(
+                host_call_id=str(payload.get("host_call_id") or ""),
+                error={"reason": "host_call_failed", "message": str(exc), "error_type": type(exc).__name__},
+            )
 
     def _read_events(self) -> None:
         if self.conn is None:
@@ -272,7 +295,8 @@ class WorkflowPythonNodeRuntime:
     def shutdown(self) -> None:
         try:
             if self.alive() and self.conn is not None:
-                self.conn.send({"kind": "shutdown"})
+                with self._send_lock:
+                    self.conn.send({"kind": "shutdown"})
         except Exception:
             pass
         self.ensure_stopped()
@@ -382,20 +406,13 @@ class WorkflowPythonNodeRuntime:
                 }
                 if on_event is not None:
                     on_event("host_call", payload)
-                if callable(host_dispatcher):
-                    try:
-                        dispatched = dict(host_dispatcher(payload) or {})
-                        self.respond_host_call(host_call_id=payload["host_call_id"], result=dispatched)
-                    except Exception as exc:
-                        self.respond_host_call(
-                            host_call_id=payload["host_call_id"],
-                            error={"reason": "host_call_failed", "message": str(exc), "error_type": type(exc).__name__},
-                        )
-                else:
-                    self.respond_host_call(
-                        host_call_id=payload["host_call_id"],
-                        error={"reason": "host_dispatcher_unavailable", "message": "host dispatcher is not available"},
-                    )
+                dispatch_thread = threading.Thread(
+                    target=self._dispatch_host_call,
+                    args=(payload, host_dispatcher),
+                    daemon=True,
+                    name=f"workflow-python-node-host-call-{payload['host_call_id']}",
+                )
+                dispatch_thread.start()
                 continue
             if event_type == "canceled":
                 self._wait_for_exit()

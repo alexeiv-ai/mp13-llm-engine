@@ -9,6 +9,7 @@ import io
 import json
 import os
 import sys
+import threading
 import traceback
 from multiprocessing.connection import Client
 from typing import Any, Dict, Optional
@@ -133,30 +134,78 @@ class HostApi:
         self.conn = conn
         self.request_id = str(request_id or "")
         self._seq = 0
+        self._seq_lock = threading.Lock()
+        self._send_lock = threading.Lock()
+        self._recv_lock = threading.Lock()
+        self._response_cv = threading.Condition()
+        self._pending_responses: Dict[str, Dict[str, Any]] = {}
 
-    def call(self, method: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        meth = str(method or "").strip()
-        if not meth:
-            raise RuntimeError("host_method_required")
-        self._seq += 1
-        call_id = f"{self.request_id}:{self._seq}"
-        self.conn.send(
-            {
-                "type": "host_call",
-                "request_id": self.request_id,
-                "host_call_id": call_id,
-                "method": meth,
-                "arguments": dict(arguments or {}) if isinstance(arguments, dict) else {},
-            }
-        )
-        response = dict(self.conn.recv() or {})
-        if str(response.get("type") or "") != "host_response" or str(response.get("host_call_id") or "") != call_id:
-            raise RuntimeError("host_response_mismatch")
+    def _next_call_id(self) -> str:
+        with self._seq_lock:
+            self._seq += 1
+            return f"{self.request_id}:{self._seq}"
+
+    @staticmethod
+    def _result_from_response(response: Dict[str, Any]) -> Dict[str, Any]:
         if str(response.get("status") or "").strip().lower() == "error":
             detail = response.get("detail") if isinstance(response.get("detail"), dict) else {}
             message = str(response.get("message") or detail.get("message") or response.get("reason") or "host_call_failed")
             raise RuntimeError(message)
         return dict(response.get("result") or {})
+
+    def _take_pending_response(self, call_id: str) -> Optional[Dict[str, Any]]:
+        with self._response_cv:
+            return self._pending_responses.pop(call_id, None)
+
+    def _wait_for_response(self, call_id: str) -> Dict[str, Any]:
+        response = self._take_pending_response(call_id)
+        if response is not None:
+            return self._result_from_response(response)
+
+        while True:
+            if not self._recv_lock.acquire(blocking=False):
+                with self._response_cv:
+                    if call_id not in self._pending_responses:
+                        self._response_cv.wait(timeout=0.05)
+                    response = self._pending_responses.pop(call_id, None)
+                if response is not None:
+                    return self._result_from_response(response)
+                continue
+            try:
+                while True:
+                    response = self._take_pending_response(call_id)
+                    if response is not None:
+                        return self._result_from_response(response)
+                    row = dict(self.conn.recv() or {})
+                    if str(row.get("type") or "") != "host_response":
+                        raise RuntimeError("host_response_mismatch")
+                    response_id = str(row.get("host_call_id") or "")
+                    if response_id == call_id:
+                        return self._result_from_response(row)
+                    if not response_id:
+                        raise RuntimeError("host_response_mismatch")
+                    with self._response_cv:
+                        self._pending_responses[response_id] = row
+                        self._response_cv.notify_all()
+            finally:
+                self._recv_lock.release()
+
+    def call(self, method: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        meth = str(method or "").strip()
+        if not meth:
+            raise RuntimeError("host_method_required")
+        call_id = self._next_call_id()
+        with self._send_lock:
+            self.conn.send(
+                {
+                    "type": "host_call",
+                    "request_id": self.request_id,
+                    "host_call_id": call_id,
+                    "method": meth,
+                    "arguments": dict(arguments or {}) if isinstance(arguments, dict) else {},
+                }
+            )
+        return self._wait_for_response(call_id)
 
     def describe(self) -> Dict[str, Any]:
         return self.call("host.describe", {})

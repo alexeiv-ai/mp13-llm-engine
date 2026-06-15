@@ -107,7 +107,7 @@ def workflow_python_node_contract() -> Dict[str, Any]:
                 "framed": True,
                 "host_call_id": True,
                 "async_capable": True,
-                "out_of_order_responses": False,
+                "out_of_order_responses": True,
                 "sync_handlers": True,
                 "async_handlers": True,
             },

@@ -309,7 +309,7 @@ Transport requirement: use async-capable framed messages with `host_call_id` cor
 - [x] Extract a reusable host-dispatch registry for built-in and host-registered node functions.
 - [x] Model the dispatch registry as a native scoped toolbox-like capability registry without toolbox manifests or hosted toolbox lifecycle.
 - [x] Include method descriptions, argument schemas, result schemas, and permissions in sandbox-visible `host.describe` discovery.
-- [ ] Support async-capable framed host API messages with `host_call_id` correlation and out-of-order-safe responses.
+- [x] Support async-capable framed host API messages with `host_call_id` correlation and out-of-order-safe responses.
 - [x] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
 - [x] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
 - [x] Add policy-gated HTTP host API support using the same dispatcher shape.
