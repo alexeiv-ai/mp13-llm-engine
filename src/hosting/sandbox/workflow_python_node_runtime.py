@@ -79,6 +79,13 @@ def _allocate_node_ipc_address(request_id: str) -> tuple[str, str]:
     return "AF_UNIX", posixpath.join(base, f"mp13-node-{safe[:24]}-{nonce}.sock")
 
 
+def _node_startup_timeout_seconds() -> float:
+    try:
+        return max(1.0, min(float(os.environ.get("MP13_WORKFLOW_PYTHON_NODE_STARTUP_TIMEOUT_SECONDS") or 30.0), 120.0))
+    except Exception:
+        return 30.0
+
+
 def _import_allowlist(request: Dict[str, Any]) -> list[str]:
     py = dict(request.get("python") or {})
     out: list[str] = []
@@ -102,6 +109,7 @@ class WorkflowPythonNodeRuntime:
     _request_id: str = ""
     _busy: bool = False
     _closed: bool = False
+    _heartbeat_interval_ms: int = 0
 
     @classmethod
     def start(cls, *, runtime_key: str, python_executable: str) -> "WorkflowPythonNodeRuntime":
@@ -151,7 +159,7 @@ class WorkflowPythonNodeRuntime:
         accept_thread = threading.Thread(target=_accept, daemon=True, name=f"workflow-python-node-accept-{int(proc.pid or 0)}")
         accept_thread.start()
         try:
-            accepted = accept_queue.get(timeout=10.0)
+            accepted = accept_queue.get(timeout=_node_startup_timeout_seconds())
         except Exception:
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
@@ -178,6 +186,8 @@ class WorkflowPythonNodeRuntime:
         self._request_id = _clean(request.get("request_id"))
         self._cancel_requested = False
         self._busy = True
+        limits = dict(request.get("limits") or {})
+        self._heartbeat_interval_ms = max(0, int(limits.get("heartbeat_interval_ms") or 0))
         while True:
             try:
                 self._events.get_nowait()
@@ -298,8 +308,26 @@ class WorkflowPythonNodeRuntime:
         last_stdout = ""
         last_stderr = ""
         last_progress: Optional[Dict[str, Any]] = None
+        started_at = time.monotonic()
+        heartbeat_interval = float(max(0, int(self._heartbeat_interval_ms or 0))) / 1000.0
+        next_heartbeat = started_at + heartbeat_interval if heartbeat_interval > 0 else 0.0
 
         while True:
+            now = time.monotonic()
+            if heartbeat_interval > 0 and now >= next_heartbeat:
+                if on_event is not None:
+                    elapsed_ms = max(0, int((now - started_at) * 1000))
+                    remaining_ms = max(0, int((deadline - now) * 1000))
+                    on_event(
+                        "heartbeat",
+                        {
+                            "request_id": self.request_id,
+                            "status": "running",
+                            "elapsed_ms": elapsed_ms,
+                            "remaining_ms": remaining_ms,
+                        },
+                    )
+                next_heartbeat = now + heartbeat_interval
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self._kill()

@@ -50,6 +50,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
+- Python node request lifecycle states are exposed as `submitted`, `running`, `ok`, `error`, `timeout`, and `canceled`; long-running node requests can opt into host-side `heartbeat` stream events with `limits.heartbeat_interval_ms`.
 - Pending-cancel handling in the shared active child runtime registry so host cancellation is not lost while a node harness child is still starting.
 
 ## Discrepancies
@@ -151,8 +152,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added a reusable native scoped host API registry for node built-ins and future host-registered functions, with sync/async handler support and sandbox-visible schemas.
 - Added warm node harness reuse across compatible sequential requests and resource reporting for idle warm workers.
 - Added capacity-shrink cleanup for idle warm node workers through the node capacity API.
+- Added explicit node lifecycle states and opt-in heartbeat stream events for long-running node requests.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
-- Verified broader hosting workflow tests after node host API and warm-worker lifecycle changes: `184 passed`.
+- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, and heartbeat changes: `185 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
 ## Current Client Impact

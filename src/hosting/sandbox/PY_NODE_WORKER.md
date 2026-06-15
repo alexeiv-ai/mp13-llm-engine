@@ -43,6 +43,17 @@ Node-profile execution is host-owned:
 
 The node runtime intentionally does not use `execute_workflow_python_helper`. It also does not expose a raw `python -m ...` worker entrypoint to dependent projects.
 
+Request lifecycle states are shared with the hosted pool model:
+
+1. `submitted`: accepted by the host but not yet assigned to a worker slot.
+2. `running`: assigned to a node runtime and currently executing.
+3. `ok`: completed successfully.
+4. `error`: failed before or during execution.
+5. `timeout`: exceeded `limits.timeout_ms`.
+6. `canceled`: canceled by host request, stream command, or worker shutdown.
+
+Long-running requests can opt into host-side liveness events by setting `limits.heartbeat_interval_ms`. Heartbeats are emitted by the host wait loop as `heartbeat` stream events with `request_id`, `status=running`, `elapsed_ms`, and `remaining_ms`. They do not require sandbox code cooperation and are separate from user progress events.
+
 ## Request Contract
 
 Required fields:

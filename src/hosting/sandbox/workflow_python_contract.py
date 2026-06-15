@@ -57,6 +57,7 @@ def workflow_python_node_contract() -> Dict[str, Any]:
         "response_fields": list(NODE_RESPONSE_FIELDS),
         "stream_event_types": [
             "started",
+            "heartbeat",
             "progress",
             "log",
             "stdout",
@@ -77,7 +78,8 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "payload",
         ],
         "execution_modes": ["module", "snippet", "project"],
-        "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb"],
+        "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb", "heartbeat_interval_ms"],
+        "job_lifecycle_states": ["submitted", "running", "ok", "error", "timeout", "canceled"],
         "artifact_contract": {
             "ref_format": "@alias/relative/path",
             "default_roots": ["@artifacts"],

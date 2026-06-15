@@ -54,6 +54,7 @@ def _string_map(payload: Any) -> Dict[str, str]:
 
 HOSTED_STREAM_EVENT_TYPES = [
     "started",
+    "heartbeat",
     "progress",
     "stdout",
     "stderr",

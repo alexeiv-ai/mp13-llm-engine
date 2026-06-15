@@ -21,7 +21,10 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
     assert "artifact_outputs" in contract["request_fields"]
     assert "state_patch" in contract["response_fields"]
     assert "progress" in contract["stream_event_types"]
+    assert "heartbeat" in contract["stream_event_types"]
     assert "log" in contract["stream_event_types"]
+    assert "heartbeat_interval_ms" in contract["limits"]
+    assert contract["job_lifecycle_states"] == ["submitted", "running", "ok", "error", "timeout", "canceled"]
     assert contract["artifact_contract"]["ref_format"] == "@alias/relative/path"
     assert "inline" in contract["artifact_contract"]["input_kinds"]
 

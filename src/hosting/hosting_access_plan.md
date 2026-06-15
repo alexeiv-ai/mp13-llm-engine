@@ -329,7 +329,7 @@ Warm-worker obstacles to solve:
 5. Warm workers need cleanup/restart policy for worker-owned request artifacts, leaked module state, dependency/runtime changes, and canceled or unhealthy children.
 6. Stream backpressure must be per request, not only per process.
 
-- [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
+- [x] Define node job lifecycle states for long-running execution beyond short helper calls.
 - [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
 - [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
 - [x] Implement a warm harness worker loop that accepts many sequential requests over one control channel.
@@ -340,10 +340,11 @@ Warm-worker obstacles to solve:
 - [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
-- [ ] Add long-running progress heartbeat/status behavior.
+- [x] Add opt-in long-running heartbeat/status behavior.
 - [x] Add tests for concurrent different node jobs.
 - [x] Add tests for concurrent same-code node jobs.
 - [x] Add tests for warm worker reuse across compatible sequential requests.
+- [x] Add tests for opt-in long-running heartbeat stream events.
 - [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
 
 ### Snippets And Python Projects

@@ -1557,8 +1557,10 @@ def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=3.0)
+        thread.join(timeout=20.0)
 
+    assert all(not thread.is_alive() for thread in threads)
+    assert set(results) == {"a", "b"}
     assert results["a"]["status"] == "ok"
     assert results["b"]["status"] == "ok"
     environment_key = results["a"]["environment_key"]
@@ -2405,6 +2407,57 @@ def test_workflow_python_node_stream_emits_runtime_progress_and_stdout(tmp_path:
     event_types = [row["type"] for row in events]
     assert event_types.index("progress") < event_types.index("result")
     assert any(row["type"] == "stdout" and "node stdout" in row["payload"]["text"] for row in events)
+
+
+def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_request(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import time\n\ndef run(payload):\n    time.sleep(0.35)\n    return {'output': {'done': True}}\n"
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-stream-heartbeat",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "python": {"import_allowlist": ["time"]},
+                "limits": {"timeout_ms": 2000, "output_limit_bytes": 1024, "heartbeat_interval_ms": 100},
+            },
+        )
+        events = []
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("events") or []))
+            if any(dict(row or {}).get("type") == "done" for row in events):
+                break
+            time.sleep(0.05)
+        status = svc.workflow_python_request_status(
+            profile="node",
+            environment_key=str(opened["environment_key"]),
+            request_id="req-node-stream-heartbeat",
+        )
+    finally:
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    heartbeats = [row for row in events if row["type"] == "heartbeat"]
+    assert opened["status"] == "ok"
+    assert heartbeats
+    assert heartbeats[0]["payload"]["request_id"] == "req-node-stream-heartbeat"
+    assert heartbeats[0]["payload"]["status"] == "running"
+    assert any(row["type"] == "result" for row in events)
+    assert status["request"]["status"] == "ok"
+    assert status["request"]["stream_event_count"] >= len(heartbeats)
 
 
 def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp_path: Path) -> None:
