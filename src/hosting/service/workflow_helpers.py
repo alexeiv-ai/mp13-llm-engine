@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import base64
 import sys
 import os
 import json
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -12,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
+from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot, hosted_log_summary
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 from ..sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
@@ -210,111 +209,19 @@ class WorkflowHelperMixin:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    @staticmethod
-    def _workflow_python_artifact_safe_name(value: Any, *, fallback: str) -> str:
-        raw = str(value or "").strip() or fallback
-        safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw)
-        return safe.strip("._") or fallback
-
-    def _workflow_python_artifact_roots(self, *, sandbox_policy: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:
-        roots = {"artifacts": (self._workflow_python_artifact_root() / "objects").resolve()}
+    def _workflow_python_artifact_manager(self, *, sandbox_policy: Optional[Dict[str, Any]] = None) -> HostedArtifactManager:
         sandbox = dict(dict(sandbox_policy or {}).get("sandbox") or sandbox_policy or {})
         configured = sandbox.get("artifact_roots")
         if isinstance(configured, dict):
             rows = [{"name": key, "path": value} for key, value in configured.items()]
         else:
             rows = [dict(row or {}) for row in list(configured or []) if isinstance(row, dict)]
+        roots: Dict[str, Path] = {}
         for row in rows:
-            alias = self._workflow_python_artifact_safe_name(row.get("name") or row.get("root_id") or row.get("alias"), fallback="")
-            if not alias:
-                continue
-            roots[alias] = Path(str(row.get("path") or "")).expanduser().resolve()
-        for root in roots.values():
-            root.mkdir(parents=True, exist_ok=True)
-        return roots
-
-    @staticmethod
-    def _workflow_python_artifact_ref_parts(ref: str) -> Optional[tuple[str, str]]:
-        value = str(ref or "").strip().replace("\\", "/")
-        if not value.startswith("@"):
-            return None
-        alias, _, rel = value[1:].partition("/")
-        alias = alias.strip()
-        rel = rel.strip("/")
-        if not alias or not rel:
-            return None
-        path = Path(rel)
-        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-            return None
-        return alias, rel
-
-    def _workflow_python_artifact_path_from_ref(self, ref: str, *, roots: Dict[str, Path]) -> Optional[Path]:
-        parts = self._workflow_python_artifact_ref_parts(ref)
-        if parts is None:
-            return None
-        alias, rel = parts
-        root = roots.get(alias)
-        if root is None:
-            return None
-        path = (root / rel).resolve()
-        try:
-            path.relative_to(root.resolve())
-        except ValueError:
-            return None
-        return path
-
-    @staticmethod
-    def _workflow_python_artifact_has_mask(value: str) -> bool:
-        text = str(value or "")
-        return any(ch in text for ch in ("*", "?", "["))
-
-    def _workflow_python_artifact_paths_from_ref(
-        self,
-        row: Dict[str, Any],
-        *,
-        roots: Dict[str, Path],
-    ) -> tuple[Optional[Path], list[Path]]:
-        ref = str(row.get("ref") or "").strip()
-        path_mask = str(row.get("path_mask") or row.get("mask") or "").strip()
-        recursive = bool(row.get("recursive", False))
-        parts = self._workflow_python_artifact_ref_parts(ref)
-        if parts is None:
-            return None, []
-        alias, rel = parts
-        root = roots.get(alias)
-        if root is None:
-            return None, []
-        if path_mask:
-            base = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
-            if base is None or not base.exists() or not base.is_dir():
-                return base, []
-            matches = list(base.rglob(path_mask) if recursive else base.glob(path_mask))
-            return base, sorted(path.resolve() for path in matches if path.is_file())
-        if self._workflow_python_artifact_has_mask(rel):
-            pattern = rel
-            if recursive and not pattern.startswith("**/"):
-                pattern = f"**/{pattern}"
-            matches = list(root.glob(pattern))
-            return root, sorted(path.resolve() for path in matches if path.is_file())
-        path = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
-        return path, [path] if path is not None and path.exists() and path.is_file() else []
-
-    @staticmethod
-    def _workflow_python_inline_artifact_bytes(row: Dict[str, Any]) -> Optional[bytes]:
-        if "base64" in row:
-            return base64.b64decode(str(row.get("base64") or ""), validate=True)
-        if "text" in row:
-            encoding = str(row.get("encoding") or "utf-8").strip() or "utf-8"
-            return str(row.get("text") or "").encode(encoding)
-        if "data" in row:
-            data = row.get("data")
-            if isinstance(data, bytes):
-                return data
-            encoding = str(row.get("encoding") or "utf-8").strip() or "utf-8"
-            return str(data or "").encode(encoding)
-        if str(row.get("kind") or row.get("mode") or "").strip().lower() == "inline":
-            return b""
-        return None
+            alias = artifact_safe_name(row.get("name") or row.get("root_id") or row.get("alias"), fallback="")
+            if alias:
+                roots[alias] = Path(str(row.get("path") or "")).expanduser().resolve()
+        return HostedArtifactManager(artifact_root=self._workflow_python_artifact_root(), artifact_roots=roots)
 
     def _workflow_python_prepare_node_artifacts(
         self,
@@ -323,136 +230,10 @@ class WorkflowHelperMixin:
         request_id: str,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        inputs = []
-        outputs = []
-        child_inputs: Dict[str, str] = {}
-        child_outputs: Dict[str, str] = {}
-        roots = self._workflow_python_artifact_roots(sandbox_policy=sandbox_policy)
-        run_root = (self._workflow_python_artifact_root() / "runs" / self._workflow_python_artifact_safe_name(request_id, fallback="request")).resolve()
-        input_root = run_root / "inputs"
-        output_root = run_root / "outputs"
-        input_root.mkdir(parents=True, exist_ok=True)
-        output_root.mkdir(parents=True, exist_ok=True)
-        for index, spec in enumerate(list(request.get("artifact_inputs") or [])):
-            row = dict(spec or {})
-            name = self._workflow_python_artifact_safe_name(row.get("name"), fallback=f"input_{index}")
-            inline_bytes = self._workflow_python_inline_artifact_bytes(row)
-            source = None
-            matches: list[Path] = []
-            if inline_bytes is None:
-                source, matches = self._workflow_python_artifact_paths_from_ref(row, roots=roots)
-            if inline_bytes is None and not matches:
-                raise ValueError(f"artifact_input_unavailable:{name}")
-            masked_input = inline_bytes is None and bool(
-                str(row.get("path_mask") or row.get("mask") or "").strip()
-                or self._workflow_python_artifact_has_mask(str(row.get("ref") or ""))
-            )
-            filename = self._workflow_python_artifact_safe_name(row.get("filename") or (matches[0].name if matches else name), fallback="artifact.bin")
-            target = ((input_root / name) if masked_input else (input_root / name / filename)).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if inline_bytes is not None:
-                target.write_bytes(inline_bytes)
-            elif masked_input:
-                target.mkdir(parents=True, exist_ok=True)
-                base = source if source is not None and source.is_dir() else (source.parent if source is not None else matches[0].parent)
-                files = []
-                for match in matches:
-                    try:
-                        rel = match.relative_to(base)
-                    except ValueError:
-                        rel = Path(match.name)
-                    out_path = (target / rel).resolve()
-                    try:
-                        out_path.relative_to(target)
-                    except ValueError as exc:
-                        raise ValueError(f"artifact_input_path_invalid:{name}") from exc
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(match, out_path)
-                    files.append({"source": str(match), "path": str(out_path), "relative_path": str(rel).replace("\\", "/")})
-            else:
-                shutil.copyfile(matches[0], target)
-                files = [{"source": str(matches[0]), "path": str(target), "relative_path": filename}]
-            child_inputs[name] = str(target)
-            inputs.append(
-                {
-                    "name": name,
-                    "kind": "inline" if inline_bytes is not None else "ref",
-                    "ref": str(row.get("ref") or "") or None,
-                    "path": str(target),
-                    "filename": filename,
-                    "path_mask": str(row.get("path_mask") or row.get("mask") or "").strip() or None,
-                    "recursive": bool(row.get("recursive", False)),
-                    "files": [] if inline_bytes is not None else files,
-                    "media_type": str(row.get("media_type") or row.get("content_type") or "application/octet-stream"),
-                    "encoding": str(row.get("encoding") or "").strip() or None,
-                    "max_bytes": row.get("max_bytes"),
-                    "count": row.get("count"),
-                    "ttl": row.get("ttl"),
-                    "lifetime": row.get("lifetime"),
-                    "expires_at": row.get("expires_at"),
-                }
-            )
-        for index, spec in enumerate(list(request.get("artifact_outputs") or [])):
-            row = dict(spec or {})
-            name = self._workflow_python_artifact_safe_name(row.get("name"), fallback=f"output_{index}")
-            filename = self._workflow_python_artifact_safe_name(row.get("filename"), fallback=f"{name}.bin")
-            kind = str(row.get("kind") or row.get("mode") or ("inline" if bool(row.get("inline")) else "ref")).strip().lower() or "ref"
-            if kind == "inline":
-                outputs.append(
-                    {
-                        "name": name,
-                        "kind": "inline",
-                        "filename": filename,
-                        "media_type": str(row.get("media_type") or row.get("content_type") or "application/octet-stream"),
-                        "encoding": str(row.get("encoding") or "utf-8").strip() or "utf-8",
-                        "max_bytes": row.get("max_bytes"),
-                        "count": row.get("count"),
-                        "ttl": row.get("ttl"),
-                        "lifetime": row.get("lifetime"),
-                        "expires_at": row.get("expires_at"),
-                    }
-                )
-                continue
-            path_mask = str(row.get("path_mask") or row.get("mask") or "").strip()
-            recursive = bool(row.get("recursive", False))
-            target = ((output_root / name) if path_mask else (output_root / name / filename)).resolve()
-            try:
-                target.relative_to(output_root)
-            except ValueError as exc:
-                raise ValueError(f"artifact_output_path_invalid:{name}") from exc
-            if path_mask:
-                target.mkdir(parents=True, exist_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-            child_outputs[name] = str(target)
-            output_ref = str(row.get("ref") or "").strip() or None
-            if output_ref and self._workflow_python_artifact_path_from_ref(output_ref, roots=roots) is None:
-                raise ValueError(f"artifact_output_ref_invalid:{name}")
-            outputs.append(
-                {
-                    "name": name,
-                    "kind": "ref",
-                    "filename": filename,
-                    "path": str(target),
-                    "ref": output_ref,
-                    "path_mask": path_mask or None,
-                    "recursive": recursive,
-                    "media_type": str(row.get("media_type") or row.get("content_type") or "application/octet-stream"),
-                    "encoding": str(row.get("encoding") or "").strip() or None,
-                    "max_bytes": row.get("max_bytes"),
-                    "count": row.get("count"),
-                    "ttl": row.get("ttl"),
-                    "lifetime": row.get("lifetime"),
-                    "expires_at": row.get("expires_at"),
-                }
-            )
-        return {
-            "run_root": str(run_root),
-            "roots": {f"@{key}": str(value) for key, value in sorted(roots.items())},
-            "inputs": inputs,
-            "outputs": outputs,
-            "child_context": {"inputs": child_inputs, "outputs": child_outputs},
-        }
+        return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).prepare(
+            request=dict(request or {}),
+            request_id=str(request_id or ""),
+        )
 
     def _workflow_python_collect_node_artifacts(
         self,
@@ -462,92 +243,21 @@ class WorkflowHelperMixin:
         runtime_artifacts: Optional[list[Dict[str, Any]]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
-        out = []
-        roots = self._workflow_python_artifact_roots(sandbox_policy=sandbox_policy)
-        for row in list(dict(context or {}).get("outputs") or []):
-            spec = dict(row or {})
-            if str(spec.get("kind") or "ref").strip().lower() == "inline":
-                match = next(
-                    (
-                        dict(item or {})
-                        for item in list(runtime_artifacts or [])
-                        if isinstance(item, dict)
-                        and self._workflow_python_artifact_safe_name(item.get("name"), fallback="") == str(spec.get("name") or "")
-                    ),
-                    None,
-                )
-                if match is None:
-                    continue
-                inline_bytes = self._workflow_python_inline_artifact_bytes(match)
-                if inline_bytes is None:
-                    continue
-                encoding = str(match.get("encoding") or spec.get("encoding") or "utf-8").strip() or "utf-8"
-                artifact = {
-                    "name": str(spec.get("name") or "").strip() or None,
-                    "kind": "inline",
-                    "filename": str(match.get("filename") or spec.get("filename") or "").strip() or None,
-                    "media_type": str(match.get("media_type") or match.get("content_type") or spec.get("media_type") or "application/octet-stream"),
-                    "encoding": encoding,
-                    "size_bytes": len(inline_bytes),
-                }
-                if "base64" in match:
-                    artifact["base64"] = str(match.get("base64") or "")
-                else:
-                    try:
-                        artifact["text"] = inline_bytes.decode(encoding)
-                    except UnicodeDecodeError:
-                        artifact["base64"] = base64.b64encode(inline_bytes).decode("ascii")
-                        artifact["encoding"] = "base64"
-                out.append(artifact)
-                continue
-            source = Path(str(spec.get("path") or "")).expanduser().resolve()
-            path_mask = str(spec.get("path_mask") or "").strip()
-            recursive = bool(spec.get("recursive", False))
-            if path_mask and source.exists() and source.is_dir():
-                sources = sorted(path.resolve() for path in (source.rglob(path_mask) if recursive else source.glob(path_mask)) if path.is_file())
-            else:
-                sources = [source] if source.exists() and source.is_file() else []
-            if not sources:
-                continue
-            for source_file in sources:
-                try:
-                    rel = source_file.relative_to(source) if source.is_dir() else Path(source_file.name)
-                except ValueError:
-                    rel = Path(source_file.name)
-                artifact_id = self._workflow_python_artifact_safe_name(f"{request_id}-{spec.get('name')}-{int(time.time() * 1000)}", fallback="artifact")
-                filename = self._workflow_python_artifact_safe_name((str(rel).replace("\\", "_") if path_mask else spec.get("filename")) or source_file.name, fallback="artifact.bin")
-                ref = str(spec.get("ref") or "").strip()
-                if ref:
-                    target_base = self._workflow_python_artifact_path_from_ref(ref, roots=roots)
-                    if target_base is None:
-                        raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
-                    target = (target_base / rel).resolve() if path_mask else target_base
-                    try:
-                        target.relative_to(target_base if path_mask else target.parent)
-                    except ValueError as exc:
-                        raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}") from exc
-                    rel_ref = str(rel).replace("\\", "/")
-                    out_ref = f"{ref.rstrip('/')}/{rel_ref}" if path_mask else ref
-                else:
-                    out_ref = f"@artifacts/{artifact_id}/{filename}"
-                    target = self._workflow_python_artifact_path_from_ref(out_ref, roots=roots)
-                    if target is None:
-                        raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source_file, target)
-                artifact = {
-                    "name": str(spec.get("name") or "").strip() or None,
-                    "kind": "ref",
-                    "ref": out_ref,
-                    "filename": filename,
-                    "media_type": str(spec.get("media_type") or "application/octet-stream"),
-                    "size_bytes": int(target.stat().st_size),
-                    "encoding": str(spec.get("encoding") or "").strip() or None,
-                }
-                if path_mask:
-                    artifact["relative_path"] = str(rel).replace("\\", "/")
-                out.append(artifact)
-        return out
+        return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).collect(
+            dict(context or {}),
+            request_id=str(request_id or ""),
+            runtime_artifacts=list(runtime_artifacts or []),
+        )
+
+    def _workflow_python_cleanup_node_artifacts(
+        self,
+        context: Optional[Dict[str, Any]],
+        *,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if context is None:
+            return {"status": "skipped", "reason": "artifact_context_missing"}
+        return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).cleanup_run(dict(context or {}))
 
     def _workflow_python_node_artifact_error(
         self,
@@ -1246,6 +956,8 @@ class WorkflowHelperMixin:
                     }
             else:
                 result["artifacts"] = []
+            if artifact_context is not None:
+                self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
             status = "ok" if bool(result.get("ok", False)) else "error"
             reason = str(result.get("reason") or "") or None
             if reason == "workflow_sandbox_timeout":
@@ -1701,6 +1413,8 @@ class WorkflowHelperMixin:
                 }
         else:
             result["artifacts"] = []
+        if artifact_context is not None:
+            self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
         status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))
         response = self._workflow_python_node_response_from_execution(
             execution=result,

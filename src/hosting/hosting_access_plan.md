@@ -148,7 +148,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 
 Decision: artifact I/O belongs in the first-class node sandbox contract, and this pass implements the local host-provisioned version. The node response keeps `artifacts` and `artifact_store` stable; `artifact_store.status=ok` is returned only when the host mints refs from declared output files or declared inline outputs, while requests with no declared output artifacts still report the store as unavailable for that response.
 
-How artifacts fit the sandbox model: input artifacts are either alias refs such as `@artifacts/...` or `@project/...`, or inline bytes/text that the host writes to sandbox-visible input paths before execution. Output artifacts are either files written by sandboxed code only to exact host-provided output paths, or inline outputs returned by sandboxed code only when a matching inline output declaration exists. After execution, the host validates declared output slots, copies file outputs into host-controlled local artifact storage or configured alias roots, and returns host-minted alias refs such as `@artifacts/...`. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
+How artifacts fit the sandbox model: input artifacts are either alias refs such as `@artifacts/...` or `@project/...`, inline bytes/text, or inline zip bundles that the host expands into sandbox-visible input paths before execution. Output artifacts are either files written by sandboxed code only to host-provided output paths/directories, inline outputs returned by sandboxed code only when a matching inline output declaration exists, or multi-file outputs exported as one inline zip. Ref outputs remain producer-owned when an explicit output ref is used. The host takes over a ref output only when the output declaration asks for takeover or omits `ref`, in which case the host copies files into `@artifacts/...`. Request-local worker output paths are cleaned after collection. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
 
 Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which configured alias refs are readable, which exact output files are writable, what inline bytes cross back out, and which refs clients may later read. Direct filesystem paths are not promoted as artifact refs.
 
@@ -162,9 +162,12 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Support input artifact file masks with `path_mask` or `mask`.
 - [x] Support recursive input artifact matching with `recursive=true`.
 - [x] Support inline artifact inputs by writing declared bytes/text to sandbox input paths.
+- [x] Support inline zip artifact inputs by expanding zip members into sandbox input directories.
 - [x] Support alias-ref artifact outputs by returning host-minted or host-validated relative alias refs.
 - [x] Support output artifact file masks with `path_mask` or `mask`.
 - [x] Support recursive output artifact collection with `recursive=true`.
+- [x] Support host takeover of selected output ref artifacts with `host_takeover`.
+- [x] Support multi-file output export as inline zip without changing producer ownership.
 - [x] Support declared inline artifact outputs without trusting undeclared sandbox artifact returns.
 - [x] Configure artifact root alias to physical path mappings through sandbox policy.
 - [x] Treat input-side size/count/lifetime/encoding metadata as optional advisory metadata.
@@ -172,6 +175,7 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Provide output artifact paths scoped to the current request.
 - [x] Collect only files written under host-provided output locations.
 - [x] Register collected output files into host-controlled artifact storage and return host-minted refs.
+- [x] Clean request-local worker artifact directories after collection.
 - [x] Ensure direct node execution ignores or rejects untrusted returned artifact refs instead of treating them as host-created artifacts.
 - [x] Ensure stream execution emits `artifact` events only for host-minted refs.
 - [x] Keep artifact-looking values from sandbox code as ordinary `output` only, unless the host artifact manager creates the reference.
@@ -179,8 +183,11 @@ Untrusted artifact refs means any artifact-looking value produced by sandboxed c
 - [x] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
 - [x] Add tests for input artifact ref resolution to sandbox paths.
 - [x] Add tests for recursive masked input artifact refs.
+- [x] Add tests for inline zip input artifact expansion.
 - [x] Add tests for output artifact collection from allowed output paths.
 - [x] Add tests for recursive masked output artifact collection.
+- [x] Add tests for host takeover of ref outputs.
+- [x] Add tests for multi-file inline zip export.
 - [x] Add tests rejecting artifact collection from paths outside host-provided output locations.
 - [x] Document the artifact-storage requirements before enabling artifacts:
   - [x] host-controlled storage root
@@ -252,16 +259,16 @@ These items are intentionally separate from the completed first-class node contr
 
 ### Base Class Completeness
 
-Current assessment: `HostedProcessSandboxBase` is useful host-side bookkeeping, but it is not yet a complete worker/runtime base. It centralizes pool, request lifecycle, request status, stream queues, capacity, and cancellation bookkeeping. It does not yet own child process launch, hot process reuse, child protocol parsing, artifact preparation/collection, import policy, result normalization, project staging, or venv selection.
+Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Runtime-specific code still owns child process launch details, stdout protocol parsing, import policy, result normalization, hot process reuse, project staging, and venv selection.
 
 - [x] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
-- [ ] Move child process launch/cancel/stdout-protocol parsing behind that interface.
-- [ ] Move common active-process resource sampling behind that interface.
-- [ ] Move reusable artifact preparation/collection into a shared host-side component.
+- [x] Move active child cancel/resource tracking behind the shared child-runtime base.
+- [x] Move reusable artifact preparation/collection/cleanup into a shared host-side component.
 - [x] Make node runtime use the shared child-runtime interface.
+- [x] Keep child process launch/stdout protocol parsing runtime-specific for now.
 - [ ] Decide whether Python helper can use the same child-runtime implementation while preserving helper response compatibility.
 - [ ] Keep toolbox orchestration separate, but map toolbox executor resource/status reporting through the same normalized host pool/resource shapes where practical.
-- [ ] Add tests proving pool/request/status/cancel behavior is identical across helper-compatible and node runtimes.
+- [x] Add base-layer tests for pool/request/status/cancel behavior and active child resource/cancel tracking.
 
 ### Long-Running And Concurrent Node Jobs
 

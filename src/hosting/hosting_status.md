@@ -11,7 +11,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
-- Node artifact store: local host-provisioned refs implemented for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path matching.
+- Node artifact store: local host-provisioned refs implemented for declared input refs and output slots, including inline artifacts, inline zip inputs, alias refs, file masks, recursive path matching, host takeover, and inline zip export.
 - Python helper worker cleanup: reviewed; it remains intentionally required for helper-profile execution.
 
 ## Implemented
@@ -39,6 +39,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node resource, request-status, capacity, and metrics reporting through the workflow pool.
 - Node compatible-work routing through environment-keyed pools, with runtime capacity controls for reserved slots.
 - Node artifact file-mask and recursive input/output collection support.
+- Shared active child runtime registry for active child resources/cancel tracking.
+- Shared host artifact manager for artifact prepare, collect, zip, ownership, and request-local cleanup.
 
 ## Discrepancies
 
@@ -46,6 +48,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Verified dependency runtime success now selects the verified runtime interpreter before node execution.
 - Artifact I/O is host-provisioned local sandbox file access: alias-ref and inline inputs are copied into request input paths, output slots become exact writable paths, inline outputs require matching declarations, and host-minted alias refs such as `@artifacts/...` are returned only for declared output files.
 - File-mask artifact I/O is supported for local alias roots. Input masks copy matching files into a request-scoped input directory, and output masks collect matching files from a request-scoped output directory while preserving relative paths in returned refs.
+- Inline zip inputs are expanded into request-scoped input directories. Multi-file outputs can be exported as inline zip without taking over artifact ownership. Explicit ref outputs remain producer-owned unless `host_takeover` is requested; takeover copies outputs into `@artifacts/...`.
 - Artifact authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
@@ -54,7 +57,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
 - Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior, arbitrary snippets, multi-module Python projects, and uv-managed environments.
-- Continue the shared hosted child-runtime/base abstraction so helper-compatible runtimes can share launch, cancel, resources, and protocol mechanics.
+- Decide whether helper-compatible runtimes should adopt the shared child-runtime/artifact helpers without changing helper response compatibility.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
 
@@ -103,10 +106,15 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added same-code concurrency coverage proving multiple instances of one `module_sha256` can run concurrently up to configured capacity.
 - Added artifact input/output `path_mask` / `mask` and `recursive` support for alias refs, including tests for recursive masked input consumption and recursive masked output collection.
 - Verified broader hosting workflow tests: `161 passed`.
+- Added `hosting.sandbox.child_runtime.HostedActiveChildRuntimeRegistry` so direct host-managed runtimes share active child tracking, cancellation lookup, and active process resource listing.
+- Added `hosting.sandbox.artifacts.HostedArtifactManager` and routed Python node artifact prepare/collect/cleanup through it.
+- Added inline zip input expansion for multi-file artifacts, inline zip export for multi-file outputs, explicit `host_takeover` for selected ref outputs, and request-local artifact cleanup after collection.
+- Added tests for active child runtime tracking, inline zip input, inline zip output export, and host takeover.
+- Verified broader hosting workflow tests: `165 passed`.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
 - Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
-- Node-profile clients should pass input artifacts as alias refs or inline payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
+- Node-profile clients should pass input artifacts as alias refs, inline payloads, or inline zip payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, use `export_inline_zip` for many output files when ownership should stay with the producer, request `host_takeover` only when the host should own returned ref lifetime, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.

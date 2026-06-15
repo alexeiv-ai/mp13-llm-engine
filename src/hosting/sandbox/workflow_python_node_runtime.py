@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from .._process_utils import hidden_subprocess_kwargs
-from .child_runtime import ChildRuntimeEventCallback, HostedChildRuntime
+from .child_runtime import ChildRuntimeEventCallback, HostedActiveChildRuntimeRegistry
 
 
 NodeEventCallback = ChildRuntimeEventCallback
@@ -362,11 +362,7 @@ class WorkflowPythonNodeRuntime:
                 }
 
 
-class WorkflowPythonNodeRuntimeRegistry(HostedChildRuntime):
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._active: Dict[str, WorkflowPythonNodeRuntime] = {}
-
+class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
     def execute(
         self,
         request: Dict[str, Any],
@@ -392,46 +388,11 @@ class WorkflowPythonNodeRuntimeRegistry(HostedChildRuntime):
         }
         executable = _clean(python_executable) or _python_executable_from_request(req)
         runtime = WorkflowPythonNodeRuntime.start(request=child_req, python_executable=executable)
-        with self._lock:
-            if request_id:
-                self._active[request_id] = runtime
+        self.register_active(request_id, runtime)
         try:
             return runtime.wait(timeout_ms=timeout_ms, on_event=on_event)
         finally:
-            with self._lock:
-                if request_id:
-                    self._active.pop(request_id, None)
-
-    def cancel(self, request_id: str) -> Dict[str, Any]:
-        rid = _clean(request_id)
-        if not rid:
-            return {"status": "error", "reason": "request_id_required", "canceled": False}
-        with self._lock:
-            runtime = self._active.get(rid)
-        if runtime is None:
-            return {"status": "ok", "request_id": rid, "canceled": False, "reason": "request_not_found"}
-        return {"status": "ok", "request_id": rid, "canceled": runtime.cancel(), "reason": "canceled"}
-
-    def resources(self) -> Dict[str, Any]:
-        with self._lock:
-            active = list(self._active.items())
-        processes = []
-        for request_id, runtime in active:
-            proc = runtime.proc
-            processes.append(
-                {
-                    "request_id": str(request_id or "").strip(),
-                    "pid": int(proc.pid or 0) or None,
-                    "alive": proc.poll() is None,
-                    "python_executable": runtime.python_executable,
-                    "canceled": bool(runtime._cancel_requested),
-                }
-            )
-        return {
-            "status": "ok",
-            "active_count": len(processes),
-            "processes": processes,
-        }
+            self.unregister_active(request_id)
 
 
 __all__ = ["WorkflowPythonNodeRuntimeRegistry"]

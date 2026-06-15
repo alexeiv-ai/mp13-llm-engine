@@ -108,7 +108,7 @@ Artifact I/O is part of the node sandbox contract, but artifact authority stays
 with the host. The current implementation provides local host-controlled alias
 refs such as `@artifacts/...` for declared output files, supports
 policy-configured roots such as `@project/...`, resolves declared input refs
-into request-scoped input paths, and supports declared inline inputs/outputs.
+into request-scoped input paths, supports inline zip inputs, and supports declared inline inputs/outputs.
 The remaining durable-service concerns are explicit:
 
 1. A host-controlled storage root outside arbitrary sandbox paths.
@@ -116,17 +116,20 @@ The remaining durable-service concerns are explicit:
 3. Read and write authorization rules for refs.
 4. Lifetime, expiry, cleanup, and garbage-collection policy.
 5. Size and count limits per request.
-6. Input-ref and inline-input resolution into sandbox-visible input paths.
+6. Input-ref, inline-input, and inline-zip resolution into sandbox-visible input paths.
 7. Output-slot resolution into exact sandbox-visible writable paths.
 8. A brokered write API if path-based output slots are insufficient.
 9. Stream `artifact` events only for host-minted refs.
-10. Response `artifacts` entries only for host-validated output files or declared inline outputs.
+10. Response `artifacts` entries only for host-validated output files, declared inline outputs, or declared inline zip exports.
 
 Sandboxed code may return ordinary JSON values that look like paths, URLs, or
 artifact IDs, but those values are not trusted artifact refs. The host only
 mints artifact refs after validating files from declared output locations,
-registering them in host-controlled storage, or accepting inline bytes for a
-declared inline output name. Input-side size/count/lifetime/encoding fields are
+registering them in host-controlled storage, accepting inline bytes for a
+declared inline output name, or packing declared output files into inline zip.
+Explicit ref outputs remain producer-managed unless the host is asked to take
+over ownership, in which case they are copied into `@artifacts/...`.
+Input-side size/count/lifetime/encoding fields are
 advisory metadata. Stronger authorization, expiry, cleanup, and external
 artifact-read APIs remain future durable-service work.
 

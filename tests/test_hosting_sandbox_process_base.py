@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hosting.sandbox.process_base import HostedProcessSandboxBase
+from hosting.sandbox.child_runtime import HostedActiveChildRuntimeRegistry
 from hosting.sandbox.runtime_base import HostedPoolKey, HostedStreamEvent, HostedWorkerSlot
 
 
@@ -128,3 +129,35 @@ def test_process_base_missing_pool_results_are_structured() -> None:
         "environment_key": "missing",
         "request_id": "req-1",
     }
+
+
+def test_active_child_runtime_registry_tracks_resources_and_cancel() -> None:
+    class Proc:
+        pid = 4321
+
+        def poll(self):
+            return None
+
+    class Runtime:
+        proc = Proc()
+        python_executable = "python-test"
+        _cancel_requested = False
+
+        def cancel(self):
+            self._cancel_requested = True
+            return True
+
+    registry = HostedActiveChildRuntimeRegistry()
+    runtime = Runtime()
+
+    registry.register_active("req-1", runtime)
+    resources = registry.resources()
+    canceled = registry.cancel("req-1")
+    registry.unregister_active("req-1")
+
+    assert resources["active_count"] == 1
+    assert resources["processes"][0]["pid"] == 4321
+    assert resources["processes"][0]["python_executable"] == "python-test"
+    assert canceled["canceled"] is True
+    assert runtime._cancel_requested is True
+    assert registry.resources()["active_count"] == 0

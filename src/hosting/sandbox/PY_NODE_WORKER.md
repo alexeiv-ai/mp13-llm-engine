@@ -101,12 +101,14 @@ Artifact input kinds:
 1. `ref`: host resolves an alias ref into a request-scoped input file.
 2. `inline`: host writes declared inline text/base64/data into a request-scoped input file.
 3. masked `ref`: host copies matching files into a request-scoped input directory and preserves relative paths.
+4. inline zip: host expands declared zip bytes into a request-scoped input directory and preserves relative paths.
 
 Artifact output kinds:
 
 1. `ref`: host exposes an exact writable path, validates the written file, and returns a host-minted or host-validated alias ref.
 2. `inline`: sandboxed code returns inline bytes/text in `artifacts`, and the host promotes it only when a matching output declaration exists.
 3. masked `ref`: host exposes a writable output directory, collects matching files after execution, and returns one ref per collected file.
+4. inline zip export: host packs matching output files into one inline zip response without changing artifact ownership.
 
 Alias ref format:
 
@@ -159,6 +161,21 @@ Inline input example:
   "encoding": "utf-8"
 }
 ```
+
+Inline zip input example:
+
+```json
+{
+  "name": "project",
+  "kind": "inline",
+  "filename": "project.zip",
+  "media_type": "application/zip",
+  "encoding": "zip",
+  "base64": "..."
+}
+```
+
+For inline zip inputs, `artifact_inputs["project"]` is a request-scoped directory containing the extracted files. Zip entries with absolute paths or `..` are rejected.
 
 File output declaration:
 
@@ -213,6 +230,37 @@ Masked output declaration:
 
 For masked outputs, `artifact_outputs["reports"]` is a request-scoped writable directory. The host collects files matching `path_mask` after execution. With `recursive=true`, nested matches are included and returned with `relative_path`; explicit refs are expanded by appending the relative path, for example `@project/output/nested/report.txt`.
 
+Host takeover ref output:
+
+```json
+{
+  "name": "report",
+  "kind": "ref",
+  "ref": "@project/worker/report.txt",
+  "filename": "report.txt",
+  "host_takeover": true,
+  "media_type": "text/plain"
+}
+```
+
+With `host_takeover=true`, the returned artifact ref is minted under `@artifacts/...` and its lifetime is host-managed. Without takeover, an explicit output `ref` remains producer-managed.
+
+Inline zip export:
+
+```json
+{
+  "name": "bundle",
+  "kind": "ref",
+  "ref": "@project/producer-owned",
+  "path_mask": "*.py",
+  "recursive": true,
+  "export_inline_zip": true,
+  "filename": "bundle.zip"
+}
+```
+
+With `export_inline_zip=true`, the host packs matching files into one inline `application/zip` artifact and does not copy them into `ref`; ownership remains with the producer.
+
 Inline output declaration:
 
 ```json
@@ -236,7 +284,7 @@ def run(payload):
     }
 ```
 
-Input-side `max_bytes`, `count`, `ttl`, `lifetime`, `expires_at`, and `encoding` metadata are accepted as optional advisory metadata. `path_mask` / `mask` and `recursive` are also accepted on input refs to select files from a configured alias root. The current local implementation carries metadata where useful, but it does not implement a durable artifact authorization, expiry, cleanup, or external read API.
+Input-side `max_bytes`, `count`, `ttl`, `lifetime`, `expires_at`, and `encoding` metadata are accepted as optional advisory metadata. `path_mask` / `mask` and `recursive` are also accepted on input refs to select files from a configured alias root. Inline artifact payloads are receiver-managed. Ref artifacts are producer-managed unless the output declaration asks for `host_takeover` or omits `ref`, in which case the host owns the returned `@artifacts/...` ref. The current local implementation carries metadata where useful, but it does not implement a durable artifact authorization, expiry, cleanup, or external read API.
 
 ## Trust Boundary
 
@@ -254,6 +302,9 @@ The host mints response artifacts only after one of these happens:
 
 1. A declared file output path was written and collected.
 2. A declared inline output name matched returned inline artifact bytes/text.
+3. A declared multi-file output was packed as inline zip.
+
+Request-local worker artifact directories are cleaned after collection. Producer-owned explicit refs remain outside host lifetime management; host-takeover refs are copied into the host `@artifacts` root.
 
 ## Import And Builtin Policy
 
@@ -320,17 +371,17 @@ The current shared base layer is useful but incomplete:
 2. `HostedPythonRuntimeBase` centralizes Python environment identity and runtime environment management.
 3. Toolbox still has separate orchestration because it owns tool assignment, bundle staging, callback routing, and persistent toolbox state.
 4. Python helper still has separate IPC-worker internals because it remains a compatibility process for helper-profile clients.
-5. Python node has separate child-runtime internals because it is not a registered IPC worker and has node-specific artifact/import/result semantics.
+5. Python node has runtime-specific launch/protocol internals because it is not a registered IPC worker and has node-specific import/result semantics.
 
-The incomplete part is not the pool concept. The pool concept is the right host-side shape for long-running and concurrent node work. The missing part is a shared child-runtime layer underneath the pool that can own launch, child protocol, hot reuse/recycling, cancellation, resource sampling, and result normalization across Python node and helper-compatible runtimes.
+The incomplete part is not the pool concept. The pool concept is the right host-side shape for long-running and concurrent node work. The shared child-runtime layer now owns active child tracking, cancellation lookup, and active resource listing. Runtime-specific code still owns launch, child protocol parsing, hot reuse/recycling, import policy, and result normalization.
 
 Recommended future simplification:
 
-1. Extract a small hosted child-runtime interface for `execute`, `cancel`, and `resources` so Python node and helper child pools can share process lifecycle mechanics.
-2. Add explicit long-running/concurrent node job support on top of the shared pool model.
+1. Decide whether Python helper internals should adopt the shared child-runtime/artifact helpers while preserving helper compatibility.
+2. Add explicit long-running/concurrent node job lifecycle and heartbeat behavior on top of the shared pool model.
 3. Add Python snippet and multi-module project execution modes.
 4. Add uv-managed environment preparation, lock/receipt verification, interpreter selection, and cleanup.
-5. Keep toolbox orchestration separate, but adapt toolbox executor registrations to report through the same normalized pool/resource models where possible.
+5. Keep toolbox orchestration separate, but adapt toolbox executor registrations to report through the same normalized pool/resource models where practical.
 6. Replace Python helper internals with either a thin compatibility adapter over node runtime or a shared child-runtime implementation only after dependent helper-profile clients no longer require the current response and operation semantics.
 
 Do not delete the Python helper worker solely because node exists. It still has a compatibility niche for helper-profile workflow calls and already migrated dependent projects that expect helper semantics.

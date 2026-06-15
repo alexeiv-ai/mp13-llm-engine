@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import base64
 import hashlib
+import io
 import shutil
 import sys
 import threading
 import time
+import zipfile
 
 import pytest
 from hosting.service.host_service import EngineHostService
@@ -1757,6 +1760,151 @@ def test_execute_workflow_python_node_collects_recursive_masked_output_artifacts
     assert [row["ref"] for row in out["artifacts"]] == ["@project/out/a.txt", "@project/out/nested/b.txt"]
     assert (project_root / "out" / "a.txt").read_text(encoding="utf-8") == "a"
     assert (project_root / "out" / "nested" / "b.txt").read_text(encoding="utf-8") == "b"
+
+
+def test_execute_workflow_python_node_reads_inline_zip_input_artifact(tmp_path: Path) -> None:
+    raw = io.BytesIO()
+    with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("a.txt", "a")
+        zf.writestr("nested/b.txt", "b")
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "import os\n\n"
+        "def run(payload):\n"
+        "    found = []\n"
+        "    for root, dirs, files in os.walk(artifact_inputs['project']):\n"
+        "        for name in files:\n"
+        "            found.append(os.path.relpath(os.path.join(root, name), artifact_inputs['project']).replace('\\\\', '/'))\n"
+        "    return {'output': {'files': sorted(found)}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-inline-zip-input",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["os"]},
+            "artifact_inputs": [
+                {
+                    "name": "project",
+                    "kind": "inline",
+                    "filename": "project.zip",
+                    "base64": base64.b64encode(raw.getvalue()).decode("ascii"),
+                    "media_type": "application/zip",
+                    "encoding": "zip",
+                }
+            ],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"files": ["a.txt", "nested/b.txt"]}
+
+
+def test_execute_workflow_python_node_exports_many_outputs_as_inline_zip_without_takeover(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "import os\n\n"
+        "def run(payload):\n"
+        "    root = artifact_outputs['bundle']\n"
+        "    os.makedirs(os.path.join(root, 'pkg'), exist_ok=True)\n"
+        "    open(os.path.join(root, 'pkg', 'a.py'), 'w').write('A = 1')\n"
+        "    open(os.path.join(root, 'pkg', 'b.py'), 'w').write('B = 2')\n"
+        "    return {'output': {'done': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-node-inline-zip-output",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["os"]},
+            "artifact_outputs": [
+                {
+                    "name": "bundle",
+                    "ref": "@project/producer-owned",
+                    "path_mask": "*.py",
+                    "recursive": True,
+                    "export_inline_zip": True,
+                    "filename": "bundle.zip",
+                }
+            ],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["artifacts"][0]["kind"] == "inline"
+    assert out["artifacts"][0]["media_type"] == "application/zip"
+    assert out["artifacts"][0]["ownership"] == "producer"
+    assert not (project_root / "producer-owned").exists()
+    data = base64.b64decode(out["artifacts"][0]["base64"])
+    with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+        assert sorted(zf.namelist()) == ["pkg/a.py", "pkg/b.py"]
+
+
+def test_execute_workflow_python_node_host_takeover_copies_ref_outputs_to_host_store(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    open(artifact_outputs['report'], 'w').write('owned by host')\n"
+        "    return {'output': {'done': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-node-host-takeover",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_outputs": [
+                {
+                    "name": "report",
+                    "ref": "@project/worker/report.txt",
+                    "filename": "report.txt",
+                    "host_takeover": True,
+                    "media_type": "text/plain",
+                }
+            ],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["artifacts"][0]["ref"].startswith("@artifacts/")
+    assert out["artifacts"][0]["ownership"] == "host"
+    assert out["artifacts"][0]["host_takeover"] is True
+    assert not (project_root / "worker" / "report.txt").exists()
 
 
 def test_execute_workflow_python_node_rejects_non_alias_artifact_refs(tmp_path: Path) -> None:
