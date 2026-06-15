@@ -47,6 +47,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Deterministic non-executing uv install plans from `pyproject_toml`, `uv_lock`, and dependency groups.
 - uv install plan locking/verification, explicit uv execution through install APIs, uv install receipts, uv receipt verification, and uv-managed interpreter selection for dependency-bearing node execution.
 - Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
+- Python node host API back channel for discoverable, dispatcher-based cooperative host calls over child stdout/stdin, currently scoped to artifact-root filesystem operations.
 
 ## Discrepancies
 
@@ -134,6 +135,12 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added toolbox hosted-pool tests for execute lifecycle recording and cancellation lifecycle recording.
 - Verified full toolbox sandbox tests: `124 passed`.
 - Verified broader hosting workflow tests after toolbox lifecycle migration: `180 passed`.
+- Added `hosting.workflow_python.node.host_api.v1` with `host.describe`, `host.call`, and artifact-scoped `fs.*` helpers available to node code through a bidirectional host-call protocol.
+- Documented the node host API, back-channel transport, and code-edit strategy for future long-lived workers in `sandbox/PY_NODE_WORKER.md`.
+- Investigated node code editing: current one-child-per-request execution naturally handles fixed snippets as new `module_sha256` revisions; future long-lived workers should use explicit code revisions with restart/reroute as the conservative default, not uv as the code-edit mechanism.
+- Added node host API tests for discovery, artifact-root reads/writes, and rejected input-root writes.
+- Verified broader hosting workflow tests after node host API changes: `182 passed`.
+- Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
 ## Current Client Impact
 

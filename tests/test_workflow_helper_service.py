@@ -1701,6 +1701,92 @@ def test_execute_workflow_python_node_reads_inline_input_artifact(tmp_path: Path
     assert out["output"] == {"text": "inline seed"}
 
 
+def test_execute_workflow_python_node_host_api_reads_and_writes_artifact_roots(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    described = host.describe()\n"
+        "    seed = host.fs_read_text('seed')['text']\n"
+        "    host.fs_mkdir('report', 'nested')\n"
+        "    written = host.fs_write_text('report', 'nested/report.txt', seed.upper())\n"
+        "    stat = host.fs_stat('report', 'nested/report.txt')\n"
+        "    return {'output': {'methods': described['methods'], 'seed': seed, 'bytes': written['bytes'], 'size': stat['size']}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-host-api-artifacts",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": [
+                {
+                    "name": "seed",
+                    "kind": "inline",
+                    "filename": "seed.txt",
+                    "text": "host api seed",
+                    "media_type": "text/plain",
+                }
+            ],
+            "artifact_outputs": [{"name": "report", "path_mask": "*.txt", "media_type": "text/plain", "recursive": True}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert "host.describe" in out["output"]["methods"]
+    assert out["output"]["seed"] == "host api seed"
+    assert out["output"]["bytes"] == len("HOST API SEED")
+    assert out["output"]["size"] == len("HOST API SEED")
+    assert out["artifacts"][0]["ref"]
+
+
+def test_execute_workflow_python_node_host_api_rejects_input_writes(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    host.fs_write_text('seed', 'seed.txt', 'mutated')\n"
+        "    return {'output': {'ok': True}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-host-api-reject-input-write",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_inputs": [
+                {
+                    "name": "seed",
+                    "kind": "inline",
+                    "filename": "seed.txt",
+                    "text": "immutable",
+                    "media_type": "text/plain",
+                }
+            ],
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "artifact_root_unavailable:seed" in out["error"]["detail"]["message"]
+
+
 def test_execute_workflow_python_node_collects_declared_inline_output_artifact(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

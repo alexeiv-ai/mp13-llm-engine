@@ -115,6 +115,7 @@ Node Python code can use these globals:
 1. `progress(payload)` or `emit_progress(payload)`: emits a stream progress event.
 2. `artifact_inputs`: mapping from declared input artifact name to a sandbox-visible file path or directory path.
 3. `artifact_outputs`: mapping from declared file output artifact name to an exact writable file path or directory path.
+4. `host`: discoverable cooperative host API client.
 
 Example:
 
@@ -132,6 +133,54 @@ def run(payload):
 ```
 
 Artifact refs are host-side capabilities. Python node code should not dereference `@project/...` or `@artifacts/...` refs itself. It receives host-provisioned file paths through `artifact_inputs` and `artifact_outputs`.
+
+## Host API Back Channel
+
+Node code can call the host through the `host` global:
+
+```python
+def run(payload):
+    described = host.describe()
+    seed = host.fs_read_text("seed")["text"]
+    host.fs_mkdir("reports", "nested")
+    host.fs_write_text("reports", "nested/report.txt", seed.upper())
+    return {"output": {"methods": described["methods"]}}
+```
+
+The current host API contract is `hosting.workflow_python.node.host_api.v1`.
+
+Discoverable methods:
+
+1. `host.describe`
+2. `fs.list`
+3. `fs.read_text`
+4. `fs.write_text`
+5. `fs.mkdir`
+6. `fs.stat`
+
+Convenience methods on `host` call those dispatcher methods:
+
+1. `host.describe()`
+2. `host.call(method, arguments)`
+3. `host.fs_read_text(root_id, relative_path="", encoding="utf-8")`
+4. `host.fs_write_text(root_id, relative_path="", text="", encoding="utf-8", create_parents=True)`
+5. `host.fs_list(root_id, relative_path="")`
+6. `host.fs_stat(root_id, relative_path="")`
+7. `host.fs_mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
+
+Transport: the child writes a `host_call` JSON event to stdout, the host dispatcher evaluates it, and the host writes a matching `host_response` JSON line back to the child stdin. This is deliberately a bidirectional request/response protocol, not a one-way event, so it can be reused by a future long-lived node worker loop.
+
+The current dispatcher maps `fs.*` calls to declared artifact roots:
+
+1. readable roots: declared artifact inputs and declared artifact outputs
+2. writable roots: declared artifact outputs only
+3. input roots are read-only
+4. output roots may be exact files or directories depending on the output declaration
+5. relative paths cannot escape the selected root
+
+Single-file inline inputs resolve to the file itself. Directory-like inputs and outputs are created by masked/recursive declarations, inline zip inputs, or output declarations with `path_mask` / `mask`.
+
+The current node host dispatcher does not enable arbitrary HTTP, subprocess, or filesystem access. Those should be added only through the same policy-gated dispatcher shape used by toolbox cooperative brokered APIs.
 
 ## Artifact Contract
 
@@ -375,6 +424,24 @@ Node stream event types:
 10. `done`
 
 `artifact` events are emitted only for host-minted or host-accepted artifacts, before the terminal `result` event.
+
+## Long-Lived Workers And Code Edits
+
+Current implementation: the host starts a child process per node request. That makes source edits simple and deterministic: a fixed `module_source` plus `module_sha256` is executed in a fresh process, so a corrected snippet or module is just a new request with a new digest. There is no stale module cache to invalidate.
+
+For a future long-lived Python node worker, code updates should not rely on uv. uv manages dependencies and interpreter environments; it is not the right mechanism for hot-editing workflow source modules.
+
+Recommended long-lived model:
+
+1. Every loaded snippet/project/module gets a code revision identity such as `module_sha256`, `package_source_digest`, or an explicit `code_revision`.
+2. The worker routes execution by `(environment_key, code_revision, entrypoint)` rather than only by environment.
+3. When code changes, the host either:
+   - starts/reuses a worker for the new revision and lets old in-flight requests finish, or
+   - sends an explicit `unload/reload` command that removes affected modules from `sys.modules`, invalidates import caches, and reloads from the staged revision root.
+4. In-flight requests keep their original revision.
+5. Failed snippets are fixed by submitting a new revision; the old revision is not mutated in place.
+
+The restart/reroute approach used by toolbox remains the conservative default for correctness. A hot-reload path is useful later, but it must be explicit and revision-scoped; otherwise Python import caches and module globals will make bug-fix behavior ambiguous.
 
 ## Relationship To Helper And Toolbox Workers
 

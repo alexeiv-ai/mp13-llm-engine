@@ -87,6 +87,15 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "path_selection": ["path_mask", "mask", "recursive"],
             "input_metadata_advisory": ["max_bytes", "count", "ttl", "encoding"],
         },
+        "host_api": {
+            "contract": "hosting.workflow_python.node.host_api.v1",
+            "transport": "child_stdout_host_call_parent_stdin_host_response",
+            "methods": ["host.describe", "fs.list", "fs.read_text", "fs.write_text", "fs.mkdir", "fs.stat"],
+            "filesystem_model": "artifact_roots",
+            "readable_roots": "declared artifact inputs and outputs",
+            "writable_roots": "declared artifact outputs only",
+            "http": "not_enabled_in_current_node_dispatcher",
+        },
     }
 
 

@@ -310,6 +310,135 @@ class WorkflowHelperMixin:
             return {"status": "skipped", "reason": "artifact_context_missing"}
         return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).cleanup_run(dict(context or {}))
 
+    @staticmethod
+    def _workflow_python_node_host_root(
+        artifact_context: Optional[Dict[str, Any]],
+        *,
+        root_id: str,
+        write: bool = False,
+    ) -> Path:
+        child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
+        inputs = dict(child.get("inputs") or {})
+        outputs = dict(child.get("outputs") or {})
+        rid = str(root_id or "").strip()
+        if not rid:
+            raise PermissionError("root_id_required")
+        source = outputs if write else {**outputs, **inputs}
+        raw = str(source.get(rid) or "").strip()
+        if not raw:
+            raise PermissionError(f"artifact_root_unavailable:{rid}")
+        return Path(raw).expanduser().resolve()
+
+    @staticmethod
+    def _workflow_python_node_host_path(root: Path, relative_path: Any = None) -> Path:
+        rel = str(relative_path or "").replace("\\", "/").strip("/")
+        target = (root / rel).expanduser().resolve() if rel else root
+        if target != root and root not in target.parents:
+            raise PermissionError("artifact_path_escape")
+        return target
+
+    def _workflow_python_node_host_dispatcher(
+        self,
+        *,
+        request: Dict[str, Any],
+        artifact_context: Optional[Dict[str, Any]],
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ):
+        child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
+        input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
+        output_roots = sorted(str(key) for key in dict(child.get("outputs") or {}).keys())
+        methods = [
+            "host.describe",
+            "fs.list",
+            "fs.read_text",
+            "fs.write_text",
+            "fs.mkdir",
+            "fs.stat",
+        ]
+
+        def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
+            method = str(dict(call or {}).get("method") or "").strip()
+            args = dict(dict(call or {}).get("arguments") or {})
+            if method == "host.describe":
+                return {
+                    "status": "ok",
+                    "contract": "hosting.workflow_python.node.host_api.v1",
+                    "methods": methods,
+                    "roots": {
+                        "readable": sorted(set(input_roots + output_roots)),
+                        "writable": output_roots,
+                    },
+                    "request_id": str(dict(request or {}).get("request_id") or ""),
+                    "policy": {
+                        "artifact_fs": True,
+                        "http": False,
+                        "subprocess": False,
+                    },
+                }
+            if method not in set(methods):
+                raise RuntimeError(f"unsupported_host_method:{method}")
+            root_id = str(args.get("root_id") or "").strip()
+            relative_path = args.get("relative_path")
+            write = method in {"fs.write_text", "fs.mkdir"}
+            root = self._workflow_python_node_host_root(artifact_context, root_id=root_id, write=write)
+            target = self._workflow_python_node_host_path(root, relative_path)
+            if method == "fs.list":
+                if not target.exists():
+                    raise FileNotFoundError(str(target))
+                if not target.is_dir():
+                    raise NotADirectoryError(str(target))
+                return {
+                    "status": "ok",
+                    "root_id": root_id,
+                    "relative_path": str(relative_path or ""),
+                    "entries": [
+                        {
+                            "name": child_path.name,
+                            "type": "dir" if child_path.is_dir() else "file",
+                            "size": child_path.stat().st_size if child_path.is_file() else None,
+                        }
+                        for child_path in sorted(target.iterdir(), key=lambda item: item.name)
+                    ],
+                }
+            if method == "fs.read_text":
+                encoding = str(args.get("encoding") or "utf-8")
+                return {
+                    "status": "ok",
+                    "root_id": root_id,
+                    "relative_path": str(relative_path or ""),
+                    "text": target.read_text(encoding=encoding),
+                    "encoding": encoding,
+                }
+            if method == "fs.write_text":
+                encoding = str(args.get("encoding") or "utf-8")
+                if bool(args.get("create_parents", True)):
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(str(args.get("text") or ""), encoding=encoding)
+                return {
+                    "status": "ok",
+                    "root_id": root_id,
+                    "relative_path": str(relative_path or ""),
+                    "bytes": len(str(args.get("text") or "").encode(encoding, errors="replace")),
+                    "encoding": encoding,
+                }
+            if method == "fs.mkdir":
+                target.mkdir(parents=bool(args.get("parents", True)), exist_ok=bool(args.get("exist_ok", True)))
+                return {"status": "ok", "root_id": root_id, "relative_path": str(relative_path or "")}
+            if method == "fs.stat":
+                stat = target.stat()
+                return {
+                    "status": "ok",
+                    "root_id": root_id,
+                    "relative_path": str(relative_path or ""),
+                    "exists": True,
+                    "type": "dir" if target.is_dir() else "file",
+                    "size": stat.st_size if target.is_file() else None,
+                    "mtime": stat.st_mtime,
+                }
+            raise RuntimeError(f"unsupported_host_method:{method}")
+
+        return _dispatch
+
     def _workflow_python_node_artifact_error(
         self,
         *,
@@ -989,6 +1118,11 @@ class WorkflowHelperMixin:
                 },
                 python_executable=str(py.get("python_executable") or "").strip() or None,
                 on_event=_record_node_event,
+                host_dispatcher=self._workflow_python_node_host_dispatcher(
+                    request={**req, "request_id": lifecycle.request_id},
+                    artifact_context=artifact_context,
+                    sandbox_policy=sandbox_policy,
+                ),
             )
             if artifact_context is not None and bool(result.get("ok", False)):
                 try:
@@ -1448,6 +1582,11 @@ class WorkflowHelperMixin:
             },
             python_executable=str(dict(request.get("python") or {}).get("python_executable") or "").strip() or None,
             on_event=_emit_node_event,
+            host_dispatcher=self._workflow_python_node_host_dispatcher(
+                request=dict(request or {}),
+                artifact_context=artifact_context,
+                sandbox_policy=sandbox_policy,
+            ),
         )
         if artifact_context is not None and bool(result.get("ok", False)):
             try:

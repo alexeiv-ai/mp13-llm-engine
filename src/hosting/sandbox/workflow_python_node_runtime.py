@@ -117,6 +117,18 @@ def send(row):
     sys.__stdout__.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.__stdout__.flush()
 
+def recv():
+    line = sys.__stdin__.readline()
+    if not line:
+        raise RuntimeError("host_channel_closed")
+    try:
+        row = json.loads(line)
+    except Exception as exc:
+        raise RuntimeError(f"host_channel_invalid_json:{exc}") from exc
+    if not isinstance(row, dict):
+        raise RuntimeError("host_channel_invalid_message")
+    return row
+
 def detail_from_error(err):
     tb = traceback.format_exception(type(err), err, err.__traceback__, limit=6)
     return {
@@ -195,9 +207,60 @@ def make_artifact_open(inputs, outputs):
 
     return guarded_open
 
+class HostApi:
+    def __init__(self, request_id):
+        self.request_id = str(request_id or "")
+        self._seq = 0
+
+    def call(self, method, arguments=None):
+        meth = str(method or "").strip()
+        if not meth:
+            raise RuntimeError("host_method_required")
+        self._seq += 1
+        call_id = f"{self.request_id}:{self._seq}"
+        send({
+            "type": "host_call",
+            "request_id": self.request_id,
+            "host_call_id": call_id,
+            "method": meth,
+            "arguments": dict(arguments or {}) if isinstance(arguments, dict) else {},
+        })
+        response = recv()
+        if str(response.get("type") or "") != "host_response" or str(response.get("host_call_id") or "") != call_id:
+            raise RuntimeError("host_response_mismatch")
+        if str(response.get("status") or "").strip().lower() == "error":
+            detail = response.get("detail") if isinstance(response.get("detail"), dict) else {}
+            message = str(response.get("message") or detail.get("message") or response.get("reason") or "host_call_failed")
+            raise RuntimeError(message)
+        return response.get("result")
+
+    def describe(self):
+        return self.call("host.describe", {})
+
+    def fs_read_text(self, root_id, relative_path="", encoding="utf-8"):
+        return self.call("fs.read_text", {"root_id": root_id, "relative_path": relative_path, "encoding": encoding})
+
+    def fs_write_text(self, root_id, relative_path="", text="", encoding="utf-8", create_parents=True):
+        return self.call("fs.write_text", {
+            "root_id": root_id,
+            "relative_path": relative_path,
+            "text": text,
+            "encoding": encoding,
+            "create_parents": bool(create_parents),
+        })
+
+    def fs_list(self, root_id, relative_path=""):
+        return self.call("fs.list", {"root_id": root_id, "relative_path": relative_path})
+
+    def fs_stat(self, root_id, relative_path=""):
+        return self.call("fs.stat", {"root_id": root_id, "relative_path": relative_path})
+
+    def fs_mkdir(self, root_id, relative_path="", parents=True, exist_ok=True):
+        return self.call("fs.mkdir", {"root_id": root_id, "relative_path": relative_path, "parents": bool(parents), "exist_ok": bool(exist_ok)})
+
 def main():
     try:
-        req = json.loads(sys.stdin.read() or "{}")
+        req = json.loads(sys.__stdin__.readline() or "{}")
     except Exception as exc:
         send({"type": "error", "reason": "workflow_python_node_invalid_request", "detail": detail_from_error(exc)})
         return 0
@@ -235,6 +298,7 @@ def main():
         "__name__": "workflow_python_node_module",
         "progress": progress,
         "emit_progress": progress,
+        "host": HostApi(request_id),
         "artifact_inputs": dict(artifact_inputs or {}),
         "artifact_outputs": dict(artifact_outputs or {}),
         "payload": payload,
@@ -366,8 +430,33 @@ class WorkflowPythonNodeRuntime:
         runtime._reader.start()
         assert proc.stdin is not None
         proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-        proc.stdin.close()
+        proc.stdin.flush()
         return runtime
+
+    def respond_host_call(self, *, host_call_id: str, result: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None) -> bool:
+        if self.proc.poll() is not None or self.proc.stdin is None:
+            return False
+        row: Dict[str, Any] = {
+            "type": "host_response",
+            "host_call_id": str(host_call_id or ""),
+        }
+        if error is not None:
+            row.update(
+                {
+                    "status": "error",
+                    "reason": str(dict(error or {}).get("reason") or "host_call_failed"),
+                    "message": str(dict(error or {}).get("message") or dict(error or {}).get("reason") or "host_call_failed"),
+                    "detail": dict(error or {}),
+                }
+            )
+        else:
+            row.update({"status": "ok", "result": dict(result or {})})
+        try:
+            self.proc.stdin.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self.proc.stdin.flush()
+            return True
+        except Exception:
+            return False
 
     def _read_stdout(self) -> None:
         stream = self.proc.stdout
@@ -425,7 +514,13 @@ class WorkflowPythonNodeRuntime:
         self._events.put({"type": "canceled", "reason": "workflow_sandbox_canceled"})
         return killed
 
-    def wait(self, *, timeout_ms: int, on_event: Optional[NodeEventCallback] = None) -> Dict[str, Any]:
+    def wait(
+        self,
+        *,
+        timeout_ms: int,
+        on_event: Optional[NodeEventCallback] = None,
+        host_dispatcher: Optional[Any] = None,
+    ) -> Dict[str, Any]:
         deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
         last_stdout = ""
         last_stderr = ""
@@ -476,6 +571,30 @@ class WorkflowPythonNodeRuntime:
                 if on_event is not None:
                     on_event("progress", payload)
                 continue
+            if event_type == "host_call":
+                payload = {
+                    "host_call_id": _clean(row.get("host_call_id")),
+                    "method": _clean(row.get("method")),
+                    "arguments": dict(row.get("arguments") or {}),
+                    "request_id": _clean(row.get("request_id")) or self.request_id,
+                }
+                if on_event is not None:
+                    on_event("host_call", payload)
+                if callable(host_dispatcher):
+                    try:
+                        dispatched = dict(host_dispatcher(payload) or {})
+                        self.respond_host_call(host_call_id=payload["host_call_id"], result=dispatched)
+                    except Exception as exc:
+                        self.respond_host_call(
+                            host_call_id=payload["host_call_id"],
+                            error={"reason": "host_call_failed", "message": str(exc), "error_type": type(exc).__name__},
+                        )
+                else:
+                    self.respond_host_call(
+                        host_call_id=payload["host_call_id"],
+                        error={"reason": "host_dispatcher_unavailable", "message": "host dispatcher is not available"},
+                    )
+                continue
             if event_type == "canceled":
                 self._wait_for_exit()
                 return {
@@ -518,6 +637,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         *,
         python_executable: Optional[str] = None,
         on_event: Optional[NodeEventCallback] = None,
+        host_dispatcher: Optional[Any] = None,
     ) -> Dict[str, Any]:
         req = dict(request or {})
         request_id = _clean(req.get("request_id"))
@@ -539,7 +659,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         runtime = WorkflowPythonNodeRuntime.start(request=child_req, python_executable=executable)
         self.register_active(request_id, runtime)
         try:
-            return runtime.wait(timeout_ms=timeout_ms, on_event=on_event)
+            return runtime.wait(timeout_ms=timeout_ms, on_event=on_event, host_dispatcher=host_dispatcher)
         finally:
             runtime.ensure_stopped()
             self.unregister_active(request_id)

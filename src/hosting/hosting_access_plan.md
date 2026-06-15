@@ -271,6 +271,20 @@ Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact he
 - [ ] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific.
 - [x] Add base-layer tests for pool/request/status/cancel behavior and active child resource/cancel tracking.
 
+### Node Host API Back Channel
+
+Target assumption: node workers may need cooperative host interactions like toolbox brokered filesystem/http callbacks, especially once node workers become long-lived. The host API should be discoverable from Python code and should use a dispatcher-based request/response protocol that can be reused by one-shot and future long-lived workers.
+
+- [x] Define a node host API contract exposed through `host.describe`.
+- [x] Add bidirectional child-process protocol messages for `host_call` and `host_response`.
+- [x] Expose a Python `host` object with `call`, `describe`, and filesystem convenience methods.
+- [x] Implement artifact-scoped `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat` through the host dispatcher.
+- [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
+- [x] Include host API metadata in the machine-readable node contract.
+- [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
+- [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests.
+- [x] Add tests for host API discovery, artifact-root read/write, and rejected input-root writes.
+
 ### Long-Running And Concurrent Node Jobs
 
 Target assumption: many different Python node jobs may run concurrently, and several instances of the same Python node code may run concurrently. Long-running node jobs are expected and should be managed explicitly by host pool capacity, request IDs, status, stream backpressure, cancellation, and resource reporting.
@@ -278,6 +292,8 @@ Target assumption: many different Python node jobs may run concurrently, and sev
 - [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
 - [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
 - [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
+- [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
+- [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
 - [ ] Add long-running progress heartbeat/status behavior.
 - [x] Add tests for concurrent different node jobs.
