@@ -7,7 +7,7 @@ Purpose: record the current implementation state and the discrepancies against `
 ## Summary
 
 - Helper-profile workflow Python facade: implemented.
-- Workflow JS helper facade: implemented.
+- Workflow JS QuickJS node facade: implemented.
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
@@ -27,7 +27,7 @@ Purpose: record the current implementation state and the discrepancies against `
   - `workflow-python-stream-send`
   - `workflow-python-stream-close`
 - Shared stream/session plumbing for node-profile stream events.
-- `workflow_js(profile=helper)` public facade and `workflow-js-execute`.
+- `workflow_js(profile=node)` public facade and `workflow-js-execute` through QuickJS.
 - RBAC/daemon/channel/CLI support for the workflow command families.
 - Toolbox shared identity/process-base migration while preserving toolbox semantics.
 - Direct node-profile Python execution path that no longer calls `execute_workflow_python_helper`.
@@ -82,6 +82,21 @@ Purpose: record the current implementation state and the discrepancies against `
 - Update public docs after the first-class node behavior is implemented and verified.
 
 ## Progress Updates
+
+### 2026-06-15
+
+- Added the QuickJS-backed `workflow_js(profile=node)` execution path and routed
+  workflow JS facade calls away from the removed Node.js helper worker.
+- Added `hosting.workflow_js_node_worker_ipc` and
+  `hosting.sandbox.workflow_js_node_runtime` for source-hash-verified
+  single-script execution with `exports.run(input, api)`.
+- Added JS host API coverage for `api.describe`, artifact filesystem
+  read/write, console/progress capture, output limits, async rejection, and
+  helper-removal regressions.
+- Removed `hosting.workflow_js_helper_ipc`, JS helper service aliases,
+  `node_executable` JS facade plumbing, and JS helper wording from public docs.
+- Verified focused QuickJS workflow JS tests:
+  `python -m pytest tests/test_workflow_js_node_runtime.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_hosting_js_runtime_base.py -q -k "workflow_js or js_runtime"`.
 
 ### 2026-06-14
 

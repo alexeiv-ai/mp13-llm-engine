@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import io
+import json
+import threading
+import traceback
+from multiprocessing.connection import Client
+from typing import Any, Dict, Optional
+
+
+def _detail_from_error(err: BaseException) -> Dict[str, Any]:
+    tb = traceback.format_exception(type(err), err, err.__traceback__, limit=6)
+    return {
+        "message": str(err),
+        "error_type": type(err).__name__,
+        "traceback_summary": "".join(tb)[-4096:],
+    }
+
+
+def _send(conn: Any, row: Dict[str, Any]) -> None:
+    conn.send(dict(row or {}))
+
+
+class HostApiBridge:
+    def __init__(self, *, conn: Any, request_id: str) -> None:
+        self.conn = conn
+        self.request_id = str(request_id or "")
+        self._seq = 0
+        self._seq_lock = threading.Lock()
+        self._send_lock = threading.Lock()
+
+    def _next_call_id(self) -> str:
+        with self._seq_lock:
+            self._seq += 1
+            return f"{self.request_id}:{self._seq}"
+
+    @staticmethod
+    def _result_from_response(response: Dict[str, Any]) -> str:
+        if str(response.get("status") or "").strip().lower() == "error":
+            detail = response.get("detail") if isinstance(response.get("detail"), dict) else {}
+            message = str(response.get("message") or detail.get("message") or response.get("reason") or "host_call_failed")
+            raise RuntimeError(message)
+        return json.dumps(dict(response.get("result") or {}), ensure_ascii=False, separators=(",", ":"))
+
+    def call_json(self, method: str, arguments_json: str = "{}") -> str:
+        meth = str(method or "").strip()
+        if not meth:
+            raise RuntimeError("host_method_required")
+        try:
+            arguments = json.loads(str(arguments_json or "{}"))
+        except Exception as exc:
+            raise RuntimeError(f"host_arguments_invalid_json:{exc}") from exc
+        if not isinstance(arguments, dict):
+            arguments = {}
+        call_id = self._next_call_id()
+        with self._send_lock:
+            self.conn.send(
+                {
+                    "type": "host_call",
+                    "request_id": self.request_id,
+                    "host_call_id": call_id,
+                    "method": meth,
+                    "arguments": arguments,
+                }
+            )
+        while True:
+            row = dict(self.conn.recv() or {})
+            if str(row.get("type") or "") != "host_response":
+                raise RuntimeError("host_response_mismatch")
+            response_id = str(row.get("host_call_id") or "")
+            if response_id == call_id:
+                return self._result_from_response(row)
+
+
+def _normalize_console_args(args_json: str) -> str:
+    try:
+        args = json.loads(str(args_json or "[]"))
+    except Exception:
+        args = [str(args_json or "")]
+    if not isinstance(args, list):
+        args = [args]
+    return " ".join(str(item) for item in args)
+
+
+def _runtime_metadata() -> Dict[str, Any]:
+    try:
+        import quickjs  # type: ignore
+
+        return {
+            "quickjs_binding": "quickjs",
+            "quickjs_binding_version": str(getattr(quickjs, "__version__", "") or "unknown"),
+            "quickjs_available": True,
+        }
+    except Exception as exc:
+        return {
+            "quickjs_binding": "quickjs",
+            "quickjs_binding_version": None,
+            "quickjs_available": False,
+            "quickjs_error": str(exc),
+        }
+
+
+def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
+    request_id = str(req.get("request_id") or "")
+    source = str(req.get("module_source") or "")
+    export_name = str(req.get("export_name") or "run").strip() or "run"
+    execution_mode = str(req.get("execution_mode") or "script").strip().lower() or "script"
+    payload = req.get("payload")
+    output_limit_bytes = max(1, int(req.get("output_limit_bytes") or 65536))
+    limits = dict(req.get("limits") or {})
+    timeout_ms = max(1, int(limits.get("timeout_ms") or 5000))
+    memory_limit_mb = limits.get("memory_limit_mb")
+    logs: list[str] = []
+
+    try:
+        import quickjs  # type: ignore
+    except Exception as exc:
+        _send(
+            conn,
+            {
+                "type": "error",
+                "request_id": request_id,
+                "reason": "workflow_sandbox_host_unavailable",
+                "detail": {"message": str(exc), "runtime": _runtime_metadata()},
+                "stdout": "",
+                "stderr": "",
+            },
+        )
+        return 0
+
+    stdout_io = io.StringIO()
+    stderr_io = io.StringIO()
+    host = HostApiBridge(conn=conn, request_id=request_id)
+    ctx = quickjs.Context()
+    # The Python quickjs binding cannot call Python callbacks while a context
+    # time limit is active. Host APIs, console, and progress all use callbacks,
+    # so wall-clock limits are enforced by the parent process for this slice.
+    if memory_limit_mb is not None:
+        try:
+            ctx.set_memory_limit(max(1, int(memory_limit_mb)) * 1024 * 1024)
+        except Exception:
+            pass
+
+    def _host_call(method: str, args_json: str = "{}") -> str:
+        return host.call_json(method, args_json)
+
+    def _progress(payload_json: str = "{}") -> None:
+        try:
+            payload_row = json.loads(str(payload_json or "{}"))
+        except Exception:
+            payload_row = {"value": str(payload_json or "")}
+        if not isinstance(payload_row, dict):
+            payload_row = {"value": payload_row}
+        _send(conn, {"type": "progress", "request_id": request_id, "payload": payload_row})
+
+    def _console(level: str, args_json: str = "[]") -> None:
+        message = _normalize_console_args(args_json)
+        line = f"{str(level or 'log')}: {message}"
+        logs.append(line)
+        stdout_io.write(line + "\n")
+        _send(conn, {"type": "console", "request_id": request_id, "payload": {"level": str(level or "log"), "message": message}})
+
+    def _base64_encode(value: str = "") -> str:
+        return base64.b64encode(str(value or "").encode("utf-8")).decode("ascii")
+
+    def _base64_decode(value: str = "") -> str:
+        return base64.b64decode(str(value or "").encode("ascii"), validate=True).decode("utf-8")
+
+    def _sha256(value: str = "") -> str:
+        return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+    ctx.add_callable("__host_call", _host_call)
+    ctx.add_callable("__progress", _progress)
+    ctx.add_callable("__console", _console)
+    ctx.add_callable("__base64_encode", _base64_encode)
+    ctx.add_callable("__base64_decode", _base64_decode)
+    ctx.add_callable("__sha256", _sha256)
+    ctx.set("__payload_json", json.dumps(payload, ensure_ascii=False))
+    ctx.set("__export_name", export_name)
+    prelude = r"""
+globalThis.exports = {};
+globalThis.payload = JSON.parse(globalThis.__payload_json || "null");
+globalThis.progress = function (value) { __progress(JSON.stringify(value === undefined ? null : value)); };
+globalThis.emitProgress = globalThis.progress;
+globalThis.console = {
+  log: function (...args) { __console("log", JSON.stringify(args)); },
+  info: function (...args) { __console("info", JSON.stringify(args)); },
+  warn: function (...args) { __console("warn", JSON.stringify(args)); },
+  error: function (...args) { __console("error", JSON.stringify(args)); }
+};
+globalThis.api = {
+  call: function (method, args) { return JSON.parse(__host_call(String(method || ""), JSON.stringify(args || {}))); },
+  describe: function () { return this.call("host.describe", {}); },
+  progress: globalThis.progress,
+  fs: {
+    readText: function (rootId, relativePath, encoding) {
+      return api.call("fs.read_text", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), encoding: String(encoding || "utf-8")}).text;
+    },
+    writeText: function (rootId, relativePath, text, encoding) {
+      return api.call("fs.write_text", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), text: String(text || ""), encoding: String(encoding || "utf-8"), create_parents: true});
+    },
+    list: function (rootId, relativePath) { return api.call("fs.list", {root_id: String(rootId || ""), relative_path: String(relativePath || "")}); },
+    stat: function (rootId, relativePath) { return api.call("fs.stat", {root_id: String(rootId || ""), relative_path: String(relativePath || "")}); },
+    mkdir: function (rootId, relativePath, options) {
+      options = options || {};
+      return api.call("fs.mkdir", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), parents: options.parents !== false, exist_ok: options.exist_ok !== false});
+    }
+  },
+  http: {
+    fetch: function (url, options) {
+      options = options || {};
+      return api.call("http.fetch", {url: String(url || ""), method: String(options.method || "GET"), headers: options.headers || {}, body_b64: String(options.body_b64 || ""), timeout_seconds: Number(options.timeout_seconds || 30), max_response_bytes: Number(options.max_response_bytes || 1048576)});
+    }
+  },
+  codec: {
+    base64Encode: function (text) { return __base64_encode(String(text || "")); },
+    base64Decode: function (text) { return __base64_decode(String(text || "")); }
+  },
+  crypto: {
+    sha256: function (text) { return __sha256(String(text || "")); }
+  }
+};
+""".strip()
+    runner = r"""
+(function () {
+  function normalize(value) {
+    if (value && typeof value.then === "function") {
+      return {__workflow_error: {reason: "workflow_sandbox_async_unsupported", detail: {message: "promise-returning JS nodes are not supported in this runtime slice"}}};
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return {
+        output: Object.prototype.hasOwnProperty.call(value, "output") ? value.output : value,
+        state_patch: value.state_patch && typeof value.state_patch === "object" && !Array.isArray(value.state_patch) ? value.state_patch : null,
+        artifacts: Array.isArray(value.artifacts) ? value.artifacts : [],
+        progress: value.progress && typeof value.progress === "object" && !Array.isArray(value.progress) ? value.progress : null
+      };
+    }
+    return {output: value === undefined ? null : value, state_patch: null, artifacts: [], progress: null};
+  }
+  let value;
+  if ("%EXECUTION_MODE%" === "snippet") {
+    value = globalThis.result;
+  } else {
+    const fn = exports[globalThis.__export_name || "run"];
+    if (typeof fn !== "function") {
+      return JSON.stringify({__workflow_error: {reason: "workflow_sandbox_export_not_found", detail: {export_name: globalThis.__export_name || "run"}}});
+    }
+    value = fn(globalThis.payload, globalThis.api);
+  }
+  return JSON.stringify(normalize(value === undefined ? null : value));
+})()
+""".replace("%EXECUTION_MODE%", execution_mode)
+
+    try:
+        ctx.eval(prelude)
+        ctx.eval(source)
+        result_json = ctx.eval(runner)
+        if not isinstance(result_json, str):
+            raise RuntimeError("workflow_sandbox_invalid_json_output")
+        if len(result_json.encode("utf-8")) > output_limit_bytes:
+            _send(
+                conn,
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "reason": "workflow_sandbox_output_limit_exceeded",
+                    "detail": {"output_limit_bytes": output_limit_bytes},
+                    "stdout": stdout_io.getvalue(),
+                    "stderr": stderr_io.getvalue(),
+                },
+            )
+            return 0
+        normalized = json.loads(result_json)
+        if isinstance(normalized, dict) and isinstance(normalized.get("__workflow_error"), dict):
+            error = dict(normalized.get("__workflow_error") or {})
+            _send(
+                conn,
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "reason": str(error.get("reason") or "workflow_sandbox_runtime_error"),
+                    "detail": dict(error.get("detail") or {}),
+                    "stdout": stdout_io.getvalue(),
+                    "stderr": stderr_io.getvalue(),
+                },
+            )
+            return 0
+        _send(
+            conn,
+            {
+                "type": "result",
+                "request_id": request_id,
+                "output": normalized.get("output") if isinstance(normalized, dict) else normalized,
+                "state_patch": dict(normalized.get("state_patch") or {}) if isinstance(normalized, dict) else None,
+                "artifacts": list(normalized.get("artifacts") or []) if isinstance(normalized, dict) else [],
+                "progress": dict(normalized.get("progress") or {}) if isinstance(normalized, dict) and isinstance(normalized.get("progress"), dict) else None,
+                "stdout": stdout_io.getvalue(),
+                "stderr": stderr_io.getvalue(),
+                "runtime": _runtime_metadata(),
+            },
+        )
+    except Exception as exc:
+        _send(
+            conn,
+            {
+                "type": "error",
+                "request_id": request_id,
+                "reason": "workflow_sandbox_runtime_error",
+                "detail": _detail_from_error(exc),
+                "stdout": stdout_io.getvalue(),
+                "stderr": stderr_io.getvalue(),
+                "runtime": _runtime_metadata(),
+            },
+        )
+    return 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ipc-family", required=True, choices=["AF_UNIX", "AF_PIPE"])
+    parser.add_argument("--ipc-address", required=True)
+    parser.add_argument("--auth-token", default="")
+    args = parser.parse_args(argv)
+    conn = Client(args.ipc_address, family=args.ipc_family, authkey=str(args.auth_token or "").encode("utf-8"))
+    try:
+        while True:
+            msg = conn.recv()
+            if not isinstance(msg, dict):
+                _send(conn, {"type": "error", "reason": "workflow_sandbox_invalid_request", "detail": {"message": "request must be an object"}})
+                continue
+            kind = str(msg.get("kind") or "").strip().lower()
+            if kind == "shutdown":
+                _send(conn, {"type": "shutdown_ack"})
+                return 0
+            req = dict(msg.get("request") or {}) if kind == "execute" else dict(msg or {})
+            _execute_quickjs(conn, req)
+    except Exception as exc:
+        try:
+            _send(conn, {"type": "error", "reason": "workflow_sandbox_invalid_request", "detail": _detail_from_error(exc)})
+        except Exception:
+            pass
+        return 1
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

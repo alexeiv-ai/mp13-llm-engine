@@ -18,47 +18,6 @@ from hosting.sandbox.workflow_python_contract import build_workflow_python_node_
 from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
 
 
-def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    seen = {}
-
-    def fake_spawn(self, **kwargs):
-        seen.update(kwargs)
-        return {
-            "engine_id": kwargs["engine_id"],
-            "command": list(kwargs["command"]),
-            "env": dict(kwargs["env"]),
-            "worker_profile_class": kwargs["worker_profile_class"],
-            "sandbox_policy": dict(kwargs["sandbox_policy"]),
-            "executor_kind": kwargs["executor_kind"],
-            "capabilities": dict(kwargs["capabilities"]),
-        }
-
-    monkeypatch.setattr(EngineHostService, "spawn", fake_spawn)
-
-    out = svc.spawn_workflow_js_helper(engine_id="wf-js", node_executable="node-custom", capacity=3)
-
-    assert out["engine_id"] == "wf-js"
-    assert out["command"][-1] == "hosting.workflow_js_helper_ipc"
-    assert out["env"]["MP13_WORKER_CONTRACT"] == "hosting.workflow_helper.worker.v1"
-    assert out["env"]["MP13_WORKFLOW_JS_NODE"] == "node-custom"
-    assert out["env"]["MP13_WORKFLOW_JS_HELPER_CAPACITY"] == "3"
-    assert out["worker_profile_class"] == "generic"
-    assert out["executor_kind"] == "workflow_js_helper"
-    assert out["sandbox_policy"]["sandbox"]["profile"] == "workflow_js_helper_v1"
-    assert out["sandbox_policy"]["sandbox"]["network"]["mode"] == "disabled"
-    assert out["sandbox_policy"]["sandbox"]["brokered_io"] == {
-        "filesystem": False,
-        "http": False,
-        "subprocess": False,
-    }
-    assert seen["capabilities"]["workflow_js_helper"] is True
-    assert seen["capabilities"]["capacity"] == 3
-
-
 def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -253,90 +212,44 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     assert [name for name, _ in fake.calls] == ["spec", "ensure", "execute", "resources", "set_capacity", "cancel"]
 
 
-def test_workflow_js_helper_resources_include_normalized_pool_aliases(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_js_facade_reserves_environment_keyed_node_pool(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-
-    def fake_proxy_rpc_call(**kwargs):
-        return {
-            "result": {
-                "status": "ok",
-                "capacity": 2,
-                "active_calls": 1,
-                "node_pool": {
-                    "capacity": 2,
-                    "node_process_count": 1,
-                    "active_node_process_count": 1,
-                    "idle_node_process_count": 0,
-                    "node_processes": [{"pid": 4321, "alive": True, "busy": True, "active_request_id": "req-live"}],
-                },
-            }
-        }
-
-    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
-    monkeypatch.setattr(svc, "_process_resource_snapshot", lambda pid: {"pid": pid, "cpu_percent": 1.0, "memory_mb": 2.0})
-
-    out = svc.workflow_js_helper_resources(engine_id="wf-js")
-
-    assert out["pool"]["process_count"] == 1
-    assert out["pool"]["active_process_count"] == 1
-    assert out["pool"]["active_request_ids"] == ["req-live"]
-
-
-def test_workflow_js_facade_spawns_environment_keyed_worker(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    seen = {}
-
-    monkeypatch.setattr(svc, "get_registration", lambda _engine_id: None)
-
-    def fake_spawn(**kwargs):
-        seen.update(kwargs)
-        return {"status": "ok", "engine_id": kwargs["engine_id"]}
-
-    monkeypatch.setattr(svc, "spawn_workflow_js_helper", fake_spawn)
-    monkeypatch.setattr(svc, "workflow_js_helper_resources", lambda **_kwargs: {"status": "ok"})
 
     out = svc.ensure_workflow_js(
-        profile="helper",
-        node={"node_executable": "node-demo"},
+        profile="node",
+        node={"runtime_hash": "quickjs-demo"},
         capacity=3,
     )
 
     assert out["status"] == "ok"
-    assert out["outcome"] == "spawned"
+    assert out["outcome"] == "ready"
     assert out["engine_id"].startswith("workflow-js-")
     assert out["environment_key"]
-    assert seen["engine_id"] == out["engine_id"]
-    assert seen["capacity"] == 3
 
     resources = svc.workflow_js_resources(
-        profile="helper",
-        node={"node_executable": "node-demo"},
+        profile="node",
+        node={"runtime_hash": "quickjs-demo"},
     )
     assert resources["workflow_pool"]["metrics"]["desired_capacity"] == 3
     assert resources["workflow_pool"]["metrics"]["worker_count"] == 1
 
 
-def test_workflow_js_facade_isolates_pools_by_policy(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_js_facade_isolates_node_pools_by_policy(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    monkeypatch.setattr(svc, "get_registration", lambda _engine_id: None)
-    monkeypatch.setattr(svc, "spawn_workflow_js_helper", lambda **kwargs: {"status": "ok", "engine_id": kwargs["engine_id"]})
 
     first = svc.ensure_workflow_js(
-        profile="helper",
-        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_js_helper_v1"}},
+        profile="node",
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_js_node_v1"}},
     )
     second = svc.ensure_workflow_js(
-        profile="helper",
-        sandbox_policy={"sandbox": {"enabled": False, "profile": "workflow_js_helper_v1"}},
+        profile="node",
+        sandbox_policy={"sandbox": {"enabled": False, "profile": "workflow_js_node_v1"}},
     )
 
     assert first["environment_key"] != second["environment_key"]
@@ -347,63 +260,18 @@ def test_workflow_js_facade_isolates_pools_by_policy(tmp_path: Path, monkeypatch
     }
 
 
-def test_old_js_helper_resource_alias_reports_workflow_pool_for_annotated_registration(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_js_helper_profile_and_aliases_are_removed(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    svc.register_spawned(
-        engine_id="wf-js-existing",
-        pid=0,
-        command=["python", "-m", "hosting.workflow_js_helper_ipc"],
-        worker_profile_class="generic",
-        executor_kind="workflow_js_helper",
-        capabilities={"workflow_js_helper": True},
-    )
-    monkeypatch.setattr(svc, "ensure_running", lambda _engine_id: {"status": "already_running"})
-    monkeypatch.setattr(svc, "proxy_rpc_call", lambda **_kwargs: {"result": {"status": "ok", "capacity": 2, "node_pool": {}}})
 
-    ensured = svc.ensure_workflow_js(profile="helper", engine_id="wf-js-existing", capacity=2)
-    out = svc.workflow_js_helper_resources(engine_id="wf-js-existing")
-
-    assert out["workflow_runtime_kind"] == "workflow_js"
-    assert out["workflow_profile"] == "helper"
-    assert out["environment_key"] == ensured["environment_key"]
-    assert out["workflow_pool"]["metrics"]["desired_capacity"] == 2
-
-
-def test_old_js_helper_capacity_and_cancel_alias_update_workflow_pool(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    svc.register_spawned(
-        engine_id="wf-js-existing",
-        pid=0,
-        command=["python", "-m", "hosting.workflow_js_helper_ipc"],
-        worker_profile_class="generic",
-        executor_kind="workflow_js_helper",
-        capabilities={"workflow_js_helper": True},
-    )
-    monkeypatch.setattr(svc, "ensure_running", lambda _engine_id: {"status": "already_running"})
-
-    def fake_proxy_rpc_call(**kwargs):
-        if kwargs["method"] == "workflow_js_helper.set_capacity":
-            return {"result": {"status": "ok", "capacity": kwargs["params"]["capacity"], "node_pool": {}}}
-        if kwargs["method"] == "workflow_js_helper.cancel_request":
-            return {"result": {"status": "ok", "canceled": True, "request_id": kwargs["params"]["request_id"]}}
-        return {"result": {"status": "ok", "node_pool": {}}}
-
-    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
-
-    ensured = svc.ensure_workflow_js(profile="helper", engine_id="wf-js-existing", capacity=2)
-    resized = svc.set_workflow_js_helper_capacity(engine_id="wf-js-existing", capacity=4)
-    canceled = svc.cancel_workflow_js_helper_request(engine_id="wf-js-existing", request_id="req-missing")
-
-    assert resized["environment_key"] == ensured["environment_key"]
-    assert resized["workflow_pool"]["metrics"]["desired_capacity"] == 4
-    assert canceled["environment_key"] == ensured["environment_key"]
-    assert canceled["workflow_pool_cancel"]["status"] == "not_found"
+    with pytest.raises(ValueError, match="profile='node'"):
+        svc.ensure_workflow_js(profile="helper")
+    assert not hasattr(svc, "spawn_workflow_js_helper")
+    assert not hasattr(svc, "workflow_js_helper_resources")
+    assert not hasattr(svc, "set_workflow_js_helper_capacity")
+    assert not hasattr(svc, "cancel_workflow_js_helper_request")
 
 
 def test_workflow_python_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:
@@ -505,105 +373,6 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
     assert python_runtime["python_executable"]
     assert python_runtime["python_source"] in {"bootstrap", "venv"}
     assert python_runtime["runtime_environment"]["venv_key"]
-
-
-def test_workflow_js_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-
-    def fake_proxy_rpc_call(**kwargs):
-        assert kwargs["engine_id"] == "wf-js"
-        assert kwargs["method"] == "worker.resources"
-        return {
-            "result": {
-                "status": "ok",
-                "capacity": 2,
-                "active_calls": 1,
-                "node_pool": {
-                    "capacity": 2,
-                    "node_process_count": 1,
-                    "active_node_process_count": 1,
-                    "idle_node_process_count": 0,
-                    "node_processes": [
-                        {
-                            "pid": 4321,
-                            "alive": True,
-                            "busy": True,
-                            "active_request_id": "req-live",
-                            "request_count": 3,
-                        }
-                    ],
-                },
-            }
-        }
-
-    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
-    monkeypatch.setattr(svc, "_process_resource_snapshot", lambda pid: {"pid": pid, "cpu_percent": 12.5, "memory_mb": 64.0})
-
-    out = svc.workflow_js_helper_resources(engine_id="wf-js")
-
-    pool = out["node_pool"]
-    assert pool["active_request_ids"] == ["req-live"]
-    assert pool["node_cpu_percent"] == 12.5
-    assert pool["node_memory_mb"] == 64.0
-    assert pool["node_processes"][0]["resources"]["pid"] == 4321
-
-
-def test_workflow_js_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node executable is not available")
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    reg = svc.spawn_workflow_js_helper(
-        engine_id="wf-js-roundtrip",
-        node_executable=node,
-        sandbox_policy={
-            "sandbox": {
-                "enabled": False,
-                "profile": "workflow_js_helper_v1",
-                "network": {"mode": "disabled"},
-                "brokered_io": {"filesystem": False, "http": False, "subprocess": False},
-            }
-        },
-    )
-    source = "export function condition(input) { return { accepted: input.value === 7 }; }"
-    try:
-        svc._wait_for_worker_rpc_ready(reg, timeout_seconds=5.0, poll_interval_seconds=0.1)
-        hello = svc.proxy_rpc_call(engine_id="wf-js-roundtrip", method="rpc.describe", params={})
-        assert hello["executor_kind"] == "workflow_js_helper"
-        out = svc.proxy_rpc_call(
-            engine_id="wf-js-roundtrip",
-            method="execute_workflow_js_helper",
-            params={
-                "module_source": source,
-                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-                "package_id": "pkg-demo",
-                "workflow_id": "config/demo",
-                "package_source_digest": "sha256:digest",
-                "export_name": "condition",
-                "operation": "condition",
-                "payload": {"value": 7},
-                "limits": {"timeout_ms": 5000, "output_limit_bytes": 65536, "memory_limit_mb": 128},
-            },
-        )
-        result = out["result"]
-        assert result["ok"] is True
-        assert result["result"] == {"accepted": True}
-        assert result["runtime"]["sandbox_profile"] == "workflow_js_helper_v1"
-        persisted = svc.get_registration("wf-js-roundtrip")
-        assert persisted is not None
-        assert persisted["executor_kind"] == "workflow_js_helper"
-        assert persisted["sandbox_policy"]["sandbox"]["profile"] == "workflow_js_helper_v1"
-        assert persisted["sandbox_runtime"]
-        ensured = svc.ensure_running("wf-js-roundtrip")
-        assert ensured["status"] in {"ok", "already_running", "running"}
-    finally:
-        svc.shutdown(str(reg.get("engine_id") or "wf-js-roundtrip"), timeout_seconds=5.0)
 
 
 def test_workflow_python_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:
@@ -957,37 +726,23 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
     assert calls["method"] == "execute_workflow_python_helper"
 
 
-def test_execute_workflow_js_facade_uses_existing_rpc(tmp_path: Path, monkeypatch) -> None:
+def test_execute_workflow_js_facade_uses_quickjs_node_runtime(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    calls = {}
-
-    monkeypatch.setattr(
-        svc,
-        "ensure_workflow_js",
-        lambda **kwargs: {
-            "status": "ok",
-            "engine_id": "workflow-js-demo",
-            "environment_key": "env-js",
-        },
-    )
-
-    def fake_proxy_rpc_call(**kwargs):
-        calls.update(kwargs)
-        return {"status": "ok", "result": {"ok": True, "result": {"accepted": True}}}
-
-    monkeypatch.setattr(svc, "proxy_rpc_call", fake_proxy_rpc_call)
+    source = "exports.run = function(input, api) { return { output: { accepted: input.value === 7 }, state_patch: { seen: true } }; };"
 
     out = svc.execute_workflow_js(
-        profile="helper",
+        profile="node",
         request={
-            "module_source": "export function condition(input) { return { accepted: true }; }",
-            "module_sha256": "demo",
-            "operation": "condition",
-            "export_name": "condition",
-            "payload": {},
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg-demo",
+            "workflow_id": "wf-demo",
+            "package_source_digest": "sha256:digest",
+            "export_name": "run",
+            "payload": {"value": 7},
             "limits": {"timeout_ms": 1000},
         },
     )
@@ -995,11 +750,66 @@ def test_execute_workflow_js_facade_uses_existing_rpc(tmp_path: Path, monkeypatc
     assert out["status"] == "ok"
     assert out["ok"] is True
     assert out["output"] == {"accepted": True}
+    assert out["state_patch"] == {"seen": True}
     assert out["metrics"]["request"]["status"] == "ok"
     assert out["metrics"]["workflow_pool"]["metrics"]["active_calls"] == 0
     assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-js-sync"
-    assert calls["engine_id"] == "workflow-js-demo"
-    assert calls["method"] == "execute_workflow_js_helper"
+
+
+def test_execute_workflow_js_node_reads_and_writes_declared_artifacts(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    write_source = """
+exports.run = function(input, api) {
+  api.fs.writeText("seed", "", "seed text");
+  return {output: {written: true}};
+};
+"""
+    read_source = """
+exports.run = function(input, api) {
+  const text = api.fs.readText("seed", "");
+  api.fs.writeText("report", "", text.toUpperCase());
+  return {output: {text: text}};
+};
+"""
+
+    written = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-artifact-write",
+            "module_source": write_source,
+            "module_sha256": hashlib.sha256(write_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
+        },
+    )
+    read = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-artifact-read",
+            "module_source": read_source,
+            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_inputs": [{"name": "seed", "ref": written["artifacts"][0]["ref"]}],
+            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert written["status"] == "ok"
+    assert written["artifacts"][0]["ref"].startswith("@artifacts/")
+    assert read["status"] == "ok"
+    assert read["output"] == {"text": "seed text"}
+    assert read["artifact_store"]["status"] == "ok"
+    assert read["artifacts"][0]["filename"] == "report.txt"
+    assert read["artifacts"][0]["size_bytes"] == len("SEED TEXT")
 
 
 def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:

@@ -7,18 +7,18 @@ Scope: shared sandbox foundation used by hosted workers. Worker-specific details
 
 The sandbox layer is the common host-side boundary for launching worker processes with an explicit policy, registering their runtime metadata, and brokering selected I/O back through the host. It is not only a toolbox feature anymore.
 
-Current worker families:
+Current worker/runtime families:
 
 1. toolbox executors, described in [TOOLBOX_WORKER.md](TOOLBOX_WORKER.md)
 2. generic/model workers, described in [GENERIC_WORKER.md](GENERIC_WORKER.md)
-3. workflow helper workers, described in [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md)
+3. workflow Python helper workers, described in [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md)
+4. workflow JS QuickJS node runtime, described in [JS_NODE_WORKER.md](JS_NODE_WORKER.md)
 
-Workflow helper workers use the same launch, registration, policy, and runtime
-metadata foundation, but expose `hosting.workflow_helper.worker.v1` instead of
-the model-worker contract. JS and Python helpers report a normalized helper
-`pool` shape with process counts, active request ids, per-process state, and
-sampled process resources. JS helpers retain their Node-specific compatibility
-fields.
+Workflow Python helper workers use the same launch, registration, policy, and
+runtime metadata foundation, but expose `hosting.workflow_helper.worker.v1`
+instead of the model-worker contract. Workflow JS no longer uses a helper
+worker or Node.js child pool; the host launches a Python-owned QuickJS child
+harness for JS node requests.
 
 The host remains the trust boundary and lifecycle authority. Workers are separate processes that expose RPC over hosting IPC; the host decides what process is launched, what sandbox policy is attached to the registration, and what brokered callbacks are allowed.
 
@@ -67,8 +67,8 @@ are implementation layers, not public sandbox kinds:
    `HostedPythonRuntimeManager`, which add Python runtime/environment identity,
    runtime environment realization, install plan/lock/verify/receipt hooks, and
    Python executable selection.
-5. [js_runtime.py](js_runtime.py): `HostedJsRuntimeBase`, a thin Node/runtime
-   identity layer for workflow JS helper compatibility. It intentionally does
+5. [js_runtime.py](js_runtime.py): `HostedJsRuntimeBase`, a thin QuickJS
+   workflow node identity layer for JavaScript requests. It intentionally does
    not reuse Python venv machinery.
 6. [toolbox_runtime.py](toolbox_runtime.py): `HostedToolboxRuntimeBase`, an
    internal toolbox identity adapter. It keeps toolbox staging, tool routing,
@@ -91,9 +91,9 @@ Concrete workflow facades currently use these layers incrementally:
    implicitly. Declared artifact inputs and outputs use the host-provisioned
    local artifact data plane described below and in
    [PY_NODE_WORKER.md](PY_NODE_WORKER.md).
-3. `workflow_js(profile=helper)` exposes environment spec, ensure, execute,
+3. `workflow_js(profile=node)` exposes environment spec, ensure, execute,
    resources, capacity, cancel, and request status through the JS runtime base
-   and existing helper worker compatibility path.
+   and QuickJS node runtime.
 4. `toolbox_executor` registrations now include shared hosted environment
    identity through `HostedToolboxRuntimeBase`; toolbox public APIs and
    lifecycle semantics are otherwise unchanged.

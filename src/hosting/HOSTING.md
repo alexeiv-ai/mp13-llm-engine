@@ -256,7 +256,7 @@ path is `workflow-python-execute` with `profile=node`; the streaming path is
 Stream-open returns immediately and background execution emits `started`,
 `log`, optional `progress`, `result` or structured `error`, and `done`.
 
-Workflow JS helper profile exposes the same environment-keyed management shape:
+Workflow JS node profile exposes the same environment-keyed management shape:
 `workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-execute`,
 `workflow-js-resources`, `workflow-js-set-capacity`, `workflow-js-request-status`, and
 `workflow-js-cancel-request`.
@@ -327,7 +327,7 @@ Execute Python helper-profile code through the workflow facade:
 }'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-execute
 ```
 
-JS helper-profile code uses `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. The worker executes `module_source` after verifying `module_sha256`; helper IPC RPC names such as `execute_workflow_python_helper` and `execute_workflow_js_helper` are host-internal implementation details.
+Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs. Node.js, `node_executable`, and the old `execute_workflow_js_helper` RPC path are not part of the JS workflow contract.
 
 ## 3. Diagnostics and Auditing
 

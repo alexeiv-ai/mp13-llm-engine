@@ -1778,16 +1778,16 @@ class EngineHostControlChannel:
     def workflow_js_environment_spec(
         self,
         *,
-        profile: str = "helper",
-        environment_name: str = "workflow-js-helper",
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
         node: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-js-environment-spec",
             {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_name": str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "node": dict(node or {}),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
             },
@@ -1797,11 +1797,10 @@ class EngineHostControlChannel:
     def ensure_workflow_js(
         self,
         *,
-        profile: str = "helper",
-        environment_name: str = "workflow-js-helper",
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
         environment_key: Optional[str] = None,
         node: Optional[Dict[str, Any]] = None,
-        node_executable: Optional[str] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         engine_id: Optional[str] = None,
@@ -1810,11 +1809,10 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-ensure",
             {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_name": str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "node": dict(node or {}),
-                "node_executable": str(node_executable or "").strip() or None,
                 "capacity": max(1, min(int(capacity or 1), 256)),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
                 "engine_id": str(engine_id or "").strip() or None,
@@ -1826,8 +1824,8 @@ class EngineHostControlChannel:
     def workflow_js_resources(
         self,
         *,
-        profile: str = "helper",
-        environment_name: str = "workflow-js-helper",
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
         node: Optional[Dict[str, Any]] = None,
@@ -1836,8 +1834,8 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-resources",
             {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_name": str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "node": dict(node or {}),
@@ -1849,8 +1847,8 @@ class EngineHostControlChannel:
     def execute_workflow_js(
         self,
         *,
-        profile: str = "helper",
-        environment_name: str = "workflow-js-helper",
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
         request: Optional[Dict[str, Any]] = None,
@@ -1861,8 +1859,8 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-execute",
             {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_name": str(environment_name or "workflow-js-helper").strip() or "workflow-js-helper",
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "request": dict(request or {}),
@@ -1876,7 +1874,7 @@ class EngineHostControlChannel:
     def set_workflow_js_capacity(
         self,
         *,
-        profile: str = "helper",
+        profile: str = "node",
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
         capacity: int,
@@ -1884,7 +1882,7 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-set-capacity",
             {
-                "profile": str(profile or "helper").strip() or "helper",
+                "profile": str(profile or "node").strip() or "node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "capacity": max(1, min(int(capacity or 1), 256)),
@@ -1895,7 +1893,7 @@ class EngineHostControlChannel:
     def cancel_workflow_js_request(
         self,
         *,
-        profile: str = "helper",
+        profile: str = "node",
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
         request_id: str,
@@ -1903,7 +1901,7 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-cancel-request",
             {
-                "profile": str(profile or "helper").strip() or "helper",
+                "profile": str(profile or "node").strip() or "node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "request_id": str(request_id or "").strip(),
@@ -1914,7 +1912,7 @@ class EngineHostControlChannel:
     def workflow_js_request_status(
         self,
         *,
-        profile: str = "helper",
+        profile: str = "node",
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
         request_id: str,
@@ -1922,7 +1920,7 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-request-status",
             {
-                "profile": str(profile or "helper").strip() or "helper",
+                "profile": str(profile or "node").strip() or "node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "request_id": str(request_id or "").strip(),

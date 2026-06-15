@@ -51,7 +51,7 @@ JS node execution is host-owned:
 
 The runtime should not expose raw helper worker spawn APIs to dependent
 projects. The previous `hosting.workflow_js_helper_ipc` worker and
-`execute_workflow_js_helper` RPC contract are planned for removal.
+`execute_workflow_js_helper` RPC contract have been removed.
 
 Request lifecycle states follow the hosted pool model:
 

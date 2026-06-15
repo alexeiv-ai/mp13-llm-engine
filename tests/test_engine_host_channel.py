@@ -1157,42 +1157,41 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
     ch.set_session_token("tok-123")
 
     ch.workflow_js_environment_spec(
-        profile="helper",
-        node={"node_executable": "node-demo"},
+        profile="node",
+        node={"runtime_hash": "quickjs-demo"},
         sandbox_policy={"sandbox": {"enabled": True}},
     )
     ch.ensure_workflow_js(
-        profile="helper",
+        profile="node",
         environment_key="env-js",
-        node={"node_executable": "node-demo"},
+        node={"runtime_hash": "quickjs-demo"},
         engine_id="wf-js",
         capacity=4,
     )
-    ch.workflow_js_resources(profile="helper", environment_key="env-js", engine_id="wf-js")
+    ch.workflow_js_resources(profile="node", environment_key="env-js", engine_id="wf-js")
     ch.execute_workflow_js(
-        profile="helper",
+        profile="node",
         environment_key="env-js",
         engine_id="wf-js",
         request={
             "request_id": "req-1",
-            "module_source": "export function condition(input) { return { accepted: true }; }",
+            "module_source": "exports.run = function(input, api) { return { output: { accepted: true } }; };",
             "module_sha256": "sha",
-            "operation": "condition",
-            "export_name": "condition",
+            "export_name": "run",
             "payload": {},
         },
     )
-    ch.set_workflow_js_capacity(profile="helper", environment_key="env-js", engine_id="wf-js", capacity=6)
-    ch.cancel_workflow_js_request(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
-    ch.workflow_js_request_status(profile="helper", environment_key="env-js", engine_id="wf-js", request_id="req-1")
+    ch.set_workflow_js_capacity(profile="node", environment_key="env-js", engine_id="wf-js", capacity=6)
+    ch.cancel_workflow_js_request(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
+    ch.workflow_js_request_status(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
 
     assert fake.calls == [
         (
             "workflow-js-environment-spec",
             {
-                "profile": "helper",
-                "environment_name": "workflow-js-helper",
-                "node": {"node_executable": "node-demo"},
+                "profile": "node",
+                "environment_name": "workflow-js-node",
+                "node": {"runtime_hash": "quickjs-demo"},
                 "sandbox_policy": {"sandbox": {"enabled": True}},
                 "session_token": "tok-123",
             },
@@ -1200,11 +1199,10 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         (
             "workflow-js-ensure",
             {
-                "profile": "helper",
-                "environment_name": "workflow-js-helper",
+                "profile": "node",
+                "environment_name": "workflow-js-node",
                 "environment_key": "env-js",
-                "node": {"node_executable": "node-demo"},
-                "node_executable": None,
+                "node": {"runtime_hash": "quickjs-demo"},
                 "capacity": 4,
                 "sandbox_policy": None,
                 "engine_id": "wf-js",
@@ -1215,8 +1213,8 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         (
             "workflow-js-resources",
             {
-                "profile": "helper",
-                "environment_name": "workflow-js-helper",
+                "profile": "node",
+                "environment_name": "workflow-js-node",
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "node": {},
@@ -1227,16 +1225,15 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         (
             "workflow-js-execute",
             {
-                "profile": "helper",
-                "environment_name": "workflow-js-helper",
+                "profile": "node",
+                "environment_name": "workflow-js-node",
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "request": {
                     "request_id": "req-1",
-                    "module_source": "export function condition(input) { return { accepted: true }; }",
+                    "module_source": "exports.run = function(input, api) { return { output: { accepted: true } }; };",
                     "module_sha256": "sha",
-                    "operation": "condition",
-                    "export_name": "condition",
+                    "export_name": "run",
                     "payload": {},
                 },
                 "node": {},
@@ -1248,7 +1245,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         (
             "workflow-js-set-capacity",
             {
-                "profile": "helper",
+                "profile": "node",
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "capacity": 6,
@@ -1258,7 +1255,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         (
             "workflow-js-cancel-request",
             {
-                "profile": "helper",
+                "profile": "node",
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "request_id": "req-1",
@@ -1268,7 +1265,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         (
             "workflow-js-request-status",
             {
-                "profile": "helper",
+                "profile": "node",
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "request_id": "req-1",

@@ -47,6 +47,7 @@ matplotlib = "^3.10.1"
 einops = "^0.8.1"
 numexpr = "^2.11.0"
 prompt-toolkit = "^3.0.51"
+quickjs = "^1.19.4"
 
 [tool.poetry.extras]
 xformers = ["xformers"]

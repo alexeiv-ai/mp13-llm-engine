@@ -9,7 +9,7 @@ Generic workers are hosted engine/model workers launched as separate processes a
 
 They share the sandbox launch and broker foundation, but they are not staged toolbox executors. They do not load toolbox manifests and do not have logical-toolbox routing.
 
-Workflow helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). The JS and Python helper workers use `worker_profile_class="generic"` with `executor_kind="workflow_js_helper"` or `executor_kind="workflow_python_helper"`, but they do not use the model-oriented `hosting.engine_worker_ipc` contract.
+Workflow Python helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). JavaScript workflow execution now uses the QuickJS node contract documented in [JS_NODE_WORKER.md](JS_NODE_WORKER.md) instead of a generic helper worker.
 
 ## Main Implementation
 
@@ -91,9 +91,9 @@ Current limit environment variables:
 
 The CLI/channel exposes these through `proxy-rpc-open`, `proxy-rpc-recv`, `proxy-rpc-send`, and `proxy-rpc-close`.
 
-## Workflow Helper Relationship
+## Workflow Runtime Relationship
 
-The workflow JS and Python helper workers intentionally stay outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch.
+Workflow Python helper workers intentionally stay outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch. Workflow JavaScript is no longer a generic worker specialization; it is launched as a request-scoped QuickJS child harness by the workflow JS node runtime.
 
 The shared pieces are:
 
@@ -105,12 +105,18 @@ The shared pieces are:
 6. hosting IPC/RPC
 7. lifecycle APIs such as status, ensure-running, and shutdown
 
-The specialized pieces are:
+The Python helper specialized pieces are:
 
-1. worker modules `hosting.workflow_js_helper_ipc` and `hosting.workflow_python_helper_ipc`
-2. executor kinds `workflow_js_helper` and `workflow_python_helper`
+1. worker module `hosting.workflow_python_helper_ipc`
+2. executor kind `workflow_python_helper`
 3. execution contract `hosting.workflow_helper.worker.v1`
-4. RPC methods `execute_workflow_js_helper` and `execute_workflow_python_helper`
+4. RPC method `execute_workflow_python_helper`
+
+The JavaScript specialized pieces are:
+
+1. runtime module `hosting.sandbox.workflow_js_node_runtime`
+2. child harness `hosting.workflow_js_node_worker_ipc`
+3. execution contract documented in [JS_NODE_WORKER.md](JS_NODE_WORKER.md)
 
 ## HTTP Compatibility API
 

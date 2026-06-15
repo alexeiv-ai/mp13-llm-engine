@@ -7,13 +7,15 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 ## Current State
 
 - Helper-profile dependent clients have already migrated to workflow facade APIs.
-- No additional client action is required for existing short helper-profile Python or JS execution.
+- No additional client action is required for existing short helper-profile Python execution.
+- JavaScript workflow helper-profile execution has been replaced by `workflow_js(profile=node)` with the QuickJS JS node contract.
 - `workflow_python(profile=node)` now has a direct node execution path and no longer returns helper-shaped nested results.
 - Dependency-bearing node-profile execution now requires host-prepared and verified runtime environments before execution.
 
 ## Remaining Client Changes
 
 - Clients that own node-profile workflow execution must validate against the direct node response envelope and stream event model before adopting it.
+- JS workflow clients must stop using `workflow_js(profile=helper)`, helper operation allowlists, Node ESM source loading behavior, `node_executable`, or Node.js runtime/version assumptions. Use `exports.run = function(input, api) { ... }` with `workflow-js-execute`.
 - Node-profile clients must consume streaming events as separate records:
   - `started`
   - `stdout`
@@ -42,5 +44,5 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 ## No Remaining Action For Already Migrated Helper Clients
 
 - No action for clients already using `workflow-python-*` helper-profile APIs.
-- No action for clients already using `workflow-js-*` helper-profile APIs.
+- JS clients already using `workflow-js-*` command names must update request payloads to `profile:"node"` and the QuickJS `exports.run(input, api)` contract.
 - No action for clients already routing helper resources, capacity, request status, and cancellation by `environment_key`.

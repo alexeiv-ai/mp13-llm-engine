@@ -1138,13 +1138,9 @@ class EnginesMixin:
         if is_workflow_python_helper:
             return "workflow python sandbox" if sandbox.enabled else "workflow python worker"
 
-        is_workflow_js_helper = (
-            executor_kind == "workflow_js_helper"
-            or "hosting.workflow_js_helper_ipc" in command_text
-            or "MP13_WORKFLOW_JS_HELPER_CAPACITY" in env
-        )
-        if is_workflow_js_helper:
-            return "workflow js sandbox" if sandbox.enabled else "workflow js worker"
+        is_workflow_js_node = executor_kind == "workflow_js_node" or "hosting.workflow_js_node_worker_ipc" in command_text
+        if is_workflow_js_node:
+            return "workflow js node sandbox" if sandbox.enabled else "workflow js node worker"
 
         is_model = (
             worker_class == "model"
@@ -1162,7 +1158,7 @@ class EnginesMixin:
     def _query_worker_reported_resources(self, item: Dict[str, Any]) -> Dict[str, Any]:
         kind = self._describe_registration_kind(item)
         executor_kind = str(item.get("executor_kind") or "").strip()
-        if executor_kind in {"workflow_js_helper", "workflow_python_helper"}:
+        if executor_kind == "workflow_python_helper":
             try:
                 out = self._ipc_call(
                     reg=item,
@@ -1180,8 +1176,7 @@ class EnginesMixin:
                     "method": "worker.resources",
                     "error": str(exc),
                 }
-                prefix = "workflow_js" if executor_kind == "workflow_js_helper" else "workflow_python"
-                return {f"{prefix}_helper_pending": True, f"{prefix}_helper_source": "worker_status_pending"}
+                return {"workflow_python_helper_pending": True, "workflow_python_helper_source": "worker_status_pending"}
             if str(out.get("status") or "").strip().lower() != "ok":
                 item["worker_resource_probe"] = {
                     "status": "pending",
@@ -1189,8 +1184,7 @@ class EnginesMixin:
                     "response_status": str(out.get("status") or ""),
                     "message": str(out.get("message") or ""),
                 }
-                prefix = "workflow_js" if executor_kind == "workflow_js_helper" else "workflow_python"
-                return {f"{prefix}_helper_pending": True, f"{prefix}_helper_source": "worker_status_pending"}
+                return {"workflow_python_helper_pending": True, "workflow_python_helper_source": "worker_status_pending"}
             result = dict(out.get("result") or {})
             if str(result.get("status") or "").strip().lower() not in {"", "ok", "success"}:
                 item["worker_resource_probe"] = {
@@ -1198,68 +1192,16 @@ class EnginesMixin:
                     "method": "worker.resources",
                     "response_status": str(result.get("status") or ""),
                 }
-                prefix = "workflow_js" if executor_kind == "workflow_js_helper" else "workflow_python"
-                return {f"{prefix}_helper_pending": True, f"{prefix}_helper_source": "worker_status_pending"}
-            pool = dict(result.get("node_pool") or {})
+                return {"workflow_python_helper_pending": True, "workflow_python_helper_source": "worker_status_pending"}
             generic_pool = dict(result.get("pool") or {})
-            if executor_kind == "workflow_python_helper":
-                proc_rows: List[Dict[str, Any]] = []
-                total_cpu = 0.0
-                total_mem = 0.0
-                known_cpu = False
-                known_mem = False
-                for raw_proc in list(generic_pool.get("processes") or []):
-                    proc = dict(raw_proc or {})
-                    pid = int(proc.get("pid") or 0)
-                    if pid > 0:
-                        metrics = self._process_resource_snapshot(pid)
-                        if metrics.get("cpu_percent") is not None:
-                            known_cpu = True
-                            total_cpu += float(metrics.get("cpu_percent") or 0.0)
-                        if metrics.get("memory_mb") is not None:
-                            known_mem = True
-                            total_mem += float(metrics.get("memory_mb") or 0.0)
-                        proc["resources"] = dict(metrics or {})
-                    proc_rows.append(proc)
-                item["worker_resource_probe"] = {"status": "ok", "method": "worker.resources"}
-                return {
-                    "workflow_python_capacity": int(result.get("capacity") or 0),
-                    "workflow_python_active_calls": int(result.get("active_calls") or 0),
-                    "workflow_python_available_slots": int(result.get("available_slots") or 0),
-                    "workflow_helper_pool_process_count": int(generic_pool.get("process_count") or 0),
-                    "workflow_helper_pool_active_process_count": int(generic_pool.get("active_process_count") or 0),
-                    "workflow_helper_pool_idle_process_count": int(generic_pool.get("idle_process_count") or 0),
-                    "workflow_helper_pool_active_request_ids": [
-                        str(dict(row or {}).get("active_request_id") or "").strip()
-                        for row in proc_rows
-                        if str(dict(row or {}).get("active_request_id") or "").strip()
-                    ],
-                    "workflow_python_process_count": int(generic_pool.get("process_count") or 0),
-                    "workflow_python_active_process_count": int(generic_pool.get("active_process_count") or 0),
-                    "workflow_python_idle_process_count": int(generic_pool.get("idle_process_count") or 0),
-                    "workflow_python_cpu_percent": round(total_cpu, 1) if known_cpu else None,
-                    "workflow_python_memory_mb": round(total_mem, 1) if known_mem else None,
-                    "workflow_python_pids": [
-                        int(dict(row or {}).get("pid") or 0)
-                        for row in proc_rows
-                        if int(dict(row or {}).get("pid") or 0) > 0
-                    ],
-                    "workflow_python_active_request_ids": [
-                        str(dict(row or {}).get("active_request_id") or "").strip()
-                        for row in proc_rows
-                        if str(dict(row or {}).get("active_request_id") or "").strip()
-                    ],
-                    "workflow_python_processes": proc_rows,
-                    "workflow_python_helper_source": "worker_pool",
-                }
-            node_rows: List[Dict[str, Any]] = []
+            proc_rows: List[Dict[str, Any]] = []
             total_cpu = 0.0
             total_mem = 0.0
             known_cpu = False
             known_mem = False
-            for raw_node in list(pool.get("node_processes") or []):
-                node = dict(raw_node or {})
-                pid = int(node.get("pid") or 0)
+            for raw_proc in list(generic_pool.get("processes") or []):
+                proc = dict(raw_proc or {})
+                pid = int(proc.get("pid") or 0)
                 if pid > 0:
                     metrics = self._process_resource_snapshot(pid)
                     if metrics.get("cpu_percent") is not None:
@@ -1268,39 +1210,38 @@ class EnginesMixin:
                     if metrics.get("memory_mb") is not None:
                         known_mem = True
                         total_mem += float(metrics.get("memory_mb") or 0.0)
-                    node["resources"] = dict(metrics or {})
-                node_rows.append(node)
+                    proc["resources"] = dict(metrics or {})
+                proc_rows.append(proc)
             item["worker_resource_probe"] = {"status": "ok", "method": "worker.resources"}
             return {
-                "workflow_js_capacity": int(result.get("capacity") or pool.get("capacity") or 0),
-                "workflow_js_active_calls": int(result.get("active_calls") or 0),
-                "workflow_js_available_slots": int(result.get("available_slots") or 0),
-                "workflow_helper_pool_process_count": int(generic_pool.get("process_count") or pool.get("node_process_count") or 0),
-                "workflow_helper_pool_active_process_count": int(generic_pool.get("active_process_count") or pool.get("active_node_process_count") or 0),
-                "workflow_helper_pool_idle_process_count": int(generic_pool.get("idle_process_count") or pool.get("idle_node_process_count") or 0),
+                "workflow_python_capacity": int(result.get("capacity") or 0),
+                "workflow_python_active_calls": int(result.get("active_calls") or 0),
+                "workflow_python_available_slots": int(result.get("available_slots") or 0),
+                "workflow_helper_pool_process_count": int(generic_pool.get("process_count") or 0),
+                "workflow_helper_pool_active_process_count": int(generic_pool.get("active_process_count") or 0),
+                "workflow_helper_pool_idle_process_count": int(generic_pool.get("idle_process_count") or 0),
                 "workflow_helper_pool_active_request_ids": [
                     str(dict(row or {}).get("active_request_id") or "").strip()
-                    for row in node_rows
+                    for row in proc_rows
                     if str(dict(row or {}).get("active_request_id") or "").strip()
                 ],
-                "workflow_js_node_process_count": int(pool.get("node_process_count") or 0),
-                "workflow_js_active_node_process_count": int(pool.get("active_node_process_count") or 0),
-                "workflow_js_idle_node_process_count": int(pool.get("idle_node_process_count") or 0),
-                "workflow_js_node_cpu_percent": round(total_cpu, 1) if known_cpu else None,
-                "workflow_js_node_memory_mb": round(total_mem, 1) if known_mem else None,
-                "workflow_js_node_pids": [
+                "workflow_python_process_count": int(generic_pool.get("process_count") or 0),
+                "workflow_python_active_process_count": int(generic_pool.get("active_process_count") or 0),
+                "workflow_python_idle_process_count": int(generic_pool.get("idle_process_count") or 0),
+                "workflow_python_cpu_percent": round(total_cpu, 1) if known_cpu else None,
+                "workflow_python_memory_mb": round(total_mem, 1) if known_mem else None,
+                "workflow_python_pids": [
                     int(dict(row or {}).get("pid") or 0)
-                    for row in node_rows
+                    for row in proc_rows
                     if int(dict(row or {}).get("pid") or 0) > 0
                 ],
-                "workflow_js_active_request_ids": [
+                "workflow_python_active_request_ids": [
                     str(dict(row or {}).get("active_request_id") or "").strip()
-                    for row in node_rows
+                    for row in proc_rows
                     if str(dict(row or {}).get("active_request_id") or "").strip()
                 ],
-                "workflow_js_node_processes": node_rows,
-                "workflow_js_max_requests_per_node": int(pool.get("max_requests_per_node") or 0),
-                "workflow_js_helper_source": "worker_node_pool",
+                "workflow_python_processes": proc_rows,
+                "workflow_python_helper_source": "worker_pool",
             }
         if "model" not in kind:
             return {}

@@ -9,7 +9,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - `workflow_python` is the public Python workflow runtime with two profiles:
   - `profile=helper`: short helper execution, source-in / JSON-out, compatible with existing helper behavior.
   - `profile=node`: first-class workflow node execution with a richer node response and streaming model.
-- `workflow_js(profile=helper)` remains the public JavaScript helper runtime facade.
+- `workflow_js(profile=node)` is the public JavaScript workflow runtime facade, backed by QuickJS.
 - Runtime routing is by host-derived `environment_key`, not by raw engine ID alone.
 - Environment identity includes runtime intent, dependency/import intent, and sandbox policy identity so incompatible work does not share a worker pool.
 - Dependency installation is not triggered implicitly by workflow execution. Dependency-bearing work must execute against an explicitly prepared/verified runtime environment or fail with a structured environment error.
@@ -26,7 +26,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
   - It no longer translates node execution through `execute_workflow_python_helper`.
   - It preserves the node response envelope.
   - Its stream API routes execution through the node runtime and emits node events through the shared stream/session plumbing.
-- `workflow_js(profile=helper)` exists as a public facade over the JS helper implementation.
+- `workflow_js(profile=node)` exists as a public facade over the QuickJS workflow JS node runtime.
 - Host-side environment-key routing and pool/request accounting exist for the workflow facades.
 - Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path collection. It returns `artifact_store.status=ok` only when refs are minted from declared output files or declared inline outputs.
 - Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs. Compatible module/snippet requests can reuse warm harness workers sequentially; project execution and explicit recycling policy are still next-phase work.
@@ -42,7 +42,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 ### Baseline Already Present
 
 - [x] Keep `workflow_python(profile=helper)` available as the short helper execution profile.
-- [x] Keep `workflow_js(profile=helper)` available as the JavaScript helper execution profile.
+- [x] Keep public workflow JS facade commands available for QuickJS node execution.
 - [x] Keep public workflow Python facade commands available for helper-profile execution.
 - [x] Keep public workflow JS facade commands available for helper-profile execution.
 - [x] Derive and report `environment_key` for workflow facade calls.

@@ -162,7 +162,7 @@ wired.
 
 ## Workflow Runtime Commands
 
-Workflow helper-profile workers are managed through workflow runtime facades:
+Workflow Python helper-profile workers are managed through workflow runtime facades:
 
 ```powershell
 @'{"profile":"helper","environment_name":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-ensure
@@ -171,15 +171,15 @@ Workflow helper-profile workers are managed through workflow runtime facades:
 @'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-1","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-cancel-request
 ```
 
-JS helper-profile workers use the same pattern with `workflow-js-ensure`,
-`workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and
-`workflow-js-cancel-request`. The old `*-helper-*` command names are no longer
-public host commands; the helper IPC workers remain internal implementation
-details behind these facades.
+Workflow JavaScript uses the QuickJS-backed node facade with
+`workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`,
+`workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use
+`profile:"node"` and do not accept Node.js runtime selection such as
+`node_executable`.
 
 The interactive menu exposes workflow runtime resource, capacity, refresh,
 request-status, stream receive, and request-cancel actions under `Manage
-workflow helpers`.
+workflow runtimes`.
 
 ## Remote Authentication Model
 

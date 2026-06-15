@@ -244,7 +244,7 @@ def test_cli_local_workflow_js_facade_commands(
     resources_rc = engine_host_cli.main(
         [
             "--payload-json",
-            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "node": {"node_executable": "node-demo"}}),
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "node": {"runtime_hash": "quickjs-demo"}}),
             "workflow-js-resources",
         ]
     )
@@ -277,17 +277,17 @@ def test_cli_local_workflow_js_facade_commands(
     assert (
         "resources",
         {
-            "profile": "helper",
-            "environment_name": "workflow-js-helper",
+            "profile": "node",
+            "environment_name": "workflow-js-node",
             "environment_key": "env-js",
             "engine_id": "wf-js",
-            "node": {"node_executable": "node-demo"},
+            "node": {"runtime_hash": "quickjs-demo"},
             "sandbox_policy": None,
         },
     ) in calls
-    assert ("capacity", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}) in calls
-    assert ("cancel", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
-    assert ("status", {"profile": "helper", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
+    assert ("capacity", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}) in calls
+    assert ("cancel", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
+    assert ("status", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
     out = capsys.readouterr().out
     assert '"environment_key": "env-js"' in out
     assert '"request_id": "req-1"' in out

@@ -321,7 +321,7 @@ def test_manage_workflow_helpers_prefers_workflow_python_facade(
     monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
     monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
 
-    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+    interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
     assert ("workflow-python-resources", {"engine_id": "wf-py", "profile": "helper", "environment_key": "env-demo"}) in invocations
     out = capsys.readouterr().out
@@ -369,7 +369,7 @@ def test_manage_workflow_helpers_can_ensure_python_runtime(
     monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
     monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
 
-    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+    interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
     assert ("workflow-python-ensure", {"profile": "helper", "engine_id": "wf-py", "capacity": 2}) in invocations
     assert ("workflow-python-resources", {"engine_id": "wf-py", "profile": "helper", "environment_key": "env-demo"}) in invocations
@@ -429,7 +429,7 @@ def test_manage_workflow_helpers_can_inspect_request_status(
     monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
     monkeypatch.setattr("builtins.input", lambda _prompt="": "")
 
-    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+    interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
     assert (
         "workflow-python-request-status",
@@ -487,7 +487,7 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
     monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
 
-    interactive._manage_workflow_js_helpers(args, session_token="tok-1")
+    interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
     assert ("workflow-python-stream-recv", {"stream_id": "stream-1", "max_items": 5}) in invocations
     out = capsys.readouterr().out

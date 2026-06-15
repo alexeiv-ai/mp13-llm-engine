@@ -34,6 +34,9 @@ Phase 9 toolbox migration has initial coverage for shared hosted environment ide
 Update: 2026-06-01
 Workflow Python node profile now has real execution and streaming coverage through the hosted workflow Python runtime, including progress/result/error/timeout/cancel plumbing:
 `tests/test_workflow_helper_service.py -k "node or workflow_python"`.
+Update: 2026-06-15
+Workflow JavaScript now uses the QuickJS-backed JS node runtime. The old Node.js
+helper IPC characterization tests were replaced by `tests/test_workflow_js_node_runtime.py`.
 
 ## 1. Environment
 
@@ -85,10 +88,10 @@ Current automated coverage includes:
 16. brokered callback attribution slices:
     - brokered filesystem / HTTP service echo callback context
     - live toolbox execution proves brokered filesystem callback attribution to original tool call
-17. workflow helper characterization slices:
+17. workflow helper and JS node characterization slices:
     - Python helper module identity, operation allowlist, timeout, output limit, cancellation, capacity, import allowlist, audit/provenance, child process reuse, and real round trip
-    - JS helper module identity, operation allowlist, timeout, output limit, cancellation, capacity, audit/provenance, child process reuse, and real/service round trips where Node is available
-    - service/channel/daemon helper spawn, resources, capacity, cancel, and runtime-environment realization paths
+    - JS node source identity, `exports.run` execution, missing export, output limit, progress/console, sync host API dispatch, async rejection, and helper-removal regression coverage
+    - service/channel/daemon resources, capacity, cancel, and runtime-environment realization paths
 18. hosted sandbox runtime refactor slices:
     - deterministic runtime/environment key models and sandbox policy hashes
     - internal process base request lifecycle, stream session, cancellation, and status plumbing
@@ -157,10 +160,10 @@ python -m pytest tests/test_hosting_toolbox_sandbox.py -q -k "live_callback or c
 python -m pytest tests/test_toolbox_admin.py -q
 ```
 
-### 3.5A Workflow helper slices
+### 3.5A Workflow helper and JS node slices
 
 ```powershell
-python -m pytest tests/test_workflow_python_helper_ipc.py tests/test_workflow_js_helper_ipc.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py -q -k "workflow"
+python -m pytest tests/test_workflow_python_helper_ipc.py tests/test_workflow_js_node_runtime.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py -q -k "workflow"
 ```
 
 ### 3.5B Hosted runtime refactor slices

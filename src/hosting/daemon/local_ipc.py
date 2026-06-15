@@ -2083,18 +2083,17 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-js-environment-spec":
             return svc.workflow_js_environment_spec(
-                profile=str(payload.get("profile") or "helper"),
-                environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                 node=dict(payload.get("node") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
             )
         if cmd == "workflow-js-ensure":
             return svc.ensure_workflow_js(
-                profile=str(payload.get("profile") or "helper"),
-                environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 node=dict(payload.get("node") or {}),
-                node_executable=payload.get("node_executable"),
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
@@ -2102,8 +2101,8 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-js-resources":
             return svc.workflow_js_resources(
-                profile=str(payload.get("profile") or "helper"),
-                environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 node=dict(payload.get("node") or {}),
@@ -2111,8 +2110,8 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-js-execute":
             return svc.execute_workflow_js(
-                profile=str(payload.get("profile") or "helper"),
-                environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 request=dict(payload.get("request") or {}),
@@ -2122,21 +2121,21 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-js-set-capacity":
             return svc.set_workflow_js_capacity(
-                profile=str(payload.get("profile") or "helper"),
+                profile=str(payload.get("profile") or "node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 capacity=int(payload.get("capacity") or 1),
             )
         if cmd == "workflow-js-cancel-request":
             return svc.cancel_workflow_js_request(
-                profile=str(payload.get("profile") or "helper"),
+                profile=str(payload.get("profile") or "node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 request_id=str(payload.get("request_id") or ""),
             )
         if cmd == "workflow-js-request-status":
             return svc.workflow_js_request_status(
-                profile=str(payload.get("profile") or "helper"),
+                profile=str(payload.get("profile") or "node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 request_id=str(payload.get("request_id") or ""),

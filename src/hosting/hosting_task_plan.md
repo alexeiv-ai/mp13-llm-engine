@@ -62,18 +62,18 @@ goal, and the Node.js executable requirement should be removed.
 
 - [x] Add `src/hosting/sandbox/JS_NODE_WORKER.md` as the canonical JS node
       worker contract document.
-- [ ] Define the JS node request contract with required fields:
+- [x] Define the JS node request contract with required fields:
       `module_source`, `module_sha256`, `package_id`, `workflow_id`,
       `package_source_digest`, and `payload`.
-- [ ] Define optional request fields: `request_id`, `provenance`, `limits`,
+- [x] Define optional request fields: `request_id`, `provenance`, `limits`,
       `policy`, `javascript`, `artifact_inputs`, `artifact_outputs`,
       `execution_mode`, `project`, and `code_revision`.
-- [ ] Define the initial supported execution modes:
+- [x] Define the initial supported execution modes:
       `script` for single-source execution and `snippet` for assigning a global
       result.
-- [ ] Defer multi-module/project execution until a bundling or module-loader
+- [x] Defer multi-module/project execution until a bundling or module-loader
       strategy is selected.
-- [ ] Define the runtime authoring shape for the first implementation:
+- [x] Define the runtime authoring shape for the first implementation:
 
 ```javascript
 exports.run = function(input, api) {
@@ -81,72 +81,72 @@ exports.run = function(input, api) {
 };
 ```
 
-- [ ] Define async semantics explicitly before exposing `async` examples:
+- [x] Define async semantics explicitly before exposing `async` examples:
       either synchronous host APIs only for v1 or a bounded promise/job pump
       with host-call promise resolution.
-- [ ] Define the normalized JS return shape:
+- [x] Define the normalized JS return shape:
       plain values become `output`, while objects may carry `output`,
       `state_patch`, `artifacts`, and `progress`.
-- [ ] Define structured error reasons for invalid source hash, missing export,
+- [x] Define structured error reasons for invalid source hash, missing export,
       runtime exception, timeout, cancellation, invalid output, output limit,
       unsupported host method, and policy denial.
 
 ## Phase 2: Runtime Base And Environment Identity
 
-- [ ] Rework `HostedJsRuntimeBase` so it represents the QuickJS workflow node
+- [x] Rework `HostedJsRuntimeBase` so it represents the QuickJS workflow node
       runtime instead of the legacy helper compatibility environment.
-- [ ] Update JS environment identity to include runtime kind, profile,
+- [x] Update JS environment identity to include runtime kind, profile,
       QuickJS binding/runtime identity, dependency/bundle intent, host API
       policy, and sandbox policy hash.
-- [ ] Add a `javascript` policy block parallel to Python policy, with fields
+- [x] Add a `javascript` policy block parallel to Python policy, with fields
       such as `runtime`, `runtime_hash`, `bundle_hash`, `allowed_host_modules`,
       and future package/bundle metadata.
-- [ ] Ensure incompatible QuickJS runtime identity, host API policy, sandbox
+- [x] Ensure incompatible QuickJS runtime identity, host API policy, sandbox
       policy, or bundle identity creates a distinct `environment_key`.
-- [ ] Preserve shared pool, request lifecycle, capacity, status, resource, and
+- [x] Preserve shared pool, request lifecycle, capacity, status, resource, and
       cancellation accounting through `HostedProcessSandboxBase`.
 
 ## Phase 3: QuickJS Child Harness
 
-- [ ] Add a QuickJS node runtime module, for example
+- [x] Add a QuickJS node runtime module, for example
       `hosting.sandbox.workflow_js_node_runtime`.
-- [ ] Add a built-in child harness entrypoint, for example
+- [x] Add a built-in child harness entrypoint, for example
       `hosting.workflow_js_node_worker_ipc`.
-- [ ] Launch the child harness with the selected Python executable and imported
+- [x] Launch the child harness with the selected Python executable and imported
       QuickJS binding; do not launch `node`.
-- [ ] Track active JS child processes through the shared active child runtime
+- [x] Track active JS child processes through the shared active child runtime
       registry used by Python node.
-- [ ] Implement source hash verification before executing QuickJS code.
-- [ ] Build a fresh QuickJS context per request at first; add warm context reuse
+- [x] Implement source hash verification before executing QuickJS code.
+- [x] Build a fresh QuickJS context per request at first; add warm context reuse
       only after cleanup and global-state policy are defined.
-- [ ] Inject a minimal global surface:
+- [x] Inject a minimal global surface:
       `exports`, `console`, `api`, `progress` or `emitProgress`, and selected
       codec helpers.
-- [ ] Keep ambient host access out of the QuickJS global scope:
+- [x] Keep ambient host access out of the QuickJS global scope:
       no `process`, unrestricted `require`, unrestricted `import`, direct
       filesystem, direct subprocess, or direct network.
-- [ ] Capture console output into bounded logs.
-- [ ] Enforce timeout, output limit, and cancellation at the child-process
+- [x] Capture console output into bounded logs.
+- [x] Enforce timeout, output limit, and cancellation at the child-process
       level even when QuickJS binding-level limits are available.
 - [ ] Add memory limit reporting based on what the selected QuickJS binding and
       platform can actually enforce; report unavailable when not enforced.
 
 ## Phase 4: Host API Dispatcher
 
-- [ ] Reuse or generalize the Python node host dispatcher for JS node host
+- [x] Reuse or generalize the Python node host dispatcher for JS node host
       calls.
-- [ ] Expose `api.describe()` with methods, schemas, permissions, roots,
+- [x] Expose `api.describe()` with methods, schemas, permissions, roots,
       policy, and transport capabilities.
-- [ ] Implement artifact filesystem methods:
+- [x] Implement artifact filesystem methods:
       `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat`.
-- [ ] Enforce read-only artifact input roots and writable artifact output roots.
-- [ ] Reject relative paths that escape the selected root.
-- [ ] Implement brokered `http.fetch` through the existing host HTTP policy
+- [x] Enforce read-only artifact input roots and writable artifact output roots.
+- [x] Reject relative paths that escape the selected root.
+- [x] Implement brokered `http.fetch` through the existing host HTTP policy
       checks when sandbox policy enables brokered HTTP.
-- [ ] Add `codec` helpers for UTF-8 and base64.
-- [ ] Add selected `crypto` helpers only when they are deterministic and
+- [x] Add `codec` helpers for UTF-8 and base64.
+- [x] Add selected `crypto` helpers only when they are deterministic and
       policy-approved, starting with hashing.
-- [ ] Decide whether host APIs are synchronous-only for v1 or promise-based.
+- [x] Decide whether host APIs are synchronous-only for v1 or promise-based.
 - [ ] If promise-based APIs are supported, implement QuickJS job pumping and
       host-call response correlation tests before exposing the public contract.
 - [ ] Ensure host API failures return structured JS node errors and stream
@@ -154,93 +154,93 @@ exports.run = function(input, api) {
 
 ## Phase 5: Artifacts, Streaming, And Results
 
-- [ ] Reuse the shared host-side artifact preparation, collection, cleanup, and
+- [x] Reuse the shared host-side artifact preparation, collection, cleanup, and
       ref-minting helpers used by Python node.
-- [ ] Support declared artifact inputs: alias refs, inline text/base64/data,
+- [x] Support declared artifact inputs: alias refs, inline text/base64/data,
       masked refs, recursive refs, and inline zip inputs.
-- [ ] Support declared artifact outputs: file refs, masked refs, host takeover,
+- [x] Support declared artifact outputs: file refs, masked refs, host takeover,
       producer-owned refs, inline outputs, and inline zip exports.
-- [ ] Keep sandbox-returned artifact-looking data as ordinary output unless it
+- [x] Keep sandbox-returned artifact-looking data as ordinary output unless it
       matches a declared output and the host validates it.
 - [ ] Emit stream events: `started`, `heartbeat`, `log`, `stdout` or
       `console`, `progress`, `artifact`, `result`, `error`, `canceled`, and
       `done`.
 - [ ] Keep stream retention bounded and report dropped event counts as Python
       node does.
-- [ ] Return the same top-level response envelope and artifact-store semantics
+- [x] Return the same top-level response envelope and artifact-store semantics
       as Python node.
 
 ## Phase 6: Public Facade And Cleanup
 
-- [ ] Change `workflow_js_environment_spec` to derive QuickJS node environment
+- [x] Change `workflow_js_environment_spec` to derive QuickJS node environment
       specs.
-- [ ] Change `ensure_workflow_js` to reserve or start QuickJS JS node workers,
+- [x] Change `ensure_workflow_js` to reserve or start QuickJS JS node workers,
       not registered helper workers.
-- [ ] Change `execute_workflow_js` to call the JS node runtime directly instead
+- [x] Change `execute_workflow_js` to call the JS node runtime directly instead
       of `proxy_rpc_call(..., method="execute_workflow_js_helper", ...)`.
-- [ ] Change `workflow_js_resources`, `set_workflow_js_capacity`,
+- [x] Change `workflow_js_resources`, `set_workflow_js_capacity`,
       `cancel_workflow_js_request`, and `workflow_js_request_status` to use the
       JS node pool.
-- [ ] Remove `spawn_workflow_js_helper`,
+- [x] Remove `spawn_workflow_js_helper`,
       `workflow_js_helper_default_sandbox_policy`,
       `workflow_js_helper_resources`,
       `set_workflow_js_helper_capacity`, and
       `cancel_workflow_js_helper_request` after all callers are moved.
-- [ ] Remove `hosting.workflow_js_helper_ipc`.
-- [ ] Remove Node.js runtime selection from JS workflow execution:
+- [x] Remove `hosting.workflow_js_helper_ipc`.
+- [x] Remove Node.js runtime selection from JS workflow execution:
       `MP13_WORKFLOW_JS_NODE`, `node_executable`, `node_version`, and
       Node child-process resource reporting.
-- [ ] Remove tests that assert Node helper behavior and replace them with
+- [x] Remove tests that assert Node helper behavior and replace them with
       QuickJS JS node tests.
-- [ ] Update worker discovery/status labels so JS workflow workers are reported
+- [x] Update worker discovery/status labels so JS workflow workers are reported
       as JS node sandboxes, not helper workers.
-- [ ] Remove CLI and interactive UI wording that presents JS workflow as a
+- [x] Remove CLI and interactive UI wording that presents JS workflow as a
       helper-profile worker.
 
 ## Phase 7: Tests
 
 - [ ] Add contract tests for JS node request normalization and validation.
-- [ ] Add source hash verification tests.
-- [ ] Add tests for successful `exports.run` execution.
-- [ ] Add tests for missing `exports.run` or requested export.
+- [x] Add source hash verification tests.
+- [x] Add tests for successful `exports.run` execution.
+- [x] Add tests for missing `exports.run` or requested export.
 - [ ] Add tests for structured runtime errors with safe stack/message summaries.
 - [ ] Add timeout, cancellation, output-limit, and invalid-output tests.
-- [ ] Add environment-key tests for QuickJS runtime identity and sandbox policy
+- [x] Add environment-key tests for QuickJS runtime identity and sandbox policy
       isolation.
-- [ ] Add host API discovery tests.
+- [x] Add host API discovery tests.
 - [ ] Add artifact filesystem read/write/list/stat/mkdir tests.
 - [ ] Add tests that input roots are read-only and output roots are writable.
 - [ ] Add brokered HTTP allowed and denied tests.
-- [ ] Add progress and console/log stream tests.
-- [ ] Add artifact input/output collection tests matching Python node coverage.
+- [x] Add progress and console/log stream tests.
+- [x] Add artifact input/output collection tests matching Python node coverage.
 - [ ] Add resource/status/capacity tests for success, error, timeout, and
       canceled JS node requests.
-- [ ] Add regression tests proving no Node executable is required for workflow
+- [x] Add regression tests proving no Node executable is required for workflow
       JS execution.
-- [ ] Add removal tests proving helper profile and helper RPC methods are no
+- [x] Add removal tests proving helper profile and helper RPC methods are no
       longer accepted.
 
 ## Phase 8: Documentation Updates
 
-- [ ] Update `src/hosting/hosting_access_plan.md` so current state says JS
+- [x] Update `src/hosting/hosting_access_plan.md` so current state says JS
       workflow is QuickJS node-backed, not helper-backed.
-- [ ] Update `src/hosting/hosting_status.md` after implementation with verified
+- [x] Update `src/hosting/hosting_status.md` after implementation with verified
       behavior and the focused test command used.
-- [ ] Update `src/hosting/HOSTING.md` examples to use the clean JS node
+- [x] Update `src/hosting/HOSTING.md` examples to use the clean JS node
       contract and remove helper-profile examples.
-- [ ] Update `src/hosting/ENGINE_HOST_CLI.md` and CLI help text to remove
+- [x] Update `src/hosting/ENGINE_HOST_CLI.md` and CLI help text to remove
       Node.js and helper-worker requirements.
-- [ ] Rewrite or retire `src/hosting/sandbox/WORKFLOW_HELPER_WORKER.md` sections
+- [x] Rewrite or retire `src/hosting/sandbox/WORKFLOW_HELPER_WORKER.md` sections
       that describe JS helper workers. Keep Python helper notes only if Python
       helper remains.
-- [ ] Add or update `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` to call out
+- [x] Add or update `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` to call out
       removal of `workflow_js(profile=helper)`, helper operation allowlists,
       Node ESM source loading, and `node_executable`.
 - [x] Add `src/hosting/sandbox/JS_NODE_WORKER.md` to describe the QuickJS JS
       node contract, host API, artifact rules, stream events, and non-goals.
-- [ ] Update any config/setup docs that currently tell users to install Node.js
+- [x] Update any config/setup docs that currently tell users to install Node.js
       for workflow JS.
-- [ ] Document the separate plan for browser-executed custom UI components:
+- [x] Document the separate plan for browser-executed custom UI components:
       dynamic module serving, registry/versioning, preview iframe, and reload
       without Python web server restart. Keep that separate from QuickJS
       workflow execution.

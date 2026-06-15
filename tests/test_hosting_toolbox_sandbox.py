@@ -6353,17 +6353,17 @@ def test_toolbox_gc_preserves_referenced_runtime_envs_and_removes_stale_runtime_
         stale_env.mkdir(parents=True, exist_ok=True)
 
         svc.register_spawned(
-            engine_id="workflow-helper-keep",
+            engine_id="workflow-js-node-keep",
             pid=1111,
-            command=["python", "-m", "hosting.workflow_js_helper_ipc"],
+            command=["python", "-m", "hosting.workflow_js_node_worker_ipc"],
             worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
             worker_ipc_address=str(root / "helper.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-helper-keep",
-            executor_kind="workflow_js_helper",
+            executor_kind="workflow_js_node",
             environment={
                 "venv_key": "keep-runtime-env",
                 "venv_path": str(keep_env),
                 "environment_root_kind": "runtime_envs",
-                "environment_consumer_kind": "workflow_js_helper",
+                "environment_consumer_kind": "workflow_js_node",
             },
         )
 

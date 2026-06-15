@@ -793,13 +793,9 @@ def _operator_resource_kind(info: Dict[str, Any]) -> str:
     )
     if is_workflow_python_helper:
         return "workflow python sandbox" if sandbox_enabled else "workflow python worker"
-    is_workflow_js_helper = (
-        executor_kind == "workflow_js_helper"
-        or "hosting.workflow_js_helper_ipc" in command_text
-        or "MP13_WORKFLOW_JS_HELPER_CAPACITY" in env
-    )
-    if is_workflow_js_helper:
-        return "workflow js sandbox" if sandbox_enabled else "workflow js worker"
+    is_workflow_js_node = executor_kind == "workflow_js_node" or "hosting.workflow_js_node_worker_ipc" in command_text
+    if is_workflow_js_node:
+        return "workflow js node sandbox" if sandbox_enabled else "workflow js node worker"
     is_model = (
         worker_class == "model"
         or "MP13_MODEL_PATH" in env
@@ -1582,7 +1578,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     elif choice == "d":
                         session_token = _engine_details(args, session_token)
                     elif choice == "j":
-                        session_token = _manage_workflow_js_helpers(args, session_token)
+                        session_token = _manage_workflow_runtimes(args, session_token)
                     elif choice == "m":
                         session_token = _show_metrics(args, session_token)
                     elif choice == "t":
@@ -2023,11 +2019,11 @@ def _engine_details(args: argparse.Namespace, session_token: Optional[str]) -> O
         raise e
 
 
-def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
-    _print_block("Workflow Helpers")
+def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
+    _print_block("Workflow Runtimes")
     try:
         if _can_use_offline_local_fallback(args, session_token=session_token):
-            print(_c('warn', "  Daemon is stopped. Workflow helper management requires a running daemon."))
+            print(_c('warn', "  Daemon is stopped. Workflow runtime management requires a running daemon."))
             return session_token
         res = _api_invoke(args, "discover-running", {}, session_token=session_token)
         session_token = _active_session_token(args, session_token)
@@ -2035,20 +2031,20 @@ def _manage_workflow_js_helpers(args: argparse.Namespace, session_token: Optiona
         helpers = {
             eid: info
             for eid, info in engines.items()
-            if str(dict(info or {}).get("executor_kind") or "").strip() in {"workflow_js_helper", "workflow_python_helper"}
+            if str(dict(info or {}).get("executor_kind") or "").strip() == "workflow_python_helper"
         }
         if not helpers:
-            print("  No workflow helper workers are loaded.")
+            print("  No workflow Python helper workers are loaded.")
             return session_token
         opts = {}
         for eid, info in helpers.items():
             resources = dict(dict(info or {}).get("process_resources") or {})
             executor = str(dict(info or {}).get("executor_kind") or "").strip()
-            prefix = "workflow_python" if executor == "workflow_python_helper" else "workflow_js"
+            prefix = "workflow_python"
             cap = resources.get(f"{prefix}_capacity")
             active = resources.get("workflow_helper_pool_active_process_count")
             total = resources.get("workflow_helper_pool_process_count")
-            label = "Python" if executor == "workflow_python_helper" else "JS"
+            label = "Python"
             env_key = _workflow_environment_key(dict(info or {}))
             hint_bits = [label]
             if env_key:

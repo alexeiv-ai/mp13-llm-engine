@@ -1113,8 +1113,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-environment-spec":
             _print_ok(
                 svc.workflow_js_environment_spec(
-                    profile=str(payload.get("profile") or "helper"),
-                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                     node=dict(payload.get("node") or {}),
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 )
@@ -1123,11 +1123,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-ensure":
             _print_ok(
                 svc.ensure_workflow_js(
-                    profile=str(payload.get("profile") or "helper"),
-                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     node=dict(payload.get("node") or {}),
-                    node_executable=payload.get("node_executable"),
                     capacity=int(payload.get("capacity") or 1),
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
@@ -1138,8 +1137,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-resources":
             _print_ok(
                 svc.workflow_js_resources(
-                    profile=str(payload.get("profile") or "helper"),
-                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
                     node=dict(payload.get("node") or {}),
@@ -1150,8 +1149,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-execute":
             _print_ok(
                 svc.execute_workflow_js(
-                    profile=str(payload.get("profile") or "helper"),
-                    environment_name=str(payload.get("environment_name") or "workflow-js-helper"),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
                     request=dict(payload.get("request") or {}),
@@ -1164,7 +1163,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-set-capacity":
             _print_ok(
                 svc.set_workflow_js_capacity(
-                    profile=str(payload.get("profile") or "helper"),
+                    profile=str(payload.get("profile") or "node"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
                     capacity=int(payload.get("capacity") or 1),
@@ -1174,7 +1173,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-cancel-request":
             _print_ok(
                 svc.cancel_workflow_js_request(
-                    profile=str(payload.get("profile") or "helper"),
+                    profile=str(payload.get("profile") or "node"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
                     request_id=str(payload.get("request_id") or ""),
@@ -1184,7 +1183,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-js-request-status":
             _print_ok(
                 svc.workflow_js_request_status(
-                    profile=str(payload.get("profile") or "helper"),
+                    profile=str(payload.get("profile") or "node"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
                     request_id=str(payload.get("request_id") or ""),

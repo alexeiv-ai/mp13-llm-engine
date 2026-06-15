@@ -836,35 +836,35 @@ def test_model_user_denied_proxy_to_generic_registered_engine() -> None:
             )
 
 
-def test_model_user_allowed_proxy_to_workflow_js_helper_engine() -> None:
+def test_model_user_allowed_proxy_to_workflow_python_helper_engine() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
         svc.register_spawned(
-            engine_id="workflow-js-helper",
+            engine_id="workflow-python-helper",
             pid=12345,
-            command=["python", "-m", "hosting.workflow_js_helper_ipc"],
+            command=["python", "-m", "hosting.workflow_python_helper_ipc"],
             worker_profile_class="generic",
-            executor_kind="workflow_js_helper",
+            executor_kind="workflow_python_helper",
         )
         svc.auth_upsert_key(
             key_id="model",
             key_secret="model-secret",
             role="model_user",
             auth_method="shared_secret",
-            allowed_engines=["workflow-js-helper"],
+            allowed_engines=["workflow-python-helper"],
         )
         svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
         session = svc.auth_issue_session(
             key_id="model",
             key_secret="model-secret",
             scope="traffic",
-            engine_ids=["workflow-js-helper"],
+            engine_ids=["workflow-python-helper"],
         )
         token = str(session.get("token") or "")
         assert token
         svc.authorize_command(
             "proxy-rpc-call",
-            {"session_token": token, "engine_id": "workflow-js-helper"},
+            {"session_token": token, "engine_id": "workflow-python-helper"},
         )
 
 
