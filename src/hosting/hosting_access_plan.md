@@ -270,7 +270,7 @@ Current investigation notes:
 - Toolbox has reusable host-interaction ideas: native in-process toolbox harness mode, async execution, callback relay, brokered fs/http clients, approval/permission checks, and tool/view constraints.
 - Toolbox is not reusable as-is for node host API: toolbox manifests, tool assignment, bundle staging, registration, rollout, repair, and GC are tool-distribution semantics, not generic sandbox host-call semantics.
 - Python helper workers also keep hot process state and a worker-local runtime pool. Current decision: keep helper internals minimally changed for now; do not spend migration effort adapting helper over node unless helper-profile maintenance becomes more expensive than retiring or replacing it.
-- Python node workers now support warm sequential reuse for compatible module/snippet requests. Project requests remain one-shot until cwd/sys.path/env/import-cache recycling policy is implemented.
+- Python node workers now support warm sequential reuse for compatible module/snippet requests. Project requests remain one-shot until cwd/sys.path/env/import-cache recycling policy is implemented. Idle module/snippet workers are recycled when the same logical environment name derives a changed environment identity, when capacity shrinks, or when resource inspection finds unhealthy idle workers.
 - Toolbox registration/repair/GC is not automatically replaced by the base pool layer. Current decision: keep persisted toolbox registration/repair/GC state toolbox-specific, and use shared lifecycle metadata only for runtime request/resource accounting. This avoids duplicating state ownership and minimizes maintenance cost while toolbox owns bundles, assignments, rollout state, and repair semantics.
 - Artifact authorization should remain lean. Artifact access should piggyback on normal hosting roles and sandbox policy checks unless a concrete external artifact-read API requires more.
 
@@ -336,7 +336,7 @@ Warm-worker obstacles to solve:
 - [x] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
 - [x] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
 - [x] Add explicit capacity-shrink cleanup for idle warm workers.
-- [ ] Add worker recycling for changed environment identity, unhealthy workers, and policy changes.
+- [x] Add worker recycling for changed environment identity, unhealthy workers, and policy changes.
 - [x] Define code revision lifecycle for long-lived module/snippet workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [x] Implement restart/reroute semantics for module/snippet code edits; keep explicit unload/reload as future project-mode work.
 - [x] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.

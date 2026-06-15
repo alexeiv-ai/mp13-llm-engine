@@ -11,6 +11,7 @@ import time
 import zipfile
 
 import pytest
+from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
 
@@ -1042,25 +1043,28 @@ def test_execute_workflow_python_node_keeps_and_reaps_warm_child_process(tmp_pat
         control_state_file=tmp_path / "access_control.json",
     )
     source = "def run(payload):\n    return {'output': {'done': True}}\n"
+    baseline = len(list(_ACTIVE_NODE_PROCS))
 
-    out = svc.execute_workflow_python(
-        profile="node",
-        request={
-            "request_id": "req-node-reap",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-        },
-    )
+    try:
+        out = svc.execute_workflow_python(
+            profile="node",
+            request={
+                "request_id": "req-node-reap",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+            },
+        )
 
-    assert out["status"] == "ok"
-    assert len(list(_ACTIVE_NODE_PROCS)) == 1
-    svc._workflow_python_node_runtime_registry().shutdown()
-    assert list(_ACTIVE_NODE_PROCS) == []
+        assert out["status"] == "ok"
+        assert len(list(_ACTIVE_NODE_PROCS)) == baseline + 1
+    finally:
+        svc._workflow_python_node_runtime_registry().shutdown()
+    assert len(list(_ACTIVE_NODE_PROCS)) == baseline
 
 
 def test_execute_workflow_python_node_does_not_call_helper_proxy(tmp_path: Path, monkeypatch) -> None:
@@ -1609,6 +1613,90 @@ def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink
     assert resized["node_runtime_trim"]["stopped_count"] == 1
     resources_after = svc.workflow_python_resources(profile="node", environment_key=environment_key)
     assert resources_after["workflow_python_idle_process_count"] == 1
+    svc._workflow_python_node_runtime_registry().shutdown()
+
+
+def test_execute_workflow_python_node_recycles_idle_worker_when_policy_identity_changes(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid()}}\n"
+    request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "payload": {},
+        "python": {"import_allowlist": ["os"]},
+        "limits": {"timeout_ms": 2000},
+    }
+
+    first = svc.execute_workflow_python(
+        profile="node",
+        environment_name="workflow-python-node-recycle-policy",
+        request={**request, "request_id": "req-node-recycle-policy-a"},
+    )
+    first_resources = svc.workflow_python_resources(profile="node", environment_key=first["environment_key"])
+    second = svc.execute_workflow_python(
+        profile="node",
+        environment_name="workflow-python-node-recycle-policy",
+        sandbox_policy={"sandbox": {"enabled": True, "profile": "workflow_python_node_recycle_policy_v1"}},
+        request={**request, "request_id": "req-node-recycle-policy-b"},
+    )
+    old_resources = svc.workflow_python_resources(profile="node", environment_key=first["environment_key"])
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["environment_key"] != second["environment_key"]
+    assert first["output"]["pid"] != second["output"]["pid"]
+    assert first_resources["workflow_python_idle_process_count"] == 1
+    assert second["metrics"]["node_runtime_recycle"]["stopped_count"] == 1
+    assert second["metrics"]["node_runtime_recycle"]["stopped"][0]["reason"] == "environment_identity_changed"
+    assert old_resources["workflow_python_idle_process_count"] == 0
+    svc._workflow_python_node_runtime_registry().shutdown()
+
+
+def test_workflow_python_node_resources_recycle_unhealthy_idle_workers(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid()}}\n"
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-recycle-unhealthy",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "python": {"import_allowlist": ["os"]},
+            "limits": {"timeout_ms": 2000},
+        },
+    )
+    environment_key = str(out["environment_key"])
+    pid = int(out["output"]["pid"])
+
+    terminate_process_tree(pid, timeout_seconds=2.0)
+    deadline = time.time() + 5.0
+    resources = {}
+    while time.time() < deadline:
+        resources = svc.workflow_python_resources(profile="node", environment_key=environment_key)
+        if dict(resources.get("node_runtime") or {}).get("recycle", {}).get("stopped_count"):
+            break
+        time.sleep(0.05)
+
+    recycle = dict(dict(resources.get("node_runtime") or {}).get("recycle") or {})
+    assert out["status"] == "ok"
+    assert recycle["stopped_count"] == 1
+    assert recycle["stopped"][0]["reason"] == "unhealthy"
+    assert resources["workflow_python_idle_process_count"] == 0
     svc._workflow_python_node_runtime_registry().shutdown()
 
 

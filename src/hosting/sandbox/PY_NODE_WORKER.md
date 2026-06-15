@@ -503,6 +503,14 @@ Node stream event types:
 
 Current implementation: the host keeps warm child harness processes for compatible sequential module/snippet requests under the same environment/import/revision identity. A fixed `module_source` plus `module_sha256` is the default source revision identity for each request; callers may pass explicit `code_revision` when they need a host-defined revision label. Corrected snippets/modules should be submitted as new requests with new digests or revision labels. Those requests route to a different warm worker instead of mutating already-loaded code in place. In-flight requests keep their original revision, and idle workers from older revisions are trimmed back to configured capacity after completion. Project requests remain one-shot for now because they can mutate `cwd`, `sys.path`, environment variables, and import caches.
 
+Idle warm workers are recycled when:
+
+1. the same logical `environment_name` derives a different `environment_key`, including sandbox-policy identity changes
+2. capacity shrinks below the current idle worker count
+3. resource inspection finds an unhealthy idle child process
+
+The recycling path stops only idle workers. In-flight requests keep their original runtime identity and finish or cancel through normal request lifecycle handling.
+
 For a future long-lived Python node worker, code updates should not rely on uv. uv manages dependencies and interpreter environments; it is not the right mechanism for hot-editing workflow source modules.
 
 Implemented module/snippet model:

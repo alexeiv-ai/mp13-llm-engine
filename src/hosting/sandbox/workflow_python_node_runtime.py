@@ -490,6 +490,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 runtime = rows.pop()
                 if runtime.alive():
                     return runtime
+                runtime.ensure_stopped()
             self._idle.pop(runtime_key, None)
         return None
 
@@ -507,6 +508,82 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         for runtime in rows:
             runtime.shutdown()
 
+    def recycle_idle(self, *, environment_key: str = "", runtime_key: str = "", reason: str = "idle_recycle") -> Dict[str, Any]:
+        env = _clean(environment_key)
+        exact_key = _clean(runtime_key)
+        recycle_reason = _clean(reason) or "idle_recycle"
+        stopped: list[Dict[str, Any]] = []
+        runtimes_to_stop: list[WorkflowPythonNodeRuntime] = []
+        with self._warm_lock:
+            for key in list(self._idle.keys()):
+                if exact_key and key != exact_key:
+                    continue
+                if env and self._runtime_key_environment(key) != env:
+                    continue
+                kept: list[WorkflowPythonNodeRuntime] = []
+                for runtime in self._idle.get(key, []):
+                    if runtime.alive():
+                        runtimes_to_stop.append(runtime)
+                        stopped.append(
+                            {
+                                "runtime_key": key,
+                                "environment_key": self._runtime_key_environment(key),
+                                "pid": int(runtime.proc.pid or 0) or None,
+                                "reason": recycle_reason,
+                            }
+                        )
+                    else:
+                        runtime.ensure_stopped()
+                        stopped.append(
+                            {
+                                "runtime_key": key,
+                                "environment_key": self._runtime_key_environment(key),
+                                "pid": int(runtime.proc.pid or 0) or None,
+                                "reason": "unhealthy",
+                            }
+                        )
+                if kept:
+                    self._idle[key] = kept
+                else:
+                    self._idle.pop(key, None)
+        for runtime in runtimes_to_stop:
+            runtime.shutdown()
+        return {
+            "status": "ok",
+            "environment_key": env or None,
+            "runtime_key": exact_key or None,
+            "reason": recycle_reason,
+            "stopped": stopped,
+            "stopped_count": len(stopped),
+        }
+
+    def recycle_unhealthy_idle(self, *, environment_key: str = "") -> Dict[str, Any]:
+        env = _clean(environment_key)
+        stopped: list[Dict[str, Any]] = []
+        with self._warm_lock:
+            for key in list(self._idle.keys()):
+                if env and self._runtime_key_environment(key) != env:
+                    continue
+                kept: list[WorkflowPythonNodeRuntime] = []
+                for runtime in self._idle.get(key, []):
+                    if runtime.alive():
+                        kept.append(runtime)
+                    else:
+                        runtime.ensure_stopped()
+                        stopped.append(
+                            {
+                                "runtime_key": key,
+                                "environment_key": self._runtime_key_environment(key),
+                                "pid": int(runtime.proc.pid or 0) or None,
+                                "reason": "unhealthy",
+                            }
+                        )
+                if kept:
+                    self._idle[key] = kept
+                else:
+                    self._idle.pop(key, None)
+        return {"status": "ok", "environment_key": env or None, "stopped": stopped, "stopped_count": len(stopped)}
+
     def trim_idle(self, *, environment_key: str = "", max_idle: int = 0) -> Dict[str, Any]:
         env = _clean(environment_key)
         keep = max(0, int(max_idle or 0))
@@ -515,7 +592,13 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         with self._warm_lock:
             matching: list[tuple[str, WorkflowPythonNodeRuntime]] = []
             for key in list(self._idle.keys()):
-                runtimes = [runtime for runtime in self._idle.get(key, []) if runtime.alive()]
+                runtimes = []
+                for runtime in self._idle.get(key, []):
+                    if runtime.alive():
+                        runtimes.append(runtime)
+                    else:
+                        runtime.ensure_stopped()
+                        stopped.append({"runtime_key": key, "pid": int(runtime.proc.pid or 0) or None, "reason": "unhealthy"})
                 if runtimes:
                     self._idle[key] = runtimes
                 else:
@@ -529,7 +612,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 for runtime in self._idle.get(key, []):
                     if (not env or self._runtime_key_environment(key) == env) and id(runtime) not in keep_ids:
                         runtimes_to_stop.append(runtime)
-                        stopped.append({"runtime_key": key, "pid": int(runtime.proc.pid or 0) or None})
+                        stopped.append({"runtime_key": key, "pid": int(runtime.proc.pid or 0) or None, "reason": "capacity_trim"})
                     else:
                         kept.append(runtime)
                 if kept:

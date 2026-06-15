@@ -54,6 +54,34 @@ class WorkflowHelperMixin:
             setattr(self, "_workflow_python_node_runtime_registry_instance", registry)
         return registry
 
+    def _workflow_python_node_recycle_changed_environment(
+        self,
+        *,
+        environment_name: str,
+        environment_key: str,
+    ) -> Dict[str, Any]:
+        name = str(environment_name or "workflow-python-node").strip() or "workflow-python-node"
+        key = str(environment_key or "").strip()
+        if not key:
+            return {"status": "skipped", "reason": "environment_key_missing", "stopped_count": 0}
+        seen = getattr(self, "_workflow_python_node_environment_keys_by_name", None)
+        if seen is None:
+            seen = {}
+            setattr(self, "_workflow_python_node_environment_keys_by_name", seen)
+        lock = getattr(self, "_workflow_python_node_environment_keys_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            setattr(self, "_workflow_python_node_environment_keys_lock", lock)
+        with lock:
+            previous = str(dict(seen).get(name) or "").strip()
+            seen[name] = key
+        if previous and previous != key:
+            return self._workflow_python_node_runtime_registry().recycle_idle(
+                environment_key=previous,
+                reason="environment_identity_changed",
+            )
+        return {"status": "ok", "environment_name": name, "environment_key": key, "previous_environment_key": previous or None, "stopped_count": 0}
+
     @staticmethod
     def _workflow_python_profile(profile: str) -> str:
         value = str(profile or "helper").strip().lower() or "helper"
@@ -1220,6 +1248,10 @@ class WorkflowHelperMixin:
                 if str(selected_runtime.get("python_executable") or "").strip():
                     py["python_executable"] = str(selected_runtime.get("python_executable") or "").strip()
                     req["python"] = py
+            node_runtime_recycle = self._workflow_python_node_recycle_changed_environment(
+                environment_name=str(py.get("environment_name") or environment_name or "workflow-python-node"),
+                environment_key=effective_key,
+            )
             pool = self._workflow_python_pool_registry().get_or_create(
                 self._workflow_python_pool_key(effective_key),
                 desired_capacity=capacity,
@@ -1351,6 +1383,7 @@ class WorkflowHelperMixin:
                 metrics={
                     "workflow_pool": pool.resources(),
                     "request": dict(finished.get("request") or lifecycle.to_dict()),
+                    "node_runtime_recycle": node_runtime_recycle,
                     "node_runtime_trim": node_runtime_trim,
                 },
             )
@@ -1461,6 +1494,9 @@ class WorkflowHelperMixin:
         eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
         if prof == "node":
             pool = self._workflow_python_pool_registry().get(self._workflow_python_pool_key(effective_key))
+            node_runtime_recycle = self._workflow_python_node_runtime_registry().recycle_unhealthy_idle(
+                environment_key=effective_key,
+            )
             runtime_resources = self._workflow_python_node_runtime_registry().resources()
             processes = []
             total_cpu = 0.0
@@ -1494,7 +1530,11 @@ class WorkflowHelperMixin:
                     total_mem += float(metrics.get("memory_mb") or 0.0)
                 row["resources"] = metrics
                 active_processes.append(row)
-            idle_processes = [dict(row or {}) for row in list(runtime_resources.get("idle_processes") or [])]
+            idle_processes = [
+                dict(row or {})
+                for row in list(runtime_resources.get("idle_processes") or [])
+                if str(dict(row or {}).get("runtime_key") or "").split("|", 3)[1:2] == [effective_key]
+            ]
             processes = [*active_processes, *idle_processes]
             pool_resources = pool.resources() if pool is not None else None
             pool_metrics = dict(dict(pool_resources or {}).get("metrics") or {})
@@ -1513,6 +1553,7 @@ class WorkflowHelperMixin:
                 "workflow_pool": pool_resources,
                 "node_runtime": {
                     **dict(runtime_resources or {}),
+                    "recycle": node_runtime_recycle,
                     "processes": processes,
                     "cpu_percent": round(total_cpu, 1) if known_cpu else None,
                     "memory_mb": round(total_mem, 1) if known_mem else None,
@@ -1686,6 +1727,12 @@ class WorkflowHelperMixin:
                 selected_runtime = dict(dependency_error.get("runtime") or {})
                 if str(selected_runtime.get("python_executable") or "").strip():
                     py["python_executable"] = str(selected_runtime.get("python_executable") or "").strip()
+            node_runtime_recycle = self._workflow_python_node_recycle_changed_environment(
+                environment_name=str(py.get("environment_name") or environment_name or "workflow-python-node"),
+                environment_key=effective_key,
+            )
+        else:
+            node_runtime_recycle = {"status": "skipped", "reason": "non_node_profile", "stopped_count": 0}
         base = self._workflow_python_stream_base()
         limits = dict(req.get("limits") or {})
         try:
@@ -1717,6 +1764,7 @@ class WorkflowHelperMixin:
                     "request": {**req, "request_id": request_id, "python": py},
                     "sandbox_policy": sandbox_policy,
                     "capacity": capacity,
+                    "node_runtime_recycle": node_runtime_recycle,
                 },
                 name=f"workflow-python-node-stream-{request_id}",
                 daemon=True,
@@ -1739,6 +1787,7 @@ class WorkflowHelperMixin:
         request: Dict[str, Any],
         sandbox_policy: Optional[Dict[str, Any]],
         capacity: int,
+        node_runtime_recycle: Optional[Dict[str, Any]] = None,
     ) -> None:
         base = self._workflow_python_stream_base()
         def _emit_node_event(event_type: str, payload: Dict[str, Any]) -> None:
@@ -1785,6 +1834,7 @@ class WorkflowHelperMixin:
                 artifact_context=artifact_context,
                 sandbox_policy=sandbox_policy,
             ),
+            max_idle=capacity,
         )
         if artifact_context is not None and bool(result.get("ok", False)):
             try:
@@ -1813,7 +1863,10 @@ class WorkflowHelperMixin:
             request=request,
             environment_key=environment_key,
             engine_id=engine_id,
-            metrics={"request": dict(status_snapshot.get("request") or {})},
+            metrics={
+                "request": dict(status_snapshot.get("request") or {}),
+                "node_runtime_recycle": dict(node_runtime_recycle or {}),
+            },
         )
         base.stream_emit(stream_id=stream_id, event_type="log", payload={"logs": dict(response.get("logs") or {})})
         logs = dict(response.get("logs") or {})
