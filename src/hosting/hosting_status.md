@@ -141,6 +141,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Replaced the initial stdout/stdin host-call bridge with `hosting.workflow_python_node_worker_ipc`, a built-in Python node harness that uses a dedicated multiprocessing control channel for request, event, result, and host RPC messages.
 - Routed node harness startup through the worker file entrypoint for faster cold starts while keeping the same dedicated control-channel protocol.
 - Fixed the child-runtime cancellation race where a host cancel issued while the node harness was still starting could be lost before active runtime registration.
+- Removed the legacy embedded `python -c` node runner from the node runtime after harness parity verification.
 - Documented the node host API, back-channel transport, and code-edit strategy for future long-lived workers in `sandbox/PY_NODE_WORKER.md`.
 - Investigated node code editing: current one-child-per-request execution naturally handles fixed snippets as new `module_sha256` revisions; future long-lived workers should use explicit code revisions with restart/reroute as the conservative default, not uv as the code-edit mechanism.
 - Added node host API tests for discovery, artifact-root reads/writes, and rejected input-root writes.

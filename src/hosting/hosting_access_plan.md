@@ -280,7 +280,7 @@ Target assumption: node workers may need cooperative host interactions like tool
 - [x] Add bidirectional child-process protocol messages for `host_call` and `host_response` without using stdout as the host RPC transport.
 - [x] Route active node execution through the built-in harness control channel instead of the embedded `python -c` stdout event bridge.
 - [x] Launch the harness as an explicit worker file for fast cold-start while keeping stdout/stderr reserved for user logs.
-- [ ] Remove the legacy embedded `python -c` node runner after harness parity coverage remains stable.
+- [x] Remove the legacy embedded `python -c` node runner after harness parity coverage remains stable.
 - [x] Expose a Python `host` object with `call`, `describe`, and filesystem convenience methods.
 - [x] Implement artifact-scoped `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat` through the host dispatcher.
 - [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
