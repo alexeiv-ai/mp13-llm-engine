@@ -154,6 +154,32 @@ class WorkflowHelperMixin:
         }
         return bool(package_pins or str(py.get("dependency_lock_hash") or "").strip())
 
+    @staticmethod
+    def _workflow_python_with_project_artifact_input(request: Dict[str, Any]) -> Dict[str, Any]:
+        req = dict(request or {})
+        mode = str(req.get("execution_mode") or dict(req.get("python") or {}).get("execution_mode") or "").strip().lower()
+        if mode != "project":
+            return req
+        project = dict(req.get("project") or {})
+        ref = str(project.get("ref") or project.get("root_ref") or "").strip()
+        if not ref:
+            return req
+        root_input = str(project.get("root_input") or project.get("input") or "project").strip() or "project"
+        artifacts = [dict(row or {}) for row in list(req.get("artifact_inputs") or []) if isinstance(row, dict)]
+        if not any(str(row.get("name") or "").strip() == root_input for row in artifacts):
+            artifacts.append(
+                {
+                    "name": root_input,
+                    "ref": ref,
+                    "path_mask": str(project.get("path_mask") or project.get("mask") or "*").strip() or "*",
+                    "recursive": True if "recursive" not in project else bool(project.get("recursive")),
+                }
+            )
+        project.setdefault("root_input", root_input)
+        req["project"] = project
+        req["artifact_inputs"] = artifacts
+        return req
+
     def _workflow_python_node_dependency_environment_check(
         self,
         *,
@@ -811,6 +837,8 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
+        if prof == "node":
+            req = self._workflow_python_with_project_artifact_input(req)
         if prof == "node" and str(environment_name or "") == "workflow-python-helper":
             environment_name = "workflow-python-node"
         py = dict(req.get("python") or {})
@@ -1260,6 +1288,8 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
+        if prof == "node":
+            req = self._workflow_python_with_project_artifact_input(req)
         py = dict(python or req.get("python") or {})
         env = self.workflow_python_environment_spec(
             profile=prof,

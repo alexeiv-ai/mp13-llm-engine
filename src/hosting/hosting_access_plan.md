@@ -287,14 +287,14 @@ Target assumption: many different Python node jobs may run concurrently, and sev
 
 Target assumption: node execution should support both arbitrary Python snippets and Python projects made of multiple modules. `module_source` remains useful for single-file execution, but it is not enough for project execution.
 
-- [ ] Define request shape for snippet execution where source is arbitrary Python code and not necessarily a named workflow export.
-- [ ] Define request shape for project execution with a project root artifact/ref, entrypoint module, callable, argv, environment variables, and working directory.
-- [ ] Stage project files into a request/runtime workspace using artifact refs or configured alias roots.
-- [ ] Support multi-module imports from the staged project root without weakening global import policy.
-- [ ] Preserve source/package digest audit fields for staged projects.
-- [ ] Add tests for snippet execution.
-- [ ] Add tests for multi-module project execution.
-- [ ] Add tests that project import paths cannot escape the staged project root.
+- [x] Define request shape for snippet execution where source is arbitrary Python code and not necessarily a named workflow export.
+- [x] Define request shape for project execution with a project root artifact/ref, entrypoint module, callable, argv, environment variables, and working directory.
+- [x] Stage project files into a request/runtime workspace using artifact refs or configured alias roots.
+- [x] Support multi-module imports from the staged project root without weakening global import policy.
+- [x] Preserve source/package digest audit fields for staged projects.
+- [x] Add tests for snippet execution.
+- [x] Add tests for multi-module project execution.
+- [x] Add tests that project import paths cannot escape the staged project root.
 
 ### uv-Managed Environments
 

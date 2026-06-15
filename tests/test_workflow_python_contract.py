@@ -13,6 +13,10 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
 
     assert contract["profile"] == "node"
     assert "module_source" in contract["request_fields"]
+    assert "execution_mode" in contract["request_fields"]
+    assert "project" in contract["request_fields"]
+    assert "snippet" in contract["execution_modes"]
+    assert "project" in contract["execution_modes"]
     assert "artifact_inputs" in contract["request_fields"]
     assert "artifact_outputs" in contract["request_fields"]
     assert "state_patch" in contract["response_fields"]
@@ -101,6 +105,40 @@ def test_validate_node_request_requires_export_or_operation() -> None:
 
     assert out["status"] == "error"
     assert out["missing"] == ["export_name_or_operation"]
+
+
+def test_validate_node_request_allows_snippet_without_export() -> None:
+    out = validate_workflow_python_node_request(
+        {
+            "execution_mode": "snippet",
+            "module_source": "result = {'output': payload}\n",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+        }
+    )
+
+    assert out["status"] == "ok"
+    assert out["request"]["execution_mode"] == "snippet"
+
+
+def test_validate_node_request_allows_project_without_module_source_or_export() -> None:
+    out = validate_workflow_python_node_request(
+        {
+            "execution_mode": "project",
+            "module_sha256": "sha",
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "project": {"entrypoint": "pkg.runner", "callable": "run"},
+            "payload": {},
+        }
+    )
+
+    assert out["status"] == "ok"
+    assert out["request"]["execution_mode"] == "project"
 
 
 def test_validate_node_request_accepts_payload_omission_as_empty_object() -> None:

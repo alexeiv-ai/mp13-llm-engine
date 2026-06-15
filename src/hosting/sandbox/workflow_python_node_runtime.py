@@ -52,6 +52,8 @@ def _child_source() -> str:
     return r'''
 import builtins
 import contextlib
+import importlib
+import importlib.machinery
 import io
 import json
 import os
@@ -96,11 +98,39 @@ def detail_from_error(err):
         "traceback_summary": "".join(tb)[-4096:],
     }
 
-def make_importer(allowlist):
+def _under_root(path, root):
+    try:
+        target = os.path.abspath(str(path or ""))
+        base = os.path.abspath(str(root or ""))
+        return target == base or target.startswith(base + os.sep)
+    except Exception:
+        return False
+
+def _project_module_allowed(root, name):
+    root = os.path.abspath(str(root or ""))
+    if not root or not os.path.isdir(root):
+        return False
+    module_root = str(name or "").split(".", 1)[0]
+    try:
+        spec = importlib.machinery.PathFinder.find_spec(module_root, [root])
+    except Exception:
+        return False
+    if spec is None:
+        return False
+    origin = getattr(spec, "origin", None)
+    if origin and origin not in {"built-in", "frozen"} and _under_root(origin, root):
+        return True
+    for item in list(getattr(spec, "submodule_search_locations", None) or []):
+        if _under_root(item, root):
+            return True
+    return False
+
+def make_importer(allowlist, project_roots=None):
     allowed = {str(item or "").strip().split(".", 1)[0] for item in allowlist if str(item or "").strip()}
+    roots = [os.path.abspath(str(item or "")) for item in list(project_roots or []) if str(item or "")]
     def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
         root = str(name or "").split(".", 1)[0]
-        if root not in allowed:
+        if root not in allowed and not any(_project_module_allowed(project_root, root) for project_root in roots):
             raise ImportError(f"import not allowed: {name}")
         return builtins.__import__(name, globals, locals, fromlist, level)
     return guarded_import
@@ -147,15 +177,23 @@ def main():
     request_id = str(req.get("request_id") or "")
     source = str(req.get("module_source") or "")
     export_name = str(req.get("export_name") or req.get("operation") or "")
+    execution_mode = str(req.get("execution_mode") or "module").strip().lower() or "module"
+    project = req.get("project") if isinstance(req.get("project"), dict) else {}
     allowlist = list(req.get("import_allowlist") or [])
     payload = req.get("payload")
     artifact_context = req.get("artifact_context") if isinstance(req.get("artifact_context"), dict) else {}
     artifact_inputs = artifact_context.get("inputs") if isinstance(artifact_context.get("inputs"), dict) else {}
     artifact_outputs = artifact_context.get("outputs") if isinstance(artifact_context.get("outputs"), dict) else {}
+    project_roots = []
+    project_root = ""
+    if execution_mode == "project":
+        root_input = str(project.get("root_input") or project.get("input") or "project")
+        project_root = os.path.abspath(str(artifact_inputs.get(root_input) or ""))
+        if project_root:
+            project_roots.append(project_root)
     output_limit_bytes = max(1, int(req.get("output_limit_bytes") or 65536))
     builtins_row = dict(SAFE_BUILTINS)
-    if allowlist:
-        builtins_row["__import__"] = make_importer(allowlist)
+    builtins_row["__import__"] = make_importer(allowlist, project_roots)
     if artifact_inputs or artifact_outputs:
         builtins_row["open"] = make_artifact_open(artifact_inputs, artifact_outputs)
 
@@ -172,22 +210,71 @@ def main():
         "emit_progress": progress,
         "artifact_inputs": dict(artifact_inputs or {}),
         "artifact_outputs": dict(artifact_outputs or {}),
+        "payload": payload,
     }
     try:
         with contextlib.redirect_stdout(stdout_io), contextlib.redirect_stderr(stderr_io):
-            exec(compile(source, "<workflow_python_node>", "exec"), globals_row, globals_row)
-            fn = globals_row.get(export_name)
-            if not callable(fn):
-                send({
-                    "type": "error",
-                    "request_id": request_id,
-                    "reason": "workflow_sandbox_export_not_found",
-                    "detail": {"export_name": export_name},
-                    "stdout": stdout_io.getvalue(),
-                    "stderr": stderr_io.getvalue(),
-                })
-                return 0
-            value = fn(payload)
+            if execution_mode == "snippet":
+                exec(compile(source, "<workflow_python_snippet>", "exec"), globals_row, globals_row)
+                value = globals_row.get("result")
+            elif execution_mode == "project":
+                if not project_root or not os.path.isdir(project_root):
+                    send({
+                        "type": "error",
+                        "request_id": request_id,
+                        "reason": "workflow_sandbox_project_root_unavailable",
+                        "detail": {"root_input": str(project.get("root_input") or project.get("input") or "project")},
+                        "stdout": stdout_io.getvalue(),
+                        "stderr": stderr_io.getvalue(),
+                    })
+                    return 0
+                workdir = str(project.get("working_directory") or project.get("cwd") or "").strip().replace("\\", "/").strip("/")
+                cwd = os.path.abspath(os.path.join(project_root, workdir)) if workdir else project_root
+                if not _under_root(cwd, project_root) or not os.path.isdir(cwd):
+                    send({
+                        "type": "error",
+                        "request_id": request_id,
+                        "reason": "workflow_sandbox_project_cwd_invalid",
+                        "detail": {"working_directory": workdir},
+                        "stdout": stdout_io.getvalue(),
+                        "stderr": stderr_io.getvalue(),
+                    })
+                    return 0
+                env = project.get("env") if isinstance(project.get("env"), dict) else {}
+                for key, val in env.items():
+                    if str(key or "").strip():
+                        os.environ[str(key)] = str(val)
+                sys.path.insert(0, project_root)
+                os.chdir(cwd)
+                module_name = str(project.get("entrypoint") or project.get("module") or "").strip()
+                callable_name = str(project.get("callable") or project.get("function") or export_name or "run").strip()
+                module = importlib.import_module(module_name)
+                fn = getattr(module, callable_name, None)
+                if not callable(fn):
+                    send({
+                        "type": "error",
+                        "request_id": request_id,
+                        "reason": "workflow_sandbox_export_not_found",
+                        "detail": {"export_name": callable_name, "module": module_name},
+                        "stdout": stdout_io.getvalue(),
+                        "stderr": stderr_io.getvalue(),
+                    })
+                    return 0
+                value = fn(payload)
+            else:
+                exec(compile(source, "<workflow_python_node>", "exec"), globals_row, globals_row)
+                fn = globals_row.get(export_name)
+                if not callable(fn):
+                    send({
+                        "type": "error",
+                        "request_id": request_id,
+                        "reason": "workflow_sandbox_export_not_found",
+                        "detail": {"export_name": export_name},
+                        "stdout": stdout_io.getvalue(),
+                        "stderr": stderr_io.getvalue(),
+                    })
+                    return 0
+                value = fn(payload)
         normalized = normalize_result(value)
         result_json = json.dumps(normalized.get("output"), ensure_ascii=False, separators=(",", ":"))
         if len(result_json.encode("utf-8")) > output_limit_bytes:
@@ -287,6 +374,15 @@ class WorkflowPythonNodeRuntime:
         deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
         last_stdout = ""
         last_stderr = ""
+        last_progress: Optional[Dict[str, Any]] = None
+
+        def wait_for_exit() -> None:
+            try:
+                if self.proc.poll() is None:
+                    self.proc.wait(timeout=1.0)
+            except Exception:
+                pass
+
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -327,10 +423,12 @@ class WorkflowPythonNodeRuntime:
             event_type = _clean(row.get("type"))
             if event_type == "progress":
                 payload = dict(row.get("payload") or {})
+                last_progress = payload
                 if on_event is not None:
                     on_event("progress", payload)
                 continue
             if event_type == "canceled":
+                wait_for_exit()
                 return {
                     "ok": False,
                     "reason": "workflow_sandbox_canceled",
@@ -341,18 +439,20 @@ class WorkflowPythonNodeRuntime:
             if event_type == "result":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
+                wait_for_exit()
                 return {
                     "ok": True,
                     "output": row.get("output"),
                     "state_patch": dict(row.get("state_patch") or {}) or None,
                     "artifacts": list(row.get("artifacts") or []),
-                    "progress": dict(row.get("progress") or {}) or None,
+                    "progress": dict(row.get("progress") or {}) or last_progress,
                     "stdout": last_stdout,
                     "stderr": last_stderr,
                 }
             if event_type == "error":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
+                wait_for_exit()
                 return {
                     "ok": False,
                     "reason": _clean(row.get("reason")) or "workflow_sandbox_runtime_error",

@@ -16,6 +16,8 @@ NODE_REQUEST_FIELDS = [
     "package_source_digest",
     "export_name",
     "operation",
+    "execution_mode",
+    "project",
     "payload",
     "provenance",
     "limits",
@@ -71,16 +73,18 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "package_id",
             "workflow_id",
             "package_source_digest",
-            "export_name_or_operation",
+            "export_name_or_operation_unless_snippet_or_project",
             "payload",
         ],
+        "execution_modes": ["module", "snippet", "project"],
         "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb"],
         "artifact_contract": {
             "ref_format": "@alias/relative/path",
             "default_roots": ["@artifacts"],
             "policy_root_field": "sandbox.artifact_roots",
-            "input_kinds": ["ref", "inline"],
-            "output_kinds": ["ref", "inline"],
+            "input_kinds": ["ref", "inline", "inline_zip"],
+            "output_kinds": ["ref", "inline", "inline_zip_export"],
+            "path_selection": ["path_mask", "mask", "recursive"],
             "input_metadata_advisory": ["max_bytes", "count", "ttl", "encoding"],
         },
     }
@@ -90,6 +94,9 @@ def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) ->
     req = _dict(request)
     operation = _clean(req.get("operation"))
     export_name = _clean(req.get("export_name"))
+    execution_mode = _clean(req.get("execution_mode") or _dict(req.get("python")).get("execution_mode")).lower() or "module"
+    if execution_mode not in {"module", "snippet", "project"}:
+        execution_mode = "module"
     normalized = {
         "request_id": _clean(req.get("request_id")) or f"workflow-python-node-{int(time.time() * 1000)}",
         "module_source": str(req.get("module_source") or ""),
@@ -99,6 +106,8 @@ def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) ->
         "package_source_digest": _clean(req.get("package_source_digest")),
         "export_name": export_name or operation,
         "operation": operation or export_name,
+        "execution_mode": execution_mode,
+        "project": _dict(req.get("project")),
         "payload": req.get("payload") if "payload" in req else {},
         "provenance": _dict(req.get("provenance")),
         "limits": _dict(req.get("limits")),
@@ -113,11 +122,18 @@ def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) ->
 def validate_workflow_python_node_request(request: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     normalized = normalize_workflow_python_node_request(request)
     missing: List[str] = []
-    for field in ["module_source", "module_sha256", "package_id", "workflow_id", "package_source_digest"]:
+    required = ["module_sha256", "package_id", "workflow_id", "package_source_digest"]
+    if normalized.get("execution_mode") != "project":
+        required.insert(0, "module_source")
+    for field in required:
         if not _clean(normalized.get(field)):
             missing.append(field)
-    if not (_clean(normalized.get("export_name")) or _clean(normalized.get("operation"))):
+    if normalized.get("execution_mode") not in {"snippet", "project"} and not (_clean(normalized.get("export_name")) or _clean(normalized.get("operation"))):
         missing.append("export_name_or_operation")
+    if normalized.get("execution_mode") == "project":
+        project = _dict(normalized.get("project"))
+        if not _clean(project.get("entrypoint") or project.get("module")):
+            missing.append("project.entrypoint")
     return {
         "status": "ok" if not missing else "error",
         "missing": missing,

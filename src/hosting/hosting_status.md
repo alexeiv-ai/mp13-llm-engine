@@ -41,6 +41,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node artifact file-mask and recursive input/output collection support.
 - Shared active child runtime registry for active child resources/cancel tracking.
 - Shared host artifact manager for artifact prepare, collect, zip, ownership, and request-local cleanup.
+- Snippet execution with `execution_mode=snippet`, using `module_source` directly and no required export.
+- Multi-module project execution with `execution_mode=project`, staged project refs, entrypoint module/callable selection, working directory, environment variables, and project-local import allowance.
 
 ## Discrepancies
 
@@ -56,7 +58,7 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
-- Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior, arbitrary snippets, multi-module Python projects, and uv-managed environments.
+- Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior and uv-managed environments.
 - Decide whether helper-compatible runtimes should adopt the shared child-runtime/artifact helpers without changing helper response compatibility.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
@@ -111,10 +113,16 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added inline zip input expansion for multi-file artifacts, inline zip export for multi-file outputs, explicit `host_takeover` for selected ref outputs, and request-local artifact cleanup after collection.
 - Added tests for active child runtime tracking, inline zip input, inline zip output export, and host takeover.
 - Verified broader hosting workflow tests: `165 passed`.
+- Added `execution_mode=snippet` for arbitrary source snippets that do not require `operation` or `export_name`.
+- Added `execution_mode=project` for staged multi-module projects using `project.ref`, `project.entrypoint`, `project.callable`, optional `working_directory`, and optional `env`.
+- Added project-local import handling so staged modules can import each other without allowing unlisted global imports.
+- Added snippet, multi-module project, and project import-escape tests.
+- Verified broader hosting workflow tests: `170 passed`.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
 - Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
 - Node-profile clients should pass input artifacts as alias refs, inline payloads, or inline zip payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, use `export_inline_zip` for many output files when ownership should stay with the producer, request `host_takeover` only when the host should own returned ref lifetime, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
+- Node-profile clients may use `execution_mode=snippet` for source snippets or `execution_mode=project` with `project.ref` / `project.entrypoint` / `project.callable` for staged projects.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.

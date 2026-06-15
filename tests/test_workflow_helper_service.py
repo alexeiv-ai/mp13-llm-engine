@@ -1810,6 +1810,107 @@ def test_execute_workflow_python_node_reads_inline_zip_input_artifact(tmp_path: 
     assert out["output"] == {"files": ["a.txt", "nested/b.txt"]}
 
 
+def test_execute_workflow_python_node_runs_snippet_without_export(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "progress({'phase': 'snippet'})\nresult = {'output': {'value': payload['value'] + 1}, 'state_patch': {'mode': 'snippet'}}\n"
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-snippet",
+            "execution_mode": "snippet",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {"value": 4},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"value": 5}
+    assert out["state_patch"] == {"mode": "snippet"}
+    assert out["progress"] == {"phase": "snippet"}
+
+
+def test_execute_workflow_python_node_runs_multi_module_project_from_ref(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src" / "pkg").mkdir(parents=True)
+    (project_root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (project_root / "src" / "pkg" / "util.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    (project_root / "src" / "pkg" / "runner.py").write_text(
+        "from pkg.util import add\n\n"
+        "def run(payload):\n"
+        "    return {'output': {'value': add(payload['a'], payload['b'])}}\n",
+        encoding="utf-8",
+    )
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-node-project",
+            "execution_mode": "project",
+            "module_source": "",
+            "module_sha256": hashlib.sha256(b"").hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "project-digest",
+            "project": {"ref": "@project/src", "entrypoint": "pkg.runner", "callable": "run"},
+            "payload": {"a": 2, "b": 3},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"value": 5}
+    assert out["audit"]["package_source_digest"] == "project-digest"
+
+
+def test_execute_workflow_python_node_project_imports_cannot_escape_staged_root(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src" / "pkg").mkdir(parents=True)
+    (project_root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (project_root / "src" / "pkg" / "runner.py").write_text(
+        "import outside_helper\n\n"
+        "def run(payload):\n"
+        "    return {'output': outside_helper.VALUE}\n",
+        encoding="utf-8",
+    )
+    (project_root / "outside_helper.py").write_text("VALUE = 9\n", encoding="utf-8")
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-node-project-escape",
+            "execution_mode": "project",
+            "module_source": "",
+            "module_sha256": hashlib.sha256(b"").hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "project-digest",
+            "project": {"ref": "@project/src", "entrypoint": "pkg.runner", "callable": "run"},
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "outside_helper" in out["error"]["message"]
+
+
 def test_execute_workflow_python_node_exports_many_outputs_as_inline_zip_without_takeover(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()

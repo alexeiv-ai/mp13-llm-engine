@@ -64,8 +64,49 @@ Optional fields:
 5. `python`
 6. `artifact_inputs`
 7. `artifact_outputs`
+8. `execution_mode`
+9. `project`
 
-The host verifies `sha256(module_source) == module_sha256` before execution. The requested function is found by `export_name` or `operation`, and is called with `payload`.
+The host verifies `sha256(module_source) == module_sha256` before execution. In default module mode, the requested function is found by `export_name` or `operation`, and is called with `payload`.
+
+Snippet request:
+
+```json
+{
+  "execution_mode": "snippet",
+  "module_source": "result = {'output': {'ok': True}}",
+  "module_sha256": "...",
+  "package_id": "pkg",
+  "workflow_id": "wf",
+  "package_source_digest": "digest",
+  "payload": {}
+}
+```
+
+Snippet code can read the global `payload` and should assign `result`. `result` follows the same return normalization as a module export.
+
+Project request:
+
+```json
+{
+  "execution_mode": "project",
+  "module_source": "",
+  "module_sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
+  "package_id": "pkg",
+  "workflow_id": "wf",
+  "package_source_digest": "project-digest",
+  "project": {
+    "ref": "@project/src",
+    "entrypoint": "pkg.runner",
+    "callable": "run",
+    "working_directory": ".",
+    "env": {"MODE": "test"}
+  },
+  "payload": {}
+}
+```
+
+For `project.ref`, the host stages files into the request workspace as an artifact input named by `project.root_input` or `project` by default. Project-local imports are allowed only when the imported module resolves under the staged project root. Global imports still require `python.import_allowlist`.
 
 ## Python Execution API
 
