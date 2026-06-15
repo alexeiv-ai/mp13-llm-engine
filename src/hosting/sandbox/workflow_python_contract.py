@@ -90,7 +90,19 @@ def workflow_python_node_contract() -> Dict[str, Any]:
         "host_api": {
             "contract": "hosting.workflow_python.node.host_api.v1",
             "transport": "workflow_python_node_worker_ipc_control_channel",
+            "transport_capabilities": {
+                "framed": True,
+                "host_call_id": True,
+                "async_capable": True,
+                "out_of_order_responses": False,
+                "sync_handlers": True,
+                "async_handlers": True,
+            },
             "methods": ["host.describe", "fs.list", "fs.read_text", "fs.write_text", "fs.mkdir", "fs.stat"],
+            "discovery": {
+                "method": "host.describe",
+                "includes": ["methods", "method_descriptions", "args_schema", "result_schema", "permissions", "roots", "policy", "transport"],
+            },
             "filesystem_model": "artifact_roots",
             "readable_roots": "declared artifact inputs and outputs",
             "writable_roots": "declared artifact outputs only",

@@ -48,6 +48,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - uv install plan locking/verification, explicit uv execution through install APIs, uv install receipts, uv receipt verification, and uv-managed interpreter selection for dependency-bearing node execution.
 - Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
+- Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
 - Pending-cancel handling in the shared active child runtime registry so host cancellation is not lost while a node harness child is still starting.
 
 ## Discrepancies
@@ -139,12 +140,13 @@ Purpose: record the current implementation state and the discrepancies against `
 - Verified broader hosting workflow tests after toolbox lifecycle migration: `180 passed`.
 - Added `hosting.workflow_python.node.host_api.v1` with `host.describe`, `host.call`, and artifact-scoped `fs.*` helpers available to node code through a bidirectional host-call protocol.
 - Replaced the initial stdout/stdin host-call bridge with `hosting.workflow_python_node_worker_ipc`, a built-in Python node harness that uses a dedicated multiprocessing control channel for request, event, result, and host RPC messages.
-- Routed node harness startup through the worker file entrypoint for faster cold starts while keeping the same dedicated control-channel protocol.
+- Routed node harness startup through the built-in worker module while keeping the same dedicated control-channel protocol.
 - Fixed the child-runtime cancellation race where a host cancel issued while the node harness was still starting could be lost before active runtime registration.
 - Removed the legacy embedded `python -c` node runner from the node runtime after harness parity verification.
 - Documented the node host API, back-channel transport, and code-edit strategy for future long-lived workers in `sandbox/PY_NODE_WORKER.md`.
 - Investigated node code editing: current one-child-per-request execution naturally handles fixed snippets as new `module_sha256` revisions; future long-lived workers should use explicit code revisions with restart/reroute as the conservative default, not uv as the code-edit mechanism.
 - Added node host API tests for discovery, artifact-root reads/writes, and rejected input-root writes.
+- Added a reusable native scoped host API registry for node built-ins and future host-registered functions, with sync/async handler support and sandbox-visible schemas.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
 - Verified broader hosting workflow tests after node host API changes: `182 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.

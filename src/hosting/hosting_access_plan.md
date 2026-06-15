@@ -300,16 +300,17 @@ Transport requirement: use async-capable framed messages with `host_call_id` cor
 - [x] Add a built-in Python node worker harness with a dedicated control channel for node execution.
 - [x] Add bidirectional child-process protocol messages for `host_call` and `host_response` without using stdout as the host RPC transport.
 - [x] Route active node execution through the built-in harness control channel instead of the embedded `python -c` stdout event bridge.
-- [x] Launch the harness as an explicit worker file for fast cold-start while keeping stdout/stderr reserved for user logs.
+- [x] Launch the built-in harness as the node worker entrypoint while keeping stdout/stderr reserved for user logs.
 - [x] Remove the legacy embedded `python -c` node runner after harness parity coverage remains stable.
 - [x] Expose a Python `host` object with `call`, `describe`, and filesystem convenience methods.
 - [x] Implement artifact-scoped `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat` through the host dispatcher.
 - [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
 - [x] Include host API metadata in the machine-readable node contract.
-- [ ] Extract a reusable host-dispatch registry for built-in and host-registered node functions.
-- [ ] Model the dispatch registry as a native scoped toolbox-like capability registry without toolbox manifests or hosted toolbox lifecycle.
+- [x] Extract a reusable host-dispatch registry for built-in and host-registered node functions.
+- [x] Model the dispatch registry as a native scoped toolbox-like capability registry without toolbox manifests or hosted toolbox lifecycle.
+- [x] Include method descriptions, argument schemas, result schemas, and permissions in sandbox-visible `host.describe` discovery.
 - [ ] Support async-capable framed host API messages with `host_call_id` correlation and out-of-order-safe responses.
-- [ ] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
+- [x] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
 - [ ] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
 - [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
 - [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests and avoids per-request cold-start cost.

@@ -28,7 +28,7 @@ The public entrypoints are the workflow facade commands and channel methods:
 8. `workflow-python-request-status`
 9. `workflow-python-cancel-request`
 
-The implementation lives in `hosting.sandbox.workflow_python_node_runtime`, launches the built-in `hosting.workflow_python_node_worker_ipc` harness by file entrypoint, and is called by `WorkflowHelperMixin`. It is not an externally registered IPC worker module. The host starts a child Python harness process for execution and tracks it through the shared hosted workflow pool and request lifecycle.
+The implementation lives in `hosting.sandbox.workflow_python_node_runtime`, launches the built-in `hosting.workflow_python_node_worker_ipc` harness, and is called by `WorkflowHelperMixin`. It is not an externally registered IPC worker module. The host starts a child Python harness process for execution and tracks it through the shared hosted workflow pool and request lifecycle.
 
 ## Host Lifecycle
 
@@ -149,6 +149,14 @@ def run(payload):
 
 The current host API contract is `hosting.workflow_python.node.host_api.v1`.
 
+`host.describe()` returns:
+
+1. `methods`: available method names
+2. `method_descriptions`: descriptions, argument schemas, result schemas, permissions, and async handler metadata
+3. `roots`: readable/writable artifact root names for this request
+4. `policy`: enabled host API namespaces for this request
+5. `transport`: control-channel capabilities
+
 Discoverable methods:
 
 1. `host.describe`
@@ -168,7 +176,7 @@ Convenience methods on `host` call those dispatcher methods:
 6. `host.fs_stat(root_id, relative_path="")`
 7. `host.fs_mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
 
-Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. This is deliberately a bidirectional request/response protocol, not a one-way event, so it can be reused by a future long-lived node worker loop.
+Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. The current worker call path waits for each response; out-of-order concurrent host responses are reserved for the future long-lived worker transport loop.
 
 The current dispatcher maps `fs.*` calls to declared artifact roots:
 

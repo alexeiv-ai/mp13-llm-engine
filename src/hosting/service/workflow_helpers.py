@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
+from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot, hosted_log_summary
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 from ..sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
@@ -347,95 +348,188 @@ class WorkflowHelperMixin:
         child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
         output_roots = sorted(str(key) for key in dict(child.get("outputs") or {}).keys())
-        methods = [
-            "host.describe",
-            "fs.list",
-            "fs.read_text",
-            "fs.write_text",
-            "fs.mkdir",
-            "fs.stat",
-        ]
+        registry = HostApiRegistry(
+            contract="hosting.workflow_python.node.host_api.v1",
+            request_id=str(dict(request or {}).get("request_id") or ""),
+            roots={
+                "readable": sorted(set(input_roots + output_roots)),
+                "writable": output_roots,
+            },
+            policy={
+                "artifact_fs": True,
+                "http": False,
+                "subprocess": False,
+                "custom_functions": False,
+            },
+        )
 
-        def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
-            method = str(dict(call or {}).get("method") or "").strip()
-            args = dict(dict(call or {}).get("arguments") or {})
-            if method == "host.describe":
-                return {
-                    "status": "ok",
-                    "contract": "hosting.workflow_python.node.host_api.v1",
-                    "methods": methods,
-                    "roots": {
-                        "readable": sorted(set(input_roots + output_roots)),
-                        "writable": output_roots,
-                    },
-                    "request_id": str(dict(request or {}).get("request_id") or ""),
-                    "policy": {
-                        "artifact_fs": True,
-                        "http": False,
-                        "subprocess": False,
-                    },
-                }
-            if method not in set(methods):
-                raise RuntimeError(f"unsupported_host_method:{method}")
+        def _root_and_target(args: Dict[str, Any], *, write: bool = False) -> tuple[str, Path, Path, Any]:
             root_id = str(args.get("root_id") or "").strip()
             relative_path = args.get("relative_path")
-            write = method in {"fs.write_text", "fs.mkdir"}
             root = self._workflow_python_node_host_root(artifact_context, root_id=root_id, write=write)
             target = self._workflow_python_node_host_path(root, relative_path)
-            if method == "fs.list":
-                if not target.exists():
-                    raise FileNotFoundError(str(target))
-                if not target.is_dir():
-                    raise NotADirectoryError(str(target))
-                return {
-                    "status": "ok",
-                    "root_id": root_id,
-                    "relative_path": str(relative_path or ""),
-                    "entries": [
-                        {
-                            "name": child_path.name,
-                            "type": "dir" if child_path.is_dir() else "file",
-                            "size": child_path.stat().st_size if child_path.is_file() else None,
-                        }
-                        for child_path in sorted(target.iterdir(), key=lambda item: item.name)
-                    ],
-                }
-            if method == "fs.read_text":
-                encoding = str(args.get("encoding") or "utf-8")
-                return {
-                    "status": "ok",
-                    "root_id": root_id,
-                    "relative_path": str(relative_path or ""),
-                    "text": target.read_text(encoding=encoding),
-                    "encoding": encoding,
-                }
-            if method == "fs.write_text":
-                encoding = str(args.get("encoding") or "utf-8")
-                if bool(args.get("create_parents", True)):
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(str(args.get("text") or ""), encoding=encoding)
-                return {
-                    "status": "ok",
-                    "root_id": root_id,
-                    "relative_path": str(relative_path or ""),
-                    "bytes": len(str(args.get("text") or "").encode(encoding, errors="replace")),
-                    "encoding": encoding,
-                }
-            if method == "fs.mkdir":
-                target.mkdir(parents=bool(args.get("parents", True)), exist_ok=bool(args.get("exist_ok", True)))
-                return {"status": "ok", "root_id": root_id, "relative_path": str(relative_path or "")}
-            if method == "fs.stat":
-                stat = target.stat()
-                return {
-                    "status": "ok",
-                    "root_id": root_id,
-                    "relative_path": str(relative_path or ""),
-                    "exists": True,
-                    "type": "dir" if target.is_dir() else "file",
-                    "size": stat.st_size if target.is_file() else None,
-                    "mtime": stat.st_mtime,
-                }
-            raise RuntimeError(f"unsupported_host_method:{method}")
+            return root_id, root, target, relative_path
+
+        registry.register(
+            "fs.list",
+            namespace="fs",
+            description="List direct children under a declared artifact input or output root.",
+            args_schema=fs_root_args_schema(),
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "root_id": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                    "entries": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+            permissions=["artifact.read"],
+            handler=lambda args: _fs_list(args),
+        )
+
+        registry.register(
+            "fs.read_text",
+            namespace="fs",
+            description="Read UTF text from a declared artifact input or output root.",
+            args_schema=fs_root_args_schema(text=True),
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "root_id": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                    "text": {"type": "string"},
+                    "encoding": {"type": "string"},
+                },
+            },
+            permissions=["artifact.read"],
+            handler=lambda args: _fs_read_text(args),
+        )
+
+        registry.register(
+            "fs.write_text",
+            namespace="fs",
+            description="Write UTF text under a declared artifact output root.",
+            args_schema=fs_write_text_args_schema(),
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "root_id": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                    "bytes": {"type": "integer"},
+                    "encoding": {"type": "string"},
+                },
+            },
+            permissions=["artifact.write"],
+            handler=lambda args: _fs_write_text(args),
+        )
+
+        registry.register(
+            "fs.mkdir",
+            namespace="fs",
+            description="Create a directory under a declared artifact output root.",
+            args_schema=fs_root_args_schema(mkdir=True),
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "root_id": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                },
+            },
+            permissions=["artifact.write"],
+            handler=lambda args: _fs_mkdir(args),
+        )
+
+        registry.register(
+            "fs.stat",
+            namespace="fs",
+            description="Return metadata for a path under a declared artifact input or output root.",
+            args_schema=fs_root_args_schema(),
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "root_id": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                    "exists": {"type": "boolean"},
+                    "type": {"type": "string"},
+                    "size": {"type": ["integer", "null"]},
+                    "mtime": {"type": "number"},
+                },
+            },
+            permissions=["artifact.read"],
+            handler=lambda args: _fs_stat(args),
+        )
+
+        def _fs_list(args: Dict[str, Any]) -> Dict[str, Any]:
+            root_id, _root, target, relative_path = _root_and_target(args)
+            if not target.exists():
+                raise FileNotFoundError(str(target))
+            if not target.is_dir():
+                raise NotADirectoryError(str(target))
+            return {
+                "status": "ok",
+                "root_id": root_id,
+                "relative_path": str(relative_path or ""),
+                "entries": [
+                    {
+                        "name": child_path.name,
+                        "type": "dir" if child_path.is_dir() else "file",
+                        "size": child_path.stat().st_size if child_path.is_file() else None,
+                    }
+                    for child_path in sorted(target.iterdir(), key=lambda item: item.name)
+                ],
+            }
+
+        def _fs_read_text(args: Dict[str, Any]) -> Dict[str, Any]:
+            root_id, _root, target, relative_path = _root_and_target(args)
+            encoding = str(args.get("encoding") or "utf-8")
+            return {
+                "status": "ok",
+                "root_id": root_id,
+                "relative_path": str(relative_path or ""),
+                "text": target.read_text(encoding=encoding),
+                "encoding": encoding,
+            }
+
+        def _fs_write_text(args: Dict[str, Any]) -> Dict[str, Any]:
+            root_id, _root, target, relative_path = _root_and_target(args, write=True)
+            encoding = str(args.get("encoding") or "utf-8")
+            text = str(args.get("text") or "")
+            if bool(args.get("create_parents", True)):
+                target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding=encoding)
+            return {
+                "status": "ok",
+                "root_id": root_id,
+                "relative_path": str(relative_path or ""),
+                "bytes": len(text.encode(encoding, errors="replace")),
+                "encoding": encoding,
+            }
+
+        def _fs_mkdir(args: Dict[str, Any]) -> Dict[str, Any]:
+            root_id, _root, target, relative_path = _root_and_target(args, write=True)
+            target.mkdir(parents=bool(args.get("parents", True)), exist_ok=bool(args.get("exist_ok", True)))
+            return {"status": "ok", "root_id": root_id, "relative_path": str(relative_path or "")}
+
+        def _fs_stat(args: Dict[str, Any]) -> Dict[str, Any]:
+            root_id, _root, target, relative_path = _root_and_target(args)
+            stat = target.stat()
+            return {
+                "status": "ok",
+                "root_id": root_id,
+                "relative_path": str(relative_path or ""),
+                "exists": True,
+                "type": "dir" if target.is_dir() else "file",
+                "size": stat.st_size if target.is_file() else None,
+                "mtime": stat.st_mtime,
+            }
+
+        def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
+            return registry.dispatch(dict(call or {}))
 
         return _dispatch
 

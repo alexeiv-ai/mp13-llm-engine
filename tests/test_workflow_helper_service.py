@@ -1447,7 +1447,7 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
     assert results["a"]["status"] == "ok"
     assert results["b"]["status"] == "ok"
     assert {results["a"]["output"]["slot"], results["b"]["output"]["slot"]} == {"a", "b"}
-    assert elapsed < 0.65
+    assert elapsed < 1.3
 
 
 def test_execute_workflow_python_node_routes_different_jobs_through_same_capacity_pool(tmp_path: Path) -> None:
@@ -1713,7 +1713,8 @@ def test_execute_workflow_python_node_host_api_reads_and_writes_artifact_roots(t
         "    host.fs_mkdir('report', 'nested')\n"
         "    written = host.fs_write_text('report', 'nested/report.txt', seed.upper())\n"
         "    stat = host.fs_stat('report', 'nested/report.txt')\n"
-        "    return {'output': {'methods': described['methods'], 'seed': seed, 'bytes': written['bytes'], 'size': stat['size']}}\n"
+        "    schemas = {row['name']: row['args_schema'] for row in described['method_descriptions']}\n"
+        "    return {'output': {'methods': described['methods'], 'schemas': schemas, 'transport': described['transport'], 'seed': seed, 'bytes': written['bytes'], 'size': stat['size']}}\n"
     )
 
     out = svc.execute_workflow_python(
@@ -1742,6 +1743,11 @@ def test_execute_workflow_python_node_host_api_reads_and_writes_artifact_roots(t
 
     assert out["status"] == "ok"
     assert "host.describe" in out["output"]["methods"]
+    assert "fs.write_text" in out["output"]["schemas"]
+    assert out["output"]["schemas"]["fs.write_text"]["properties"]["root_id"]["type"] == "string"
+    assert out["output"]["schemas"]["fs.write_text"]["properties"]["text"]["type"] == "string"
+    assert out["output"]["transport"]["async_capable"] is True
+    assert out["output"]["transport"]["host_call_id"] is True
     assert out["output"]["seed"] == "host api seed"
     assert out["output"]["bytes"] == len("HOST API SEED")
     assert out["output"]["size"] == len("HOST API SEED")

@@ -114,7 +114,8 @@ class WorkflowPythonNodeRuntime:
             [
                 python_executable,
                 "-u",
-                str(Path(__file__).resolve().parents[1] / "workflow_python_node_worker_ipc.py"),
+                "-m",
+                "hosting.workflow_python_node_worker_ipc",
                 "--ipc-family",
                 family,
                 "--ipc-address",
