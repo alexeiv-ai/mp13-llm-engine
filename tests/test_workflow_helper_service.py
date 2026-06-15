@@ -14,6 +14,7 @@ import pytest
 from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
+from hosting.sandbox.workflow_python_contract import build_workflow_python_node_snippet_request
 
 
 def test_spawn_workflow_js_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
@@ -2442,6 +2443,26 @@ def test_execute_workflow_python_node_runs_snippet_without_export(tmp_path: Path
     assert out["output"] == {"value": 5}
     assert out["state_patch"] == {"mode": "snippet"}
     assert out["progress"] == {"phase": "snippet"}
+
+
+def test_execute_workflow_python_node_runs_snippet_builder_request(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    request = build_workflow_python_node_snippet_request(
+        request_id="req-node-snippet-builder",
+        source="result = {'output': {'value': payload['value'] * 2}}\n",
+        package_id="pkg",
+        workflow_id="wf",
+        payload={"value": 6},
+    )
+
+    out = svc.execute_workflow_python(profile="node", request=request)
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"value": 12}
+    assert out["audit"]["module_sha256"] == request["module_sha256"]
 
 
 def test_execute_workflow_python_node_runs_multi_module_project_from_ref(tmp_path: Path) -> None:

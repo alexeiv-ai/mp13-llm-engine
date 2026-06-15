@@ -360,8 +360,8 @@ Contract simplification target: dependent projects should not need to hand-autho
 - [x] Stage project files into a request/runtime workspace using artifact refs or configured alias roots.
 - [x] Support multi-module imports from the staged project root without weakening global import policy.
 - [x] Preserve source/package digest audit fields for staged projects.
-- [ ] Add host-owned request templates/builders for common node scenarios: module function, arbitrary snippet, staged project, uv project.
-- [ ] Reduce project-mode awkwardness by making project identity explicit, while keeping `module_source` / `module_sha256` compatibility for existing callers.
+- [x] Add host-owned request templates/builders for common node scenarios: module function, arbitrary snippet, staged project, uv project.
+- [x] Reduce project-mode awkwardness by making project identity explicit, while keeping `module_source` / `module_sha256` compatibility for existing callers.
 - [x] Add tests for snippet execution.
 - [x] Add tests for multi-module project execution.
 - [x] Add tests that project import paths cannot escape the staged project root.

@@ -1,6 +1,7 @@
 """Workflow Python request/response contract helpers."""
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any, Dict, List, Optional
 
@@ -51,6 +52,14 @@ def _dict(value: Any) -> Dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {}
 
 
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _clean_dict(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
 def workflow_python_node_contract() -> Dict[str, Any]:
     return {
         "profile": "node",
@@ -79,6 +88,7 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "payload",
         ],
         "execution_modes": ["module", "snippet", "project"],
+        "request_templates": ["module_function", "snippet", "staged_project", "uv_project"],
         "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb", "heartbeat_interval_ms", "stream_max_events"],
         "job_lifecycle_states": ["submitted", "running", "ok", "error", "timeout", "canceled"],
         "artifact_contract": {
@@ -110,9 +120,197 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "filesystem_model": "artifact_roots",
             "readable_roots": "declared artifact inputs and outputs",
             "writable_roots": "declared artifact outputs only",
-            "http": "not_enabled_in_current_node_dispatcher",
+            "http": "policy_gated_brokered_http",
         },
     }
+
+
+def build_workflow_python_node_module_request(
+    *,
+    module_source: str,
+    operation: str = "",
+    export_name: str = "",
+    request_id: str = "",
+    package_id: str = "workflow-python-node",
+    workflow_id: str = "workflow",
+    package_source_digest: str = "",
+    payload: Any = None,
+    code_revision: str = "",
+    provenance: Optional[Dict[str, Any]] = None,
+    limits: Optional[Dict[str, Any]] = None,
+    policy: Optional[Dict[str, Any]] = None,
+    python: Optional[Dict[str, Any]] = None,
+    artifact_inputs: Optional[list[Dict[str, Any]]] = None,
+    artifact_outputs: Optional[list[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    source = str(module_source or "")
+    digest = _clean(package_source_digest) or _sha256_text(source)
+    op = _clean(operation) or _clean(export_name)
+    return normalize_workflow_python_node_request(
+        {
+            "request_id": request_id,
+            "execution_mode": "module",
+            "module_source": source,
+            "module_sha256": _sha256_text(source),
+            "code_revision": _clean(code_revision) or _sha256_text(source),
+            "package_id": package_id,
+            "workflow_id": workflow_id,
+            "package_source_digest": digest,
+            "operation": op,
+            "export_name": _clean(export_name) or op,
+            "payload": payload if payload is not None else {},
+            "provenance": _clean_dict(provenance),
+            "limits": _clean_dict(limits),
+            "policy": _clean_dict(policy),
+            "python": _clean_dict(python),
+            "artifact_inputs": list(artifact_inputs or []),
+            "artifact_outputs": list(artifact_outputs or []),
+        }
+    )
+
+
+def build_workflow_python_node_snippet_request(
+    *,
+    source: str,
+    request_id: str = "",
+    package_id: str = "workflow-python-snippet",
+    workflow_id: str = "workflow",
+    package_source_digest: str = "",
+    payload: Any = None,
+    code_revision: str = "",
+    provenance: Optional[Dict[str, Any]] = None,
+    limits: Optional[Dict[str, Any]] = None,
+    policy: Optional[Dict[str, Any]] = None,
+    python: Optional[Dict[str, Any]] = None,
+    artifact_inputs: Optional[list[Dict[str, Any]]] = None,
+    artifact_outputs: Optional[list[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    snippet = str(source or "")
+    digest = _clean(package_source_digest) or _sha256_text(snippet)
+    return normalize_workflow_python_node_request(
+        {
+            "request_id": request_id,
+            "execution_mode": "snippet",
+            "module_source": snippet,
+            "module_sha256": _sha256_text(snippet),
+            "code_revision": _clean(code_revision) or _sha256_text(snippet),
+            "package_id": package_id,
+            "workflow_id": workflow_id,
+            "package_source_digest": digest,
+            "payload": payload if payload is not None else {},
+            "provenance": _clean_dict(provenance),
+            "limits": _clean_dict(limits),
+            "policy": _clean_dict(policy),
+            "python": _clean_dict(python),
+            "artifact_inputs": list(artifact_inputs or []),
+            "artifact_outputs": list(artifact_outputs or []),
+        }
+    )
+
+
+def build_workflow_python_node_project_request(
+    *,
+    project_ref: str,
+    entrypoint: str,
+    callable_name: str = "run",
+    request_id: str = "",
+    package_id: str = "workflow-python-project",
+    workflow_id: str = "workflow",
+    project_id: str = "",
+    project_digest: str = "",
+    package_source_digest: str = "",
+    payload: Any = None,
+    root_input: str = "project",
+    working_directory: str = "",
+    env: Optional[Dict[str, Any]] = None,
+    path_mask: str = "*",
+    recursive: bool = True,
+    provenance: Optional[Dict[str, Any]] = None,
+    limits: Optional[Dict[str, Any]] = None,
+    policy: Optional[Dict[str, Any]] = None,
+    python: Optional[Dict[str, Any]] = None,
+    artifact_inputs: Optional[list[Dict[str, Any]]] = None,
+    artifact_outputs: Optional[list[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    ref = _clean(project_ref)
+    project_identity = _clean(project_digest) or _sha256_text("|".join([ref, _clean(entrypoint), _clean(callable_name), _clean(working_directory)]))
+    digest = _clean(package_source_digest) or project_identity
+    input_name = _clean(root_input) or "project"
+    inputs = [dict(row or {}) for row in list(artifact_inputs or []) if isinstance(row, dict)]
+    if ref and not any(_clean(row.get("name")) == input_name for row in inputs):
+        inputs.append(
+            {
+                "name": input_name,
+                "kind": "ref",
+                "ref": ref,
+                "path_mask": _clean(path_mask) or "*",
+                "recursive": bool(recursive),
+            }
+        )
+    project: Dict[str, Any] = {
+        "ref": ref,
+        "root_input": input_name,
+        "entrypoint": _clean(entrypoint),
+        "callable": _clean(callable_name) or "run",
+        "project_id": _clean(project_id) or package_id,
+        "project_digest": project_identity,
+    }
+    if _clean(working_directory):
+        project["working_directory"] = _clean(working_directory)
+    if isinstance(env, dict) and env:
+        project["env"] = dict(env)
+    return normalize_workflow_python_node_request(
+        {
+            "request_id": request_id,
+            "execution_mode": "project",
+            "module_source": "",
+            "module_sha256": _sha256_text(""),
+            "code_revision": project_identity,
+            "package_id": package_id,
+            "workflow_id": workflow_id,
+            "package_source_digest": digest,
+            "project": project,
+            "payload": payload if payload is not None else {},
+            "provenance": _clean_dict(provenance),
+            "limits": _clean_dict(limits),
+            "policy": _clean_dict(policy),
+            "python": _clean_dict(python),
+            "artifact_inputs": inputs,
+            "artifact_outputs": list(artifact_outputs or []),
+        }
+    )
+
+
+def build_workflow_python_node_uv_project_request(
+    *,
+    project_ref: str,
+    entrypoint: str,
+    callable_name: str = "run",
+    pyproject_toml: str = "",
+    uv_lock: str = "",
+    dependency_groups: Optional[list[str]] = None,
+    python: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    py = _clean_dict(python)
+    uv = dict(py.get("uv") or {}) if isinstance(py.get("uv"), dict) else {}
+    if pyproject_toml:
+        uv["pyproject_toml"] = str(pyproject_toml)
+    if uv_lock:
+        uv["uv_lock"] = str(uv_lock)
+    if dependency_groups is not None:
+        uv["dependency_groups"] = list(dependency_groups or [])
+    if uv:
+        py["uv"] = uv
+    else:
+        py["uv_enabled"] = True
+    return build_workflow_python_node_project_request(
+        project_ref=project_ref,
+        entrypoint=entrypoint,
+        callable_name=callable_name,
+        python=py,
+        **kwargs,
+    )
 
 
 def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -215,6 +413,10 @@ def workflow_python_node_not_implemented_response(
 
 
 __all__ = [
+    "build_workflow_python_node_module_request",
+    "build_workflow_python_node_project_request",
+    "build_workflow_python_node_snippet_request",
+    "build_workflow_python_node_uv_project_request",
     "normalize_workflow_python_node_request",
     "validate_workflow_python_node_request",
     "workflow_python_node_contract",

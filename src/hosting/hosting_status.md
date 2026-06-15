@@ -54,6 +54,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
 - Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Warm node worker recycling now stops idle workers for superseded derived environment identities, capacity-trimmed idle workers, and unhealthy idle workers discovered during resource inspection.
+- Node request builders now cover module functions, snippets, staged projects, and uv projects, including explicit project identity defaults for project mode.
 - Python node request lifecycle states are exposed as `submitted`, `running`, `ok`, `error`, `timeout`, and `canceled`; long-running node requests can opt into host-side `heartbeat` stream events with `limits.heartbeat_interval_ms`.
 - Python node streams use bounded per-request retention through `limits.stream_max_events`; stream receives report retained and dropped event counts so callers can detect backpressure loss.
 - Pending-cancel handling in the shared active child runtime registry so host cancellation is not lost while a node harness child is still starting.
@@ -182,6 +183,11 @@ Purpose: record the current implementation state and the discrepancies against `
 - Fixed node resource reporting so idle process counts are scoped to the requested environment key.
 - Verified focused worker recycle/trim tests: `3 passed`.
 - Verified workflow helper service tests after worker recycling changes: `80 passed`.
+- Added host-owned workflow Python node request builders for module functions, snippets, staged projects, and uv projects.
+- Project builders now fill the empty project `module_source` hash, default project root artifact input, explicit `project_id` / `project_digest`, and `code_revision` / `package_source_digest` defaults.
+- Verified workflow Python contract tests after request builders: `13 passed`.
+- Verified focused snippet/project builder execution tests: `3 passed`.
+- Verified workflow helper service tests after request builders: `81 passed`.
 
 ## Current Client Impact
 
@@ -189,6 +195,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
 - Node-profile clients should pass input artifacts as alias refs, inline payloads, or inline zip payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, use `export_inline_zip` for many output files when ownership should stay with the producer, request `host_takeover` only when the host should own returned ref lifetime, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
 - Node-profile clients may use `execution_mode=snippet` for source snippets or `execution_mode=project` with `project.ref` / `project.entrypoint` / `project.callable` for staged projects.
+- Node-profile clients may use the host-owned request builders in `hosting.sandbox.workflow_python_contract` for module functions, snippets, staged projects, and uv projects instead of hand-authoring low-level request fields.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.
 - Node-profile callers may see `node_runtime_recycle` metrics when a request causes stale idle workers from a prior derived environment identity to be stopped.
 - Node-profile callers can disable the artifact filesystem host API namespace with `sandbox_policy.sandbox.host_api.namespaces.fs=false`; `host.describe` remains available so code can discover the effective policy.

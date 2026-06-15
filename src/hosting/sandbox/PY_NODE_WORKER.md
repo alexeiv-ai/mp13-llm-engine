@@ -121,6 +121,15 @@ Project request:
 
 For `project.ref`, the host stages files into the request workspace as an artifact input named by `project.root_input` or `project` by default. Project-local imports are allowed only when the imported module resolves under the staged project root. Global imports still require `python.import_allowlist`.
 
+Host-side callers can import request builders from `hosting.sandbox.workflow_python_contract` instead of hand-authoring low-level request fields:
+
+1. `build_workflow_python_node_module_request(...)`
+2. `build_workflow_python_node_snippet_request(...)`
+3. `build_workflow_python_node_project_request(...)`
+4. `build_workflow_python_node_uv_project_request(...)`
+
+The builders return normal node request dictionaries accepted by `execute_workflow_python(profile="node", request=...)` and stream open. They fill source hashes, code revisions, package source digests, execution mode, and default payloads. Project builders also fill the empty project `module_source` hash, default `root_input="project"`, recursive `path_mask="*"` project artifact input, and explicit `project_id` / `project_digest` fields. Existing callers may keep providing raw request dictionaries.
+
 ## Python Execution API
 
 Node Python code can use these globals:

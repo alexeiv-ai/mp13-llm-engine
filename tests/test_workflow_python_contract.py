@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+
 from hosting.sandbox.workflow_python_contract import (
+    build_workflow_python_node_module_request,
+    build_workflow_python_node_project_request,
+    build_workflow_python_node_snippet_request,
+    build_workflow_python_node_uv_project_request,
     normalize_workflow_python_node_request,
     validate_workflow_python_node_request,
     workflow_python_node_contract,
@@ -20,6 +26,7 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
     assert "project" in contract["execution_modes"]
     assert "artifact_inputs" in contract["request_fields"]
     assert "artifact_outputs" in contract["request_fields"]
+    assert contract["request_templates"] == ["module_function", "snippet", "staged_project", "uv_project"]
     assert "state_patch" in contract["response_fields"]
     assert "progress" in contract["stream_event_types"]
     assert "heartbeat" in contract["stream_event_types"]
@@ -29,6 +36,87 @@ def test_node_contract_lists_request_response_and_stream_fields() -> None:
     assert contract["job_lifecycle_states"] == ["submitted", "running", "ok", "error", "timeout", "canceled"]
     assert contract["artifact_contract"]["ref_format"] == "@alias/relative/path"
     assert "inline" in contract["artifact_contract"]["input_kinds"]
+    assert contract["host_api"]["http"] == "policy_gated_brokered_http"
+
+
+def test_build_module_request_fills_source_hash_and_defaults() -> None:
+    source = "def run(payload):\n    return {'output': payload}\n"
+
+    out = build_workflow_python_node_module_request(
+        request_id="req-builder-module",
+        module_source=source,
+        operation="run",
+        payload={"value": 3},
+        package_id="pkg",
+        workflow_id="wf",
+    )
+
+    assert out["request_id"] == "req-builder-module"
+    assert out["execution_mode"] == "module"
+    assert out["module_sha256"] == hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert out["code_revision"] == out["module_sha256"]
+    assert out["package_source_digest"] == out["module_sha256"]
+    assert out["operation"] == "run"
+    assert out["payload"] == {"value": 3}
+
+
+def test_build_snippet_request_does_not_require_export() -> None:
+    source = "result = {'output': payload}\n"
+
+    out = build_workflow_python_node_snippet_request(
+        request_id="req-builder-snippet",
+        source=source,
+        payload={"ok": True},
+    )
+
+    assert out["execution_mode"] == "snippet"
+    assert out["operation"] == ""
+    assert out["export_name"] == ""
+    assert out["module_sha256"] == hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert validate_workflow_python_node_request(out)["status"] == "ok"
+
+
+def test_build_project_request_adds_default_project_input_and_identity() -> None:
+    out = build_workflow_python_node_project_request(
+        request_id="req-builder-project",
+        project_ref="@project/src",
+        entrypoint="pkg.runner",
+        callable_name="run",
+        package_id="pkg",
+        workflow_id="wf",
+        project_id="project-a",
+        project_digest="project-digest",
+        payload={"value": 1},
+    )
+
+    assert out["execution_mode"] == "project"
+    assert out["module_source"] == ""
+    assert out["module_sha256"] == hashlib.sha256(b"").hexdigest()
+    assert out["code_revision"] == "project-digest"
+    assert out["package_source_digest"] == "project-digest"
+    assert out["project"]["project_id"] == "project-a"
+    assert out["project"]["project_digest"] == "project-digest"
+    assert out["project"]["root_input"] == "project"
+    assert out["artifact_inputs"] == [
+        {"name": "project", "kind": "ref", "ref": "@project/src", "path_mask": "*", "recursive": True}
+    ]
+    assert validate_workflow_python_node_request(out)["status"] == "ok"
+
+
+def test_build_uv_project_request_adds_uv_intent() -> None:
+    out = build_workflow_python_node_uv_project_request(
+        request_id="req-builder-uv-project",
+        project_ref="@project/src",
+        entrypoint="pkg.runner",
+        pyproject_toml="[project]\nname='demo'\nversion='0.0.0'\n",
+        uv_lock="version = 1\n",
+        dependency_groups=["dev"],
+    )
+
+    assert out["execution_mode"] == "project"
+    assert out["python"]["uv"]["pyproject_toml"].startswith("[project]")
+    assert out["python"]["uv"]["uv_lock"] == "version = 1\n"
+    assert out["python"]["uv"]["dependency_groups"] == ["dev"]
 
 
 def test_normalize_node_request_maps_export_and_operation() -> None:
