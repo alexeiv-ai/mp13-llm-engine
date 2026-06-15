@@ -49,6 +49,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
+- Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
 - Pending-cancel handling in the shared active child runtime registry so host cancellation is not lost while a node harness child is still starting.
 
 ## Discrepancies
@@ -66,7 +67,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
 - Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior and uv-managed environments.
-- Add warm long-lived Python node harness workers per environment-keyed pool so capacity can reserve reusable workers instead of paying per-request cold-start cost.
+- Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including capacity shrink cleanup and project/code-revision recycling.
+- Add worker recycling and capacity-shrink cleanup for warm node workers, including explicit project/code-revision invalidation policy.
 - Decide whether helper-compatible runtimes should adopt the shared child-runtime/artifact helpers without changing helper response compatibility.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
@@ -147,6 +149,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Investigated node code editing: current one-child-per-request execution naturally handles fixed snippets as new `module_sha256` revisions; future long-lived workers should use explicit code revisions with restart/reroute as the conservative default, not uv as the code-edit mechanism.
 - Added node host API tests for discovery, artifact-root reads/writes, and rejected input-root writes.
 - Added a reusable native scoped host API registry for node built-ins and future host-registered functions, with sync/async handler support and sandbox-visible schemas.
+- Added warm node harness reuse across compatible sequential requests and resource reporting for idle warm workers.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
 - Verified broader hosting workflow tests after node host API changes: `182 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.

@@ -350,8 +350,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
     conn = Client(args.ipc_address, family=args.ipc_family, authkey=str(args.auth_token or "").encode("utf-8"))
     try:
-        req = dict(conn.recv() or {})
-        return _execute(conn, req)
+        while True:
+            msg = conn.recv()
+            if not isinstance(msg, dict):
+                _send(conn, {"type": "error", "reason": "workflow_sandbox_invalid_request", "detail": {"message": "request must be an object"}})
+                continue
+            kind = str(msg.get("kind") or "").strip().lower()
+            if kind == "shutdown":
+                _send(conn, {"type": "shutdown_ack"})
+                return 0
+            req = dict(msg.get("request") or {}) if kind == "execute" else dict(msg or {})
+            _execute(conn, req)
     except Exception as exc:
         try:
             _send(conn, {"type": "error", "reason": "workflow_sandbox_invalid_request", "detail": _detail_from_error(exc)})

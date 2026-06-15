@@ -29,7 +29,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 - `workflow_js(profile=helper)` exists as a public facade over the JS helper implementation.
 - Host-side environment-key routing and pool/request accounting exist for the workflow facades.
 - Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path collection. It returns `artifact_store.status=ok` only when refs are minted from declared output files or declared inline outputs.
-- Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs. The current node harness is still started per request; long-lived warm worker reuse is a next-phase implementation item.
+- Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs. Compatible module/snippet requests can reuse warm harness workers sequentially; project execution and explicit recycling policy are still next-phase work.
 
 ## Current Discrepancies
 
@@ -270,7 +270,7 @@ Current investigation notes:
 - Toolbox has reusable host-interaction ideas: native in-process toolbox harness mode, async execution, callback relay, brokered fs/http clients, approval/permission checks, and tool/view constraints.
 - Toolbox is not reusable as-is for node host API: toolbox manifests, tool assignment, bundle staging, registration, rollout, repair, and GC are tool-distribution semantics, not generic sandbox host-call semantics.
 - Python helper workers also keep hot process state and a worker-local runtime pool. They may still be useful for bootstrap performance, narrow helper compatibility, and simple source-in / JSON-out host scenarios.
-- Python node workers currently start one harness process per request. That is simpler and avoids stale module state, but it is below toolbox/helper lifecycle capability and makes configured capacity less meaningful than warm reserved workers.
+- Python node workers now support warm sequential reuse for compatible module/snippet requests. Project requests remain one-shot until cwd/sys.path/env/import-cache recycling policy is implemented.
 - Toolbox registration/repair/GC is not automatically replaced by the base pool layer. The base layer covers request lifecycle/resource shapes; toolbox-specific orchestration remains warranted while toolbox owns bundles, assignments, rollout state, and repair semantics.
 - Artifact authorization should remain lean. Artifact access should piggyback on normal hosting roles and sandbox policy checks unless a concrete external artifact-read API requires more.
 
@@ -313,7 +313,7 @@ Transport requirement: use async-capable framed messages with `host_call_id` cor
 - [x] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
 - [ ] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
 - [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
-- [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests and avoids per-request cold-start cost.
+- [x] Add a long-lived worker transport loop that reuses the same host API protocol across sequential compatible requests and avoids per-request cold-start cost for warm hits.
 - [x] Add tests for host API discovery, artifact-root read/write, and rejected input-root writes.
 
 ### Long-Running And Concurrent Node Jobs
@@ -332,9 +332,9 @@ Warm-worker obstacles to solve:
 - [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
 - [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
 - [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
-- [ ] Implement a warm harness worker loop that accepts many sequential requests over one control channel.
-- [ ] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
-- [ ] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
+- [x] Implement a warm harness worker loop that accepts many sequential requests over one control channel.
+- [x] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
+- [x] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
 - [ ] Add worker recycling for changed environment identity, unhealthy workers, policy changes, and explicit capacity shrink.
 - [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
@@ -342,6 +342,7 @@ Warm-worker obstacles to solve:
 - [ ] Add long-running progress heartbeat/status behavior.
 - [x] Add tests for concurrent different node jobs.
 - [x] Add tests for concurrent same-code node jobs.
+- [x] Add tests for warm worker reuse across compatible sequential requests.
 - [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
 
 ### Snippets And Python Projects

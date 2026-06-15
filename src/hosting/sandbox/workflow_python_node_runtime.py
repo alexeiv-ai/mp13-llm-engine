@@ -93,17 +93,19 @@ def _import_allowlist(request: Dict[str, Any]) -> list[str]:
 
 @dataclass
 class WorkflowPythonNodeRuntime:
-    request_id: str
     python_executable: str
     proc: subprocess.Popen[Any]
     conn: Any = None
     _events: "queue.Queue[Dict[str, Any]]" = field(default_factory=queue.Queue)
     _reader: Optional[threading.Thread] = None
     _cancel_requested: bool = False
+    _request_id: str = ""
+    _busy: bool = False
+    _closed: bool = False
 
     @classmethod
-    def start(cls, *, request: Dict[str, Any], python_executable: str) -> "WorkflowPythonNodeRuntime":
-        family, address = _allocate_node_ipc_address(str(request.get("request_id") or "workflow-python-node"))
+    def start(cls, *, runtime_key: str, python_executable: str) -> "WorkflowPythonNodeRuntime":
+        family, address = _allocate_node_ipc_address(str(runtime_key or "workflow-python-node"))
         auth_token = secrets.token_urlsafe(24)
         listener = Listener(address=address, family=family, authkey=auth_token.encode("utf-8"))
         env = dict(os.environ)
@@ -158,11 +160,30 @@ class WorkflowPythonNodeRuntime:
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
             raise RuntimeError(f"workflow_python_node_worker_ipc_connect_failed:{accepted}") from accepted
-        runtime = cls(request_id=_clean(request.get("request_id")), python_executable=python_executable, proc=proc, conn=accepted)
+        runtime = cls(python_executable=python_executable, proc=proc, conn=accepted)
         runtime._reader = threading.Thread(target=runtime._read_events, daemon=True, name=f"workflow-python-node-{int(proc.pid or 0)}")
         runtime._reader.start()
-        accepted.send(dict(request or {}))
         return runtime
+
+    @property
+    def request_id(self) -> str:
+        return self._request_id
+
+    def alive(self) -> bool:
+        return not self._closed and self.conn is not None and self.proc.poll() is None
+
+    def send_request(self, request: Dict[str, Any]) -> None:
+        if not self.alive():
+            raise RuntimeError("workflow_python_node_worker_not_alive")
+        self._request_id = _clean(request.get("request_id"))
+        self._cancel_requested = False
+        self._busy = True
+        while True:
+            try:
+                self._events.get_nowait()
+            except queue.Empty:
+                break
+        self.conn.send({"kind": "execute", "request": dict(request or {})})
 
     def respond_host_call(self, *, host_call_id: str, result: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None) -> bool:
         if self.proc.poll() is not None or self.conn is None:
@@ -212,6 +233,7 @@ class WorkflowPythonNodeRuntime:
         except Exception:
             pass
         self.conn = None
+        self._closed = True
 
     def _kill(self) -> bool:
         if self.proc.poll() is not None:
@@ -236,6 +258,14 @@ class WorkflowPythonNodeRuntime:
         else:
             _forget_proc(self.proc)
         self._close_conn()
+
+    def shutdown(self) -> None:
+        try:
+            if self.alive() and self.conn is not None:
+                self.conn.send({"kind": "shutdown"})
+        except Exception:
+            pass
+        self.ensure_stopped()
 
     def _wait_for_exit(self, *, timeout_seconds: float = 1.0) -> None:
         try:
@@ -274,6 +304,7 @@ class WorkflowPythonNodeRuntime:
             if remaining <= 0:
                 self._kill()
                 self._wait_for_exit(timeout_seconds=0.5)
+                self._busy = False
                 return {
                     "ok": False,
                     "reason": "workflow_sandbox_timeout",
@@ -340,6 +371,7 @@ class WorkflowPythonNodeRuntime:
                 continue
             if event_type == "canceled":
                 self._wait_for_exit()
+                self._busy = False
                 return {
                     "ok": False,
                     "reason": "workflow_sandbox_canceled",
@@ -348,6 +380,7 @@ class WorkflowPythonNodeRuntime:
                     "stderr": last_stderr,
                 }
             if event_type == "process_exit":
+                self._busy = False
                 if self._cancel_requested:
                     return {
                         "ok": False,
@@ -366,7 +399,7 @@ class WorkflowPythonNodeRuntime:
             if event_type == "result":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
-                self._wait_for_exit()
+                self._busy = False
                 return {
                     "ok": True,
                     "output": row.get("output"),
@@ -379,7 +412,7 @@ class WorkflowPythonNodeRuntime:
             if event_type == "error":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")
-                self._wait_for_exit()
+                self._busy = False
                 return {
                     "ok": False,
                     "reason": _clean(row.get("reason")) or "workflow_sandbox_runtime_error",
@@ -390,6 +423,51 @@ class WorkflowPythonNodeRuntime:
 
 
 class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self._warm_lock = threading.Lock()
+        self._idle: Dict[str, list[WorkflowPythonNodeRuntime]] = {}
+
+    @staticmethod
+    def _runtime_key(request: Dict[str, Any], executable: str) -> str:
+        py = dict(request.get("python") or {})
+        environment_key = _clean(request.get("environment_key")) or _clean(py.get("environment_key")) or _clean(py.get("environment_name")) or "workflow-python-node"
+        return "|".join(
+            [
+                _clean(executable),
+                environment_key,
+                ",".join(_import_allowlist(request)),
+            ]
+        )
+
+    @staticmethod
+    def _warm_reusable(request: Dict[str, Any]) -> bool:
+        return _clean(request.get("execution_mode") or "module").lower() != "project"
+
+    def _take_idle(self, runtime_key: str) -> Optional[WorkflowPythonNodeRuntime]:
+        with self._warm_lock:
+            rows = self._idle.get(runtime_key, [])
+            while rows:
+                runtime = rows.pop()
+                if runtime.alive():
+                    return runtime
+            self._idle.pop(runtime_key, None)
+        return None
+
+    def _release_idle(self, runtime_key: str, runtime: WorkflowPythonNodeRuntime, *, reusable: bool) -> None:
+        if not reusable or not runtime.alive() or runtime._cancel_requested:
+            runtime.ensure_stopped()
+            return
+        with self._warm_lock:
+            self._idle.setdefault(runtime_key, []).append(runtime)
+
+    def _shutdown_idle(self) -> None:
+        with self._warm_lock:
+            rows = [runtime for runtimes in self._idle.values() for runtime in runtimes]
+            self._idle.clear()
+        for runtime in rows:
+            runtime.shutdown()
+
     def execute(
         self,
         request: Dict[str, Any],
@@ -415,13 +493,48 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             "output_limit_bytes": output_limit_bytes,
         }
         executable = _clean(python_executable) or _python_executable_from_request(req)
-        runtime = WorkflowPythonNodeRuntime.start(request=child_req, python_executable=executable)
+        runtime_key = self._runtime_key(child_req, executable)
+        reusable = self._warm_reusable(child_req)
+        runtime = self._take_idle(runtime_key) if reusable else None
+        if runtime is None:
+            runtime = WorkflowPythonNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+        try:
+            runtime.send_request(child_req)
+        except Exception:
+            runtime.ensure_stopped()
+            raise
         self.register_active(request_id, runtime)
         try:
             return runtime.wait(timeout_ms=timeout_ms, on_event=on_event, host_dispatcher=host_dispatcher)
         finally:
-            runtime.ensure_stopped()
             self.unregister_active(request_id)
+            self._release_idle(runtime_key, runtime, reusable=reusable)
+
+    def resources(self) -> Dict[str, Any]:
+        out = super().resources()
+        with self._warm_lock:
+            idle = [
+                {
+                    "runtime_key": key,
+                    "pid": int(runtime.proc.pid or 0) or None,
+                    "alive": runtime.alive(),
+                    "python_executable": runtime.python_executable,
+                }
+                for key, runtimes in self._idle.items()
+                for runtime in runtimes
+            ]
+        out["idle_count"] = len([row for row in idle if bool(row.get("alive"))])
+        out["idle_processes"] = idle
+        return out
+
+    def shutdown(self) -> None:
+        self._shutdown_idle()
+
+    def __del__(self) -> None:
+        try:
+            self._shutdown_idle()
+        except Exception:
+            pass
 
 
 __all__ = ["WorkflowPythonNodeRuntimeRegistry"]

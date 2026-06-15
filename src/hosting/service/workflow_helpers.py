@@ -1207,6 +1207,7 @@ class WorkflowHelperMixin:
                 {
                     **req,
                     "request_id": lifecycle.request_id,
+                    "environment_key": effective_key,
                     "python": py,
                     "artifact_context": dict((artifact_context or {}).get("child_context") or {}),
                 },
@@ -1385,6 +1386,7 @@ class WorkflowHelperMixin:
                 for worker in list(pool.resources().get("metrics", {}).get("workers", []) or []):
                     for request_id in list(dict(worker or {}).get("active_request_ids") or []):
                         active_ids.add(str(request_id or "").strip())
+            active_processes = []
             for proc in list(runtime_resources.get("processes") or []):
                 row = dict(proc or {})
                 request_id = str(row.get("request_id") or "").strip()
@@ -1404,7 +1406,9 @@ class WorkflowHelperMixin:
                     known_mem = True
                     total_mem += float(metrics.get("memory_mb") or 0.0)
                 row["resources"] = metrics
-                processes.append(row)
+                active_processes.append(row)
+            idle_processes = [dict(row or {}) for row in list(runtime_resources.get("idle_processes") or [])]
+            processes = [*active_processes, *idle_processes]
             pool_resources = pool.resources() if pool is not None else None
             pool_metrics = dict(dict(pool_resources or {}).get("metrics") or {})
             active_request_ids = []
@@ -1431,8 +1435,8 @@ class WorkflowHelperMixin:
                 "workflow_python_available_slots": int(pool_metrics.get("available_slots") or 0),
                 "workflow_python_active_request_ids": active_request_ids,
                 "workflow_python_process_count": len(processes),
-                "workflow_python_active_process_count": len([row for row in processes if bool(dict(row or {}).get("alive"))]),
-                "workflow_python_idle_process_count": 0,
+                "workflow_python_active_process_count": len([row for row in active_processes if bool(dict(row or {}).get("alive"))]),
+                "workflow_python_idle_process_count": len([row for row in idle_processes if bool(dict(row or {}).get("alive"))]),
                 "workflow_python_pids": [int(dict(row or {}).get("pid") or 0) for row in processes if int(dict(row or {}).get("pid") or 0) > 0],
                 "workflow_python_processes": processes,
                 "workflow_python_cpu_percent": round(total_cpu, 1) if known_cpu else None,
@@ -1672,6 +1676,7 @@ class WorkflowHelperMixin:
         result = self._workflow_python_node_runtime_registry().execute(
             {
                 **dict(request or {}),
+                "environment_key": environment_key,
                 "artifact_context": dict((artifact_context or {}).get("child_context") or {}),
             },
             python_executable=str(dict(request.get("python") or {}).get("python_executable") or "").strip() or None,

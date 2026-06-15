@@ -435,7 +435,7 @@ Node stream event types:
 
 ## Long-Lived Workers And Code Edits
 
-Current implementation: the host starts a child harness process per node request. That makes source edits simple and deterministic: a fixed `module_source` plus `module_sha256` is executed in a fresh process, so a corrected snippet or module is just a new request with a new digest. There is no stale module cache to invalidate. The next runtime step is warm, long-lived harness workers per environment-keyed pool so capacity reserves reusable processes while preserving explicit source revision identity.
+Current implementation: the host keeps warm child harness processes for compatible sequential module/snippet requests under the same environment/import identity. A fixed `module_source` plus `module_sha256` is still the source revision identity for each request, and corrected snippets/modules should be submitted as new requests with new digests. Project requests remain one-shot for now because they can mutate `cwd`, `sys.path`, environment variables, and import caches. The next runtime step is explicit recycling/revision policy for projects and code edits, plus capacity-shrink cleanup for idle warm workers.
 
 For a future long-lived Python node worker, code updates should not rely on uv. uv manages dependencies and interpreter environments; it is not the right mechanism for hot-editing workflow source modules.
 

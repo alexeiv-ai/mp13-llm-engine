@@ -1034,7 +1034,7 @@ def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) 
     assert "progress" in out["contract"]["stream_event_types"]
 
 
-def test_execute_workflow_python_node_reaps_child_process_after_success(tmp_path: Path) -> None:
+def test_execute_workflow_python_node_keeps_and_reaps_warm_child_process(tmp_path: Path) -> None:
     from hosting.sandbox.workflow_python_node_runtime import _ACTIVE_NODE_PROCS
 
     svc = EngineHostService(
@@ -1058,6 +1058,8 @@ def test_execute_workflow_python_node_reaps_child_process_after_success(tmp_path
     )
 
     assert out["status"] == "ok"
+    assert len(list(_ACTIVE_NODE_PROCS)) == 1
+    svc._workflow_python_node_runtime_registry().shutdown()
     assert list(_ACTIVE_NODE_PROCS) == []
 
 
@@ -1489,6 +1491,41 @@ def test_execute_workflow_python_node_routes_different_jobs_through_same_capacit
     assert resources["workflow_pool"]["metrics"]["desired_capacity"] == 2
     recent_request_ids = {row["request_id"] for row in resources["workflow_pool"]["metrics"]["recent_requests"][-2:]}
     assert recent_request_ids == {"req-node-route-a", "req-node-route-b"}
+
+
+def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequential_requests(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid(), 'value': payload['value']}}\n"
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "python": {"import_allowlist": ["os"]},
+        "limits": {"timeout_ms": 2000},
+    }
+
+    first = svc.execute_workflow_python(
+        profile="node",
+        request={**base_request, "request_id": "req-node-warm-a", "payload": {"value": "a"}},
+    )
+    resources = svc.workflow_python_resources(profile="node", python={"import_allowlist": ["os"]})
+    second = svc.execute_workflow_python(
+        profile="node",
+        request={**base_request, "request_id": "req-node-warm-b", "payload": {"value": "b"}},
+    )
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"]["pid"] == second["output"]["pid"]
+    assert resources["workflow_python_idle_process_count"] == 1
+    assert resources["workflow_python_active_process_count"] == 0
+    svc._workflow_python_node_runtime_registry().shutdown()
 
 
 def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(tmp_path: Path) -> None:
