@@ -335,7 +335,8 @@ Warm-worker obstacles to solve:
 - [x] Implement a warm harness worker loop that accepts many sequential requests over one control channel.
 - [x] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
 - [x] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
-- [ ] Add worker recycling for changed environment identity, unhealthy workers, policy changes, and explicit capacity shrink.
+- [x] Add explicit capacity-shrink cleanup for idle warm workers.
+- [ ] Add worker recycling for changed environment identity, unhealthy workers, and policy changes.
 - [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.

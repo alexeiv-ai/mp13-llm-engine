@@ -58,6 +58,22 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._runtime_engines: list[Dict[str, Any]] = []
         self._ensure_metrics_initialized()
 
+    def close(self) -> None:
+        node_registry = getattr(self, "_workflow_python_node_runtime_registry_instance", None)
+        if node_registry is not None:
+            try:
+                node_registry.shutdown()
+            except Exception:
+                pass
+            try:
+                setattr(self, "_workflow_python_node_runtime_registry_instance", None)
+            except Exception:
+                pass
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 

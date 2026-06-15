@@ -1469,13 +1469,19 @@ class WorkflowHelperMixin:
                 self._workflow_python_pool_key(effective_key),
                 desired_capacity=capacity,
             )
+            actual_capacity = pool.set_capacity(capacity)
+            node_runtime_trim = self._workflow_python_node_runtime_registry().trim_idle(
+                environment_key=effective_key,
+                max_idle=actual_capacity,
+            )
             return {
                 "status": "ok",
                 "profile": prof,
                 "engine_id": eid,
                 "environment_key": effective_key or None,
-                "capacity": pool.set_capacity(capacity),
+                "capacity": actual_capacity,
                 "workflow_pool": pool.resources(),
+                "node_runtime_trim": node_runtime_trim,
             }
         out = self.set_workflow_python_helper_capacity(engine_id=eid, capacity=capacity)
         if effective_key:

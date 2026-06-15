@@ -67,8 +67,8 @@ Purpose: record the current implementation state and the discrepancies against `
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
 - Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior and uv-managed environments.
-- Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including capacity shrink cleanup and project/code-revision recycling.
-- Add worker recycling and capacity-shrink cleanup for warm node workers, including explicit project/code-revision invalidation policy.
+- Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including project/code-revision recycling.
+- Add worker recycling for warm node workers, including explicit unhealthy-worker, policy-change, and project/code-revision invalidation behavior.
 - Decide whether helper-compatible runtimes should adopt the shared child-runtime/artifact helpers without changing helper response compatibility.
 - Treat any future Python helper worker reduction as a separate helper-profile replacement project.
 - Update public docs after the first-class node behavior is implemented and verified.
@@ -150,8 +150,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added node host API tests for discovery, artifact-root reads/writes, and rejected input-root writes.
 - Added a reusable native scoped host API registry for node built-ins and future host-registered functions, with sync/async handler support and sandbox-visible schemas.
 - Added warm node harness reuse across compatible sequential requests and resource reporting for idle warm workers.
+- Added capacity-shrink cleanup for idle warm node workers through the node capacity API.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
-- Verified broader hosting workflow tests after node host API changes: `182 passed`.
+- Verified broader hosting workflow tests after node host API and warm-worker lifecycle changes: `184 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
 ## Current Client Impact

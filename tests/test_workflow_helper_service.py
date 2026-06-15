@@ -1528,6 +1528,53 @@ def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequenti
     svc._workflow_python_node_runtime_registry().shutdown()
 
 
+def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "import time\n\ndef run(payload):\n    time.sleep(0.2)\n    return {'output': {'slot': payload['slot']}}\n"
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "python": {"import_allowlist": ["time"]},
+        "limits": {"timeout_ms": 2000},
+    }
+    results: dict[str, dict] = {}
+
+    def run(slot: str) -> None:
+        results[slot] = svc.execute_workflow_python(
+            profile="node",
+            capacity=2,
+            request={**base_request, "request_id": f"req-node-trim-{slot}", "payload": {"slot": slot}},
+        )
+
+    threads = [threading.Thread(target=run, args=(slot,)) for slot in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3.0)
+
+    assert results["a"]["status"] == "ok"
+    assert results["b"]["status"] == "ok"
+    environment_key = results["a"]["environment_key"]
+    resources = svc.workflow_python_resources(profile="node", environment_key=environment_key)
+    assert resources["workflow_python_idle_process_count"] == 2
+
+    resized = svc.set_workflow_python_capacity(profile="node", environment_key=environment_key, capacity=1)
+
+    assert resized["status"] == "ok"
+    assert resized["capacity"] == 1
+    assert resized["node_runtime_trim"]["stopped_count"] == 1
+    resources_after = svc.workflow_python_resources(profile="node", environment_key=environment_key)
+    assert resources_after["workflow_python_idle_process_count"] == 1
+    svc._workflow_python_node_runtime_registry().shutdown()
+
+
 def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

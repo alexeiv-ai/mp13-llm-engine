@@ -441,6 +441,11 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         )
 
     @staticmethod
+    def _runtime_key_environment(runtime_key: str) -> str:
+        parts = str(runtime_key or "").split("|", 2)
+        return parts[1] if len(parts) > 1 else ""
+
+    @staticmethod
     def _warm_reusable(request: Dict[str, Any]) -> bool:
         return _clean(request.get("execution_mode") or "module").lower() != "project"
 
@@ -467,6 +472,39 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             self._idle.clear()
         for runtime in rows:
             runtime.shutdown()
+
+    def trim_idle(self, *, environment_key: str = "", max_idle: int = 0) -> Dict[str, Any]:
+        env = _clean(environment_key)
+        keep = max(0, int(max_idle or 0))
+        stopped: list[Dict[str, Any]] = []
+        runtimes_to_stop: list[WorkflowPythonNodeRuntime] = []
+        with self._warm_lock:
+            matching: list[tuple[str, WorkflowPythonNodeRuntime]] = []
+            for key in list(self._idle.keys()):
+                runtimes = [runtime for runtime in self._idle.get(key, []) if runtime.alive()]
+                if runtimes:
+                    self._idle[key] = runtimes
+                else:
+                    self._idle.pop(key, None)
+                if env and self._runtime_key_environment(key) != env:
+                    continue
+                matching.extend((key, runtime) for runtime in runtimes)
+            keep_ids = {id(runtime) for _, runtime in matching[-keep:]} if keep > 0 else set()
+            for key in list(self._idle.keys()):
+                kept: list[WorkflowPythonNodeRuntime] = []
+                for runtime in self._idle.get(key, []):
+                    if (not env or self._runtime_key_environment(key) == env) and id(runtime) not in keep_ids:
+                        runtimes_to_stop.append(runtime)
+                        stopped.append({"runtime_key": key, "pid": int(runtime.proc.pid or 0) or None})
+                    else:
+                        kept.append(runtime)
+                if kept:
+                    self._idle[key] = kept
+                else:
+                    self._idle.pop(key, None)
+        for runtime in runtimes_to_stop:
+            runtime.shutdown()
+        return {"status": "ok", "environment_key": env or None, "max_idle": keep, "stopped": stopped, "stopped_count": len(stopped)}
 
     def execute(
         self,
