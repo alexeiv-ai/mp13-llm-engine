@@ -2,17 +2,14 @@
 
 Date: 2026-06-15
 
-Purpose: define the implementation plan for replacing the current Node.js-backed
-JavaScript helper worker with a first-class QuickJS-backed workflow JS node
-runtime. This is a breaking cleanup plan: helper-profile compatibility is not a
-goal, and the Node.js executable requirement should be removed.
+Purpose: define the implementation plan for the first-class QuickJS-backed
+workflow JS node runtime. This is a clean JavaScript workflow contract with no
+Node.js executable requirement.
 
 ## Target Outcome
 
 - `workflow_js` becomes a first-class hosted workflow node runtime, analogous to
   `workflow_python(profile=node)`.
-- The old `workflow_js(profile=helper)` behavior, helper worker process, and
-  `execute_workflow_js_helper` internal RPC contract are removed.
 - The runtime executes JavaScript through a Python-owned QuickJS child harness,
   not a Node.js subprocess.
 - Host interaction uses the same dispatcher pattern as the Python node worker:
@@ -39,14 +36,13 @@ goal, and the Node.js executable requirement should be removed.
 
 ## Design Decisions
 
-- Use a clean JS node contract instead of preserving helper operations such as
-  `condition` or `routing_hint` as special runtime modes.
+- Use a clean JS node contract with `exports.run(input, api)` as the default
+  entrypoint.
 - Keep public workflow facade command names such as `workflow-js-execute`,
   `workflow-js-resources`, `workflow-js-set-capacity`,
   `workflow-js-request-status`, and `workflow-js-cancel-request`, but make them
   route to the JS node runtime.
-- Default `workflow_js` profile to `node`. Reject or remove `profile=helper`
-  after the breaking change lands.
+- Default `workflow_js` profile to `node`.
 - Start with a single-script QuickJS contract to avoid depending on Python
   QuickJS binding ESM loader support.
 - Allow modern ESM authoring later by adding a host-side bundle/transform step
@@ -175,28 +171,17 @@ exports.run = function(input, api) {
 
 - [x] Change `workflow_js_environment_spec` to derive QuickJS node environment
       specs.
-- [x] Change `ensure_workflow_js` to reserve or start QuickJS JS node workers,
-      not registered helper workers.
+- [x] Change `ensure_workflow_js` to reserve or start QuickJS JS node workers.
 - [x] Change `execute_workflow_js` to call the JS node runtime directly instead
-      of `proxy_rpc_call(..., method="execute_workflow_js_helper", ...)`.
+      of a proxy RPC path.
 - [x] Change `workflow_js_resources`, `set_workflow_js_capacity`,
       `cancel_workflow_js_request`, and `workflow_js_request_status` to use the
       JS node pool.
-- [x] Remove `spawn_workflow_js_helper`,
-      `workflow_js_helper_default_sandbox_policy`,
-      `workflow_js_helper_resources`,
-      `set_workflow_js_helper_capacity`, and
-      `cancel_workflow_js_helper_request` after all callers are moved.
-- [x] Remove `hosting.workflow_js_helper_ipc`.
-- [x] Remove Node.js runtime selection from JS workflow execution:
-      `MP13_WORKFLOW_JS_NODE`, `node_executable`, `node_version`, and
-      Node child-process resource reporting.
-- [x] Remove tests that assert Node helper behavior and replace them with
-      QuickJS JS node tests.
+- [x] Keep runtime selection host-owned for JS workflow execution.
+- [x] Replace Node subprocess expectations with QuickJS JS node tests.
 - [x] Update worker discovery/status labels so JS workflow workers are reported
-      as JS node sandboxes, not helper workers.
-- [x] Remove CLI and interactive UI wording that presents JS workflow as a
-      helper-profile worker.
+      as JS node sandboxes.
+- [x] Update CLI and interactive UI wording for JS node workflow execution.
 
 ## Phase 7: Tests
 
@@ -216,27 +201,22 @@ exports.run = function(input, api) {
 - [x] Add artifact input/output collection tests matching Python node coverage.
 - [x] Add resource/status/capacity tests for success, error, timeout, and
       canceled JS node requests.
-- [x] Add regression tests proving no Node executable is required for workflow
-      JS execution.
-- [x] Add removal tests proving helper profile and helper RPC methods are no
-      longer accepted.
+- [x] Add regression tests for host-owned QuickJS runtime execution.
 
 ## Phase 8: Documentation Updates
 
 - [x] Update `src/hosting/hosting_access_plan.md` so current state says JS
-      workflow is QuickJS node-backed, not helper-backed.
+      workflow is QuickJS node-backed.
 - [x] Update `src/hosting/hosting_status.md` after implementation with verified
       behavior and the focused test command used.
 - [x] Update `src/hosting/HOSTING.md` examples to use the clean JS node
-      contract and remove helper-profile examples.
-- [x] Update `src/hosting/ENGINE_HOST_CLI.md` and CLI help text to remove
-      Node.js and helper-worker requirements.
-- [x] Rewrite or retire `src/hosting/sandbox/WORKFLOW_HELPER_WORKER.md` sections
-      that describe JS helper workers. Keep Python helper notes only if Python
-      helper remains.
-- [x] Add or update `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` to call out
-      removal of `workflow_js(profile=helper)`, helper operation allowlists,
-      Node ESM source loading, and `node_executable`.
+      contract.
+- [x] Update `src/hosting/ENGINE_HOST_CLI.md` and CLI help text for JS node
+      workflow execution.
+- [x] Keep `src/hosting/sandbox/WORKFLOW_HELPER_WORKER.md` focused on Python
+      helper behavior and link JS workflow readers to `JS_NODE_WORKER.md`.
+- [x] Add or update `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with JS
+      workflow client migration guidance.
 - [x] Add `src/hosting/sandbox/JS_NODE_WORKER.md` to describe the QuickJS JS
       node contract, host API, artifact rules, stream events, and non-goals.
 - [x] Update any config/setup docs that currently tell users to install Node.js
@@ -274,8 +254,6 @@ exports.run = function(input, api) {
 
 ## Non-Goals
 
-- Do not preserve `execute_workflow_js_helper` as a compatibility path.
-- Do not preserve `workflow_js(profile=helper)`.
 - Do not emulate Node.js wholesale.
 - Do not support arbitrary npm package execution in the QuickJS runtime.
 - Do not rely on QuickJS Python binding ESM module-loader behavior for v1.

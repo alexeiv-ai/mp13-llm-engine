@@ -6,9 +6,9 @@ QuickJS-backed hosted JavaScript runtime.
 
 ## Purpose
 
-The JavaScript node worker is the planned first-class hosted JavaScript workflow
-runtime. It replaces the current Node.js-backed JS helper worker with a
-Python-owned QuickJS child harness and returns the node-profile envelope:
+The JavaScript node worker is the first-class hosted JavaScript workflow
+runtime. It uses a Python-owned QuickJS child harness and returns the
+node-profile envelope:
 
 1. `output`
 2. `state_patch`
@@ -49,9 +49,8 @@ JS node execution is host-owned:
 7. The host records lifecycle, progress, stream events, cancellation, metrics,
    logs, and artifacts.
 
-The runtime should not expose raw helper worker spawn APIs to dependent
-projects. The previous `hosting.workflow_js_helper_ipc` worker and
-`execute_workflow_js_helper` RPC contract have been removed.
+The runtime exposes workflow facade APIs rather than raw worker spawn APIs to
+dependent projects.
 
 Request lifecycle states follow the hosted pool model:
 
@@ -339,10 +338,8 @@ that source, but the component execution target should remain the browser.
 
 ## Non-Goals
 
-1. Preserve `workflow_js(profile=helper)`.
-2. Preserve `execute_workflow_js_helper`.
-3. Preserve Node ESM `import(data:)` behavior.
-4. Emulate Node.js wholesale.
-5. Run arbitrary npm packages.
-6. Expose direct filesystem, direct network, or subprocess access.
-7. Use QuickJS as a browser DOM/web-component runtime.
+1. Preserve Node ESM `import(data:)` behavior.
+2. Emulate Node.js wholesale.
+3. Run arbitrary npm packages.
+4. Expose direct filesystem, direct network, or subprocess access.
+5. Use QuickJS as a browser DOM/web-component runtime.

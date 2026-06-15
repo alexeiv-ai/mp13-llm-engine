@@ -21,7 +21,7 @@ Update: 2026-04-06
 Guide hardening is now in place too.
 All guides execute through the static guide runner; intrinsic guides are now registered from static guide content rather than callable guide implementations.
 Update: 2026-06-01
-The hosted sandbox runtime refactor plan now treats this file as the test-navigation baseline. Existing helper characterization tests live in `tests/test_workflow_python_helper_ipc.py`, `tests/test_workflow_js_helper_ipc.py`, `tests/test_workflow_helper_service.py`, and workflow helper slices in `tests/test_engine_host_channel.py`. New shared runtime-base tests should be added without removing the current sandbox/toolbox/generic slices until the migration phases explicitly mark old helper implementations removable.
+The hosted sandbox runtime refactor plan now treats this file as the test-navigation baseline. Existing Python helper characterization tests live in `tests/test_workflow_python_helper_ipc.py`, `tests/test_workflow_helper_service.py`, and workflow helper slices in `tests/test_engine_host_channel.py`. New shared runtime-base tests should be added without removing the current sandbox/toolbox/generic slices until a migration phase explicitly marks an implementation removable.
 Update: 2026-06-01
 Shared runtime, pool, Python environment, workflow Python facade, and CLI compatibility slices now have focused coverage:
 `tests/test_hosting_sandbox_runtime_base.py`, `tests/test_hosting_sandbox_runtime_pool.py`, `tests/test_hosting_python_runtime_base.py`, `tests/test_workflow_python_contract.py`, `tests/test_workflow_helper_service.py`, `tests/test_engine_host_channel.py`, `tests/test_engine_host_cli_remote_args.py`, and `tests/test_engine_host_cli_interactive.py`.
@@ -35,8 +35,8 @@ Update: 2026-06-01
 Workflow Python node profile now has real execution and streaming coverage through the hosted workflow Python runtime, including progress/result/error/timeout/cancel plumbing:
 `tests/test_workflow_helper_service.py -k "node or workflow_python"`.
 Update: 2026-06-15
-Workflow JavaScript now uses the QuickJS-backed JS node runtime. The old Node.js
-helper IPC characterization tests were replaced by `tests/test_workflow_js_node_runtime.py`.
+Workflow JavaScript uses the QuickJS-backed JS node runtime covered by
+`tests/test_workflow_js_node_runtime.py`.
 
 ## 1. Environment
 
@@ -90,7 +90,7 @@ Current automated coverage includes:
     - live toolbox execution proves brokered filesystem callback attribution to original tool call
 17. workflow helper and JS node characterization slices:
     - Python helper module identity, operation allowlist, timeout, output limit, cancellation, capacity, import allowlist, audit/provenance, child process reuse, and real round trip
-    - JS node source identity, `exports.run` execution, missing export, output limit, progress/console, sync host API dispatch, async rejection, and helper-removal regression coverage
+    - JS node source identity, `exports.run` execution, missing export, output limit, progress/console, sync host API dispatch, and async rejection coverage
     - service/channel/daemon resources, capacity, cancel, and runtime-environment realization paths
 18. hosted sandbox runtime refactor slices:
     - deterministic runtime/environment key models and sandbox policy hashes

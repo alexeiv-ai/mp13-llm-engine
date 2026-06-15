@@ -174,8 +174,7 @@ Workflow Python helper-profile workers are managed through workflow runtime faca
 Workflow JavaScript uses the QuickJS-backed node facade with
 `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`,
 `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use
-`profile:"node"` and do not accept Node.js runtime selection such as
-`node_executable`.
+`profile:"node"` with the `exports.run(input, api)` contract.
 
 The interactive menu exposes workflow runtime resource, capacity, refresh,
 request-status, stream receive, and request-cancel actions under `Manage

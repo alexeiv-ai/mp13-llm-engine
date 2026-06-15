@@ -110,10 +110,7 @@ artifact contract.
 
 ## JavaScript Workflow
 
-JavaScript workflow requests must use `workflow_js(profile=node)`. The old
-`workflow_js(profile=helper)`, `hosting.workflow_js_helper_ipc`, Node.js child
-pool, `MP13_WORKFLOW_JS_NODE`, `node_executable`, `node_version`, and
-`execute_workflow_js_helper` compatibility path were removed.
+JavaScript workflow requests use `workflow_js(profile=node)`.
 
 See [JS_NODE_WORKER.md](JS_NODE_WORKER.md) for the QuickJS-backed contract,
 host API, artifact rules, streaming events, and non-goals.

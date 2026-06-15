@@ -87,16 +87,12 @@ Purpose: record the current implementation state and the discrepancies against `
 
 ### 2026-06-15
 
-- Added the QuickJS-backed `workflow_js(profile=node)` execution path and routed
-  workflow JS facade calls away from the removed Node.js helper worker.
+- Added the QuickJS-backed `workflow_js(profile=node)` execution path.
 - Added `hosting.workflow_js_node_worker_ipc` and
   `hosting.sandbox.workflow_js_node_runtime` for source-hash-verified
   single-script execution with `exports.run(input, api)`.
 - Added JS host API coverage for `api.describe`, artifact filesystem
-  read/write, console/progress capture, output limits, async rejection, and
-  helper-removal regressions.
-- Removed `hosting.workflow_js_helper_ipc`, JS helper service aliases,
-  `node_executable` JS facade plumbing, and JS helper wording from public docs.
+  read/write, console/progress capture, output limits, and async rejection.
 - Added QuickJS runtime memory-limit reporting, structured host API failure
   propagation, request validation coverage, artifact filesystem method tests,
   read-only/writable root enforcement tests, and brokered HTTP allowed/denied

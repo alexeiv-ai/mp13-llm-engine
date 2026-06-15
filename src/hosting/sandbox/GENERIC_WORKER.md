@@ -9,7 +9,7 @@ Generic workers are hosted engine/model workers launched as separate processes a
 
 They share the sandbox launch and broker foundation, but they are not staged toolbox executors. They do not load toolbox manifests and do not have logical-toolbox routing.
 
-Workflow Python helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). JavaScript workflow execution now uses the QuickJS node contract documented in [JS_NODE_WORKER.md](JS_NODE_WORKER.md) instead of a generic helper worker.
+Workflow Python helper workers are a separate specialization that also uses the generic worker lifecycle and sandbox foundation. See [WORKFLOW_HELPER_WORKER.md](WORKFLOW_HELPER_WORKER.md). JavaScript workflow execution uses the QuickJS node contract documented in [JS_NODE_WORKER.md](JS_NODE_WORKER.md).
 
 ## Main Implementation
 
@@ -93,7 +93,7 @@ The CLI/channel exposes these through `proxy-rpc-open`, `proxy-rpc-recv`, `proxy
 
 ## Workflow Runtime Relationship
 
-Workflow Python helper workers intentionally stay outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch. Workflow JavaScript is no longer a generic worker specialization; it is launched as a request-scoped QuickJS child harness by the workflow JS node runtime.
+Workflow Python helper workers intentionally stay outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch. Workflow JavaScript is launched as a request-scoped QuickJS child harness by the workflow JS node runtime.
 
 The shared pieces are:
 

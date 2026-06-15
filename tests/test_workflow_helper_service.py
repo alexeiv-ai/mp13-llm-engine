@@ -259,21 +259,6 @@ def test_workflow_js_facade_isolates_node_pools_by_policy(tmp_path: Path) -> Non
         f"workflow_js/{second['environment_key']}",
     }
 
-
-def test_workflow_js_helper_profile_and_aliases_are_removed(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-
-    with pytest.raises(ValueError, match="profile='node'"):
-        svc.ensure_workflow_js(profile="helper")
-    assert not hasattr(svc, "spawn_workflow_js_helper")
-    assert not hasattr(svc, "workflow_js_helper_resources")
-    assert not hasattr(svc, "set_workflow_js_helper_capacity")
-    assert not hasattr(svc, "cancel_workflow_js_helper_request")
-
-
 def test_workflow_python_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

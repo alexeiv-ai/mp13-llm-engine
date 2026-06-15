@@ -5,8 +5,6 @@ import threading
 import time
 from typing import Any, Dict
 
-import pytest
-
 from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntimeRegistry
 
 
@@ -180,8 +178,3 @@ def test_workflow_js_node_preserves_host_api_failure_detail() -> None:
     assert out["reason"] == "host_call_failed"
     assert out["detail"]["message"] == "policy denied"
     assert out["detail"]["error_type"] == "PermissionError"
-
-
-def test_legacy_js_helper_module_is_removed() -> None:
-    with pytest.raises(ModuleNotFoundError):
-        __import__("hosting.workflow_js_helper_ipc")

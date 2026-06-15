@@ -327,7 +327,7 @@ Execute Python helper-profile code through the workflow facade:
 }'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-execute
 ```
 
-Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs. Node.js, `node_executable`, and the old `execute_workflow_js_helper` RPC path are not part of the JS workflow contract.
+Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs.
 
 ## 3. Diagnostics and Auditing
 
