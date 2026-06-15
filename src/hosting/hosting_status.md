@@ -95,6 +95,10 @@ Purpose: record the current implementation state and the discrepancies against `
   helper-removal regressions.
 - Removed `hosting.workflow_js_helper_ipc`, JS helper service aliases,
   `node_executable` JS facade plumbing, and JS helper wording from public docs.
+- Added QuickJS runtime memory-limit reporting, structured host API failure
+  propagation, request validation coverage, artifact filesystem method tests,
+  read-only/writable root enforcement tests, and brokered HTTP allowed/denied
+  coverage.
 - Verified focused QuickJS workflow JS tests:
   `python -m pytest tests/test_workflow_js_node_runtime.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_hosting_js_runtime_base.py -q -k "workflow_js or js_runtime"`.
 

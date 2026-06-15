@@ -48,6 +48,8 @@ exports.run = function(input, api) {
     assert out["state_patch"] == {"seen": True}
     assert out["progress"] == {"step": "checking"}
     assert out["runtime"]["quickjs_available"] is True
+    assert out["runtime"]["memory_limit"]["requested_mb"] == 128
+    assert out["runtime"]["memory_limit"]["enforced"] is True
     assert ("progress", {"step": "checking"}) in events
     assert any(event_type == "console" and payload["message"] == "value 3" for event_type, payload in events)
 
@@ -109,6 +111,40 @@ def test_workflow_js_node_rejects_promise_return_for_sync_v1() -> None:
 
     assert out["ok"] is False
     assert out["reason"] == "workflow_sandbox_async_unsupported"
+
+
+def test_workflow_js_node_returns_structured_runtime_error() -> None:
+    source = "exports.run = function() { throw new Error('boom'); };"
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source))
+
+    assert out["ok"] is False
+    assert out["reason"] == "workflow_sandbox_runtime_error"
+    assert out["detail"]["message"]
+    assert "boom" in out["detail"]["traceback_summary"]
+    assert out["runtime"]["quickjs_available"] is True
+
+
+def test_workflow_js_node_times_out_busy_loop() -> None:
+    source = "exports.run = function() { while (true) {} };"
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source, limits={"timeout_ms": 100, "output_limit_bytes": 65536}))
+
+    assert out["ok"] is False
+    assert out["reason"] == "workflow_sandbox_timeout"
+    assert out["detail"]["timeout_ms"] == 100
+
+
+def test_workflow_js_node_preserves_host_api_failure_detail() -> None:
+    source = "exports.run = function(input, api) { return api.call('missing.method', {}); };"
+
+    def dispatcher(_call: Dict[str, Any]) -> Dict[str, Any]:
+        raise PermissionError("policy denied")
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is False
+    assert out["reason"] == "host_call_failed"
+    assert out["detail"]["message"] == "policy denied"
+    assert out["detail"]["error_type"] == "PermissionError"
 
 
 def test_legacy_js_helper_module_is_removed() -> None:

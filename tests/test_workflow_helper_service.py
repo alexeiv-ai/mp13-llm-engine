@@ -756,6 +756,29 @@ def test_execute_workflow_js_facade_uses_quickjs_node_runtime(tmp_path: Path) ->
     assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-js-sync"
 
 
+def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "exports.run = function() { return {output: true}; };"
+
+    out = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["error"]["code"] == "workflow_js_node_invalid_request"
+    assert "package_id" in out["error"]["message"]
+    assert "workflow_id" in out["error"]["message"]
+    assert "package_source_digest" in out["error"]["message"]
+
+
 def test_execute_workflow_js_node_reads_and_writes_declared_artifacts(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -810,6 +833,178 @@ exports.run = function(input, api) {
     assert read["artifact_store"]["status"] == "ok"
     assert read["artifacts"][0]["filename"] == "report.txt"
     assert read["artifacts"][0]["size_bytes"] == len("SEED TEXT")
+
+
+def test_execute_workflow_js_node_artifact_fs_list_stat_and_mkdir(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = """
+exports.run = function(input, api) {
+  api.fs.mkdir("report", "nested");
+  api.fs.writeText("report", "nested/a.txt", "alpha");
+  const listing = api.fs.list("report", "nested");
+  const stat = api.fs.stat("report", "nested/a.txt");
+  return {output: {names: listing.entries.map(x => x.name), type: stat.type, size: stat.size}};
+};
+"""
+
+    out = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-artifact-fs",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_outputs": [{"name": "report", "path_mask": "*.txt", "recursive": True, "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"names": ["a.txt"], "type": "file", "size": len("alpha")}
+
+
+def test_execute_workflow_js_node_enforces_artifact_root_permissions(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    write_seed = """
+exports.run = function(input, api) {
+  api.fs.writeText("seed", "", "seed text");
+  return {output: true};
+};
+"""
+    write_input = """
+exports.run = function(input, api) {
+  api.fs.writeText("seed", "changed.txt", "should fail");
+  return {output: true};
+};
+"""
+    escape_output = """
+exports.run = function(input, api) {
+  api.fs.writeText("report", "../escape.txt", "should fail");
+  return {output: true};
+};
+"""
+    seed = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-root-seed",
+            "module_source": write_seed,
+            "module_sha256": hashlib.sha256(write_seed.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
+        },
+    )
+    input_write = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-root-readonly",
+            "module_source": write_input,
+            "module_sha256": hashlib.sha256(write_input.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_inputs": [{"name": "seed", "ref": seed["artifacts"][0]["ref"]}],
+        },
+    )
+    escaped = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-root-escape",
+            "module_source": escape_output,
+            "module_sha256": hashlib.sha256(escape_output.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert seed["status"] == "ok"
+    assert input_write["status"] == "error"
+    assert input_write["error"]["code"] == "host_call_failed"
+    assert "artifact_root_unavailable:seed" in input_write["error"]["message"]
+    assert escaped["status"] == "error"
+    assert escaped["error"]["code"] == "host_call_failed"
+    assert "artifact_path_escape" in escaped["error"]["message"]
+
+
+def test_execute_workflow_js_node_brokered_http_allowed_and_denied(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = """
+exports.run = function(input, api) {
+  const response = api.http.fetch("https://example.test/data", {method: "POST", body_b64: "ZGF0YQ=="});
+  return {output: {status_code: response.status_code, body_b64: response.body_b64}};
+};
+"""
+    calls = []
+
+    def fake_fetch(self, **kwargs):
+        calls.append(dict(kwargs))
+        return {
+            "url": kwargs["url"],
+            "status_code": 201,
+            "headers": {"content-type": "text/plain"},
+            "body_b64": "b2s=",
+            "body_size": 2,
+            "truncated": False,
+        }
+
+    monkeypatch.setattr("hosting.service.workflow_helpers.BrokeredHttpClient.fetch", fake_fetch)
+
+    allowed = svc.execute_workflow_js(
+        profile="node",
+        sandbox_policy={
+            "sandbox": {
+                "enabled": True,
+                "network": {"mode": "brokered_only"},
+                "brokered_io": {"http": True},
+            }
+        },
+        request={
+            "request_id": "req-js-http-allowed",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+        },
+    )
+    denied = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-http-denied",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+        },
+    )
+
+    assert allowed["status"] == "ok"
+    assert allowed["output"] == {"status_code": 201, "body_b64": "b2s="}
+    assert calls[0]["url"] == "https://example.test/data"
+    assert calls[0]["method"] == "POST"
+    assert denied["status"] == "error"
+    assert denied["error"]["code"] == "host_call_failed"
+    assert "unsupported_host_method:http.fetch" in denied["error"]["message"]
 
 
 def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:

@@ -11,6 +11,14 @@ from multiprocessing.connection import Client
 from typing import Any, Dict, Optional
 
 
+class HostApiError(RuntimeError):
+    def __init__(self, *, reason: str, message: str, detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(message)
+        self.reason = str(reason or "host_call_failed")
+        self.message = str(message or self.reason)
+        self.detail = dict(detail or {})
+
+
 def _detail_from_error(err: BaseException) -> Dict[str, Any]:
     tb = traceback.format_exception(type(err), err, err.__traceback__, limit=6)
     return {
@@ -28,6 +36,7 @@ class HostApiBridge:
     def __init__(self, *, conn: Any, request_id: str) -> None:
         self.conn = conn
         self.request_id = str(request_id or "")
+        self.last_error: Optional[HostApiError] = None
         self._seq = 0
         self._seq_lock = threading.Lock()
         self._send_lock = threading.Lock()
@@ -42,7 +51,11 @@ class HostApiBridge:
         if str(response.get("status") or "").strip().lower() == "error":
             detail = response.get("detail") if isinstance(response.get("detail"), dict) else {}
             message = str(response.get("message") or detail.get("message") or response.get("reason") or "host_call_failed")
-            raise RuntimeError(message)
+            raise HostApiError(
+                reason=str(response.get("reason") or detail.get("reason") or "host_call_failed"),
+                message=message,
+                detail={**dict(detail or {}), "host_call_id": str(response.get("host_call_id") or "")},
+            )
         return json.dumps(dict(response.get("result") or {}), ensure_ascii=False, separators=(",", ":"))
 
     def call_json(self, method: str, arguments_json: str = "{}") -> str:
@@ -72,7 +85,11 @@ class HostApiBridge:
                 raise RuntimeError("host_response_mismatch")
             response_id = str(row.get("host_call_id") or "")
             if response_id == call_id:
-                return self._result_from_response(row)
+                try:
+                    return self._result_from_response(row)
+                except HostApiError as exc:
+                    self.last_error = exc
+                    raise
 
 
 def _normalize_console_args(args_json: str) -> str:
@@ -85,7 +102,7 @@ def _normalize_console_args(args_json: str) -> str:
     return " ".join(str(item) for item in args)
 
 
-def _runtime_metadata() -> Dict[str, Any]:
+def _runtime_metadata(*, memory_limit: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     try:
         import quickjs  # type: ignore
 
@@ -93,6 +110,7 @@ def _runtime_metadata() -> Dict[str, Any]:
             "quickjs_binding": "quickjs",
             "quickjs_binding_version": str(getattr(quickjs, "__version__", "") or "unknown"),
             "quickjs_available": True,
+            "memory_limit": dict(memory_limit or {"requested_mb": None, "enforced": False, "reason": "not_requested"}),
         }
     except Exception as exc:
         return {
@@ -100,6 +118,7 @@ def _runtime_metadata() -> Dict[str, Any]:
             "quickjs_binding_version": None,
             "quickjs_available": False,
             "quickjs_error": str(exc),
+            "memory_limit": dict(memory_limit or {"requested_mb": None, "enforced": False, "reason": "runtime_unavailable"}),
         }
 
 
@@ -113,7 +132,6 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     limits = dict(req.get("limits") or {})
     timeout_ms = max(1, int(limits.get("timeout_ms") or 5000))
     memory_limit_mb = limits.get("memory_limit_mb")
-    logs: list[str] = []
 
     try:
         import quickjs  # type: ignore
@@ -135,14 +153,21 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     stderr_io = io.StringIO()
     host = HostApiBridge(conn=conn, request_id=request_id)
     ctx = quickjs.Context()
+    memory_limit_report: Dict[str, Any] = {
+        "requested_mb": int(memory_limit_mb) if memory_limit_mb is not None else None,
+        "enforced": False,
+        "reason": "not_requested" if memory_limit_mb is None else "not_enforced",
+    }
     # The Python quickjs binding cannot call Python callbacks while a context
     # time limit is active. Host APIs, console, and progress all use callbacks,
     # so wall-clock limits are enforced by the parent process for this slice.
     if memory_limit_mb is not None:
         try:
             ctx.set_memory_limit(max(1, int(memory_limit_mb)) * 1024 * 1024)
-        except Exception:
-            pass
+            memory_limit_report["enforced"] = True
+            memory_limit_report["reason"] = None
+        except Exception as exc:
+            memory_limit_report["reason"] = f"unavailable:{type(exc).__name__}"
 
     def _host_call(method: str, args_json: str = "{}") -> str:
         return host.call_json(method, args_json)
@@ -159,7 +184,6 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     def _console(level: str, args_json: str = "[]") -> None:
         message = _normalize_console_args(args_json)
         line = f"{str(level or 'log')}: {message}"
-        logs.append(line)
         stdout_io.write(line + "\n")
         _send(conn, {"type": "console", "request_id": request_id, "payload": {"level": str(level or "log"), "message": message}})
 
@@ -299,20 +323,31 @@ globalThis.api = {
                 "progress": dict(normalized.get("progress") or {}) if isinstance(normalized, dict) and isinstance(normalized.get("progress"), dict) else None,
                 "stdout": stdout_io.getvalue(),
                 "stderr": stderr_io.getvalue(),
-                "runtime": _runtime_metadata(),
+                "runtime": _runtime_metadata(memory_limit=memory_limit_report),
             },
         )
     except Exception as exc:
+        host_error = host.last_error
+        reason = host_error.reason if host_error is not None else "workflow_sandbox_runtime_error"
+        detail = (
+            {
+                "message": host_error.message,
+                "reason": host_error.reason,
+                **dict(host_error.detail or {}),
+            }
+            if host_error is not None
+            else _detail_from_error(exc)
+        )
         _send(
             conn,
             {
                 "type": "error",
                 "request_id": request_id,
-                "reason": "workflow_sandbox_runtime_error",
-                "detail": _detail_from_error(exc),
+                "reason": reason,
+                "detail": detail,
                 "stdout": stdout_io.getvalue(),
                 "stderr": stderr_io.getvalue(),
-                "runtime": _runtime_metadata(),
+                "runtime": _runtime_metadata(memory_limit=memory_limit_report),
             },
         )
     return 0

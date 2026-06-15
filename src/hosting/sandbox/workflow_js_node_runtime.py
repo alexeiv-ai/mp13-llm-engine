@@ -147,10 +147,18 @@ class WorkflowJsNodeRuntime:
         try:
             accepted = accept_queue.get(timeout=_node_startup_timeout_seconds())
         except Exception:
+            try:
+                listener.close()
+            except Exception:
+                pass
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
             raise RuntimeError("workflow_js_node_worker_ipc_connect_timeout")
         if isinstance(accepted, BaseException):
+            try:
+                listener.close()
+            except Exception:
+                pass
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
             raise RuntimeError(f"workflow_js_node_worker_ipc_connect_failed:{accepted}") from accepted
@@ -438,7 +446,26 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         }
         executable = _clean(python_executable) or _python_executable_from_request(req)
         runtime_key = self._runtime_key(child_req, executable)
-        runtime = WorkflowJsNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+        runtime: Optional[WorkflowJsNodeRuntime] = None
+        last_start_error: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                runtime = WorkflowJsNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+                break
+            except Exception as exc:
+                last_start_error = exc
+                if attempt == 0 and "connect_timeout" in str(exc):
+                    continue
+                break
+        if runtime is None:
+            return {
+                "ok": False,
+                "reason": "workflow_sandbox_host_unavailable",
+                "detail": {
+                    "message": str(last_start_error or "workflow_js_node_worker_start_failed"),
+                    "error_type": type(last_start_error).__name__ if last_start_error is not None else "RuntimeError",
+                },
+            }
         try:
             runtime.send_request(child_req)
         except Exception:

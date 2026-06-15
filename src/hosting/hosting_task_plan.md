@@ -128,7 +128,7 @@ exports.run = function(input, api) {
 - [x] Capture console output into bounded logs.
 - [x] Enforce timeout, output limit, and cancellation at the child-process
       level even when QuickJS binding-level limits are available.
-- [ ] Add memory limit reporting based on what the selected QuickJS binding and
+- [x] Add memory limit reporting based on what the selected QuickJS binding and
       platform can actually enforce; report unavailable when not enforced.
 
 ## Phase 4: Host API Dispatcher
@@ -149,7 +149,7 @@ exports.run = function(input, api) {
 - [x] Decide whether host APIs are synchronous-only for v1 or promise-based.
 - [ ] If promise-based APIs are supported, implement QuickJS job pumping and
       host-call response correlation tests before exposing the public contract.
-- [ ] Ensure host API failures return structured JS node errors and stream
+- [x] Ensure host API failures return structured JS node errors and stream
       events rather than raw Python exceptions.
 
 ## Phase 5: Artifacts, Streaming, And Results
@@ -199,18 +199,18 @@ exports.run = function(input, api) {
 
 ## Phase 7: Tests
 
-- [ ] Add contract tests for JS node request normalization and validation.
+- [x] Add contract tests for JS node request normalization and validation.
 - [x] Add source hash verification tests.
 - [x] Add tests for successful `exports.run` execution.
 - [x] Add tests for missing `exports.run` or requested export.
-- [ ] Add tests for structured runtime errors with safe stack/message summaries.
+- [x] Add tests for structured runtime errors with safe stack/message summaries.
 - [ ] Add timeout, cancellation, output-limit, and invalid-output tests.
 - [x] Add environment-key tests for QuickJS runtime identity and sandbox policy
       isolation.
 - [x] Add host API discovery tests.
-- [ ] Add artifact filesystem read/write/list/stat/mkdir tests.
-- [ ] Add tests that input roots are read-only and output roots are writable.
-- [ ] Add brokered HTTP allowed and denied tests.
+- [x] Add artifact filesystem read/write/list/stat/mkdir tests.
+- [x] Add tests that input roots are read-only and output roots are writable.
+- [x] Add brokered HTTP allowed and denied tests.
 - [x] Add progress and console/log stream tests.
 - [x] Add artifact input/output collection tests matching Python node coverage.
 - [ ] Add resource/status/capacity tests for success, error, timeout, and
@@ -247,16 +247,29 @@ exports.run = function(input, api) {
 
 ## Open Questions
 
-- [ ] Which QuickJS binding should be the default dependency, and does it expose
+- [x] Which QuickJS binding should be the default dependency, and does it expose
       reliable time/memory limits on every supported platform?
-- [ ] Should v1 host APIs be synchronous-only, or should promise-based APIs be
+      Decision: use the Python `quickjs` package. Memory limits are reported as
+      enforced only when `Context.set_memory_limit(...)` succeeds. Binding-level
+      time limits are not used while Python callbacks are required; wall-clock
+      timeout remains parent-process enforced.
+- [x] Should v1 host APIs be synchronous-only, or should promise-based APIs be
       required before landing?
-- [ ] Should `exports.run(input, api)` be the only v1 entrypoint, or should
+      Decision: v1 host APIs are synchronous-only; promise-returning JS results
+      are rejected with `workflow_sandbox_async_unsupported`.
+- [x] Should `exports.run(input, api)` be the only v1 entrypoint, or should
       callers be allowed to name exports through `export_name`?
-- [ ] Should bundled ESM authoring be included in the first implementation or
+      Decision: `exports.run(input, api)` is the documented default, and
+      `export_name` may select another property on `exports`.
+- [x] Should bundled ESM authoring be included in the first implementation or
       deferred until after the single-script runtime is stable?
-- [ ] How should QuickJS runtime version and binding version be recorded in
+      Decision: defer bundled ESM authoring until the single-script runtime is
+      stable.
+- [x] How should QuickJS runtime version and binding version be recorded in
       `runtime_hash` and audit output?
+      Decision: `runtime_hash` stays host-policy derived; audit runtime records
+      the QuickJS binding name/version where the selected Python package exposes
+      it, otherwise `unknown`.
 
 ## Non-Goals
 
