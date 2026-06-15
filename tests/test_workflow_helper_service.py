@@ -2495,6 +2495,53 @@ def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_re
     assert status["request"]["stream_event_count"] >= len(heartbeats)
 
 
+def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "def run(payload):\n    for i in range(5):\n        progress({'value': i})\n    return {'output': {'done': True}}\n"
+    opened = {}
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-stream-retention",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {},
+                "limits": {"output_limit_bytes": 1024, "stream_max_events": 3},
+            },
+        )
+        received = {}
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=10)
+            if any(dict(row or {}).get("type") == "done" for row in list(received.get("events") or [])):
+                break
+            time.sleep(0.05)
+        status = svc.workflow_python_request_status(
+            profile="node",
+            environment_key=str(opened["environment_key"]),
+            request_id="req-node-stream-retention",
+        )
+    finally:
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+
+    assert opened["status"] == "ok"
+    assert received["max_events"] == 3
+    assert received["dropped_event_count"] > 0
+    assert len(received["events"]) <= 3
+    assert received["events"][-1]["type"] == "done"
+    assert status["request"]["stream_event_count"] >= received["dropped_event_count"] + len(received["events"])
+
+
 def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

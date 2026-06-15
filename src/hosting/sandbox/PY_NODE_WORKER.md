@@ -54,6 +54,8 @@ Request lifecycle states are shared with the hosted pool model:
 
 Long-running requests can opt into host-side liveness events by setting `limits.heartbeat_interval_ms`. Heartbeats are emitted by the host wait loop as `heartbeat` stream events with `request_id`, `status=running`, `elapsed_ms`, and `remaining_ms`. They do not require sandbox code cooperation and are separate from user progress events.
 
+Stream retention is bounded per request. `limits.stream_max_events` sets the retained event queue size for `workflow-python-stream-recv`; the host caps this value to a finite range. When a stream emits more events than the retained queue can hold, the oldest unread events are dropped. `workflow-python-stream-recv` returns `max_events`, `retained_event_count`, `dropped_event_count`, and `next_sequence` so callers can detect loss and adjust polling or retention. Request status still records total `stream_event_count` for lifecycle metrics.
+
 ## Request Contract
 
 Required fields:

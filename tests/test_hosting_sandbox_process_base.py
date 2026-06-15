@@ -95,6 +95,31 @@ def test_process_base_stream_lifecycle_records_events_and_close() -> None:
     assert status["request"]["latest_progress"]["payload"]["progress_percent"] == 40
 
 
+def test_process_base_stream_reports_dropped_events_when_retention_is_exceeded() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-retention",
+        profile="node",
+        factory=_factory,
+        max_events=2,
+    )
+    for value in range(4):
+        base.stream_emit(
+            stream_id=str(opened["stream_id"]),
+            event_type="progress",
+            payload={"value": value},
+        )
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=10)
+    status = base.request_status(environment_key="env-a", request_id="req-stream-retention")
+
+    assert received["max_events"] == 2
+    assert received["dropped_event_count"] == 3
+    assert [row["payload"].get("value") for row in received["events"]] == [2, 3]
+    assert status["request"]["stream_event_count"] == 5
+
+
 def test_process_base_stream_cancel_uses_pool_cancellation() -> None:
     base = WorkflowPythonProcessBase()
 

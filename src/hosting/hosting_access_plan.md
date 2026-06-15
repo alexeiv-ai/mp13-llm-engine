@@ -339,13 +339,14 @@ Warm-worker obstacles to solve:
 - [ ] Add worker recycling for changed environment identity, unhealthy workers, and policy changes.
 - [x] Define code revision lifecycle for long-lived module/snippet workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [x] Implement restart/reroute semantics for module/snippet code edits; keep explicit unload/reload as future project-mode work.
-- [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
+- [x] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
 - [x] Add opt-in long-running heartbeat/status behavior.
 - [x] Add tests for concurrent different node jobs.
 - [x] Add tests for concurrent same-code node jobs.
 - [x] Add tests for warm worker reuse across compatible sequential requests.
 - [x] Add tests for edited module/snippet source routing to a new revision worker.
 - [x] Add tests for opt-in long-running heartbeat stream events.
+- [x] Add tests for bounded stream retention and dropped-event accounting.
 - [ ] Add tests for long-running stream/status/cancel behavior under capacity pressure.
 
 ### Snippets And Python Projects

@@ -1606,11 +1606,17 @@ class WorkflowHelperMixin:
                 if str(selected_runtime.get("python_executable") or "").strip():
                     py["python_executable"] = str(selected_runtime.get("python_executable") or "").strip()
         base = self._workflow_python_stream_base()
+        limits = dict(req.get("limits") or {})
+        try:
+            max_events = max(1, min(int(limits.get("stream_max_events") or 256), 10000))
+        except Exception:
+            max_events = 256
         opened = base.stream_open(
             environment_key=effective_key,
             request_id=request_id,
             profile=prof,
             desired_capacity=capacity,
+            max_events=max_events,
             factory=lambda _key, cap: self._workflow_python_worker_slot(
                 engine_id=eid,
                 environment_key=effective_key,

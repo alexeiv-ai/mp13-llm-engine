@@ -52,6 +52,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
 - Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Python node request lifecycle states are exposed as `submitted`, `running`, `ok`, `error`, `timeout`, and `canceled`; long-running node requests can opt into host-side `heartbeat` stream events with `limits.heartbeat_interval_ms`.
+- Python node streams use bounded per-request retention through `limits.stream_max_events`; stream receives report retained and dropped event counts so callers can detect backpressure loss.
 - Pending-cancel handling in the shared active child runtime registry so host cancellation is not lost while a node harness child is still starting.
 
 ## Discrepancies
@@ -155,8 +156,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added capacity-shrink cleanup for idle warm node workers through the node capacity API.
 - Added explicit node lifecycle states and opt-in heartbeat stream events for long-running node requests.
 - Added module/snippet code-revision routing for warm workers and post-run idle trimming to capacity.
+- Added bounded stream retention metadata and dropped-event accounting for node streams.
 - Verified focused node harness lifecycle tests after control-channel startup/cancel changes: `3 passed`, repeated twice.
-- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, heartbeat, and code-revision routing changes: `186 passed`.
+- Verified broader hosting workflow tests after node host API, warm-worker lifecycle, heartbeat, code-revision routing, and stream retention changes: `188 passed`.
 - Verified toolbox host-call smoke tests after node host API changes: `2 passed`.
 
 ## Current Client Impact

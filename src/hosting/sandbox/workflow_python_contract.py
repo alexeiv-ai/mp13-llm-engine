@@ -79,7 +79,7 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "payload",
         ],
         "execution_modes": ["module", "snippet", "project"],
-        "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb", "heartbeat_interval_ms"],
+        "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb", "heartbeat_interval_ms", "stream_max_events"],
         "job_lifecycle_states": ["submitted", "running", "ok", "error", "timeout", "canceled"],
         "artifact_contract": {
             "ref_format": "@alias/relative/path",

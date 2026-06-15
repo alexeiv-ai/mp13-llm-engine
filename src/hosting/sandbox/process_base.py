@@ -28,6 +28,7 @@ class HostedProcessStreamSession:
     closed: bool = False
     canceled: bool = False
     sequence: int = 0
+    dropped_event_count: int = 0
 
     def append(self, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         self.sequence += 1
@@ -40,6 +41,7 @@ class HostedProcessStreamSession:
         self.events.append(row)
         while len(self.events) > max(1, int(self.max_events or 1)):
             self.events.popleft()
+            self.dropped_event_count += 1
         return row
 
     def recv(self, max_items: int) -> list[Dict[str, object]]:
@@ -192,6 +194,10 @@ class HostedProcessSandboxBase:
             "events": events,
             "closed": session.closed,
             "canceled": session.canceled,
+            "max_events": max(1, int(session.max_events or 1)),
+            "retained_event_count": len(session.events),
+            "dropped_event_count": max(0, int(session.dropped_event_count or 0)),
+            "next_sequence": max(0, int(session.sequence or 0)) + 1,
         }
 
     def stream_send(self, *, stream_id: str, message: Optional[Dict[str, object]] = None) -> Dict[str, object]:
