@@ -267,6 +267,8 @@ Priority order:
 Current investigation notes:
 
 - Toolbox executor workers are long-lived registered workers. They carry toolbox manifests, tool routing, callback/broker state, registration/repair/GC orchestration, and execution pools beyond a single request.
+- Toolbox has reusable host-interaction ideas: native in-process toolbox harness mode, async execution, callback relay, brokered fs/http clients, approval/permission checks, and tool/view constraints.
+- Toolbox is not reusable as-is for node host API: toolbox manifests, tool assignment, bundle staging, registration, rollout, repair, and GC are tool-distribution semantics, not generic sandbox host-call semantics.
 - Python helper workers also keep hot process state and a worker-local runtime pool. They may still be useful for bootstrap performance, narrow helper compatibility, and simple source-in / JSON-out host scenarios.
 - Python node workers currently start one harness process per request. That is simpler and avoids stale module state, but it is below toolbox/helper lifecycle capability and makes configured capacity less meaningful than warm reserved workers.
 - Toolbox registration/repair/GC is not automatically replaced by the base pool layer. The base layer covers request lifecycle/resource shapes; toolbox-specific orchestration remains warranted while toolbox owns bundles, assignments, rollout state, and repair semantics.
@@ -290,7 +292,9 @@ Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact he
 
 Target assumption: node workers may need cooperative host interactions like toolbox brokered filesystem/http callbacks, especially once node workers become long-lived. The host API should be discoverable from Python code and should use a dispatcher-based request/response protocol that can be reused by one-shot and future long-lived workers.
 
-Recommended shape: keep the node host API dispatcher-based, but make the host own the default implementation and registration surface. The built-in dispatcher should provide policy-gated filesystem and HTTP-style services where enabled, and hosts should be able to register additional functions without changing the sandbox wire protocol. Reuse toolbox broker/callback concepts where they reduce risk, but do not import toolbox manifest/tool-assignment semantics into node workers.
+Recommended shape: keep the node host API dispatcher-based, async-capable, and host-owned. The host should provide a default in-process dispatcher with policy-gated filesystem and HTTP-style services where enabled, plus a registration surface for host-defined functions. The closest toolbox reuse is a stripped/native scoped toolbox-like dispatcher: in-process function registry, permissions checks, callback/broker patterns, and async execution. It should not be a hosted toolbox instance and should not inherit toolbox manifests, bundle staging, assignment rollout, registration, repair, or GC semantics.
+
+Transport requirement: use async-capable framed messages with `host_call_id` correlation from the start. The host dispatcher must support both synchronous handlers and asynchronous handlers. Worker code should be able to issue host calls without assuming the host response is immediate or serialized with unrelated host calls.
 
 - [x] Define a node host API contract exposed through `host.describe`.
 - [x] Add a built-in Python node worker harness with a dedicated control channel for node execution.
@@ -303,6 +307,9 @@ Recommended shape: keep the node host API dispatcher-based, but make the host ow
 - [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
 - [x] Include host API metadata in the machine-readable node contract.
 - [ ] Extract a reusable host-dispatch registry for built-in and host-registered node functions.
+- [ ] Model the dispatch registry as a native scoped toolbox-like capability registry without toolbox manifests or hosted toolbox lifecycle.
+- [ ] Support async-capable framed host API messages with `host_call_id` correlation and out-of-order-safe responses.
+- [ ] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
 - [ ] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
 - [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
 - [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests and avoids per-request cold-start cost.
