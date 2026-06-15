@@ -74,8 +74,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior and uv-managed environments.
 - Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including project-mode recycling.
 - Add worker recycling for warm node workers, including explicit unhealthy-worker, policy-change, and project invalidation behavior.
-- Decide whether helper-compatible runtimes should adopt the shared child-runtime/artifact helpers without changing helper response compatibility.
-- Treat any future Python helper worker reduction as a separate helper-profile replacement project.
+- Keep Python helper internals minimally changed unless helper-profile maintenance cost justifies retiring or replacing the helper facade.
 - Update public docs after the first-class node behavior is implemented and verified.
 
 ## Progress Updates
@@ -177,6 +176,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Verified focused host API tests after HTTP support: `5 passed`.
 - Verified workflow helper service tests after HTTP support: `78 passed`.
 - Verified workflow Python contract tests: `9 passed`.
+- Closed the base-class architecture decisions: Python helper remains minimally changed for now, and persisted toolbox registration/repair/GC state remains toolbox-specific while shared lifecycle stays focused on runtime request/resource accounting.
 
 ## Current Client Impact
 

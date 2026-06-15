@@ -269,9 +269,9 @@ Current investigation notes:
 - Toolbox executor workers are long-lived registered workers. They carry toolbox manifests, tool routing, callback/broker state, registration/repair/GC orchestration, and execution pools beyond a single request.
 - Toolbox has reusable host-interaction ideas: native in-process toolbox harness mode, async execution, callback relay, brokered fs/http clients, approval/permission checks, and tool/view constraints.
 - Toolbox is not reusable as-is for node host API: toolbox manifests, tool assignment, bundle staging, registration, rollout, repair, and GC are tool-distribution semantics, not generic sandbox host-call semantics.
-- Python helper workers also keep hot process state and a worker-local runtime pool. They may still be useful for bootstrap performance, narrow helper compatibility, and simple source-in / JSON-out host scenarios.
+- Python helper workers also keep hot process state and a worker-local runtime pool. Current decision: keep helper internals minimally changed for now; do not spend migration effort adapting helper over node unless helper-profile maintenance becomes more expensive than retiring or replacing it.
 - Python node workers now support warm sequential reuse for compatible module/snippet requests. Project requests remain one-shot until cwd/sys.path/env/import-cache recycling policy is implemented.
-- Toolbox registration/repair/GC is not automatically replaced by the base pool layer. The base layer covers request lifecycle/resource shapes; toolbox-specific orchestration remains warranted while toolbox owns bundles, assignments, rollout state, and repair semantics.
+- Toolbox registration/repair/GC is not automatically replaced by the base pool layer. Current decision: keep persisted toolbox registration/repair/GC state toolbox-specific, and use shared lifecycle metadata only for runtime request/resource accounting. This avoids duplicating state ownership and minimizes maintenance cost while toolbox owns bundles, assignments, rollout state, and repair semantics.
 - Artifact authorization should remain lean. Artifact access should piggyback on normal hosting roles and sandbox policy checks unless a concrete external artifact-read API requires more.
 
 ### Base Class Completeness
@@ -283,9 +283,9 @@ Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact he
 - [x] Move reusable artifact preparation/collection/cleanup into a shared host-side component.
 - [x] Make node runtime use the shared child-runtime interface.
 - [x] Keep child process launch and control-channel protocol parsing runtime-specific for now.
-- [ ] Investigate whether Python helper should remain as a small/hot compatibility worker for simple helper use cases or become a compatibility adapter over the node runtime after warm node workers are implemented.
+- [x] Investigate whether Python helper should remain as a small/hot compatibility worker for simple helper use cases or become a compatibility adapter over the node runtime after warm node workers are implemented.
 - [x] Route toolbox executor execute/cancel/request-status/resource accounting through the same normalized host pool/resource shapes while preserving toolbox registration/repair orchestration.
-- [ ] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific; do not remove it just because pool metrics now exist.
+- [x] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific; do not remove it just because pool metrics now exist.
 - [x] Add base-layer tests for pool/request/status/cancel behavior and active child resource/cancel tracking.
 
 ### Node Host API Back Channel

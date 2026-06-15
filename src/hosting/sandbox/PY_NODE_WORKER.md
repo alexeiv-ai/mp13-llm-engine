@@ -527,7 +527,7 @@ The restart/reroute approach used by toolbox remains the conservative default fo
 4. no node stream model
 5. no node response envelope
 
-The node runtime covers the richer Python workflow-node use case. It should eventually support long-running jobs, many different jobs concurrently, and multiple concurrent instances of the same node code. It does not completely subsume the helper profile yet because helper clients may depend on the narrower operation allowlist and compatibility response shape. The correct migration path is to keep helper-profile compatibility until dependent projects explicitly move to `profile=node` or the helper facade is replaced by a compatibility adapter over the node runtime.
+The node runtime covers the richer Python workflow-node use case. It should eventually support long-running jobs, many different jobs concurrently, and multiple concurrent instances of the same node code. Current decision: keep the helper worker minimally changed for now because it is already small and hot for source-in / JSON-out helper calls. Do not adapt helper over node unless maintaining the separate helper process becomes more expensive than retiring or replacing it.
 
 ### Toolbox Worker
 
@@ -550,18 +550,18 @@ The current shared base layer is useful but incomplete:
 1. `HostedProcessSandboxBase` already centralizes pool, request status, stream queue, capacity, and cancellation bookkeeping.
 2. `HostedPythonRuntimeBase` centralizes Python environment identity and runtime environment management.
 3. Toolbox still has separate orchestration because it owns tool assignment, bundle staging, callback routing, and persistent toolbox state.
-4. Python helper still has separate IPC-worker internals because it remains a compatibility process for helper-profile clients.
+4. Python helper still has separate IPC-worker internals because minimal helper change is currently lower maintenance than adapting helper over node.
 5. Python node has runtime-specific launch/protocol internals because it is not a registered IPC worker and has node-specific import/result semantics.
 
 The incomplete part is not the pool concept. The pool concept is the right host-side shape for long-running and concurrent node work. The shared child-runtime layer now owns active child tracking, cancellation lookup, and active resource listing. Runtime-specific code still owns launch, child protocol parsing, hot reuse/recycling, import policy, and result normalization.
 
 Recommended future simplification:
 
-1. Decide whether Python helper internals should adopt the shared child-runtime/artifact helpers while preserving helper compatibility.
+1. Keep Python helper internals minimally changed unless helper-profile maintenance cost justifies retiring or replacing the helper facade.
 2. Add explicit long-running/concurrent node job lifecycle and heartbeat behavior on top of the shared pool model.
 3. Add Python snippet and multi-module project execution modes.
 4. Add uv-managed environment preparation, lock/receipt verification, interpreter selection, and cleanup.
-5. Keep toolbox orchestration separate, but adapt toolbox executor registrations to report through the same normalized pool/resource models where practical.
-6. Replace Python helper internals with either a thin compatibility adapter over node runtime or a shared child-runtime implementation only after dependent helper-profile clients no longer require the current response and operation semantics.
+5. Keep toolbox registration/repair/GC persisted state toolbox-specific; use shared lifecycle only for runtime request/resource accounting where practical.
+6. Replace Python helper internals only if a later maintenance review shows a concrete cost benefit.
 
-Do not delete the Python helper worker solely because node exists. It still has a compatibility niche for helper-profile workflow calls and already migrated dependent projects that expect helper semantics.
+Do not delete the Python helper worker solely because node exists. The current maintenance choice is to leave it small and isolated while new first-class workflow runtime work moves through `profile=node`.

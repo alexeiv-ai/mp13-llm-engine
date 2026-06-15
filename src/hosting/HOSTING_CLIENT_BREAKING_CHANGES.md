@@ -36,6 +36,7 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 - Node-profile clients may use `execution_mode=snippet` for arbitrary source snippets without `operation` / `export_name`, or `execution_mode=project` with `project.ref`, `project.entrypoint`, and `project.callable` for staged multi-module project execution.
 - Node-profile clients that use the Python node host API should call `host.describe()` and handle policy-gated methods. Artifact filesystem methods can be disabled with `sandbox_policy.sandbox.host_api.namespaces.fs=false`; brokered HTTP is exposed as `http.fetch` / `host.http_fetch(...)` only when sandbox policy enables brokered HTTP with `sandbox.enabled=true`, `sandbox.brokered_io.http=true`, and `sandbox.network.mode=brokered_only`.
 - Clients that provide dependency-management UI or orchestration must call host-controlled prepare/lock/verify/install/receipt APIs explicitly before dependency-bearing execution. Normal workflow execution does not install dependencies implicitly.
+- Clients must treat Python helper internals, toolbox worker internals, and toolbox persisted registration/repair/GC state as implementation details. The maintained public surface is the workflow/toolbox host API and this change log, not internal worker or persisted-state compatibility.
 
 ## No Remaining Action For Already Migrated Helper Clients
 
