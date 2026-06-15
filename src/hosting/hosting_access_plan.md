@@ -257,6 +257,21 @@ Cleanup decision: the Python helper worker is no longer part of node-profile exe
 
 These items are intentionally separate from the completed first-class node contract above. They address the next concern: Python node should become a general hosted Python runtime for concurrent, long-running, snippet, and project execution while sharing more host-side sandbox management code.
 
+Priority order:
+
+1. Implement warm long-lived Python node harness workers per environment-keyed pool.
+2. Move low-level contract complexity behind host-owned templates/classes for common caller scenarios.
+3. Generalize the node host API dispatcher with built-in policy-gated services and host-registered functions.
+4. Reassess helper/toolbox reuse after warm node workers exist, because that is the point where the real overlap becomes measurable.
+
+Current investigation notes:
+
+- Toolbox executor workers are long-lived registered workers. They carry toolbox manifests, tool routing, callback/broker state, registration/repair/GC orchestration, and execution pools beyond a single request.
+- Python helper workers also keep hot process state and a worker-local runtime pool. They may still be useful for bootstrap performance, narrow helper compatibility, and simple source-in / JSON-out host scenarios.
+- Python node workers currently start one harness process per request. That is simpler and avoids stale module state, but it is below toolbox/helper lifecycle capability and makes configured capacity less meaningful than warm reserved workers.
+- Toolbox registration/repair/GC is not automatically replaced by the base pool layer. The base layer covers request lifecycle/resource shapes; toolbox-specific orchestration remains warranted while toolbox owns bundles, assignments, rollout state, and repair semantics.
+- Artifact authorization should remain lean. Artifact access should piggyback on normal hosting roles and sandbox policy checks unless a concrete external artifact-read API requires more.
+
 ### Base Class Completeness
 
 Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, pending-cancel handling during child startup, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Toolbox executor runtime calls now also record execute/cancel/request-status/resource accounting through the shared hosted pool layer. Node execution now launches a built-in Python harness file with a dedicated control channel instead of using stdout as the host RPC transport. Runtime-specific code still owns child process launch details, control-channel protocol parsing, import policy, result normalization, warm process reuse, project staging, venv selection, and toolbox registration/repair/GC orchestration.
@@ -266,14 +281,16 @@ Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact he
 - [x] Move reusable artifact preparation/collection/cleanup into a shared host-side component.
 - [x] Make node runtime use the shared child-runtime interface.
 - [x] Keep child process launch and control-channel protocol parsing runtime-specific for now.
-- [ ] Decide whether Python helper can use the same child-runtime implementation while preserving helper response compatibility.
+- [ ] Investigate whether Python helper should remain as a small/hot compatibility worker for simple helper use cases or become a compatibility adapter over the node runtime after warm node workers are implemented.
 - [x] Route toolbox executor execute/cancel/request-status/resource accounting through the same normalized host pool/resource shapes while preserving toolbox registration/repair orchestration.
-- [ ] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific.
+- [ ] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific; do not remove it just because pool metrics now exist.
 - [x] Add base-layer tests for pool/request/status/cancel behavior and active child resource/cancel tracking.
 
 ### Node Host API Back Channel
 
 Target assumption: node workers may need cooperative host interactions like toolbox brokered filesystem/http callbacks, especially once node workers become long-lived. The host API should be discoverable from Python code and should use a dispatcher-based request/response protocol that can be reused by one-shot and future long-lived workers.
+
+Recommended shape: keep the node host API dispatcher-based, but make the host own the default implementation and registration surface. The built-in dispatcher should provide policy-gated filesystem and HTTP-style services where enabled, and hosts should be able to register additional functions without changing the sandbox wire protocol. Reuse toolbox broker/callback concepts where they reduce risk, but do not import toolbox manifest/tool-assignment semantics into node workers.
 
 - [x] Define a node host API contract exposed through `host.describe`.
 - [x] Add a built-in Python node worker harness with a dedicated control channel for node execution.
@@ -285,6 +302,8 @@ Target assumption: node workers may need cooperative host interactions like tool
 - [x] Implement artifact-scoped `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat` through the host dispatcher.
 - [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
 - [x] Include host API metadata in the machine-readable node contract.
+- [ ] Extract a reusable host-dispatch registry for built-in and host-registered node functions.
+- [ ] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
 - [ ] Add policy-gated HTTP host API support using the same dispatcher shape.
 - [ ] Add a long-lived worker transport loop that reuses the same host API protocol across many requests and avoids per-request cold-start cost.
 - [x] Add tests for host API discovery, artifact-root read/write, and rejected input-root writes.
@@ -293,10 +312,22 @@ Target assumption: node workers may need cooperative host interactions like tool
 
 Target assumption: many different Python node jobs may run concurrently, and several instances of the same Python node code may run concurrently. Long-running node jobs are expected and should be managed explicitly by host pool capacity, request IDs, status, stream backpressure, cancellation, and resource reporting.
 
+Warm-worker obstacles to solve:
+
+1. The current harness reads one request, executes it, returns a terminal result, and exits.
+2. A warm harness needs a control loop with request start/cancel/status messages and per-request event correlation.
+3. A warm pool needs host-side routing from `environment_key` plus code revision to a live idle worker or a new worker slot.
+4. Code edits need revision-scoped routing. Corrected snippets/modules should run as new revisions, while in-flight requests keep their original revision.
+5. Warm workers need cleanup/restart policy for worker-owned request artifacts, leaked module state, dependency/runtime changes, and canceled or unhealthy children.
+6. Stream backpressure must be per request, not only per process.
+
 - [ ] Define node job lifecycle states for long-running execution beyond short helper calls.
 - [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
 - [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
+- [ ] Implement a warm harness worker loop that accepts many sequential requests over one control channel.
 - [ ] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
+- [ ] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
+- [ ] Add worker recycling for changed environment identity, unhealthy workers, policy changes, and explicit capacity shrink.
 - [ ] Define code revision lifecycle for long-lived workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
 - [ ] Decide and implement restart/reroute versus explicit module unload/reload for long-lived worker code edits.
 - [ ] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
@@ -309,14 +340,37 @@ Target assumption: many different Python node jobs may run concurrently, and sev
 
 Target assumption: node execution should support both arbitrary Python snippets and Python projects made of multiple modules. `module_source` remains useful for single-file execution, but it is not enough for project execution.
 
+Contract simplification target: dependent projects should not need to hand-author every low-level field for common scenarios. The hosting API should expose host-side request builders/templates for module functions, snippets, staged projects, and uv projects. Templates should fill implied defaults such as empty project source hash, default project root input name, default masks, advisory artifact metadata, and standard artifact ownership.
+
 - [x] Define request shape for snippet execution where source is arbitrary Python code and not necessarily a named workflow export.
 - [x] Define request shape for project execution with a project root artifact/ref, entrypoint module, callable, argv, environment variables, and working directory.
 - [x] Stage project files into a request/runtime workspace using artifact refs or configured alias roots.
 - [x] Support multi-module imports from the staged project root without weakening global import policy.
 - [x] Preserve source/package digest audit fields for staged projects.
+- [ ] Add host-owned request templates/builders for common node scenarios: module function, arbitrary snippet, staged project, uv project.
+- [ ] Reduce project-mode awkwardness by making project identity explicit, while keeping `module_source` / `module_sha256` compatibility for existing callers.
 - [x] Add tests for snippet execution.
 - [x] Add tests for multi-module project execution.
 - [x] Add tests that project import paths cannot escape the staged project root.
+
+### Artifact API Simplification
+
+Target assumption: artifacts are first-class sandbox objects, but dependent projects should usually choose a scenario template rather than manually combine low-level knobs. Inline artifacts remain receiver-managed. Ref artifacts remain producer-managed unless the host takes over. Authorization should piggyback on general hosting roles plus sandbox policy; additional artifact-specific auth should stay out of scope unless an external read/write API is introduced.
+
+- [ ] Consolidate artifact request/response rows into first-class artifact object helpers with stable constructors/serializers.
+- [ ] Add artifact templates with reasonable defaults:
+  - [ ] single inline input
+  - [ ] inline zip project input
+  - [ ] single ref input
+  - [ ] masked/recursive ref input
+  - [ ] single file ref output
+  - [ ] host-takeover output
+  - [ ] producer-owned output
+  - [ ] inline zip export
+- [ ] Make lifetime/count/encoding hints mostly implied by artifact kind/template and keep explicit values optional.
+- [ ] Keep local cleanup semantics aligned with ownership: request-local worker paths are cleaned after collection, host-takeover refs live under host artifact root, producer-owned refs remain under producer roots, inline payload lifetime is owned by the receiver.
+- [ ] Document that artifact access control uses existing hosting roles and sandbox policy unless a future external artifact API requires more.
+- [ ] Add tests for template defaults and cleanup/ownership behavior.
 
 ### uv-Managed Environments
 
