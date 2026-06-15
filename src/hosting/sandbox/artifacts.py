@@ -6,6 +6,7 @@ import io
 import shutil
 import time
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -73,6 +74,237 @@ def _bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _optional(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in dict(row or {}).items() if value is not None and value != ""}
+
+
+@dataclass(frozen=True)
+class HostedArtifactRow:
+    """Stable serializable artifact row used by hosted workflow requests."""
+
+    row: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dict(self.row or {})
+
+    @classmethod
+    def inline_input(
+        cls,
+        *,
+        name: str,
+        text: Optional[str] = None,
+        base64_data: str = "",
+        data: Any = None,
+        filename: str = "",
+        media_type: str = "text/plain",
+        encoding: str = "utf-8",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        row = {
+            "name": name,
+            "kind": "inline",
+            "filename": filename or f"{artifact_safe_name(name, fallback='input')}.txt",
+            "media_type": media_type,
+            "encoding": encoding,
+            **dict(metadata or {}),
+        }
+        if base64_data:
+            row["base64"] = base64_data
+        elif data is not None:
+            row["data"] = data
+        else:
+            row["text"] = "" if text is None else text
+        return cls(_optional(row))
+
+    @classmethod
+    def inline_zip_input(
+        cls,
+        *,
+        name: str,
+        base64_data: str,
+        filename: str = "",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(
+            _optional(
+                {
+                    "name": name,
+                    "kind": "inline",
+                    "filename": filename or f"{artifact_safe_name(name, fallback='project')}.zip",
+                    "media_type": "application/zip",
+                    "encoding": "zip",
+                    "base64": base64_data,
+                    **dict(metadata or {}),
+                }
+            )
+        )
+
+    @classmethod
+    def ref_input(
+        cls,
+        *,
+        name: str,
+        ref: str,
+        filename: str = "",
+        media_type: str = "application/octet-stream",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(_optional({"name": name, "kind": "ref", "ref": ref, "filename": filename, "media_type": media_type, **dict(metadata or {})}))
+
+    @classmethod
+    def masked_ref_input(
+        cls,
+        *,
+        name: str,
+        ref: str,
+        path_mask: str = "*",
+        recursive: bool = True,
+        media_type: str = "application/octet-stream",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(
+            _optional(
+                {
+                    "name": name,
+                    "kind": "ref",
+                    "ref": ref,
+                    "path_mask": path_mask or "*",
+                    "recursive": bool(recursive),
+                    "media_type": media_type,
+                    **dict(metadata or {}),
+                }
+            )
+        )
+
+    @classmethod
+    def file_output(
+        cls,
+        *,
+        name: str,
+        filename: str = "",
+        media_type: str = "application/octet-stream",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(
+            _optional(
+                {
+                    "name": name,
+                    "kind": "ref",
+                    "filename": filename or f"{artifact_safe_name(name, fallback='output')}.bin",
+                    "media_type": media_type,
+                    **dict(metadata or {}),
+                }
+            )
+        )
+
+    @classmethod
+    def host_takeover_output(
+        cls,
+        *,
+        name: str,
+        ref: str,
+        filename: str = "",
+        media_type: str = "application/octet-stream",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(
+            _optional(
+                {
+                    "name": name,
+                    "kind": "ref",
+                    "ref": ref,
+                    "filename": filename or f"{artifact_safe_name(name, fallback='output')}.bin",
+                    "media_type": media_type,
+                    "host_takeover": True,
+                    **dict(metadata or {}),
+                }
+            )
+        )
+
+    @classmethod
+    def producer_owned_output(
+        cls,
+        *,
+        name: str,
+        ref: str,
+        filename: str = "",
+        media_type: str = "application/octet-stream",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(
+            _optional(
+                {
+                    "name": name,
+                    "kind": "ref",
+                    "ref": ref,
+                    "filename": filename or f"{artifact_safe_name(name, fallback='output')}.bin",
+                    "media_type": media_type,
+                    "ownership": "producer",
+                    **dict(metadata or {}),
+                }
+            )
+        )
+
+    @classmethod
+    def inline_zip_output(
+        cls,
+        *,
+        name: str,
+        ref: str = "",
+        path_mask: str = "*",
+        recursive: bool = True,
+        filename: str = "",
+        **metadata: Any,
+    ) -> "HostedArtifactRow":
+        return cls(
+            _optional(
+                {
+                    "name": name,
+                    "kind": "ref",
+                    "ref": ref,
+                    "path_mask": path_mask or "*",
+                    "recursive": bool(recursive),
+                    "filename": filename or f"{artifact_safe_name(name, fallback='artifacts')}.zip",
+                    "media_type": "application/zip",
+                    "export_inline_zip": True,
+                    **dict(metadata or {}),
+                }
+            )
+        )
+
+
+def artifact_inline_input(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.inline_input(**kwargs).to_dict()
+
+
+def artifact_inline_zip_input(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.inline_zip_input(**kwargs).to_dict()
+
+
+def artifact_ref_input(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.ref_input(**kwargs).to_dict()
+
+
+def artifact_masked_ref_input(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.masked_ref_input(**kwargs).to_dict()
+
+
+def artifact_file_output(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.file_output(**kwargs).to_dict()
+
+
+def artifact_host_takeover_output(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.host_takeover_output(**kwargs).to_dict()
+
+
+def artifact_producer_owned_output(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.producer_owned_output(**kwargs).to_dict()
+
+
+def artifact_inline_zip_output(**kwargs: Any) -> Dict[str, Any]:
+    return HostedArtifactRow.inline_zip_output(**kwargs).to_dict()
 
 
 def _zip_entries(data: bytes) -> list[tuple[str, bytes]]:
@@ -443,9 +675,18 @@ class HostedArtifactManager:
 
 __all__ = [
     "HostedArtifactManager",
+    "HostedArtifactRow",
+    "artifact_file_output",
     "artifact_has_mask",
+    "artifact_host_takeover_output",
+    "artifact_inline_input",
+    "artifact_inline_zip_input",
+    "artifact_inline_zip_output",
+    "artifact_masked_ref_input",
     "artifact_path_from_ref",
+    "artifact_producer_owned_output",
     "artifact_ref_parts",
+    "artifact_ref_input",
     "artifact_safe_name",
     "inline_artifact_bytes",
 ]

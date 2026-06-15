@@ -66,6 +66,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Artifact I/O is host-provisioned local sandbox file access: alias-ref and inline inputs are copied into request input paths, output slots become exact writable paths, inline outputs require matching declarations, and host-minted alias refs such as `@artifacts/...` are returned only for declared output files.
 - File-mask artifact I/O is supported for local alias roots. Input masks copy matching files into a request-scoped input directory, and output masks collect matching files from a request-scoped output directory while preserving relative paths in returned refs.
 - Inline zip inputs are expanded into request-scoped input directories. Multi-file outputs can be exported as inline zip without taking over artifact ownership. Explicit ref outputs remain producer-owned unless `host_takeover` is requested; takeover copies outputs into `@artifacts/...`.
+- Artifact row helper constructors now provide stable serializable templates for inline inputs, inline zip inputs, ref inputs, masked inputs, file outputs, host-takeover outputs, producer-owned outputs, and inline zip exports.
 - Artifact authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
 - Previous tracking docs overstated node-profile execution and cleanup completion.
 
@@ -188,12 +189,18 @@ Purpose: record the current implementation state and the discrepancies against `
 - Verified workflow Python contract tests after request builders: `13 passed`.
 - Verified focused snippet/project builder execution tests: `3 passed`.
 - Verified workflow helper service tests after request builders: `81 passed`.
+- Added `hosting.sandbox.artifacts.HostedArtifactRow` and artifact helper constructors for common input/output scenarios.
+- Added artifact template tests covering defaults, prepare/collect ownership behavior, request-local cleanup, inline zip input expansion, and inline zip export.
+- Documented that artifact access control uses existing hosting roles plus sandbox policy unless a future external artifact API requires more.
+- Verified artifact helper tests: `3 passed`.
+- Verified existing workflow service artifact tests after helper changes: `14 passed`.
 
 ## Current Client Impact
 
 - Existing helper-profile clients that already migrated to `workflow-python-*` and `workflow-js-*` do not need additional changes for the current implementation.
 - Clients that own dependency-bearing node-profile workflow execution must prepare and verify runtime environments before execution.
 - Node-profile clients should pass input artifacts as alias refs, inline payloads, or inline zip payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, use `export_inline_zip` for many output files when ownership should stay with the producer, request `host_takeover` only when the host should own returned ref lifetime, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
+- Node-profile clients may use artifact helper constructors in `hosting.sandbox.artifacts` instead of hand-authoring common artifact input/output rows.
 - Node-profile clients may use `execution_mode=snippet` for source snippets or `execution_mode=project` with `project.ref` / `project.entrypoint` / `project.callable` for staged projects.
 - Node-profile clients may use the host-owned request builders in `hosting.sandbox.workflow_python_contract` for module functions, snippets, staged projects, and uv projects instead of hand-authoring low-level request fields.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.

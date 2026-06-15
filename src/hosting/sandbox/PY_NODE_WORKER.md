@@ -311,6 +311,19 @@ Sandbox policy example:
 
 Input ref example:
 
+Host-side callers can build these rows with stable helper constructors from `hosting.sandbox.artifacts`:
+
+1. `artifact_inline_input(...)`
+2. `artifact_inline_zip_input(...)`
+3. `artifact_ref_input(...)`
+4. `artifact_masked_ref_input(...)`
+5. `artifact_file_output(...)`
+6. `artifact_host_takeover_output(...)`
+7. `artifact_producer_owned_output(...)`
+8. `artifact_inline_zip_output(...)`
+
+Each helper returns a plain dictionary accepted in `artifact_inputs` or `artifact_outputs`. The helpers fill reasonable defaults for `kind`, filenames, media types, recursive masks, ownership, and inline zip export flags while leaving advisory metadata such as `ttl`, `count`, `max_bytes`, and `encoding` optional.
+
 ```json
 {
   "name": "seed",
@@ -456,7 +469,7 @@ def run(payload):
     }
 ```
 
-Input-side `max_bytes`, `count`, `ttl`, `lifetime`, `expires_at`, and `encoding` metadata are accepted as optional advisory metadata. `path_mask` / `mask` and `recursive` are also accepted on input refs to select files from a configured alias root. Inline artifact payloads are receiver-managed. Ref artifacts are producer-managed unless the output declaration asks for `host_takeover` or omits `ref`, in which case the host owns the returned `@artifacts/...` ref. The current local implementation carries metadata where useful, but it does not implement a durable artifact authorization, expiry, cleanup, or external read API.
+Input-side `max_bytes`, `count`, `ttl`, `lifetime`, `expires_at`, and `encoding` metadata are accepted as optional advisory metadata. `path_mask` / `mask` and `recursive` are also accepted on input refs to select files from a configured alias root. Inline artifact payloads are receiver-managed. Ref artifacts are producer-managed unless the output declaration asks for `host_takeover` or omits `ref`, in which case the host owns the returned `@artifacts/...` ref. Artifact access control currently uses existing hosting roles plus sandbox policy and configured artifact-root aliases. The current local implementation carries metadata where useful, but it does not implement a separate durable artifact authorization, expiry, cleanup, or external read API.
 
 ## Trust Boundary
 

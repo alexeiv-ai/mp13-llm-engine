@@ -370,20 +370,20 @@ Contract simplification target: dependent projects should not need to hand-autho
 
 Target assumption: artifacts are first-class sandbox objects, but dependent projects should usually choose a scenario template rather than manually combine low-level knobs. Inline artifacts remain receiver-managed. Ref artifacts remain producer-managed unless the host takes over. Authorization should piggyback on general hosting roles plus sandbox policy; additional artifact-specific auth should stay out of scope unless an external read/write API is introduced.
 
-- [ ] Consolidate artifact request/response rows into first-class artifact object helpers with stable constructors/serializers.
-- [ ] Add artifact templates with reasonable defaults:
-  - [ ] single inline input
-  - [ ] inline zip project input
-  - [ ] single ref input
-  - [ ] masked/recursive ref input
-  - [ ] single file ref output
-  - [ ] host-takeover output
-  - [ ] producer-owned output
-  - [ ] inline zip export
-- [ ] Make lifetime/count/encoding hints mostly implied by artifact kind/template and keep explicit values optional.
-- [ ] Keep local cleanup semantics aligned with ownership: request-local worker paths are cleaned after collection, host-takeover refs live under host artifact root, producer-owned refs remain under producer roots, inline payload lifetime is owned by the receiver.
-- [ ] Document that artifact access control uses existing hosting roles and sandbox policy unless a future external artifact API requires more.
-- [ ] Add tests for template defaults and cleanup/ownership behavior.
+- [x] Consolidate artifact request/response rows into first-class artifact object helpers with stable constructors/serializers.
+- [x] Add artifact templates with reasonable defaults:
+  - [x] single inline input
+  - [x] inline zip project input
+  - [x] single ref input
+  - [x] masked/recursive ref input
+  - [x] single file ref output
+  - [x] host-takeover output
+  - [x] producer-owned output
+  - [x] inline zip export
+- [x] Make lifetime/count/encoding hints mostly implied by artifact kind/template and keep explicit values optional.
+- [x] Keep local cleanup semantics aligned with ownership: request-local worker paths are cleaned after collection, host-takeover refs live under host artifact root, producer-owned refs remain under producer roots, inline payload lifetime is owned by the receiver.
+- [x] Document that artifact access control uses existing hosting roles and sandbox policy unless a future external artifact API requires more.
+- [x] Add tests for template defaults and cleanup/ownership behavior.
 
 ### uv-Managed Environments
 
