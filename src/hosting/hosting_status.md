@@ -82,7 +82,6 @@ Purpose: record the current implementation state and the discrepancies against `
 - Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including project-mode recycling.
 - Add worker recycling for warm node workers, including explicit unhealthy-worker, policy-change, and project invalidation behavior.
 - Keep Python helper internals minimally changed unless helper-profile maintenance cost justifies retiring or replacing the helper facade.
-- Update public docs after the first-class node behavior is implemented and verified.
 
 ## Progress Updates
 
@@ -104,8 +103,12 @@ Purpose: record the current implementation state and the discrepancies against `
   coverage.
 - Added JS node cancellation, invalid-output, timeout/output-limit, and
   terminal resource/status/capacity metric coverage.
+- Added JS node stream service coverage for success/artifact events, bounded
+  retention/drop counts, and cancellation routed to worker cancel.
 - Verified focused QuickJS workflow JS tests:
   `python -m pytest tests/test_workflow_js_node_runtime.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_hosting_js_runtime_base.py -q -k "workflow_js or js_runtime"`.
+- Verified the broader selected QuickJS/node regression slice:
+  `python -m pytest tests/test_workflow_js_node_runtime.py tests/test_workflow_helper_service.py tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_hosting_js_runtime_base.py tests/test_hosting_auth_roles.py tests/test_hosting_toolbox_sandbox.py tests/test_engine_host_cli_interactive.py -q -k "workflow_js or js_runtime or workflow_runtimes or manage_workflow or workflow_python_helper_engine or runtime_env_gc"`.
 
 ### 2026-06-14
 
