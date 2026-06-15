@@ -178,6 +178,7 @@ Discoverable methods:
 4. `fs.write_text`
 5. `fs.mkdir`
 6. `fs.stat`
+7. `http.fetch` when sandbox policy enables brokered HTTP
 
 Convenience methods on `host` call those dispatcher methods:
 
@@ -188,6 +189,7 @@ Convenience methods on `host` call those dispatcher methods:
 5. `host.fs_list(root_id, relative_path="")`
 6. `host.fs_stat(root_id, relative_path="")`
 7. `host.fs_mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
+8. `host.http_fetch(url, method="GET", headers=None, body_b64="", timeout_seconds=30.0, max_response_bytes=1048576)`
 
 Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. The current worker call path waits for each response; out-of-order concurrent host responses are reserved for the future long-lived worker transport loop.
 
@@ -227,9 +229,31 @@ or:
 
 When disabled, `host.describe()` remains available, reports `policy.artifact_fs=false`, and omits the `fs.*` methods. Calling a disabled method returns an unsupported-host-method error through the normal host response path.
 
+The HTTP namespace is disabled unless the same sandbox broker policy used by generic workers allows brokered HTTP:
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "mode": "brokered_only",
+      "allow_hosts": ["example.com"],
+      "allow_url_prefixes": ["https://example.com/api/"]
+    },
+    "brokered_io": {
+      "filesystem": false,
+      "http": true,
+      "subprocess": false
+    }
+  }
+}
+```
+
+When enabled, `host.describe()` includes `http.fetch`. Node code can call either `host.call("http.fetch", {...})` or `host.http_fetch(...)`. The host broker validates the URL scheme, host allowlist, URL prefix allowlist, request method, request headers, response size limit, and timeout. Response bodies are returned as `body_b64`.
+
 Single-file inline inputs resolve to the file itself. Directory-like inputs and outputs are created by masked/recursive declarations, inline zip inputs, or output declarations with `path_mask` / `mask`.
 
-The current node host dispatcher does not enable arbitrary HTTP, subprocess, or filesystem access. Those should be added only through the same policy-gated dispatcher shape used by toolbox cooperative brokered APIs.
+The current node host dispatcher does not enable arbitrary subprocess or unrestricted filesystem access. Additional host services should be added only through the same policy-gated dispatcher shape used by toolbox cooperative brokered APIs.
 
 ## Artifact Contract
 

@@ -1,6 +1,6 @@
 # Hosting Client Remaining Changes
 
-Date: 2026-06-14
+Date: 2026-06-15
 
 Purpose: track only remaining dependent-project changes. Previously completed helper-profile migration items are intentionally omitted.
 
@@ -34,6 +34,7 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 - Node-profile clients may select multiple artifact files with `path_mask` or `mask` and `recursive` on input or output artifact declarations. Masked inputs are exposed to Python code as directories containing matched files. Masked outputs are exposed as writable directories and return one host-minted ref per collected file, with `relative_path` populated.
 - Node-profile clients may use `export_inline_zip` to export many output files as one inline zip without changing ownership. They may use `host_takeover` when the host should copy a ref output into `@artifacts/...` and own its lifetime; otherwise explicit output refs remain producer-managed.
 - Node-profile clients may use `execution_mode=snippet` for arbitrary source snippets without `operation` / `export_name`, or `execution_mode=project` with `project.ref`, `project.entrypoint`, and `project.callable` for staged multi-module project execution.
+- Node-profile clients that use the Python node host API should call `host.describe()` and handle policy-gated methods. Artifact filesystem methods can be disabled with `sandbox_policy.sandbox.host_api.namespaces.fs=false`; brokered HTTP is exposed as `http.fetch` / `host.http_fetch(...)` only when sandbox policy enables brokered HTTP with `sandbox.enabled=true`, `sandbox.brokered_io.http=true`, and `sandbox.network.mode=brokered_only`.
 - Clients that provide dependency-management UI or orchestration must call host-controlled prepare/lock/verify/install/receipt APIs explicitly before dependency-bearing execution. Normal workflow execution does not install dependencies implicitly.
 
 ## No Remaining Action For Already Migrated Helper Clients

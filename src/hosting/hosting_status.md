@@ -50,6 +50,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, currently scoped to artifact-root filesystem operations.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
 - Node host API built-in namespaces can now be disabled through node sandbox policy; the current built-in `fs`/`artifact_fs` namespace is omitted from discovery and dispatch when disabled.
+- Node host API now supports policy-gated brokered HTTP through `http.fetch` / `host.http_fetch(...)` when sandbox policy enables brokered HTTP.
 - Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
 - Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Python node request lifecycle states are exposed as `submitted`, `running`, `ok`, `error`, `timeout`, and `canceled`; long-running node requests can opt into host-side `heartbeat` stream events with `limits.heartbeat_interval_ms`.
@@ -170,6 +171,12 @@ Purpose: record the current implementation state and the discrepancies against `
 - Added host API namespace policy coverage for discovery and rejected filesystem host calls.
 - Verified focused host API tests: `3 passed`.
 - Verified workflow helper service tests: `76 passed`.
+- Added policy-gated node host API HTTP support through `http.fetch` / `host.http_fetch(...)`.
+- Reused the existing brokered HTTP policy requirements: `sandbox.enabled=true`, `sandbox.brokered_io.http=true`, and `sandbox.network.mode=brokered_only`, plus existing host and URL-prefix allowlists.
+- Updated `HOSTING_CLIENT_BREAKING_CHANGES.md` and node worker docs for policy-gated host API methods.
+- Verified focused host API tests after HTTP support: `5 passed`.
+- Verified workflow helper service tests after HTTP support: `78 passed`.
+- Verified workflow Python contract tests: `9 passed`.
 
 ## Current Client Impact
 
@@ -179,3 +186,4 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node-profile clients may use `execution_mode=snippet` for source snippets or `execution_mode=project` with `project.ref` / `project.entrypoint` / `project.callable` for staged projects.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.
 - Node-profile callers can disable the artifact filesystem host API namespace with `sandbox_policy.sandbox.host_api.namespaces.fs=false`; `host.describe` remains available so code can discover the effective policy.
+- Node-profile callers can enable brokered HTTP host calls with the existing sandbox HTTP policy; code should discover `http.fetch` before calling it because it is policy-gated.

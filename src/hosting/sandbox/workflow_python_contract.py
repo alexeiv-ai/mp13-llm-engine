@@ -101,7 +101,8 @@ def workflow_python_node_contract() -> Dict[str, Any]:
                 "sync_handlers": True,
                 "async_handlers": True,
             },
-            "methods": ["host.describe", "fs.list", "fs.read_text", "fs.write_text", "fs.mkdir", "fs.stat"],
+            "methods": ["host.describe", "fs.list", "fs.read_text", "fs.write_text", "fs.mkdir", "fs.stat", "http.fetch"],
+            "policy_gated_methods": ["fs.list", "fs.read_text", "fs.write_text", "fs.mkdir", "fs.stat", "http.fetch"],
             "discovery": {
                 "method": "host.describe",
                 "includes": ["methods", "method_descriptions", "args_schema", "result_schema", "permissions", "roots", "policy", "transport"],

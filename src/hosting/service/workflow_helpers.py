@@ -11,7 +11,9 @@ from typing import Any, Dict, Optional
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
+from ..sandbox.broker_http import BrokeredHttpClient
 from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
+from ..sandbox.policy import WorkerSandboxPolicy
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot, hosted_log_summary
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 from ..sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
@@ -352,11 +354,24 @@ class WorkflowHelperMixin:
         host_api_policy = sandbox.get("host_api") if isinstance(sandbox.get("host_api"), dict) else {}
         namespace_policy = dict(host_api_policy.get("namespaces") or {})
         artifact_fs_enabled = bool(host_api_policy.get("enabled", True))
+        http_namespace_enabled = bool(host_api_policy.get("enabled", True))
         for key in ("fs", "artifact_fs"):
             if key in host_api_policy:
                 artifact_fs_enabled = bool(host_api_policy.get(key))
             if key in namespace_policy:
                 artifact_fs_enabled = bool(namespace_policy.get(key))
+        for key in ("http", "http_fetch"):
+            if key in host_api_policy:
+                http_namespace_enabled = bool(host_api_policy.get(key))
+            if key in namespace_policy:
+                http_namespace_enabled = bool(namespace_policy.get(key))
+        worker_policy = WorkerSandboxPolicy.from_mapping(dict(sandbox_policy or {}))
+        http_enabled = (
+            http_namespace_enabled
+            and bool(worker_policy.enabled)
+            and bool(worker_policy.brokered_io.http)
+            and str(worker_policy.network.mode or "").strip().lower() == "brokered_only"
+        )
         registry = HostApiRegistry(
             contract="hosting.workflow_python.node.host_api.v1",
             request_id=str(dict(request or {}).get("request_id") or ""),
@@ -368,11 +383,11 @@ class WorkflowHelperMixin:
                 "artifact_fs": artifact_fs_enabled,
                 "namespaces": {
                     "fs": artifact_fs_enabled,
-                    "http": False,
+                    "http": http_enabled,
                     "subprocess": False,
                     "custom_functions": False,
                 },
-                "http": False,
+                "http": http_enabled,
                 "subprocess": False,
                 "custom_functions": False,
             },
@@ -480,6 +495,40 @@ class WorkflowHelperMixin:
                 handler=lambda args: _fs_stat(args),
             )
 
+        if http_enabled:
+            registry.register(
+                "http.fetch",
+                namespace="http",
+                description="Fetch an HTTP(S) URL through the host broker using this request's sandbox network policy.",
+                args_schema={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "method": {"type": "string", "default": "GET"},
+                        "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+                        "body_b64": {"type": "string", "default": ""},
+                        "timeout_seconds": {"type": "number", "default": 30.0},
+                        "max_response_bytes": {"type": "integer", "default": 1048576},
+                    },
+                    "required": ["url"],
+                    "additionalProperties": False,
+                },
+                result_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "url": {"type": "string"},
+                        "status_code": {"type": "integer"},
+                        "headers": {"type": "object"},
+                        "body_b64": {"type": "string"},
+                        "body_size": {"type": "integer"},
+                        "truncated": {"type": "boolean"},
+                    },
+                },
+                permissions=["http.fetch"],
+                handler=lambda args: _http_fetch(args),
+            )
+
         def _fs_list(args: Dict[str, Any]) -> Dict[str, Any]:
             root_id, _root, target, relative_path = _root_and_target(args)
             if not target.exists():
@@ -543,6 +592,22 @@ class WorkflowHelperMixin:
                 "size": stat.st_size if target.is_file() else None,
                 "mtime": stat.st_mtime,
             }
+
+        def _http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
+            headers = {
+                str(key): str(value)
+                for key, value in dict(args.get("headers") or {}).items()
+                if str(key or "").strip()
+            }
+            out = BrokeredHttpClient(worker_policy).fetch(
+                url=str(args.get("url") or ""),
+                method=str(args.get("method") or "GET"),
+                headers=headers,
+                body_b64=str(args.get("body_b64") or ""),
+                timeout_seconds=float(args.get("timeout_seconds") or 30.0),
+                max_response_bytes=int(args.get("max_response_bytes") or 1024 * 1024),
+            )
+            return {"status": "ok", **dict(out or {})}
 
         def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
             return registry.dispatch(dict(call or {}))

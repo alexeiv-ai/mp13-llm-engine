@@ -179,6 +179,27 @@ class HostApi:
     def fs_mkdir(self, root_id: str, relative_path: str = "", parents: bool = True, exist_ok: bool = True) -> Dict[str, Any]:
         return self.call("fs.mkdir", {"root_id": root_id, "relative_path": relative_path, "parents": bool(parents), "exist_ok": bool(exist_ok)})
 
+    def http_fetch(
+        self,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        body_b64: str = "",
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> Dict[str, Any]:
+        return self.call(
+            "http.fetch",
+            {
+                "url": url,
+                "method": method,
+                "headers": dict(headers or {}),
+                "body_b64": body_b64,
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "max_response_bytes": int(max_response_bytes or 1024 * 1024),
+            },
+        )
+
 
 def _send(conn: Any, row: Dict[str, Any]) -> None:
     conn.send(dict(row or {}))

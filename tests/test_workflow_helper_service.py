@@ -1979,6 +1979,139 @@ def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tm
     assert "unsupported_host_method:fs.read_text" in rejected["error"]["detail"]["message"]
 
 
+def test_execute_workflow_python_node_host_api_http_fetch_uses_broker_policy(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    described = host.describe()\n"
+        "    fetched = host.http_fetch('https://example.com/api/node', method='POST', headers={'Content-Type': 'application/json'}, body_b64='e30=', timeout_seconds=5.0)\n"
+        "    return {'output': {'methods': described['methods'], 'policy': described['policy'], 'status_code': fetched['status_code'], 'body_b64': fetched['body_b64']}}\n"
+    )
+    sandbox_policy = {
+        "sandbox": {
+            "enabled": True,
+            "network": {
+                "mode": "brokered_only",
+                "allow_hosts": ["example.com"],
+                "allow_url_prefixes": ["https://example.com/api/"],
+            },
+            "brokered_io": {"filesystem": False, "http": True, "subprocess": False},
+        }
+    }
+
+    class _Resp:
+        status = 201
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, _size: int = -1) -> bytes:
+            return b'{"node":true}'
+
+    def _fake_urlopen(req, timeout=0.0):
+        assert req.full_url == "https://example.com/api/node"
+        assert req.get_method() == "POST"
+        assert timeout == 5.0
+        assert req.headers["Content-type"] == "application/json"
+        return _Resp()
+
+    monkeypatch.setattr("hosting.sandbox.broker_http.urllib.request.urlopen", _fake_urlopen)
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-host-api-http-fetch",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert "http.fetch" in out["output"]["methods"]
+    assert out["output"]["policy"]["http"] is True
+    assert out["output"]["policy"]["namespaces"]["http"] is True
+    assert out["output"]["status_code"] == 201
+    assert base64.b64decode(out["output"]["body_b64"]) == b'{"node":true}'
+
+
+def test_execute_workflow_python_node_host_api_http_fetch_requires_broker_policy(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    describe_source = (
+        "def run(payload):\n"
+        "    described = host.describe()\n"
+        "    return {'output': {'methods': described['methods'], 'policy': described['policy']}}\n"
+    )
+    fetch_source = (
+        "def run(payload):\n"
+        "    return {'output': host.http_fetch('https://example.com/api/node')}\n"
+    )
+    sandbox_policy = {
+        "sandbox": {
+            "enabled": True,
+            "host_api": {"namespaces": {"http": True}},
+            "network": {
+                "mode": "disabled",
+                "allow_hosts": ["example.com"],
+                "allow_url_prefixes": ["https://example.com/api/"],
+            },
+            "brokered_io": {"filesystem": False, "http": True, "subprocess": False},
+        }
+    }
+
+    described = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-host-api-http-disabled-describe",
+            "module_source": describe_source,
+            "module_sha256": hashlib.sha256(describe_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+    rejected = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-host-api-http-disabled-fetch",
+            "module_source": fetch_source,
+            "module_sha256": hashlib.sha256(fetch_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert described["status"] == "ok"
+    assert "http.fetch" not in described["output"]["methods"]
+    assert described["output"]["policy"]["http"] is False
+    assert described["output"]["policy"]["namespaces"]["http"] is False
+    assert rejected["status"] == "error"
+    assert rejected["error"]["code"] == "workflow_sandbox_runtime_error"
+    assert "unsupported_host_method:http.fetch" in rejected["error"]["detail"]["message"]
+
+
 def test_execute_workflow_python_node_collects_declared_inline_output_artifact(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
