@@ -127,6 +127,13 @@ Node.js. If clients want ESM-style authoring, bundle or transform modules before
 submission into one deterministic `module_source` that assigns `exports.run`;
 then submit the matching `module_sha256`.
 
+For host-backed imports in already-composed JS source, clients can call
+`hosting.sandbox.build_workflow_js_bundle(...)`. The helper rewrites enabled
+`@host/...` bridge imports, reports `resolved_allowed_imports`,
+`resolved_disabled_imports`, and `unresolved_imports`, and sets `ok=false` when
+anything remains disabled or unresolved. It does not resolve Node built-ins,
+npm packages, arbitrary ESM graphs, or QuickJS module loader behavior.
+
 Error handling should move from helper-shaped nested results to the direct node
 response envelope. Terminal failures use structured reasons such as
 `workflow_sandbox_runtime_error`, `workflow_sandbox_timeout`,

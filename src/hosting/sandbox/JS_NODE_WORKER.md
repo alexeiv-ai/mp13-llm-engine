@@ -246,7 +246,62 @@ Initial v1 import policy:
 Future ESM authoring can be supported by bundling or transforming user modules
 into the single-script runtime contract before execution.
 
-A workable bundling path is host-side composition:
+The supported v1 helper is `hosting.sandbox.build_workflow_js_bundle(...)`.
+It is a finalizer for already-composed JS source, not a Node/npm compatibility
+layer. It rewrites static imports that target enabled host bridge specifiers
+into bindings against the injected QuickJS globals, emits one deterministic
+`module_source`, and hashes that source as `module_sha256`.
+
+Default host bridge import specifiers:
+
+1. `@host/api` -> `api`
+2. `@host/fs` -> `api.fs`
+3. `@host/http` -> `api.http`
+4. `@host/codec` -> `api.codec`
+5. `@host/crypto` -> `api.crypto`
+6. `@host/console` -> `console`
+7. `@host/progress` -> `api.progress` for default imports
+8. `@host/call` -> `api.call` for default imports
+9. `@host/describe` -> `api.describe` for default imports
+
+The helper accepts `host_description`, usually from `api.describe()`, and
+`sandbox_policy` so policy-gated bridges match the effective toolbox. Callers
+may also pass an explicit `bridge_imports` mapping for custom host-backed
+imports. A custom bridge maps a specifier to enabled expressions for default,
+namespace, and named import forms.
+
+Example:
+
+```javascript
+import fs, { readText } from "@host/fs";
+import { sha256 } from "@host/crypto";
+
+exports.run = function(input) {
+  const seed = readText("seed", "");
+  return { output: { digest: sha256(seed), fs_available: !!fs } };
+};
+```
+
+The helper rewrites that to ordinary single-script bindings:
+
+```javascript
+const fs = api.fs;
+const { readText } = api.fs;
+const { sha256 } = api.crypto;
+```
+
+The returned diagnostic fields are part of the caller contract:
+
+1. `resolved_allowed_imports`: bridge specifiers that were enabled and patched
+2. `resolved_disabled_imports`: known bridge specifiers disabled by policy
+3. `unresolved_imports`: imports not present in the bridge table
+
+`ok` is true only when every static import is resolved and enabled. Disabled or
+unresolved imports are left unchanged in `module_source` for diagnosis, and
+callers should not submit that source to the JS worker until the import sets are
+acceptable.
+
+A broader bundling path is host-side composition:
 
 1. Resolve allowed relative module refs or host-provided bridge refs.
 2. Rewrite imports to a private module table or inline bundle format.

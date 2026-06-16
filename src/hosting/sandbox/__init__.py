@@ -21,6 +21,12 @@ from .broker_fs import BrokeredFilesystem, BrokeredFsError
 from .worker_fs import BrokeredFilesystemClient
 from .broker_http import BrokeredHttpClient as HostBrokeredHttpClient, BrokeredHttpError
 from .worker_http import BrokeredHttpClient
+from .workflow_js_bundle import (
+    WorkflowJsBridgeImport,
+    build_workflow_js_bundle,
+    build_workflow_js_bundle_request,
+    workflow_js_host_bridge_imports,
+)
 
 __all__ = [
     "PlatformSupport",
@@ -39,4 +45,8 @@ __all__ = [
     "HostBrokeredHttpClient",
     "BrokeredHttpError",
     "BrokeredHttpClient",
+    "WorkflowJsBridgeImport",
+    "build_workflow_js_bundle",
+    "build_workflow_js_bundle_request",
+    "workflow_js_host_bridge_imports",
 ]

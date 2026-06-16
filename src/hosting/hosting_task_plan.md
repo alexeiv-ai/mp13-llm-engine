@@ -47,6 +47,9 @@ Node.js executable requirement.
   QuickJS binding ESM loader support.
 - Allow modern ESM authoring later by adding a host-side bundle/transform step
   that emits the single-script runtime format.
+- Provide a host-side bridge import finalizer for already-composed JS source so
+  callers can patch allowed `@host/...` imports and inspect disabled or
+  unresolved imports before submitting the single script.
 - Expose Node-like conveniences only as host-owned capabilities, for example
   artifact filesystem methods, brokered HTTP, codec helpers, selected crypto
   helpers, and console/progress capture.
@@ -69,6 +72,8 @@ Node.js executable requirement.
       result.
 - [x] Defer multi-module/project execution until a bundling or module-loader
       strategy is selected.
+- [x] Add a JS bundle finalizer helper that rewrites only enabled host bridge
+      imports and reports allowed, disabled, and unresolved imports.
 - [x] Define the runtime authoring shape for the first implementation:
 
 ```javascript
@@ -202,6 +207,8 @@ exports.run = function(input, api) {
 - [x] Add resource/status/capacity tests for success, error, timeout, and
       canceled JS node requests.
 - [x] Add regression tests for host-owned QuickJS runtime execution.
+- [x] Add tests for JS host bridge import finalization, disabled imports,
+      unresolved imports, and request hash construction.
 
 ## Phase 8: Documentation Updates
 
@@ -219,6 +226,8 @@ exports.run = function(input, api) {
       workflow client migration guidance.
 - [x] Add `src/hosting/sandbox/JS_NODE_WORKER.md` to describe the QuickJS JS
       node contract, host API, artifact rules, stream events, and non-goals.
+- [x] Document the JS bridge import finalizer and caller diagnostics in
+      `src/hosting/sandbox/JS_NODE_WORKER.md`.
 - [x] Update any config/setup docs that currently tell users to install Node.js
       for workflow JS.
 - [x] Document the separate plan for browser-executed custom UI components:
