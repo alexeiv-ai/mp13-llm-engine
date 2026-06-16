@@ -38,6 +38,13 @@ Purpose: track only remaining dependent-project changes. Previously completed he
   returned artifact rows into their own artifact model or wait for a parent
   artifact read/download route with explicit auth, metadata, range, lifetime,
   and error semantics.
+- Running the daemon on the same machine as a dependent backend does not make
+  `@artifacts/...` a public file path contract. The alias-to-path mapping is an
+  internal host implementation detail used for declared artifact staging and
+  collection. A dependent backend should not infer or reconstruct concrete paths
+  from `@artifacts/...`; it should use returned artifact rows as opaque host
+  refs, project them into its own artifact store, or call a supported parent
+  artifact read/download API when one exists.
 - Node-profile clients should prefer artifact helper constructors in `hosting.sandbox.artifacts` for common artifact input/output rows instead of hand-authoring every low-level artifact field.
 - Node-profile clients may select multiple artifact files with `path_mask` or `mask` and `recursive` on input or output artifact declarations. Masked inputs are exposed to Python code as directories containing matched files. Masked outputs are exposed as writable directories and return one host-minted ref per collected file, with `relative_path` populated.
 - Node-profile clients may use `export_inline_zip` to export many output files as one inline zip without changing ownership. They may use `host_takeover` when the host should copy a ref output into `@artifacts/...` and own its lifetime; otherwise explicit output refs remain producer-managed.

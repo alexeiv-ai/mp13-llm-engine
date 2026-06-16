@@ -34,6 +34,7 @@ Purpose: keep the implementation pointed at the intended hosted workflow runtime
 ## Current Discrepancies
 
 - Node-profile artifact refs are implemented as local host-controlled alias refs such as `@artifacts/...`, but authorization, lifetime, cleanup, and external read APIs remain basic/local rather than a full durable artifact service.
+- Local host-controlled does not make `@artifacts/...` a public path mapping; the alias remains opaque outside host artifact staging, validation, and collection.
 - Node-profile cancellation, output-limit, truncation, environment-policy, and artifact behavior now have focused coverage; broader integration coverage can still be added when real dependency installs and artifact consumers exist.
 - Cleanup is incomplete: the Python helper worker remains the actual execution substrate for helper-profile execution.
 
@@ -150,7 +151,7 @@ Decision: artifact I/O belongs in the first-class node sandbox contract, and thi
 
 How artifacts fit the sandbox model: input artifacts are either alias refs such as `@artifacts/...` or `@project/...`, inline bytes/text, or inline zip bundles that the host expands into sandbox-visible input paths before execution. Output artifacts are either files written by sandboxed code only to host-provided output paths/directories, inline outputs returned by sandboxed code only when a matching inline output declaration exists, or multi-file outputs exported as one inline zip. Ref outputs remain producer-owned when an explicit output ref is used. The host takes over a ref output only when the output declaration asks for takeover or omits `ref`, in which case the host copies files into `@artifacts/...`. Request-local worker output paths are cleaned after collection. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
 
-Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which configured alias refs are readable, which exact output files are writable, what inline bytes cross back out, and which refs clients may later read. Direct filesystem paths are not promoted as artifact refs.
+Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which configured alias refs are readable, which exact output files are writable, what inline bytes cross back out, and which refs clients may later read. Direct filesystem paths are not promoted as artifact refs, and host-minted refs are not demoted into public filesystem paths for dependent backends.
 
 Untrusted artifact refs means any artifact-looking value produced by sandboxed code rather than by the host artifact manager. Examples include returned dicts such as `{"path": "/tmp/report.csv"}`, `{"url": "file:///..."}`, `{"artifact_id": "abc"}`, or `{"ref": "../other-run/output"}`. These values may be useful as ordinary JSON output if the workflow wants them, but the host must not treat them as authorized downloadable artifacts, emit them as `artifact` stream events, or store them in the response `artifacts` list until the host has verified the file came from an allowed output path and has created/registered the reference.
 

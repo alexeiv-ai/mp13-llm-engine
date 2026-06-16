@@ -292,9 +292,16 @@ Rules:
 
 1. Refs must be relative alias refs beginning with `@`.
 2. Absolute paths, `..`, empty path parts, and URL-like refs are rejected.
-3. `@artifacts` is the default host-controlled artifact root.
+3. `@artifacts` is the default host-controlled artifact alias.
 4. Additional aliases such as `@project` or `@home` are configured through `sandbox_policy.sandbox.artifact_roots`.
-5. Alias-to-physical-path mappings are part of sandbox policy normalization and therefore part of `environment_key` identity.
+5. Policy-configured alias-to-physical-path mappings are part of sandbox policy normalization and therefore part of `environment_key` identity.
+
+`@artifacts/...` is not a public filesystem path or a stable external download
+route. Even for a local daemon endpoint on the same machine as a dependent
+backend, the default host artifact alias is opaque outside the host artifact
+manager. The host may resolve it internally while staging declared inputs,
+validating declared outputs, or copying host-takeover outputs, but dependent
+backends should not reconstruct concrete paths from the alias.
 
 Sandbox policy example:
 

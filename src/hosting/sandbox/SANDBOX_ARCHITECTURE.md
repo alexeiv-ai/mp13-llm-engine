@@ -132,6 +132,12 @@ Input-side size/count/lifetime/encoding fields are
 advisory metadata. Stronger authorization, expiry, cleanup, and external
 artifact-read APIs remain future durable-service work.
 
+The local implementation detail that aliases eventually resolve to files under
+host-managed roots is not a public path-resolution API. Co-located dependent
+backends should not map `@artifacts/...` to concrete paths themselves. That
+would bypass the host artifact boundary and would couple clients to storage
+layout, cleanup, and ownership details that are intentionally host-internal.
+
 ## Shared API
 
 ### `WorkerSandboxPolicy`
