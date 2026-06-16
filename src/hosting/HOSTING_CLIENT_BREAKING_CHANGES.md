@@ -33,18 +33,15 @@ Purpose: track only remaining dependent-project changes. Previously completed he
 - Node-profile host callers may use capacity APIs during runtime to trim or expand reserved workers for a pool.
 - Node-profile clients must not rely on helper-shaped nested result payloads. They should consume the node response envelope directly.
 - Node-profile clients must stop assuming `artifact_store.status=unavailable`. They must pass input artifacts as relative alias refs such as `@artifacts/...`, declared inline payloads, or inline zip payloads; configure any non-default artifact roots such as `@project` through sandbox policy; write file outputs only to host-provided artifact output paths or output directories; declare inline outputs before returning inline artifact payloads; consume host-minted alias refs; and handle missing-artifact or unavailable-artifact responses when no refs are produced.
-- `@artifacts/...` refs are currently local host artifact aliases, not a stable
-  external download API. Dependent backends that need downloads should project
-  returned artifact rows into their own artifact model or wait for a parent
-  artifact read/download route with explicit auth, metadata, range, lifetime,
-  and error semantics.
-- Running the daemon on the same machine as a dependent backend does not make
-  `@artifacts/...` a public file path contract. The alias-to-path mapping is an
-  internal host implementation detail used for declared artifact staging and
-  collection. A dependent backend should not infer or reconstruct concrete paths
-  from `@artifacts/...`; it should use returned artifact rows as opaque host
-  refs, project them into its own artifact store, or call a supported parent
-  artifact read/download API when one exists.
+- `@artifacts/...` refs are local host artifact aliases. On a local host
+  endpoint, a returned ref is resolvable to an absolute path on the
+  worker-process host by the host artifact manager: `@artifacts` is always
+  registered to the default workflow artifact root, and non-default prefixes
+  such as `@project` or `@home` must be registered in
+  `sandbox_policy.sandbox.artifact_roots`. This is a local resolver contract,
+  not a remote download contract; dependent backends that need HTTP download
+  behavior still need explicit auth, metadata, range, lifetime, and error
+  semantics.
 - Node-profile clients should prefer artifact helper constructors in `hosting.sandbox.artifacts` for common artifact input/output rows instead of hand-authoring every low-level artifact field.
 - Node-profile clients may select multiple artifact files with `path_mask` or `mask` and `recursive` on input or output artifact declarations. Masked inputs are exposed to Python code as directories containing matched files. Masked outputs are exposed as writable directories and return one host-minted ref per collected file, with `relative_path` populated.
 - Node-profile clients may use `export_inline_zip` to export many output files as one inline zip without changing ownership. They may use `host_takeover` when the host should copy a ref output into `@artifacts/...` and own its lifetime; otherwise explicit output refs remain producer-managed.

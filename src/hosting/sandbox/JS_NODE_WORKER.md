@@ -344,14 +344,14 @@ validated a declared output slot and minted or accepted the artifact ref.
 
 `@artifacts/...` aliases are currently local host-controlled artifact refs.
 They can be consumed by later workflow requests as declared inputs, but they are
-not filesystem paths and are not yet a durable public download API. A local
-daemon endpoint on the same machine as a dependent backend does not change this
-contract: the alias-to-path mapping is internal to the host artifact manager.
-Dependent backends should treat returned refs as opaque, project them into their
-own artifact model, or use a supported parent artifact read/download route when
-one exists. That route still needs explicit helper naming, authorization,
-metadata shape, range/streaming limits, expiry/cleanup semantics, and errors for
-missing, expired, unauthorized, or unavailable refs.
+not resolved by sandboxed JS code. On the host/harness side, every valid ref
+with a registered prefix resolves to an absolute path on the worker-process
+host. `@artifacts` is always registered to the default workflow artifact root;
+non-default prefixes such as `@project` or `@home` must be registered in
+`sandbox_policy.sandbox.artifact_roots`. A separate remote download route, if
+needed, still needs explicit helper naming, authorization, metadata shape,
+range/streaming limits, expiry/cleanup semantics, and errors for missing,
+expired, unauthorized, or unavailable refs.
 
 ## Streaming
 

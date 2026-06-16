@@ -70,7 +70,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Dependency-bearing node execution now rejects missing preparation and missing install receipts.
 - Verified dependency runtime success now selects the verified runtime interpreter before node execution.
 - Artifact I/O is host-provisioned local sandbox file access: alias-ref and inline inputs are copied into request input paths, output slots become exact writable paths, inline outputs require matching declarations, and host-minted alias refs such as `@artifacts/...` are returned only for declared output files.
-- Returned `@artifacts/...` refs are opaque host artifact aliases, not a public local-path lookup contract for co-located dependent backends.
+- Returned `@artifacts/...` refs resolve through the host artifact manager to absolute paths under the default workflow artifact root on the worker-process host.
 - File-mask artifact I/O is supported for local alias roots. Input masks copy matching files into a request-scoped input directory, and output masks collect matching files from a request-scoped output directory while preserving relative paths in returned refs.
 - Inline zip inputs are expanded into request-scoped input directories. Multi-file outputs can be exported as inline zip without taking over artifact ownership. Explicit ref outputs remain producer-owned unless `host_takeover` is requested; takeover copies outputs into `@artifacts/...`.
 - Artifact row helper constructors now provide stable serializable templates for inline inputs, inline zip inputs, ref inputs, masked inputs, file outputs, host-takeover outputs, producer-owned outputs, and inline zip exports.

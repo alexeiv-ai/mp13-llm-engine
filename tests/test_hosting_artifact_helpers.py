@@ -90,6 +90,25 @@ def test_artifact_templates_prepare_collect_and_cleanup_ownership(tmp_path: Path
     assert not Path(context["run_root"]).exists()
 
 
+def test_artifact_refs_resolve_to_registered_host_paths(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "host-artifacts"
+    home_root = tmp_path / "home"
+    manager = HostedArtifactManager(artifact_root=artifact_root, artifact_roots={"home": home_root})
+
+    default_path = manager.path_from_ref("@artifacts/run/report.txt")
+    home_path = manager.path_from_ref("@home/project/report.txt")
+    context = manager.prepare(request={}, request_id="req-roots")
+
+    assert default_path == (artifact_root / "objects" / "run" / "report.txt").resolve()
+    assert home_path == (home_root / "project" / "report.txt").resolve()
+    assert default_path.is_absolute()
+    assert home_path.is_absolute()
+    assert context["roots"]["@artifacts"] == str((artifact_root / "objects").resolve())
+    assert context["roots"]["@home"] == str(home_root.resolve())
+    assert manager.path_from_ref("@missing/file.txt") is None
+    assert manager.path_from_ref("@home/../escape.txt") is None
+
+
 def test_artifact_inline_zip_templates_expand_and_export(tmp_path: Path) -> None:
     raw = io.BytesIO()
     with zipfile.ZipFile(raw, "w") as zf:

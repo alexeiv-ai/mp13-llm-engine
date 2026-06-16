@@ -296,12 +296,13 @@ Rules:
 4. Additional aliases such as `@project` or `@home` are configured through `sandbox_policy.sandbox.artifact_roots`.
 5. Policy-configured alias-to-physical-path mappings are part of sandbox policy normalization and therefore part of `environment_key` identity.
 
-`@artifacts/...` is not a public filesystem path or a stable external download
-route. Even for a local daemon endpoint on the same machine as a dependent
-backend, the default host artifact alias is opaque outside the host artifact
-manager. The host may resolve it internally while staging declared inputs,
-validating declared outputs, or copying host-takeover outputs, but dependent
-backends should not reconstruct concrete paths from the alias.
+`@artifacts/...` and other registered alias refs are resolvable to absolute
+paths on the worker-process host by the host artifact manager. `@artifacts` is
+always registered to the default workflow artifact root. Additional prefixes
+such as `@project` or `@home` are valid only after registration in
+`sandbox_policy.sandbox.artifact_roots`. Python node code should still use the
+host-provisioned `artifact_inputs` and `artifact_outputs` paths instead of
+resolving alias refs itself; alias resolution belongs to the host/harness side.
 
 Sandbox policy example:
 

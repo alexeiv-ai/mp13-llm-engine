@@ -132,11 +132,15 @@ Input-side size/count/lifetime/encoding fields are
 advisory metadata. Stronger authorization, expiry, cleanup, and external
 artifact-read APIs remain future durable-service work.
 
-The local implementation detail that aliases eventually resolve to files under
-host-managed roots is not a public path-resolution API. Co-located dependent
-backends should not map `@artifacts/...` to concrete paths themselves. That
-would bypass the host artifact boundary and would couple clients to storage
-layout, cleanup, and ownership details that are intentionally host-internal.
+Alias refs are local resolver inputs for the host/harness artifact manager.
+`@artifacts` is always registered to the default workflow artifact root, and
+policy-configured aliases such as `@project` or `@home` are registered through
+`sandbox_policy.sandbox.artifact_roots`. A valid ref under a registered prefix
+resolves to an absolute path on the worker-process host. Sandboxed code should
+not perform that resolution itself; it receives request-scoped input/output
+paths or root IDs from the host. Co-located dependent backends that need local
+file access must use the same registered-prefix resolver context rather than
+treating unregistered or sandbox-returned strings as trusted artifact refs.
 
 ## Shared API
 
