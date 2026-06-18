@@ -231,28 +231,36 @@ cancellation, and stream-event behavior.
 
 ## Module And Import Policy
 
-QuickJS core supports ES modules, but common Python bindings may not expose an
-ergonomic module loader. The v1 runtime should not depend on QuickJS ESM loader
-support.
+The JS worker executes one already-finalized script. The runtime does not ask
+QuickJS to resolve modules, load files, load npm packages, emulate Node.js, or
+interpret `require`. Code submitted to `workflow-js-execute` must already be a
+single `module_source` that assigns callable exports such as `exports.run`.
 
-Initial v1 import policy:
+QuickJS core has ES module support, but this host runtime deliberately keeps
+module loading outside the child process. That keeps filesystem access,
+dependency selection, host bridges, policy checks, and source hashing in the
+Python host where they can be audited before execution.
 
-1. no unrestricted `import`
+Runtime import policy:
+
+1. no unrestricted runtime `import`
 2. no unrestricted `require`
-3. no Node built-ins
+3. no Node built-ins such as `fs`, `path`, `buffer`, or `node:*`
 4. no npm package resolution
-5. host APIs are exposed through `api`
+5. host APIs are available only through injected globals such as `api`
 
-Future ESM authoring can be supported by bundling or transforming user modules
-into the single-script runtime contract before execution.
+Authoring with imports is supported by host-side helpers that emit the
+single-script worker contract. These helpers are preprocessing tools; their
+output is still ordinary JS source plus `module_sha256`.
 
-The supported v1 helper is `hosting.sandbox.build_workflow_js_bundle(...)`.
-It is a finalizer for already-composed JS source, not a Node/npm compatibility
-layer. It rewrites static imports that target enabled host bridge specifiers
-into bindings against the injected QuickJS globals, emits one deterministic
-`module_source`, and hashes that source as `module_sha256`.
+### Host Bridge Finalizer
 
-Default host bridge import specifiers:
+`hosting.sandbox.build_workflow_js_bundle(...)` finalizes one already-composed
+source string. It rewrites static imports that target enabled host bridge
+specifiers into bindings against injected QuickJS globals, then emits
+deterministic `module_source` and `module_sha256`.
+
+Default host bridge specifiers:
 
 1. `@host/api` -> `api`
 2. `@host/fs` -> `api.fs`
@@ -265,12 +273,12 @@ Default host bridge import specifiers:
 9. `@host/describe` -> `api.describe` for default imports
 
 The helper accepts `host_description`, usually from `api.describe()`, and
-`sandbox_policy` so policy-gated bridges match the effective toolbox. Callers
-may also pass an explicit `bridge_imports` mapping for custom host-backed
-imports. A custom bridge maps a specifier to enabled expressions for default,
-namespace, and named import forms.
+`sandbox_policy` so policy-gated bridges match the effective host toolbox.
+Callers may also pass an explicit `bridge_imports` map for custom host-backed
+imports. Custom bridge expressions must still point at host-provided globals or
+methods; they are not arbitrary package imports.
 
-Example:
+Example source:
 
 ```javascript
 import fs, { readText } from "@host/fs";
@@ -282,7 +290,7 @@ exports.run = function(input) {
 };
 ```
 
-The helper rewrites that to ordinary single-script bindings:
+The finalizer rewrites those imports to single-script bindings:
 
 ```javascript
 const fs = api.fs;
@@ -290,56 +298,58 @@ const { readText } = api.fs;
 const { sha256 } = api.crypto;
 ```
 
-The returned diagnostic fields are part of the caller contract:
+Diagnostics:
 
 1. `resolved_allowed_imports`: bridge specifiers that were enabled and patched
 2. `resolved_disabled_imports`: known bridge specifiers disabled by policy
 3. `unresolved_imports`: imports not present in the bridge table
 
-`ok` is true only when every static import is resolved and enabled. Disabled or
-unresolved imports are left unchanged in `module_source` for diagnosis, and
-callers should not submit that source to the JS worker until the import sets are
-acceptable.
+`ok` is true only when every static import is resolved and enabled.
 
-A broader bundling path is host-side composition:
+### Multi-Module Bundler
 
-1. Resolve allowed relative module refs or host-provided bridge refs.
-2. Rewrite imports to a private module table or inline bundle format.
-3. Emit one deterministic `module_source` that assigns `exports.run`.
-4. Hash that emitted source and submit the hash as `module_sha256`.
+`hosting.sandbox.build_workflow_js_module_bundle(...)` accepts a constrained
+module set and emits one worker script. It is intended for producers that want
+to author multiple JS files with import/export syntax while still submitting a
+single runtime payload.
 
-The supported constrained multi-module helper is
-`hosting.sandbox.build_workflow_js_module_bundle(...)`. It accepts an
-`entry_module`, passed module rows, optional `local_roots`, optional
-`allowed_lib_roots`, and optional `disabled_lib_roots`.
+Inputs:
+
+1. `entry_module`: normalized entry module id, for example `main.js`
+2. `modules`: passed module rows with `id` and `source`
+3. `local_roots`: optional folders for resolving missing relative imports
+4. `allowed_lib_roots`: optional folders for known allowed bare imports
+5. `disabled_lib_roots`: optional folders for known but disabled bare imports
+6. host bridge policy inputs shared with `build_workflow_js_bundle(...)`
 
 Resolution rules:
 
-1. passed modules are matched by their normalized module `id`
-2. relative imports such as `./x.js` first resolve against passed modules and
-   then against `local_roots`
+1. passed modules are matched by normalized `id`
+2. relative imports such as `./x.js` and `../shared/x.js` resolve against
+   passed modules first, then `local_roots`
 3. bare imports such as `math` resolve only from `allowed_lib_roots`
 4. bare imports found under `disabled_lib_roots` are reported as disabled
-5. `@host/...` imports use the same host bridge policy as
-   `build_workflow_js_bundle(...)`
-6. Node built-ins, `node:*`, `require(...)`, dynamic `import(...)`, and
-   re-export-from syntax are rejected
+5. allowed library modules may import other modules under the same allowed root
+6. all modules may import enabled `@host/...` bridges
 
-Allowed library modules may import other modules under the same allowed library
-root and may import enabled host bridges. They are not treated as npm packages
-and do not get Node built-ins.
+Rejected forms:
 
-The helper returns `module_source`, `module_sha256`, `resolved_modules`,
-`resolved_allowed_imports`, `resolved_disabled_imports`,
-`unresolved_imports`, and `rejected_imports`. Callers can add missing files and
-call the helper again until `ok=true`, then submit the resulting single script
-to the JS worker.
+1. Node built-ins and `node:*`
+2. `require(...)`
+3. dynamic `import(...)`
+4. `export ... from` re-export syntax
+5. dependency cycles
 
-This can support modern authoring syntax without claiming Node compatibility.
-QuickJS core can execute ES modules, but the Python binding used here does not
-provide the same loader, package resolution, built-ins, or event-loop behavior
-as Node. npm/ESM compatibility therefore belongs in a pre-execution bundling
-step, not in the QuickJS worker runtime.
+The bundler returns `module_source`, `module_sha256`, `resolved_modules`,
+`resolved_allowed_imports`, `resolved_disabled_imports`, `unresolved_imports`,
+and `rejected_imports`. Callers can add missing modules or adjust allowed and
+disabled roots, call the helper again, and submit the resulting script only
+when `ok=true`.
+
+This is intentionally a small authoring subset. It supports local JS module
+composition and host bridges, but it does not imply Node.js compatibility, npm
+installation, package.json interpretation, browser module loading, or QuickJS
+module-loader behavior.
 
 ## Artifact Contract
 
