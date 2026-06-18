@@ -74,6 +74,9 @@ Node.js executable requirement.
       strategy is selected.
 - [x] Add a JS bundle finalizer helper that rewrites only enabled host bridge
       imports and reports allowed, disabled, and unresolved imports.
+- [x] Add a constrained JS multi-module bundle helper that resolves passed
+      modules, local roots, allowed library roots, disabled library roots, and
+      host bridge imports into one deterministic worker script.
 - [x] Define the runtime authoring shape for the first implementation:
 
 ```javascript
@@ -209,6 +212,9 @@ exports.run = function(input, api) {
 - [x] Add regression tests for host-owned QuickJS runtime execution.
 - [x] Add tests for JS host bridge import finalization, disabled imports,
       unresolved imports, and request hash construction.
+- [x] Add tests for JS multi-module bundling from passed modules, local roots,
+      allowed library roots, disabled library roots, and unsupported Node-style
+      imports.
 
 ## Phase 8: Documentation Updates
 
@@ -254,7 +260,9 @@ exports.run = function(input, api) {
 - [x] Should bundled ESM authoring be included in the first implementation or
       deferred until after the single-script runtime is stable?
       Decision: defer bundled ESM authoring until the single-script runtime is
-      stable.
+      stable. Follow-up implemented a constrained host-side multi-module helper
+      that still emits the single-script runtime contract and does not add
+      Node/npm compatibility.
 - [x] How should QuickJS runtime version and binding version be recorded in
       `runtime_hash` and audit output?
       Decision: `runtime_hash` stays host-policy derived; audit runtime records

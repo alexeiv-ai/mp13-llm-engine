@@ -308,6 +308,33 @@ A broader bundling path is host-side composition:
 3. Emit one deterministic `module_source` that assigns `exports.run`.
 4. Hash that emitted source and submit the hash as `module_sha256`.
 
+The supported constrained multi-module helper is
+`hosting.sandbox.build_workflow_js_module_bundle(...)`. It accepts an
+`entry_module`, passed module rows, optional `local_roots`, optional
+`allowed_lib_roots`, and optional `disabled_lib_roots`.
+
+Resolution rules:
+
+1. passed modules are matched by their normalized module `id`
+2. relative imports such as `./x.js` first resolve against passed modules and
+   then against `local_roots`
+3. bare imports such as `math` resolve only from `allowed_lib_roots`
+4. bare imports found under `disabled_lib_roots` are reported as disabled
+5. `@host/...` imports use the same host bridge policy as
+   `build_workflow_js_bundle(...)`
+6. Node built-ins, `node:*`, `require(...)`, dynamic `import(...)`, and
+   re-export-from syntax are rejected
+
+Allowed library modules may import other modules under the same allowed library
+root and may import enabled host bridges. They are not treated as npm packages
+and do not get Node built-ins.
+
+The helper returns `module_source`, `module_sha256`, `resolved_modules`,
+`resolved_allowed_imports`, `resolved_disabled_imports`,
+`unresolved_imports`, and `rejected_imports`. Callers can add missing files and
+call the helper again until `ok=true`, then submit the resulting single script
+to the JS worker.
+
 This can support modern authoring syntax without claiming Node compatibility.
 QuickJS core can execute ES modules, but the Python binding used here does not
 provide the same loader, package resolution, built-ins, or event-loop behavior

@@ -24,6 +24,7 @@ from .worker_http import BrokeredHttpClient
 from .workflow_js_bundle import (
     WorkflowJsBridgeImport,
     build_workflow_js_bundle,
+    build_workflow_js_module_bundle,
     build_workflow_js_bundle_request,
     workflow_js_host_bridge_imports,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "BrokeredHttpClient",
     "WorkflowJsBridgeImport",
     "build_workflow_js_bundle",
+    "build_workflow_js_module_bundle",
     "build_workflow_js_bundle_request",
     "workflow_js_host_bridge_imports",
 ]

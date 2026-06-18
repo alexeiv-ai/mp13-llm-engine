@@ -4,9 +4,11 @@ import hashlib
 
 from hosting.sandbox.workflow_js_bundle import (
     build_workflow_js_bundle,
+    build_workflow_js_module_bundle,
     build_workflow_js_bundle_request,
     workflow_js_host_bridge_imports,
 )
+from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntimeRegistry
 
 
 def test_workflow_js_bundle_rewrites_allowed_host_bridge_imports() -> None:
@@ -134,3 +136,170 @@ def test_workflow_js_host_bridge_imports_respects_sandbox_http_policy() -> None:
     disabled = workflow_js_host_bridge_imports(sandbox_policy={"sandbox": {"host_api": {"namespaces": {"fs": False}}}})
 
     assert disabled["@host/fs"].enabled is False
+
+
+def test_workflow_js_module_bundle_inlines_passed_modules_and_host_bridges() -> None:
+    bundle = build_workflow_js_module_bundle(
+        entry_module="main.js",
+        host_description={"methods": ["host.describe"]},
+        modules=[
+            {
+                "id": "main.js",
+                "source": (
+                    'import { readSeed } from "./lib/io.js";\n'
+                    'import { sha256 } from "@host/crypto";\n'
+                    "export function run(input) {\n"
+                    "  return {output: {digest: sha256(readSeed(input.value))}};\n"
+                    "}\n"
+                ),
+            },
+            {
+                "id": "lib/io.js",
+                "source": "export function readSeed(value) { return 'seed:' + value; }\n",
+            },
+        ],
+    )
+
+    assert bundle["ok"] is True
+    assert bundle["resolved_modules"] == ["lib/io.js", "main.js"]
+    assert bundle["resolved_allowed_imports"] == ["./lib/io.js", "@host/crypto"]
+    assert bundle["resolved_disabled_imports"] == []
+    assert bundle["unresolved_imports"] == []
+    assert bundle["rejected_imports"] == []
+    assert bundle["module_sha256"] == hashlib.sha256(bundle["module_source"].encode("utf-8")).hexdigest()
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(
+        {
+            "request_id": "req-module-bundle",
+            "module_source": bundle["module_source"],
+            "module_sha256": bundle["module_sha256"],
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {"value": 7},
+            "limits": {"timeout_ms": 5000, "output_limit_bytes": 65536, "memory_limit_mb": 128},
+        }
+    )
+
+    assert out["ok"] is True
+    assert out["output"] == {"digest": hashlib.sha256(b"seed:7").hexdigest()}
+
+
+def test_workflow_js_module_bundle_reads_missing_relative_modules_from_local_root(tmp_path) -> None:
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "main.js").write_text('import answer from "./lib/answer.js";\nexport function run() { return {output: answer}; }\n', encoding="utf-8")
+    (tmp_path / "lib" / "answer.js").write_text("export default 42;\n", encoding="utf-8")
+
+    bundle = build_workflow_js_module_bundle(entry_module="main.js", local_roots=[tmp_path])
+
+    assert bundle["ok"] is True
+    assert bundle["resolved_modules"] == ["lib/answer.js", "main.js"]
+    assert bundle["unresolved_imports"] == []
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(
+        {
+            "request_id": "req-module-bundle-local-root",
+            "module_source": bundle["module_source"],
+            "module_sha256": bundle["module_sha256"],
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "limits": {"timeout_ms": 5000, "output_limit_bytes": 65536, "memory_limit_mb": 128},
+        }
+    )
+
+    assert out["ok"] is True
+    assert out["output"] == 42
+
+
+def test_workflow_js_module_bundle_resolves_parent_relative_imports() -> None:
+    bundle = build_workflow_js_module_bundle(
+        entry_module="features/main.js",
+        modules=[
+            {
+                "id": "features/main.js",
+                "source": 'import { answer } from "../shared/answer.js";\nexport function run() { return {output: answer}; }\n',
+            },
+            {"id": "shared/answer.js", "source": "export const answer = 42;\n"},
+        ],
+    )
+
+    assert bundle["ok"] is True
+    assert bundle["resolved_allowed_imports"] == ["../shared/answer.js"]
+
+
+def test_workflow_js_module_bundle_reports_disabled_and_unresolved_libs(tmp_path) -> None:
+    disabled_root = tmp_path / "disabled"
+    disabled_root.mkdir()
+    (disabled_root / "blocked.js").write_text("export const value = 1;\n", encoding="utf-8")
+    bundle = build_workflow_js_module_bundle(
+        entry_module="main.js",
+        disabled_lib_roots=[disabled_root],
+        modules=[
+            {
+                "id": "main.js",
+                "source": (
+                    'import { value } from "blocked";\n'
+                    'import missing from "missing-lib";\n'
+                    "export function run() { return {output: value || missing}; }\n"
+                ),
+            }
+        ],
+    )
+
+    assert bundle["ok"] is False
+    assert bundle["resolved_disabled_imports"] == ["blocked"]
+    assert bundle["unresolved_imports"] == ["missing-lib"]
+
+
+def test_workflow_js_module_bundle_resolves_allowed_lib_imports(tmp_path) -> None:
+    lib_root = tmp_path / "libs"
+    (lib_root / "math").mkdir(parents=True)
+    (lib_root / "math" / "index.js").write_text("import { two } from './two.js';\nexport const answer = two * 21;\n", encoding="utf-8")
+    (lib_root / "math" / "two.js").write_text("export const two = 2;\n", encoding="utf-8")
+    bundle = build_workflow_js_module_bundle(
+        entry_module="main.js",
+        allowed_lib_roots=[lib_root],
+        modules=[
+            {
+                "id": "main.js",
+                "source": 'import { answer } from "math";\nexport function run() { return {output: answer}; }\n',
+            }
+        ],
+    )
+
+    assert bundle["ok"] is True
+    assert bundle["resolved_modules"] == ["lib:0:math/index.js", "lib:0:math/two.js", "main.js"]
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(
+        {
+            "request_id": "req-module-bundle-lib-root",
+            "module_source": bundle["module_source"],
+            "module_sha256": bundle["module_sha256"],
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "limits": {"timeout_ms": 5000, "output_limit_bytes": 65536, "memory_limit_mb": 128},
+        }
+    )
+
+    assert out["ok"] is True
+    assert out["output"] == 42
+
+
+def test_workflow_js_module_bundle_rejects_require_and_node_builtins() -> None:
+    bundle = build_workflow_js_module_bundle(
+        entry_module="main.js",
+        modules=[
+            {
+                "id": "main.js",
+                "source": 'import fs from "node:fs";\nconst x = require("x");\nexport function run() { return {output: x}; }\n',
+            }
+        ],
+    )
+
+    assert bundle["ok"] is False
+    assert {"module": "main.js", "specifier": "require(...)", "reason": "require_unsupported"} in bundle["rejected_imports"]
+    assert {"module": "main.js", "specifier": "node:fs", "reason": "node_builtin_unsupported"} in bundle["rejected_imports"]

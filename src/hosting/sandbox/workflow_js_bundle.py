@@ -10,8 +10,11 @@ callers can decide whether to execute, rebundle, or reject the source.
 from __future__ import annotations
 
 import hashlib
+import json
+import posixpath
 import re
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from .policy import WorkerSandboxPolicy
@@ -26,6 +29,50 @@ _SIDE_EFFECT_IMPORT_RE = re.compile(
     re.MULTILINE,
 )
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_EXPORT_NAMED_RE = re.compile(r"^[ \t]*export\s*\{(?P<items>[^}]+)\}\s*;?[ \t]*(?:\r?\n)?", re.MULTILINE)
+_EXPORT_FROM_RE = re.compile(r"^[ \t]*export\s+[\s\S]*?\s+from\s*['\"][^'\"]+['\"]\s*;?[ \t]*(?:\r?\n)?", re.MULTILINE)
+_EXPORT_DECL_RE = re.compile(r"^(?P<indent>[ \t]*)export\s+(?P<kind>function|class|const|let|var)\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\b", re.MULTILINE)
+_EXPORT_DEFAULT_NAMED_RE = re.compile(r"^(?P<indent>[ \t]*)export\s+default\s+(?P<kind>function|class)\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\b", re.MULTILINE)
+_EXPORT_DEFAULT_EXPR_RE = re.compile(r"^(?P<indent>[ \t]*)export\s+default\s+(?P<expr>[^;\r\n]+)\s*;?[ \t]*(?:\r?\n)?", re.MULTILINE)
+_DYNAMIC_IMPORT_RE = re.compile(r"\bimport\s*\(")
+_REQUIRE_RE = re.compile(r"\brequire\s*\(")
+_NODE_BUILTINS = {
+    "assert",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "dns",
+    "domain",
+    "events",
+    "fs",
+    "http",
+    "https",
+    "module",
+    "net",
+    "os",
+    "path",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "repl",
+    "stream",
+    "string_decoder",
+    "timers",
+    "tls",
+    "tty",
+    "url",
+    "util",
+    "v8",
+    "vm",
+    "worker_threads",
+    "zlib",
+}
 
 
 @dataclass(frozen=True)
@@ -485,9 +532,447 @@ def build_workflow_js_bundle_request(
     return request
 
 
+def _module_id(value: str) -> str:
+    raw = str(value or "").replace("\\", "/").strip()
+    while raw.startswith("./"):
+        raw = raw[2:]
+    path = PurePosixPath(raw)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"workflow_js_module_id_invalid:{value}")
+    return "/".join(path.parts)
+
+
+def _relative_module_id(importer_id: str, specifier: str) -> str:
+    base = PurePosixPath(_module_id(importer_id)).parent
+    normalized = posixpath.normpath(str(base.joinpath(str(specifier or "").replace("\\", "/"))))
+    if normalized == "." or normalized.startswith("../"):
+        raise ValueError(f"workflow_js_module_ref_escape:{specifier}")
+    return _module_id(normalized)
+
+
+def _candidate_ids(raw_id: str) -> List[str]:
+    clean = _module_id(raw_id)
+    candidates = [clean]
+    if not clean.endswith(".js"):
+        candidates.append(f"{clean}.js")
+        candidates.append(f"{clean}/index.js")
+    return list(dict.fromkeys(candidates))
+
+
+def _root_rows(roots: Optional[Iterable[Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for index, value in enumerate(list(roots or [])):
+        if isinstance(value, Mapping):
+            raw_path = str(value.get("path") or value.get("root") or "").strip()
+            name = str(value.get("name") or value.get("id") or f"root_{index}").strip() or f"root_{index}"
+        else:
+            raw_path = str(value or "").strip()
+            name = f"root_{index}"
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser().resolve()
+        out.append({"name": name, "path": path, "index": index})
+    return out
+
+
+def _path_inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _find_relative_file(root: Path, module_id: str) -> Optional[Path]:
+    for candidate in _candidate_ids(module_id):
+        target = (root / candidate).resolve()
+        if _path_inside(target, root) and target.exists() and target.is_file():
+            return target
+    return None
+
+
+def _find_bare_file(root: Path, specifier: str) -> Optional[Path]:
+    clean = str(specifier or "").replace("\\", "/").strip().strip("/")
+    if not clean or clean.startswith(".") or clean.startswith("/"):
+        return None
+    for candidate in _candidate_ids(clean):
+        target = (root / candidate).resolve()
+        if _path_inside(target, root) and target.exists() and target.is_file():
+            return target
+    return None
+
+
+def _lib_module_id(root_index: int, root: Path, path: Path) -> str:
+    rel = path.resolve().relative_to(root.resolve())
+    rel_text = str(rel).replace("\\", "/")
+    return f"lib:{root_index}:{rel_text}"
+
+
+def _module_import_declaration(clause: str, module_expression: str, *, temp_name: str = "__workflowJsImported") -> tuple[str, List[Dict[str, str]], List[str]]:
+    default_binding, namespace_binding, named_bindings = _split_import_clause(clause)
+    declarations: List[str] = []
+    bindings: List[Dict[str, str]] = []
+    invalid: List[str] = []
+    if default_binding or namespace_binding or named_bindings:
+        declarations.append(f"const {temp_name} = {module_expression};")
+    if default_binding:
+        if _is_identifier(default_binding):
+            declarations.append(f"const {default_binding} = {temp_name}.default;")
+            bindings.append({"kind": "default", "local": default_binding})
+        else:
+            invalid.append(default_binding)
+    if namespace_binding:
+        if _is_identifier(namespace_binding):
+            declarations.append(f"const {namespace_binding} = {temp_name};")
+            bindings.append({"kind": "namespace", "local": namespace_binding})
+        else:
+            invalid.append(namespace_binding)
+    if named_bindings:
+        parts: List[str] = []
+        for imported, local in named_bindings:
+            if not _is_identifier(imported) or not _is_identifier(local):
+                invalid.append(local or imported)
+                continue
+            parts.append(imported if imported == local else f"{imported}: {local}")
+            bindings.append({"kind": "named", "imported": imported, "local": local})
+        if parts:
+            declarations.append(f"const {{ {', '.join(parts)} }} = {temp_name};")
+    return "\n".join(declarations), bindings, invalid
+
+
+def _is_relative_specifier(specifier: str) -> bool:
+    return str(specifier or "").startswith(("./", "../"))
+
+
+def _is_node_builtin_specifier(specifier: str) -> bool:
+    value = str(specifier or "").strip()
+    if value.startswith("node:"):
+        return True
+    return value in _NODE_BUILTINS
+
+
+def _make_module_row(module_id: str, source: str, *, origin_path: Optional[Path] = None, kind: str = "inline", root: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "id": _module_id(module_id) if not str(module_id).startswith("lib:") else str(module_id),
+        "source": str(source or ""),
+        "origin_path": origin_path,
+        "kind": kind,
+        "root": root,
+    }
+
+
+def _read_module_file(path: Path, module_id: str, *, kind: str, root: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return _make_module_row(module_id, path.read_text(encoding="utf-8"), origin_path=path, kind=kind, root=root)
+
+
+def _transform_exports(source: str) -> tuple[str, List[str], List[Dict[str, str]]]:
+    appended: List[str] = []
+    rejected: List[Dict[str, str]] = []
+    default_index = 0
+
+    for match in _EXPORT_FROM_RE.finditer(source):
+        rejected.append({"reason": "export_from_unsupported", "statement": match.group(0).strip()})
+
+    def _replace_named(match: re.Match[str]) -> str:
+        for imported, exported in _parse_named_imports(match.group("items")):
+            if not _is_identifier(imported) or not _is_identifier(exported):
+                rejected.append({"reason": "export_binding_invalid", "statement": match.group(0).strip()})
+                continue
+            appended.append(f"exports.{exported} = {imported};")
+        return ""
+
+    source = _EXPORT_NAMED_RE.sub(_replace_named, source)
+
+    def _replace_decl(match: re.Match[str]) -> str:
+        name = match.group("name")
+        appended.append(f"exports.{name} = {name};")
+        return f"{match.group('indent')}{match.group('kind')} {name}"
+
+    source = _EXPORT_DECL_RE.sub(_replace_decl, source)
+
+    def _replace_default_named(match: re.Match[str]) -> str:
+        name = match.group("name")
+        appended.append(f"exports.default = {name};")
+        return f"{match.group('indent')}{match.group('kind')} {name}"
+
+    source = _EXPORT_DEFAULT_NAMED_RE.sub(_replace_default_named, source)
+
+    def _replace_default_expr(match: re.Match[str]) -> str:
+        nonlocal default_index
+        default_index += 1
+        name = f"__workflowJsDefault{default_index}"
+        appended.append(f"exports.default = {name};")
+        return f"{match.group('indent')}const {name} = {match.group('expr')};\n"
+
+    source = _EXPORT_DEFAULT_EXPR_RE.sub(_replace_default_expr, source)
+    if appended:
+        source = source.rstrip() + "\n" + "\n".join(appended) + "\n"
+    return source, appended, rejected
+
+
+def build_workflow_js_module_bundle(
+    *,
+    entry_module: str,
+    modules: Optional[Iterable[Mapping[str, Any]]] = None,
+    local_roots: Optional[Iterable[Any]] = None,
+    allowed_lib_roots: Optional[Iterable[Any]] = None,
+    disabled_lib_roots: Optional[Iterable[Any]] = None,
+    bridge_imports: Optional[Mapping[str, Any]] = None,
+    host_description: Optional[Mapping[str, Any]] = None,
+    sandbox_policy: Optional[Mapping[str, Any]] = None,
+    enabled_imports: Optional[Iterable[str]] = None,
+    disabled_imports: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """Bundle a constrained local JS module graph into one JS worker script.
+
+    This helper supports relative local modules, allowed library roots, disabled
+    library roots for diagnostics, and the same ``@host/...`` bridge imports as
+    ``build_workflow_js_bundle``. It deliberately does not emulate Node/npm.
+    """
+
+    bridges = (
+        workflow_js_host_bridge_imports(
+            host_description=host_description,
+            sandbox_policy=sandbox_policy,
+            enabled_imports=enabled_imports,
+            disabled_imports=disabled_imports,
+        )
+        if bridge_imports is None
+        else _normalize_bridge_imports(bridge_imports)
+    )
+    if bridge_imports is not None and (enabled_imports or disabled_imports):
+        explicit_enabled = _clean_set(enabled_imports)
+        explicit_disabled = _clean_set(disabled_imports)
+        updated: Dict[str, WorkflowJsBridgeImport] = {}
+        for specifier, bridge in bridges.items():
+            enabled = bridge.enabled
+            if specifier in explicit_enabled:
+                enabled = True
+            if specifier in explicit_disabled:
+                enabled = False
+            updated[specifier] = WorkflowJsBridgeImport(
+                specifier=bridge.specifier,
+                default_expression=bridge.default_expression,
+                namespace_expression=bridge.namespace_expression,
+                named_expression=bridge.named_expression,
+                enabled=enabled,
+                description=bridge.description,
+            )
+        bridges = updated
+
+    module_map: Dict[str, Dict[str, Any]] = {}
+    for row in list(modules or []):
+        module_id = _module_id(str(row.get("id") or row.get("name") or row.get("path") or ""))
+        module_map[module_id] = _make_module_row(module_id, str(row.get("source") or ""))
+
+    local_root_rows = _root_rows(local_roots)
+    allowed_root_rows = _root_rows(allowed_lib_roots)
+    disabled_root_rows = _root_rows(disabled_lib_roots)
+    entry_id = _module_id(entry_module)
+
+    if entry_id not in module_map:
+        for root in local_root_rows:
+            path = _find_relative_file(root["path"], entry_id)
+            if path is not None:
+                module_map[entry_id] = _read_module_file(path, entry_id, kind="local", root=root)
+                break
+
+    resolved_allowed_imports: set[str] = set()
+    resolved_disabled_imports: set[str] = set()
+    unresolved_imports: set[str] = set()
+    resolved_modules: set[str] = set()
+    rejected_imports: List[Dict[str, Any]] = []
+    module_edges: Dict[str, Dict[str, str]] = {}
+    visiting: set[str] = set()
+
+    def _resolve_relative(row: Dict[str, Any], specifier: str) -> Optional[str]:
+        importer_id = str(row["id"])
+        if str(row.get("kind")) == "lib":
+            root = dict(row.get("root") or {})
+            origin_path = row.get("origin_path")
+            if isinstance(origin_path, Path) and root.get("path") is not None:
+                base = origin_path.parent
+                for suffix in ["", ".js", "/index.js"]:
+                    target = (base / f"{specifier}{suffix}").resolve()
+                    if _path_inside(target, root["path"]) and target.exists() and target.is_file():
+                        module_id = _lib_module_id(int(root.get("index") or 0), root["path"], target)
+                        if module_id not in module_map:
+                            module_map[module_id] = _read_module_file(target, module_id, kind="lib", root=root)
+                        return module_id
+            return None
+        candidate = _relative_module_id(importer_id, specifier)
+        for candidate_id in _candidate_ids(candidate):
+            if candidate_id in module_map:
+                return candidate_id
+        for root in local_root_rows:
+            path = _find_relative_file(root["path"], candidate)
+            if path is not None:
+                module_id = _module_id(str(path.relative_to(root["path"])).replace("\\", "/"))
+                if module_id not in module_map:
+                    module_map[module_id] = _read_module_file(path, module_id, kind="local", root=root)
+                return module_id
+        return None
+
+    def _resolve_bare(specifier: str) -> tuple[str, Optional[str]]:
+        for root in disabled_root_rows:
+            path = _find_bare_file(root["path"], specifier)
+            if path is not None:
+                return "disabled", None
+        for root in allowed_root_rows:
+            path = _find_bare_file(root["path"], specifier)
+            if path is not None:
+                module_id = _lib_module_id(int(root.get("index") or 0), root["path"], path)
+                if module_id not in module_map:
+                    module_map[module_id] = _read_module_file(path, module_id, kind="lib", root=root)
+                return "allowed", module_id
+        return "unresolved", None
+
+    def _walk(module_id: str, stack: List[str]) -> None:
+        if module_id in visiting:
+            rejected_imports.append({"module": module_id, "specifier": module_id, "reason": "local_import_cycle", "path": stack + [module_id]})
+            return
+        row = module_map.get(module_id)
+        if row is None:
+            unresolved_imports.add(module_id)
+            return
+        if module_id in resolved_modules:
+            return
+        visiting.add(module_id)
+        edges: Dict[str, str] = {}
+        source = str(row.get("source") or "")
+        if _DYNAMIC_IMPORT_RE.search(source):
+            rejected_imports.append({"module": module_id, "specifier": "import(...)", "reason": "dynamic_import_unsupported"})
+        if _REQUIRE_RE.search(source):
+            rejected_imports.append({"module": module_id, "specifier": "require(...)", "reason": "require_unsupported"})
+        for export_reject in _EXPORT_FROM_RE.finditer(source):
+            rejected_imports.append({"module": module_id, "specifier": "", "reason": "export_from_unsupported", "statement": export_reject.group(0).strip()})
+        for item in _import_matches(source):
+            specifier = str(item["specifier"])
+            bridge = bridges.get(specifier)
+            if bridge is not None:
+                if bridge.enabled:
+                    resolved_allowed_imports.add(specifier)
+                else:
+                    resolved_disabled_imports.add(specifier)
+                continue
+            if _is_node_builtin_specifier(specifier):
+                rejected_imports.append({"module": module_id, "specifier": specifier, "reason": "node_builtin_unsupported"})
+                continue
+            if _is_relative_specifier(specifier):
+                try:
+                    target_id = _resolve_relative(row, specifier)
+                except ValueError:
+                    rejected_imports.append({"module": module_id, "specifier": specifier, "reason": "relative_import_escape"})
+                    continue
+                if target_id is None:
+                    unresolved_imports.add(specifier)
+                else:
+                    edges[specifier] = target_id
+                    resolved_allowed_imports.add(specifier)
+                    _walk(target_id, stack + [module_id])
+                continue
+            status, target_id = _resolve_bare(specifier)
+            if status == "disabled":
+                resolved_disabled_imports.add(specifier)
+            elif status == "allowed" and target_id:
+                edges[specifier] = target_id
+                resolved_allowed_imports.add(specifier)
+                _walk(target_id, stack + [module_id])
+            else:
+                unresolved_imports.add(specifier)
+        visiting.remove(module_id)
+        resolved_modules.add(module_id)
+        module_edges[module_id] = edges
+
+    _walk(entry_id, [])
+
+    def _transform_module(row: Dict[str, Any]) -> str:
+        source = str(row.get("source") or "")
+        output: List[str] = []
+        cursor = 0
+        for item in _import_matches(source):
+            start = int(item["start"])
+            end = int(item["end"])
+            specifier = str(item["specifier"])
+            bridge = bridges.get(specifier)
+            output.append(source[cursor:start])
+            if bridge is not None and bridge.enabled:
+                if item["kind"] == "side_effect":
+                    output.append(f"/* workflow-js-module-bundle host bridge import: {specifier} */\n")
+                else:
+                    declaration, _bindings, invalid = _declaration_for_import(str(item["clause"]), bridge)
+                    output.append(str(item["statement"]) if invalid else declaration + "\n")
+            elif specifier in module_edges.get(str(row["id"]), {}):
+                target_id = module_edges[str(row["id"])][specifier]
+                if item["kind"] == "side_effect":
+                    output.append(f"__workflowJsRequire({json.dumps(target_id)});\n")
+                else:
+                    declaration, _bindings, invalid = _module_import_declaration(
+                        str(item["clause"]),
+                        f"__workflowJsRequire({json.dumps(target_id)})",
+                        temp_name=f"__workflowJsImported{len(output)}",
+                    )
+                    output.append(str(item["statement"]) if invalid else declaration + "\n")
+            else:
+                output.append(str(item["statement"]))
+            cursor = end
+        output.append(source[cursor:])
+        transformed, _exports, export_rejected = _transform_exports("".join(output))
+        for rejected in export_rejected:
+            rejected_imports.append({"module": str(row["id"]), **rejected})
+        return transformed
+
+    ok = bool(entry_id in resolved_modules) and not resolved_disabled_imports and not unresolved_imports and not rejected_imports
+    module_sources: List[str] = []
+    for module_id in sorted(resolved_modules):
+        row = module_map[module_id]
+        transformed = _transform_module(row)
+        module_sources.append(
+            "__workflowJsDefine("
+            + json.dumps(module_id)
+            + ", function(module, exports, __workflowJsRequire) {\n"
+            + transformed.rstrip()
+            + "\n});"
+        )
+    module_source = "\n".join(
+        [
+            "(function () {",
+            "const __workflowJsModules = Object.create(null);",
+            "const __workflowJsCache = Object.create(null);",
+            "function __workflowJsDefine(id, factory) { __workflowJsModules[id] = factory; }",
+            "function __workflowJsRequire(id) {",
+            "  if (__workflowJsCache[id]) return __workflowJsCache[id].exports;",
+            "  const factory = __workflowJsModules[id];",
+            "  if (typeof factory !== 'function') throw new Error('workflow_js_module_not_found:' + id);",
+            "  const module = { exports: {} };",
+            "  __workflowJsCache[id] = module;",
+            "  factory(module, module.exports, __workflowJsRequire);",
+            "  return module.exports;",
+            "}",
+            *module_sources,
+            f"Object.assign(globalThis.exports, __workflowJsRequire({json.dumps(entry_id)}));",
+            "})();",
+            "",
+        ]
+    )
+    module_sha256 = hashlib.sha256(module_source.encode("utf-8")).hexdigest()
+    return {
+        "ok": ok,
+        "entry_module": entry_id,
+        "module_source": module_source,
+        "module_sha256": module_sha256,
+        "resolved_modules": sorted(resolved_modules),
+        "resolved_allowed_imports": sorted(resolved_allowed_imports),
+        "resolved_disabled_imports": sorted(resolved_disabled_imports),
+        "unresolved_imports": sorted(unresolved_imports),
+        "rejected_imports": rejected_imports,
+    }
+
+
 __all__ = [
     "WorkflowJsBridgeImport",
     "build_workflow_js_bundle",
+    "build_workflow_js_module_bundle",
     "build_workflow_js_bundle_request",
     "workflow_js_host_bridge_imports",
 ]
