@@ -36,6 +36,8 @@ _EXPORT_DEFAULT_NAMED_RE = re.compile(r"^(?P<indent>[ \t]*)export\s+default\s+(?
 _EXPORT_DEFAULT_EXPR_RE = re.compile(r"^(?P<indent>[ \t]*)export\s+default\s+(?P<expr>[^;\r\n]+)\s*;?[ \t]*(?:\r?\n)?", re.MULTILINE)
 _DYNAMIC_IMPORT_RE = re.compile(r"\bimport\s*\(")
 _REQUIRE_RE = re.compile(r"\brequire\s*\(")
+_SEGMENT_BEGIN_RE = re.compile(r"^/\*\s*workflow-js-bundle-segment-begin\s+(?P<meta>\{.*\})\s*\*/$")
+_SEGMENT_END_RE = re.compile(r"^/\*\s*workflow-js-bundle-segment-end\s+(?P<meta>\{.*\})\s*\*/$")
 _NODE_BUILTINS = {
     "assert",
     "buffer",
@@ -710,6 +712,106 @@ def _transform_exports(source: str) -> tuple[str, List[str], List[Dict[str, str]
     return source, appended, rejected
 
 
+def _line_number_at(source: str, index: int) -> int:
+    return str(source or "").count("\n", 0, max(0, int(index or 0))) + 1
+
+
+def _split_lines(text: str) -> List[str]:
+    if text == "":
+        return []
+    return str(text).splitlines()
+
+
+def _append_mapped_text(parts: List[str], line_map: List[Optional[int]], text: str, *, source_line: int) -> None:
+    lines = _split_lines(text)
+    for offset, line in enumerate(lines):
+        parts.append(line)
+        line_map.append(int(source_line) + offset)
+
+
+def _append_generated_text(parts: List[str], line_map: List[Optional[int]], text: str, *, source_line: Optional[int] = None) -> None:
+    for line in _split_lines(text):
+        parts.append(line)
+        line_map.append(source_line)
+
+
+def _segment_marker(event: str, *, kind: str, name: str, module: Optional[str] = None) -> str:
+    meta = {"kind": str(kind), "name": str(name)}
+    if module is not None:
+        meta["module"] = str(module)
+    return f"/* workflow-js-bundle-segment-{event} {json.dumps(meta, sort_keys=True)} */"
+
+
+def describe_workflow_js_bundle_source(source: str) -> List[Dict[str, Any]]:
+    """Return segment ranges embedded in a generated JS module bundle."""
+
+    segments: List[Dict[str, Any]] = []
+    stack: List[Dict[str, Any]] = []
+    lines = str(source or "").splitlines()
+    for index, line in enumerate(lines, start=1):
+        begin = _SEGMENT_BEGIN_RE.match(line.strip())
+        if begin:
+            try:
+                meta = json.loads(begin.group("meta"))
+            except json.JSONDecodeError:
+                meta = {"kind": "unknown", "name": "unknown"}
+            stack.append(
+                {
+                    **dict(meta or {}),
+                    "generated_start_line": index,
+                    "content_start_line": index + 1,
+                }
+            )
+            continue
+        end = _SEGMENT_END_RE.match(line.strip())
+        if end and stack:
+            segment = stack.pop()
+            segment["content_end_line"] = index - 1
+            segment["generated_end_line"] = index
+            segments.append(segment)
+    return segments
+
+
+def extract_workflow_js_bundle_segment(bundle_or_source: Any, name: str) -> Optional[str]:
+    """Extract a marked bundle segment by segment name or module id."""
+
+    source = str(bundle_or_source.get("module_source") if isinstance(bundle_or_source, Mapping) else bundle_or_source or "")
+    if not source:
+        return None
+    lines = source.splitlines()
+    for segment in describe_workflow_js_bundle_source(source):
+        if str(segment.get("name") or "") != str(name) and str(segment.get("module") or "") != str(name):
+            continue
+        start = int(segment.get("content_start_line") or 0)
+        end = int(segment.get("content_end_line") or 0)
+        if start <= 0 or end < start:
+            return ""
+        return "\n".join(lines[start - 1 : end])
+    return None
+
+
+def resolve_workflow_js_bundle_line(bundle_or_source: Any, line_number: int) -> Dict[str, Any]:
+    """Resolve a generated bundle line to segment and original module context."""
+
+    line = int(line_number or 0)
+    if isinstance(bundle_or_source, Mapping):
+        for item in list(bundle_or_source.get("bundle_line_map") or []):
+            row = dict(item or {})
+            if int(row.get("generated_line") or 0) == line:
+                return row
+        source = str(bundle_or_source.get("module_source") or "")
+    else:
+        source = str(bundle_or_source or "")
+    for segment in describe_workflow_js_bundle_source(source):
+        if int(segment.get("generated_start_line") or 0) <= line <= int(segment.get("generated_end_line") or 0):
+            out = dict(segment)
+            out["generated_line"] = line
+            if str(segment.get("kind") or "") == "module" and line >= int(segment.get("content_start_line") or 0):
+                out["original_line"] = line - int(segment.get("content_start_line") or line) + 1
+            return out
+    return {"generated_line": line, "kind": "unknown", "name": None, "module": None, "original_line": None}
+
+
 def build_workflow_js_module_bundle(
     *,
     entry_module: str,
@@ -886,81 +988,137 @@ def build_workflow_js_module_bundle(
 
     _walk(entry_id, [])
 
-    def _transform_module(row: Dict[str, Any]) -> str:
+    def _transform_module(row: Dict[str, Any]) -> tuple[str, List[Optional[int]]]:
         source = str(row.get("source") or "")
-        output: List[str] = []
+        output_lines: List[str] = []
+        output_line_map: List[Optional[int]] = []
         cursor = 0
         for item in _import_matches(source):
             start = int(item["start"])
             end = int(item["end"])
             specifier = str(item["specifier"])
             bridge = bridges.get(specifier)
-            output.append(source[cursor:start])
+            _append_mapped_text(output_lines, output_line_map, source[cursor:start], source_line=_line_number_at(source, cursor))
             if bridge is not None and bridge.enabled:
                 if item["kind"] == "side_effect":
-                    output.append(f"/* workflow-js-module-bundle host bridge import: {specifier} */\n")
+                    _append_generated_text(
+                        output_lines,
+                        output_line_map,
+                        f"/* workflow-js-module-bundle host bridge import: {specifier} */",
+                        source_line=_line_number_at(source, start),
+                    )
                 else:
                     declaration, _bindings, invalid = _declaration_for_import(str(item["clause"]), bridge)
-                    output.append(str(item["statement"]) if invalid else declaration + "\n")
+                    _append_generated_text(
+                        output_lines,
+                        output_line_map,
+                        str(item["statement"]).rstrip("\r\n") if invalid else declaration,
+                        source_line=_line_number_at(source, start),
+                    )
             elif specifier in module_edges.get(str(row["id"]), {}):
                 target_id = module_edges[str(row["id"])][specifier]
                 if item["kind"] == "side_effect":
-                    output.append(f"__workflowJsRequire({json.dumps(target_id)});\n")
+                    _append_generated_text(
+                        output_lines,
+                        output_line_map,
+                        f"__workflowJsRequire({json.dumps(target_id)});",
+                        source_line=_line_number_at(source, start),
+                    )
                 else:
                     declaration, _bindings, invalid = _module_import_declaration(
                         str(item["clause"]),
                         f"__workflowJsRequire({json.dumps(target_id)})",
-                        temp_name=f"__workflowJsImported{len(output)}",
+                        temp_name=f"__workflowJsImported{len(output_lines)}",
                     )
-                    output.append(str(item["statement"]) if invalid else declaration + "\n")
+                    _append_generated_text(
+                        output_lines,
+                        output_line_map,
+                        str(item["statement"]).rstrip("\r\n") if invalid else declaration,
+                        source_line=_line_number_at(source, start),
+                    )
             else:
-                output.append(str(item["statement"]))
+                _append_mapped_text(output_lines, output_line_map, str(item["statement"]), source_line=_line_number_at(source, start))
             cursor = end
-        output.append(source[cursor:])
-        transformed, _exports, export_rejected = _transform_exports("".join(output))
+        _append_mapped_text(output_lines, output_line_map, source[cursor:], source_line=_line_number_at(source, cursor))
+        raw_transformed = "\n".join(output_lines)
+        transformed, _exports, export_rejected = _transform_exports(raw_transformed)
         for rejected in export_rejected:
             rejected_imports.append({"module": str(row["id"]), **rejected})
-        return transformed
+        transformed_line_count = len(transformed.splitlines())
+        if transformed_line_count > len(output_line_map):
+            output_line_map.extend([None] * (transformed_line_count - len(output_line_map)))
+        elif transformed_line_count < len(output_line_map):
+            output_line_map = output_line_map[:transformed_line_count]
+        return transformed, output_line_map
 
     ok = bool(entry_id in resolved_modules) and not resolved_disabled_imports and not unresolved_imports and not rejected_imports
-    module_sources: List[str] = []
+    bundle_lines: List[str] = []
+    bundle_line_map: List[Dict[str, Any]] = []
+
+    def _emit_line(text: str, *, kind: str, name: str, module_id: Optional[str] = None, original_line: Optional[int] = None) -> None:
+        bundle_lines.append(text)
+        bundle_line_map.append(
+            {
+                "generated_line": len(bundle_lines),
+                "kind": kind,
+                "name": name,
+                "module": module_id,
+                "original_line": original_line,
+            }
+        )
+
+    def _emit_segment_begin(kind: str, name: str, module_id: Optional[str] = None) -> None:
+        _emit_line(_segment_marker("begin", kind=kind, name=name, module=module_id), kind=kind, name=name, module_id=module_id)
+
+    def _emit_segment_end(kind: str, name: str, module_id: Optional[str] = None) -> None:
+        _emit_line(_segment_marker("end", kind=kind, name=name, module=module_id), kind=kind, name=name, module_id=module_id)
+
+    _emit_segment_begin("runtime", "runtime:prelude")
+    for line in [
+        "(function () {",
+        "const __workflowJsModules = Object.create(null);",
+        "const __workflowJsCache = Object.create(null);",
+        "function __workflowJsDefine(id, factory) { __workflowJsModules[id] = factory; }",
+        "function __workflowJsRequire(id) {",
+        "  if (__workflowJsCache[id]) return __workflowJsCache[id].exports;",
+        "  const factory = __workflowJsModules[id];",
+        "  if (typeof factory !== 'function') throw new Error('workflow_js_module_not_found:' + id);",
+        "  const module = { exports: {} };",
+        "  __workflowJsCache[id] = module;",
+        "  factory(module, module.exports, __workflowJsRequire);",
+        "  return module.exports;",
+        "}",
+    ]:
+        _emit_line(line, kind="runtime", name="runtime:prelude")
+    _emit_segment_end("runtime", "runtime:prelude")
     for module_id in sorted(resolved_modules):
         row = module_map[module_id]
-        transformed = _transform_module(row)
-        module_sources.append(
-            "__workflowJsDefine("
-            + json.dumps(module_id)
-            + ", function(module, exports, __workflowJsRequire) {\n"
-            + transformed.rstrip()
-            + "\n});"
-        )
-    module_source = "\n".join(
-        [
-            "(function () {",
-            "const __workflowJsModules = Object.create(null);",
-            "const __workflowJsCache = Object.create(null);",
-            "function __workflowJsDefine(id, factory) { __workflowJsModules[id] = factory; }",
-            "function __workflowJsRequire(id) {",
-            "  if (__workflowJsCache[id]) return __workflowJsCache[id].exports;",
-            "  const factory = __workflowJsModules[id];",
-            "  if (typeof factory !== 'function') throw new Error('workflow_js_module_not_found:' + id);",
-            "  const module = { exports: {} };",
-            "  __workflowJsCache[id] = module;",
-            "  factory(module, module.exports, __workflowJsRequire);",
-            "  return module.exports;",
-            "}",
-            *module_sources,
-            f"Object.assign(globalThis.exports, __workflowJsRequire({json.dumps(entry_id)}));",
-            "})();",
-            "",
-        ]
-    )
+        transformed, transformed_line_map = _transform_module(row)
+        _emit_line(f"__workflowJsDefine({json.dumps(module_id)}, function(module, exports, __workflowJsRequire) {{", kind="module", name=module_id, module_id=module_id)
+        _emit_segment_begin("module", module_id, module_id)
+        for index, line in enumerate(transformed.rstrip().splitlines(), start=1):
+            original_line = transformed_line_map[index - 1] if index - 1 < len(transformed_line_map) else None
+            _emit_line(line, kind="module", name=module_id, module_id=module_id, original_line=original_line)
+        _emit_segment_end("module", module_id, module_id)
+        _emit_line("});", kind="module", name=module_id, module_id=module_id)
+    _emit_segment_begin("runtime", "runtime:entry")
+    for line in [
+        f"Object.assign(globalThis.exports, __workflowJsRequire({json.dumps(entry_id)}));",
+        "})();",
+        "",
+    ]:
+        _emit_line(line, kind="runtime", name="runtime:entry")
+    _emit_segment_end("runtime", "runtime:entry")
+    module_source = "\n".join(bundle_lines) + "\n"
     module_sha256 = hashlib.sha256(module_source.encode("utf-8")).hexdigest()
+    bundle_segments = describe_workflow_js_bundle_source(module_source)
     return {
         "ok": ok,
         "entry_module": entry_id,
         "module_source": module_source,
         "module_sha256": module_sha256,
+        "bundle_segments": bundle_segments,
+        "bundle_line_map": bundle_line_map,
         "resolved_modules": sorted(resolved_modules),
         "resolved_allowed_imports": sorted(resolved_allowed_imports),
         "resolved_disabled_imports": sorted(resolved_disabled_imports),
@@ -974,5 +1132,8 @@ __all__ = [
     "build_workflow_js_bundle",
     "build_workflow_js_module_bundle",
     "build_workflow_js_bundle_request",
+    "describe_workflow_js_bundle_source",
+    "extract_workflow_js_bundle_segment",
+    "resolve_workflow_js_bundle_line",
     "workflow_js_host_bridge_imports",
 ]

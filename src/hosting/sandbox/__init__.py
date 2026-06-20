@@ -26,6 +26,9 @@ from .workflow_js_bundle import (
     build_workflow_js_bundle,
     build_workflow_js_module_bundle,
     build_workflow_js_bundle_request,
+    describe_workflow_js_bundle_source,
+    extract_workflow_js_bundle_segment,
+    resolve_workflow_js_bundle_line,
     workflow_js_host_bridge_imports,
 )
 
@@ -50,5 +53,8 @@ __all__ = [
     "build_workflow_js_bundle",
     "build_workflow_js_module_bundle",
     "build_workflow_js_bundle_request",
+    "describe_workflow_js_bundle_source",
+    "extract_workflow_js_bundle_segment",
+    "resolve_workflow_js_bundle_line",
     "workflow_js_host_bridge_imports",
 ]

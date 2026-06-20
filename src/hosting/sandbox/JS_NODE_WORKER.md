@@ -342,9 +342,22 @@ Rejected forms:
 
 The bundler returns `module_source`, `module_sha256`, `resolved_modules`,
 `resolved_allowed_imports`, `resolved_disabled_imports`, `unresolved_imports`,
-and `rejected_imports`. Callers can add missing modules or adjust allowed and
-disabled roots, call the helper again, and submit the resulting script only
-when `ok=true`.
+`rejected_imports`, `bundle_segments`, and `bundle_line_map`. Callers can add
+missing modules or adjust allowed and disabled roots, call the helper again, and
+submit the resulting script only when `ok=true`.
+
+The emitted script includes comment markers around shared runtime segments and
+each bundled module segment. The returned line map lets callers resolve a bundle
+line number from a QuickJS exception back to the original module id and source
+line where available. Helper functions are available for diagnostics:
+
+1. `describe_workflow_js_bundle_source(source)` reads segment markers from a
+   bundle source string
+2. `extract_workflow_js_bundle_segment(bundle_or_source, name)` extracts a
+   marked module or shared runtime segment
+3. `resolve_workflow_js_bundle_line(bundle_or_source, line_number)` resolves a
+   generated bundle line to the segment, module id, and original line when the
+   returned `bundle_line_map` is available
 
 This is intentionally a small authoring subset. It supports local JS module
 composition and host bridges, but it does not imply Node.js compatibility, npm

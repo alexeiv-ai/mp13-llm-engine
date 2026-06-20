@@ -6,6 +6,9 @@ from hosting.sandbox.workflow_js_bundle import (
     build_workflow_js_bundle,
     build_workflow_js_module_bundle,
     build_workflow_js_bundle_request,
+    describe_workflow_js_bundle_source,
+    extract_workflow_js_bundle_segment,
+    resolve_workflow_js_bundle_line,
     workflow_js_host_bridge_imports,
 )
 from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntimeRegistry
@@ -183,6 +186,45 @@ def test_workflow_js_module_bundle_inlines_passed_modules_and_host_bridges() -> 
 
     assert out["ok"] is True
     assert out["output"] == {"digest": hashlib.sha256(b"seed:7").hexdigest()}
+
+
+def test_workflow_js_module_bundle_marks_segments_and_resolves_lines() -> None:
+    bundle = build_workflow_js_module_bundle(
+        entry_module="main.js",
+        modules=[
+            {
+                "id": "main.js",
+                "source": (
+                    'import { value } from "./value.js";\n'
+                    "export function run(input) {\n"
+                    "  const total = value + input.add;\n"
+                    "  return {output: total};\n"
+                    "}\n"
+                ),
+            },
+            {"id": "value.js", "source": "export const value = 40;\n"},
+        ],
+    )
+
+    segments = describe_workflow_js_bundle_source(bundle["module_source"])
+    names = {segment["name"] for segment in segments}
+    main_segment = extract_workflow_js_bundle_segment(bundle, "main.js")
+    runtime_segment = extract_workflow_js_bundle_segment(bundle, "runtime:prelude")
+    generated_line = next(
+        index
+        for index, line in enumerate(bundle["module_source"].splitlines(), start=1)
+        if "const total = value + input.add;" in line
+    )
+    resolved = resolve_workflow_js_bundle_line(bundle, generated_line)
+
+    assert {"runtime:prelude", "runtime:entry", "main.js", "value.js"}.issubset(names)
+    assert main_segment is not None
+    assert "const total = value + input.add;" in main_segment
+    assert "__workflowJsDefine" not in main_segment
+    assert runtime_segment is not None
+    assert "function __workflowJsRequire" in runtime_segment
+    assert resolved["module"] == "main.js"
+    assert resolved["original_line"] == 3
 
 
 def test_workflow_js_module_bundle_reads_missing_relative_modules_from_local_root(tmp_path) -> None:
