@@ -82,13 +82,18 @@ Optional fields:
 6. `artifact_inputs`
 7. `artifact_outputs`
 8. `execution_mode`
-9. `project`
-10. `code_revision`
-11. `export_name`
+9. `code_revision`
+10. `export_name`
 
 The host verifies `sha256(module_source) == module_sha256` before execution.
 
-Initial v1 execution should use a single-script contract:
+Supported JS worker execution modes:
+
+1. `script`, the default: execute one finalized JS source and call
+   `exports[export_name || "run"](payload, api)`.
+2. `snippet`: execute one finalized JS source and read global `result`.
+
+Script mode should use a single-script contract:
 
 ```javascript
 exports.run = function(input, api) {
@@ -114,6 +119,11 @@ Snippet request:
 ```
 
 Snippet code can read the global `payload` and should assign `result`.
+
+The JS worker does not support Python node `project` or uv-project execution
+modes. Multi-file JS authoring is handled before execution by
+`build_workflow_js_module_bundle(...)`, which still emits one `module_source`
+submitted as normal `script` mode.
 
 ## JavaScript Execution API
 
@@ -439,7 +449,8 @@ instead of implying enforcement.
 
 ## Relationship To Python Node
 
-JS node should share host-side concepts with Python node:
+JS node should be on par with Python node for the host-side node envelope and
+pooling model:
 
 1. environment-keyed routing
 2. hosted process pool accounting
@@ -450,14 +461,35 @@ JS node should share host-side concepts with Python node:
 7. artifact preparation, collection, and cleanup
 8. cancellation and resource reporting
 
-Runtime-specific code still owns:
+Supported JS worker modes are intentionally narrower than Python node modes:
+
+1. `script`: one finalized JS source, usually either hand-authored,
+   bridge-finalized, or emitted by `build_workflow_js_module_bundle(...)`
+2. `snippet`: one finalized JS source that assigns global `result`
+
+Not supported by the JS worker runtime:
+
+1. Python node `project` mode
+2. Python uv-project/dependency environment execution
+3. Python import allowlist semantics
+4. loading multiple source files directly in the QuickJS child
+5. resolving Node/npm packages at runtime
+6. treating browser components as QuickJS execution targets
+
+The JS multi-module helper is a producer-side authoring convenience. It may
+read passed module rows, local roots, and allowed/disabled library roots, but
+its output is still one script submitted to the JS worker. It is not equivalent
+to Python project execution because the QuickJS child does not receive a project
+directory, mutate `cwd`, manage `sys.path`, or import files during execution.
+
+Runtime-specific JS code still owns:
 
 1. QuickJS context creation
 2. JS global injection
 3. JS result normalization
 4. JS error formatting
 5. QuickJS job pumping if async APIs are exposed
-6. bundle/transform behavior if ESM authoring is added
+6. bundle/transform behavior for constrained JS authoring helpers
 
 ## Relationship To Custom UI Components
 
