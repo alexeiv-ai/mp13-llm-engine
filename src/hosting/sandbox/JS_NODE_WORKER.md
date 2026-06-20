@@ -472,30 +472,24 @@ Supported JS worker modes are narrower than Python node modes:
    bridge-finalized, or emitted by `build_workflow_js_module_bundle(...)`
 2. `snippet`: one finalized JS source that assigns global `result`
 
-Within those modes, choosing JS node instead of Python node changes these
-capabilities:
+Within those modes, choosing JS node instead of Python node mainly changes:
 
-1. user code async: JS promise-returning results are rejected with
-   `workflow_sandbox_async_unsupported`; Python node also invokes user
-   functions synchronously, but Python host dispatchers may be synchronous or
-   async on the host side.
-2. host calls: JS exposes synchronous `api.call(...)` and convenience wrappers
-   (`api.fs.*`, `api.http.fetch`, `api.codec.*`, `api.crypto.*`); Python exposes
-   synchronous `host.call(...)`, `host.fs_*`, and `host.http_fetch(...)`.
-3. imports: JS runtime has no runtime module loader and no import allowlist;
-   local JS imports must be bundled before execution. Python module/snippet mode
-   can use allowlisted Python imports through `python.import_allowlist`.
-4. dependencies: JS has no Node/npm dependency installation path. Python node
-   can run against prepared dependency environments for dependency-bearing
-   requests.
-5. artifacts: both use host-prepared artifact inputs/outputs and the same
-   host dispatcher model. JS accesses artifacts through `api.fs.*`; Python code
-   can use host-provisioned paths and guarded `open(...)`, plus host API calls.
-6. diagnostics: JS bundled module helpers can emit bundle segment markers and
-   line maps. Python runtime errors use Python traceback summaries directly.
-7. runtime surface: JS gains a small QuickJS surface with deterministic
-   built-in codec/hash helpers and no Python imports. Python gains Python
-   language/library behavior subject to sandbox import and dependency policy.
+1. async: JS currently rejects promise-returning results with
+   `workflow_sandbox_async_unsupported`. Python node host dispatch can run
+   asynchronous host handlers, although user exports are still invoked
+   synchronously.
+2. host calls: both runtimes use the same host dispatcher pattern. JS exposes
+   `api.call(...)` and `api.fs/http/codec/crypto` wrappers; Python exposes
+   `host.call(...)`, `host.fs_*`, and `host.http_fetch(...)`.
+3. imports and code shape: JS worker execution uses one finalized source and
+   has no runtime loader; local JS modules must be bundled first. Python
+   module/snippet mode can use allowlisted Python imports at runtime.
+4. environment: JS currently runs in a static QuickJS environment selected by
+   runtime/source/policy identity. Python node can also run dependency-bearing
+   requests against prepared runtime environments.
+5. artifacts: both use host-prepared artifact inputs/outputs. JS accesses them
+   through `api.fs.*`; Python can use host-provisioned paths and guarded
+   `open(...)`, plus host API calls.
 
 Not supported by the JS worker runtime, compared with broader Python node
 features:
@@ -521,6 +515,13 @@ Runtime-specific JS code still owns:
 4. JS error formatting
 5. QuickJS job pumping if async APIs are exposed
 6. bundle/transform behavior for constrained JS authoring helpers
+
+The next parity feature for JS should be promise-aware execution: allow
+`exports.run` or snippet `result` to be a promise, pump QuickJS pending jobs
+until settlement, and expose promise-returning host APIs whose `host_call_id`
+responses resolve or reject the right promise. That work must define timeout,
+cancellation, stream-event ordering, backpressure, and failure behavior before
+the public contract advertises async JS nodes.
 
 ## Relationship To Custom UI Components
 
