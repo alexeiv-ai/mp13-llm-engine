@@ -225,6 +225,12 @@ daemon control channels. Cross-channel callback routing would need an explicit
 session/channel/worker ownership protocol with auth, cancellation, close,
 backpressure, and response-routing rules.
 
+The JS worker does not need a different parent IPC contract for async support.
+It uses the same `host_call` and `host_response` message shapes as Python node.
+The implementation difference is child-local: the QuickJS harness can keep
+multiple JS promises pending and resolve or reject them when the matching
+`host_response` arrives.
+
 The dispatcher maps `fs.*` calls to declared artifact roots:
 
 1. readable roots: declared artifact inputs and declared artifact outputs
@@ -245,6 +251,8 @@ compatibility. The child harness owns the QuickJS context and pumps
 `execute_pending_job()` while a script or snippet result promise is pending.
 During that pump it also polls the worker IPC channel for `host_response`
 messages and resolves or rejects the matching JS promise by `host_call_id`.
+The daemon/parent runtime never pumps QuickJS jobs; it only dispatches host
+calls and sends responses back over the worker IPC channel.
 
 Supported async forms:
 
@@ -268,6 +276,9 @@ Limits and caveats:
    same terminal request failure semantics as the worker
 4. `host_call_id` remains scoped to the worker/request IPC conversation, not a
    globally routable daemon identifier
+5. sync and async host calls share one response-correlation buffer, so an
+   out-of-order async response observed during a sync wait can still be applied
+   to the right pending promise later
 
 ## Module And Import Policy
 
@@ -499,11 +510,10 @@ Supported JS worker modes are narrower than Python node modes:
 
 Within those modes, choosing JS node instead of Python node mainly changes:
 
-1. async: JS script and snippet results may be promises, and JS can use
-   `api.callAsync(...)` plus async convenience wrappers. Python node host
-   dispatch can also run asynchronous host handlers, but Python user exports
-   are still invoked through the Python worker's normal synchronous entrypoint
-   contract.
+1. async: both runtimes can use sync or awaitable parent host dispatchers. JS
+   additionally supports promise-returning script/snippet results and explicit
+   `api.callAsync(...)` wrappers by pumping QuickJS jobs in the child harness.
+   This is QuickJS promise support, not Node/libuv compatibility.
 2. host calls: both runtimes use the same host dispatcher pattern. JS exposes
    `api.call(...)`, `api.callAsync(...)`, and `api.fs/http/codec/crypto`
    wrappers; Python exposes `host.call(...)`, `host.fs_*`, and

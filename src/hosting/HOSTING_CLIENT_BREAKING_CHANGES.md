@@ -51,7 +51,12 @@ interpret `package.json`, or implement `require`.
 The JS worker is closer to PY node after the async changes, but it is not a
 drop-in replacement for all PY node modes.
 
-Available in both:
+If a dependent backend already integrates with the PY node worker, it can treat
+the JS worker as the same hosted node shape for request routing, lifecycle, host
+dispatch, artifacts, and cancellation. The drift is in the language runtime and
+entrypoint surface, not in the parent host contract.
+
+Same parent-host behavior as PY node:
 
 1. hosted process pooling and request status
 2. node envelope output, state patch, progress, artifacts, logs, metrics, and
@@ -59,6 +64,18 @@ Available in both:
 3. host API back channel with sync or awaitable host dispatchers
 4. declared artifact input/output handling through host-owned roots
 5. request cancellation and timeout behavior
+6. worker/request-scoped `host_call_id` response correlation
+
+JS async parity:
+
+1. `exports.run(payload, api)` may return a value or a promise.
+2. `snippet` mode may assign `result` to a value or a promise.
+3. `api.callAsync(method, arguments)` returns a promise for the same host
+   dispatcher used by sync calls.
+4. `api.fs.*Async` and `api.http.fetchAsync(...)` are convenience wrappers over
+   `api.callAsync(...)`.
+5. parent host dispatchers may be regular Python callables or awaitables, as
+   with PY node.
 
 JS-specific differences:
 
@@ -72,6 +89,15 @@ JS-specific differences:
 5. JS async means QuickJS promise jobs plus host-call promises. It does not
    imply timers, streams, background tasks after the terminal result, or Node
    event-loop compatibility.
+
+Migration from PY-node assumptions:
+
+1. replace direct file paths or guarded `open(...)` with declared roots and
+   `api.fs.*` / `api.fs.*Async`
+2. replace Python import/dependency expectations with pre-bundled JS source
+3. replace host helper calls with `api.call(...)` or `await api.callAsync(...)`
+4. keep artifact refs as host-owned values; JS should not translate
+   `@artifacts/...` or other registered prefixes itself
 
 Artifact refs remain host-owned. Sandboxed JS should use declared root names
 through `api.fs.*`; it should not resolve aliases such as `@artifacts/...`
