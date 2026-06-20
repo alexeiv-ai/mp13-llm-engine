@@ -86,8 +86,8 @@ exports.run = function(input, api) {
 ```
 
 - [x] Define async semantics explicitly before exposing `async` examples:
-      either synchronous host APIs only for v1 or a bounded promise/job pump
-      with host-call promise resolution.
+      JS supports a bounded QuickJS promise/job pump with host-call promise
+      resolution and worker/request-scoped `host_call_id` correlation.
 - [x] Define the normalized JS return shape:
       plain values become `output`, while objects may carry `output`,
       `state_patch`, `artifacts`, and `progress`.
@@ -153,7 +153,8 @@ exports.run = function(input, api) {
 - [x] Decide whether host APIs are synchronous-only for v1 or promise-based.
 - [x] If promise-based APIs are supported, implement QuickJS job pumping and
       host-call response correlation tests before exposing the public contract.
-      Not applicable for v1 because promise-based host APIs are not exposed.
+      Implemented with `api.callAsync(...)`, async convenience wrappers, promise
+      result adoption, and out-of-order host response correlation tests.
 - [x] Ensure host API failures return structured JS node errors and stream
       events rather than raw Python exceptions.
 
@@ -251,8 +252,9 @@ exports.run = function(input, api) {
       timeout remains parent-process enforced.
 - [x] Should v1 host APIs be synchronous-only, or should promise-based APIs be
       required before landing?
-      Decision: v1 host APIs are synchronous-only; promise-returning JS results
-      are rejected with `workflow_sandbox_async_unsupported`.
+      Decision: JS keeps synchronous host wrappers and also exposes
+      promise-based host wrappers. Promise-returning script and snippet results
+      are supported through the QuickJS job pump.
 - [x] Should `exports.run(input, api)` be the only v1 entrypoint, or should
       callers be allowed to name exports through `export_name`?
       Decision: `exports.run(input, api)` is the documented default, and

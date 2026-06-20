@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import threading
+import time
 import traceback
 from multiprocessing.connection import Client
 from typing import Any, Dict, Optional
@@ -40,6 +41,7 @@ class HostApiBridge:
         self._seq = 0
         self._seq_lock = threading.Lock()
         self._send_lock = threading.Lock()
+        self._pending_responses: Dict[str, Dict[str, Any]] = {}
 
     def _next_call_id(self) -> str:
         with self._seq_lock:
@@ -58,16 +60,19 @@ class HostApiBridge:
             )
         return json.dumps(dict(response.get("result") or {}), ensure_ascii=False, separators=(",", ":"))
 
-    def call_json(self, method: str, arguments_json: str = "{}") -> str:
-        meth = str(method or "").strip()
-        if not meth:
-            raise RuntimeError("host_method_required")
+    @staticmethod
+    def _arguments_from_json(arguments_json: str = "{}") -> Dict[str, Any]:
         try:
             arguments = json.loads(str(arguments_json or "{}"))
         except Exception as exc:
             raise RuntimeError(f"host_arguments_invalid_json:{exc}") from exc
-        if not isinstance(arguments, dict):
-            arguments = {}
+        return dict(arguments or {}) if isinstance(arguments, dict) else {}
+
+    def send_call(self, method: str, arguments_json: str = "{}") -> str:
+        meth = str(method or "").strip()
+        if not meth:
+            raise RuntimeError("host_method_required")
+        arguments = self._arguments_from_json(arguments_json)
         call_id = self._next_call_id()
         with self._send_lock:
             self.conn.send(
@@ -79,10 +84,41 @@ class HostApiBridge:
                     "arguments": arguments,
                 }
             )
+        return call_id
+
+    def _read_host_response(self, *, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        if timeout is not None and not self.conn.poll(max(0.0, float(timeout))):
+            return None
+        row = dict(self.conn.recv() or {})
+        if str(row.get("type") or "") != "host_response":
+            raise RuntimeError("host_response_mismatch")
+        response_id = str(row.get("host_call_id") or "")
+        if not response_id:
+            raise RuntimeError("host_response_mismatch")
+        return row
+
+    def _pop_pending_response(self, call_id: str) -> Optional[Dict[str, Any]]:
+        return self._pending_responses.pop(str(call_id or ""), None)
+
+    def poll_response(self, *, timeout: float = 0.0) -> Optional[Dict[str, Any]]:
+        if self._pending_responses:
+            first_key = next(iter(self._pending_responses))
+            return self._pending_responses.pop(first_key)
+        return self._read_host_response(timeout=timeout)
+
+    def call_json(self, method: str, arguments_json: str = "{}") -> str:
+        call_id = self.send_call(method, arguments_json)
+        pending = self._pop_pending_response(call_id)
+        if pending is not None:
+            try:
+                return self._result_from_response(pending)
+            except HostApiError as exc:
+                self.last_error = exc
+                raise
         while True:
-            row = dict(self.conn.recv() or {})
-            if str(row.get("type") or "") != "host_response":
-                raise RuntimeError("host_response_mismatch")
+            row = self._read_host_response()
+            if row is None:
+                continue
             response_id = str(row.get("host_call_id") or "")
             if response_id == call_id:
                 try:
@@ -90,6 +126,48 @@ class HostApiBridge:
                 except HostApiError as exc:
                     self.last_error = exc
                     raise
+            self._pending_responses[response_id] = row
+
+
+def _pump_quickjs_until_settled(
+    *,
+    ctx: Any,
+    host: HostApiBridge,
+    timeout_ms: int,
+) -> str:
+    deadline = time.monotonic() + (max(1, int(timeout_ms or 1)) / 1000.0)
+    max_jobs_per_turn = 1000
+
+    while True:
+        ran_job = False
+        for _ in range(max_jobs_per_turn):
+            if not ctx.execute_pending_job():
+                break
+            ran_job = True
+
+        if bool(ctx.get("__workflow_async_settled")):
+            result_json = ctx.get("__workflow_result_json")
+            if not isinstance(result_json, str):
+                raise RuntimeError("workflow_sandbox_invalid_json_output")
+            return result_json
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return json.dumps(
+                {
+                    "__workflow_error": {
+                        "reason": "workflow_sandbox_timeout",
+                        "detail": {"timeout_ms": timeout_ms},
+                    }
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        response = host.poll_response(timeout=0.0 if ran_job else min(remaining, 0.01))
+        if response is not None:
+            ctx.set("__workflow_host_response_json", json.dumps(response, ensure_ascii=False, separators=(",", ":")))
+            ctx.eval("__workflowHandleHostResponse(globalThis.__workflow_host_response_json)")
 
 
 def _normalize_console_args(args_json: str) -> str:
@@ -172,6 +250,9 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     def _host_call(method: str, args_json: str = "{}") -> str:
         return host.call_json(method, args_json)
 
+    def _host_call_async(method: str, args_json: str = "{}") -> str:
+        return host.send_call(method, args_json)
+
     def _progress(payload_json: str = "{}") -> None:
         try:
             payload_row = json.loads(str(payload_json or "{}"))
@@ -197,6 +278,7 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
         return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
     ctx.add_callable("__host_call", _host_call)
+    ctx.add_callable("__host_call_async", _host_call_async)
     ctx.add_callable("__progress", _progress)
     ctx.add_callable("__console", _console)
     ctx.add_callable("__base64_encode", _base64_encode)
@@ -215,9 +297,42 @@ globalThis.console = {
   warn: function (...args) { __console("warn", JSON.stringify(args)); },
   error: function (...args) { __console("error", JSON.stringify(args)); }
 };
+globalThis.__workflowPendingHostCalls = {};
+globalThis.__workflow_async_settled = false;
+globalThis.__workflow_result_json = "";
+globalThis.__workflowHostError = function (row) {
+  const detail = row && row.detail && typeof row.detail === "object" ? row.detail : {};
+  const message = String((row && (row.message || detail.message || row.reason)) || "host_call_failed");
+  const err = new Error(message);
+  err.reason = String((row && (row.reason || detail.reason)) || "host_call_failed");
+  err.detail = detail;
+  err.host_call_id = String((row && row.host_call_id) || "");
+  return err;
+};
+globalThis.__workflowHandleHostResponse = function (rowJson) {
+  const row = JSON.parse(String(rowJson || "{}"));
+  const callId = String(row.host_call_id || "");
+  const pending = globalThis.__workflowPendingHostCalls[callId];
+  if (!pending) {
+    return;
+  }
+  delete globalThis.__workflowPendingHostCalls[callId];
+  if (String(row.status || "").toLowerCase() === "error") {
+    pending.reject(globalThis.__workflowHostError(row));
+    return;
+  }
+  pending.resolve(row.result || {});
+};
 globalThis.api = {
   call: function (method, args) { return JSON.parse(__host_call(String(method || ""), JSON.stringify(args || {}))); },
+  callAsync: function (method, args) {
+    const callId = String(__host_call_async(String(method || ""), JSON.stringify(args || {})));
+    return new Promise(function (resolve, reject) {
+      globalThis.__workflowPendingHostCalls[callId] = {resolve: resolve, reject: reject};
+    });
+  },
   describe: function () { return this.call("host.describe", {}); },
+  describeAsync: function () { return this.callAsync("host.describe", {}); },
   progress: globalThis.progress,
   fs: {
     readText: function (rootId, relativePath, encoding) {
@@ -226,17 +341,33 @@ globalThis.api = {
     writeText: function (rootId, relativePath, text, encoding) {
       return api.call("fs.write_text", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), text: String(text || ""), encoding: String(encoding || "utf-8"), create_parents: true});
     },
+    readTextAsync: function (rootId, relativePath, encoding) {
+      return api.callAsync("fs.read_text", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), encoding: String(encoding || "utf-8")}).then(function (result) { return result.text; });
+    },
+    writeTextAsync: function (rootId, relativePath, text, encoding) {
+      return api.callAsync("fs.write_text", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), text: String(text || ""), encoding: String(encoding || "utf-8"), create_parents: true});
+    },
     list: function (rootId, relativePath) { return api.call("fs.list", {root_id: String(rootId || ""), relative_path: String(relativePath || "")}); },
+    listAsync: function (rootId, relativePath) { return api.callAsync("fs.list", {root_id: String(rootId || ""), relative_path: String(relativePath || "")}); },
     stat: function (rootId, relativePath) { return api.call("fs.stat", {root_id: String(rootId || ""), relative_path: String(relativePath || "")}); },
+    statAsync: function (rootId, relativePath) { return api.callAsync("fs.stat", {root_id: String(rootId || ""), relative_path: String(relativePath || "")}); },
     mkdir: function (rootId, relativePath, options) {
       options = options || {};
       return api.call("fs.mkdir", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), parents: options.parents !== false, exist_ok: options.exist_ok !== false});
+    },
+    mkdirAsync: function (rootId, relativePath, options) {
+      options = options || {};
+      return api.callAsync("fs.mkdir", {root_id: String(rootId || ""), relative_path: String(relativePath || ""), parents: options.parents !== false, exist_ok: options.exist_ok !== false});
     }
   },
   http: {
     fetch: function (url, options) {
       options = options || {};
       return api.call("http.fetch", {url: String(url || ""), method: String(options.method || "GET"), headers: options.headers || {}, body_b64: String(options.body_b64 || ""), timeout_seconds: Number(options.timeout_seconds || 30), max_response_bytes: Number(options.max_response_bytes || 1048576)});
+    },
+    fetchAsync: function (url, options) {
+      options = options || {};
+      return api.callAsync("http.fetch", {url: String(url || ""), method: String(options.method || "GET"), headers: options.headers || {}, body_b64: String(options.body_b64 || ""), timeout_seconds: Number(options.timeout_seconds || 30), max_response_bytes: Number(options.max_response_bytes || 1048576)});
     }
   },
   codec: {
@@ -250,10 +381,17 @@ globalThis.api = {
 """.strip()
     runner = r"""
 (function () {
+  function errorDetail(err) {
+    const detail = err && err.detail && typeof err.detail === "object" ? err.detail : {};
+    const message = String((err && err.message) || err || "workflow_sandbox_runtime_error");
+    const out = {message: message};
+    if (err && err.reason) out.reason = String(err.reason);
+    if (err && err.host_call_id) out.host_call_id = String(err.host_call_id);
+    if (err && err.stack) out.stack = String(err.stack);
+    for (const key in detail) out[key] = detail[key];
+    return out;
+  }
   function normalize(value) {
-    if (value && typeof value.then === "function") {
-      return {__workflow_error: {reason: "workflow_sandbox_async_unsupported", detail: {message: "promise-returning JS nodes are not supported in this runtime slice"}}};
-    }
     if (value && typeof value === "object" && !Array.isArray(value)) {
       return {
         output: Object.prototype.hasOwnProperty.call(value, "output") ? value.output : value,
@@ -263,6 +401,19 @@ globalThis.api = {
       };
     }
     return {output: value === undefined ? null : value, state_patch: null, artifacts: [], progress: null};
+  }
+  function settleOk(value) {
+    try {
+      globalThis.__workflow_result_json = JSON.stringify(normalize(value === undefined ? null : value));
+    } catch (err) {
+      globalThis.__workflow_result_json = JSON.stringify({__workflow_error: {reason: "workflow_sandbox_invalid_output", detail: errorDetail(err)}});
+    }
+    globalThis.__workflow_async_settled = true;
+  }
+  function settleErr(err) {
+    const reason = String((err && err.reason) || "workflow_sandbox_runtime_error");
+    globalThis.__workflow_result_json = JSON.stringify({__workflow_error: {reason: reason, detail: errorDetail(err)}});
+    globalThis.__workflow_async_settled = true;
   }
   let value;
   if ("%EXECUTION_MODE%" === "snippet") {
@@ -275,9 +426,15 @@ globalThis.api = {
     value = fn(globalThis.payload, globalThis.api);
   }
   try {
+    if (value && typeof value.then === "function") {
+      globalThis.__workflow_async_settled = false;
+      globalThis.__workflow_result_json = "";
+      Promise.resolve(value).then(settleOk, settleErr);
+      return "__workflow_pending__";
+    }
     return JSON.stringify(normalize(value === undefined ? null : value));
   } catch (err) {
-    return JSON.stringify({__workflow_error: {reason: "workflow_sandbox_invalid_output", detail: {message: String(err && err.message ? err.message : err)}}});
+    return JSON.stringify({__workflow_error: {reason: "workflow_sandbox_invalid_output", detail: errorDetail(err)}});
   }
 })()
 """.replace("%EXECUTION_MODE%", execution_mode)
@@ -286,6 +443,8 @@ globalThis.api = {
         ctx.eval(prelude)
         ctx.eval(source)
         result_json = ctx.eval(runner)
+        if result_json == "__workflow_pending__":
+            result_json = _pump_quickjs_until_settled(ctx=ctx, host=host, timeout_ms=timeout_ms)
         if not isinstance(result_json, str):
             raise RuntimeError("workflow_sandbox_invalid_json_output")
         if len(result_json.encode("utf-8")) > output_limit_bytes:

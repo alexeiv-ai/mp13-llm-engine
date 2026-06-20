@@ -201,12 +201,20 @@ Convenience methods on `api` may wrap dispatcher methods:
 
 1. `api.describe()`
 2. `api.call(method, arguments)`
-3. `api.fs.readText(rootId, relativePath="", encoding="utf-8")`
-4. `api.fs.writeText(rootId, relativePath="", text="", encoding="utf-8")`
-5. `api.fs.list(rootId, relativePath="")`
-6. `api.fs.stat(rootId, relativePath="")`
-7. `api.fs.mkdir(rootId, relativePath="", options={})`
-8. `api.http.fetch(url, options={})`
+3. `api.callAsync(method, arguments)`
+4. `api.describeAsync()`
+5. `api.fs.readText(rootId, relativePath="", encoding="utf-8")`
+6. `api.fs.readTextAsync(rootId, relativePath="", encoding="utf-8")`
+7. `api.fs.writeText(rootId, relativePath="", text="", encoding="utf-8")`
+8. `api.fs.writeTextAsync(rootId, relativePath="", text="", encoding="utf-8")`
+9. `api.fs.list(rootId, relativePath="")`
+10. `api.fs.listAsync(rootId, relativePath="")`
+11. `api.fs.stat(rootId, relativePath="")`
+12. `api.fs.statAsync(rootId, relativePath="")`
+13. `api.fs.mkdir(rootId, relativePath="", options={})`
+14. `api.fs.mkdirAsync(rootId, relativePath="", options={})`
+15. `api.http.fetch(url, options={})`
+16. `api.http.fetchAsync(url, options={})`
 
 Transport should reuse the framed host-call pattern from Python node: the child
 harness sends `host_call` messages with `host_call_id`, the host dispatcher
@@ -232,17 +240,34 @@ allowlist, method, headers, timeout, and response size.
 
 ## Async Semantics
 
-QuickJS supports promises, but the Python binding may not provide a complete
-Node-style event loop. The runtime must choose one of these v1 strategies:
+JS worker async support is QuickJS promise support, not Node.js event-loop
+compatibility. The child harness owns the QuickJS context and pumps
+`execute_pending_job()` while a script or snippet result promise is pending.
+During that pump it also polls the worker IPC channel for `host_response`
+messages and resolves or rejects the matching JS promise by `host_call_id`.
 
-1. synchronous host APIs only, with host calls blocking inside the child
-   harness under strict timeout and cancellation; or
-2. promise-based host APIs with explicit QuickJS job pumping and host response
-   correlation.
+Supported async forms:
 
-The public contract must not imply Node.js event-loop compatibility. If
-promise-based APIs are exposed, tests must prove ordering, timeout,
-cancellation, and stream-event behavior.
+1. `exports.run(payload, api)` may return a value or a promise.
+2. snippet mode may assign `result` to a value or a promise.
+3. `api.callAsync(method, arguments)` returns a promise for a host dispatcher
+   response.
+4. async convenience wrappers such as `api.fs.readTextAsync(...)` and
+   `api.http.fetchAsync(...)` return promises.
+
+The synchronous wrappers remain available. `api.call(...)`, `api.fs.readText`,
+and related sync helpers block the child harness until the matching
+`host_response` arrives. Async wrappers allow multiple in-flight host calls;
+out-of-order responses are correlated by `host_call_id`.
+
+Limits and caveats:
+
+1. no Node timers, Node streams, libuv handles, or npm event-loop behavior
+2. no background task lifetime after the terminal worker result
+3. timeout and cancellation are request-scoped; pending promises fail with the
+   same terminal request failure semantics as the worker
+4. `host_call_id` remains scoped to the worker/request IPC conversation, not a
+   globally routable daemon identifier
 
 ## Module And Import Policy
 
@@ -474,13 +499,15 @@ Supported JS worker modes are narrower than Python node modes:
 
 Within those modes, choosing JS node instead of Python node mainly changes:
 
-1. async: JS currently rejects promise-returning results with
-   `workflow_sandbox_async_unsupported`. Python node host dispatch can run
-   asynchronous host handlers, although user exports are still invoked
-   synchronously.
+1. async: JS script and snippet results may be promises, and JS can use
+   `api.callAsync(...)` plus async convenience wrappers. Python node host
+   dispatch can also run asynchronous host handlers, but Python user exports
+   are still invoked through the Python worker's normal synchronous entrypoint
+   contract.
 2. host calls: both runtimes use the same host dispatcher pattern. JS exposes
-   `api.call(...)` and `api.fs/http/codec/crypto` wrappers; Python exposes
-   `host.call(...)`, `host.fs_*`, and `host.http_fetch(...)`.
+   `api.call(...)`, `api.callAsync(...)`, and `api.fs/http/codec/crypto`
+   wrappers; Python exposes `host.call(...)`, `host.fs_*`, and
+   `host.http_fetch(...)`.
 3. imports and code shape: JS worker execution uses one finalized source and
    has no runtime loader; local JS modules must be bundled first. Python
    module/snippet mode can use allowlisted Python imports at runtime.
@@ -513,15 +540,8 @@ Runtime-specific JS code still owns:
 2. JS global injection
 3. JS result normalization
 4. JS error formatting
-5. QuickJS job pumping if async APIs are exposed
+5. QuickJS job pumping for promise results and async host APIs
 6. bundle/transform behavior for constrained JS authoring helpers
-
-The next parity feature for JS should be promise-aware execution: allow
-`exports.run` or snippet `result` to be a promise, pump QuickJS pending jobs
-until settlement, and expose promise-returning host APIs whose `host_call_id`
-responses resolve or reject the right promise. That work must define timeout,
-cancellation, stream-event ordering, backpressure, and failure behavior before
-the public contract advertises async JS nodes.
 
 ## Relationship To Custom UI Components
 

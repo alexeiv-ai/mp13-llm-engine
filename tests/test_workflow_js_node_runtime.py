@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import threading
 import time
@@ -105,12 +106,135 @@ exports.run = function(input, api) {
     assert [call["method"] for call in calls] == ["host.describe", "fs.read_text", "fs.write_text"]
 
 
-def test_workflow_js_node_rejects_promise_return_for_sync_v1() -> None:
+def test_workflow_js_node_resolves_promise_return() -> None:
     source = "exports.run = function() { return Promise.resolve({output: true}); };"
     out = WorkflowJsNodeRuntimeRegistry().execute(_request(source))
 
+    assert out["ok"] is True
+    assert out["output"] is True
+
+
+def test_workflow_js_node_maps_promise_rejection() -> None:
+    source = "exports.run = function() { return Promise.reject(new Error('async boom')); };"
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source))
+
     assert out["ok"] is False
-    assert out["reason"] == "workflow_sandbox_async_unsupported"
+    assert out["reason"] == "workflow_sandbox_runtime_error"
+    assert out["detail"]["message"] == "async boom"
+
+
+def test_workflow_js_node_resolves_snippet_promise_result() -> None:
+    source = "result = Promise.resolve({output: {snippet: payload.value}});"
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source, execution_mode="snippet"))
+
+    assert out["ok"] is True
+    assert out["output"] == {"snippet": 3}
+
+
+def test_workflow_js_node_supports_async_host_calls() -> None:
+    source = """
+exports.run = async function(input, api) {
+  const text = await api.fs.readTextAsync("seed", "");
+  await api.fs.writeTextAsync("report", "", text.toUpperCase());
+  return {output: {seed: text}};
+};
+"""
+    calls = []
+
+    def dispatcher(call: Dict[str, Any]) -> Dict[str, Any]:
+        calls.append(dict(call))
+        if call["method"] == "fs.read_text":
+            return {"text": "demo"}
+        if call["method"] == "fs.write_text":
+            assert call["arguments"]["text"] == "DEMO"
+            return {"ok": True}
+        raise AssertionError(call["method"])
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is True
+    assert out["output"] == {"seed": "demo"}
+    assert [call["method"] for call in calls] == ["fs.read_text", "fs.write_text"]
+
+
+def test_workflow_js_node_correlates_out_of_order_async_host_responses() -> None:
+    source = """
+exports.run = async function(input, api) {
+  const slow = api.callAsync("demo.slow", {});
+  const fast = api.callAsync("demo.fast", {});
+  const values = await Promise.all([slow, fast]);
+  return {output: values.map((value) => value.name)};
+};
+"""
+
+    def dispatcher(call: Dict[str, Any]) -> Dict[str, Any]:
+        if call["method"] == "demo.slow":
+            time.sleep(0.1)
+            return {"name": "slow"}
+        if call["method"] == "demo.fast":
+            return {"name": "fast"}
+        raise AssertionError(call["method"])
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is True
+    assert out["output"] == ["slow", "fast"]
+
+
+def test_workflow_js_node_buffers_async_response_seen_by_sync_call() -> None:
+    source = """
+exports.run = async function(input, api) {
+  const fast = api.callAsync("demo.fast", {});
+  const slow = api.call("demo.slow", {});
+  const fastValue = await fast;
+  return {output: {fast: fastValue.name, slow: slow.name}};
+};
+"""
+
+    def dispatcher(call: Dict[str, Any]) -> Dict[str, Any]:
+        if call["method"] == "demo.fast":
+            return {"name": "fast"}
+        if call["method"] == "demo.slow":
+            time.sleep(0.1)
+            return {"name": "slow"}
+        raise AssertionError(call["method"])
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is True
+    assert out["output"] == {"fast": "fast", "slow": "slow"}
+
+
+def test_workflow_js_node_supports_awaitable_host_dispatcher() -> None:
+    source = """
+exports.run = async function(input, api) {
+  const value = await api.callAsync("demo.async", {value: input.value});
+  return {output: value};
+};
+"""
+
+    async def dispatcher(call: Dict[str, Any]) -> Dict[str, Any]:
+        await asyncio.sleep(0)
+        return {"accepted": call["arguments"]["value"] == 3}
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is True
+    assert out["output"] == {"accepted": True}
+
+
+def test_workflow_js_node_maps_async_host_api_failure_detail() -> None:
+    source = "exports.run = async function(input, api) { return await api.callAsync('missing.method', {}); };"
+
+    def dispatcher(_call: Dict[str, Any]) -> Dict[str, Any]:
+        raise PermissionError("policy denied")
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is False
+    assert out["reason"] == "host_call_failed"
+    assert out["detail"]["message"] == "policy denied"
+    assert out["detail"]["error_type"] == "PermissionError"
 
 
 def test_workflow_js_node_returns_structured_runtime_error() -> None:
