@@ -555,9 +555,11 @@ def _relative_module_id(importer_id: str, specifier: str) -> str:
 def _candidate_ids(raw_id: str) -> List[str]:
     clean = _module_id(raw_id)
     candidates = [clean]
-    if not clean.endswith(".js"):
+    if not clean.endswith((".js", ".mjs")):
         candidates.append(f"{clean}.js")
+        candidates.append(f"{clean}.mjs")
         candidates.append(f"{clean}/index.js")
+        candidates.append(f"{clean}/index.mjs")
     return list(dict.fromkeys(candidates))
 
 
@@ -894,7 +896,7 @@ def build_workflow_js_module_bundle(
             origin_path = row.get("origin_path")
             if isinstance(origin_path, Path) and root.get("path") is not None:
                 base = origin_path.parent
-                for suffix in ["", ".js", "/index.js"]:
+                for suffix in ["", ".js", ".mjs", "/index.js", "/index.mjs"]:
                     target = (base / f"{specifier}{suffix}").resolve()
                     if _path_inside(target, root["path"]) and target.exists() and target.is_file():
                         module_id = _lib_module_id(int(root.get("index") or 0), root["path"], target)

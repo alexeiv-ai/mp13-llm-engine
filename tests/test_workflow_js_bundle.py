@@ -255,6 +255,21 @@ def test_workflow_js_module_bundle_reads_missing_relative_modules_from_local_roo
     assert out["output"] == 42
 
 
+def test_workflow_js_module_bundle_resolves_extensionless_mjs_from_local_root(tmp_path) -> None:
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "main.js").write_text(
+        'import answer from "./lib/answer";\nexport function run() { return {output: answer}; }\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "lib" / "answer.mjs").write_text("export default 42;\n", encoding="utf-8")
+
+    bundle = build_workflow_js_module_bundle(entry_module="main.js", local_roots=[tmp_path])
+
+    assert bundle["ok"] is True
+    assert bundle["resolved_modules"] == ["lib/answer.mjs", "main.js"]
+    assert bundle["unresolved_imports"] == []
+
+
 def test_workflow_js_module_bundle_resolves_parent_relative_imports() -> None:
     bundle = build_workflow_js_module_bundle(
         entry_module="features/main.js",
@@ -329,6 +344,27 @@ def test_workflow_js_module_bundle_resolves_allowed_lib_imports(tmp_path) -> Non
 
     assert out["ok"] is True
     assert out["output"] == 42
+
+
+def test_workflow_js_module_bundle_resolves_allowed_lib_index_mjs_and_relative_mjs(tmp_path) -> None:
+    lib_root = tmp_path / "libs"
+    (lib_root / "math").mkdir(parents=True)
+    (lib_root / "math" / "index.mjs").write_text("import { two } from './two';\nexport const answer = two * 21;\n", encoding="utf-8")
+    (lib_root / "math" / "two.mjs").write_text("export const two = 2;\n", encoding="utf-8")
+    bundle = build_workflow_js_module_bundle(
+        entry_module="main.js",
+        allowed_lib_roots=[lib_root],
+        modules=[
+            {
+                "id": "main.js",
+                "source": 'import { answer } from "math";\nexport function run() { return {output: answer}; }\n',
+            }
+        ],
+    )
+
+    assert bundle["ok"] is True
+    assert bundle["resolved_modules"] == ["lib:0:math/index.mjs", "lib:0:math/two.mjs", "main.js"]
+    assert bundle["unresolved_imports"] == []
 
 
 def test_workflow_js_module_bundle_rejects_require_and_node_builtins() -> None:

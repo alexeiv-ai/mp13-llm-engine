@@ -292,6 +292,20 @@ class WorkflowJsNodeRuntime:
             pass
         self.ensure_stopped()
 
+    def _wait_for_exit(self, *, timeout_seconds: float = 1.0) -> None:
+        try:
+            if self.proc.poll() is None:
+                self.proc.wait(timeout=max(0.05, float(timeout_seconds or 1.0)))
+        except Exception:
+            self._kill()
+            try:
+                self.proc.wait(timeout=0.5)
+            except Exception:
+                pass
+        finally:
+            if self.proc.poll() is not None:
+                _forget_proc(self.proc)
+
     def cancel(self) -> bool:
         self._cancel_requested = True
         killed = self._kill()
@@ -330,6 +344,7 @@ class WorkflowJsNodeRuntime:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self._kill()
+                self._wait_for_exit(timeout_seconds=0.5)
                 self._busy = False
                 return {
                     "ok": False,
@@ -343,13 +358,25 @@ class WorkflowJsNodeRuntime:
             except queue.Empty:
                 if self.proc.poll() is not None:
                     if self._cancel_requested:
-                        return {"ok": False, "reason": "workflow_sandbox_canceled", "detail": {}, "stdout": last_stdout, "stderr": last_stderr}
+                        return {
+                            "ok": False,
+                            "reason": "workflow_sandbox_canceled",
+                            "detail": {"message": "JS node runtime canceled"},
+                            "stdout": last_stdout,
+                            "stderr": last_stderr,
+                        }
+                    stderr = ""
+                    try:
+                        if self.proc.stderr is not None:
+                            stderr = self.proc.stderr.read() or ""
+                    except Exception:
+                        stderr = ""
                     return {
                         "ok": False,
                         "reason": "workflow_sandbox_runtime_error",
                         "detail": {"message": "JS node runtime exited without result"},
                         "stdout": last_stdout,
-                        "stderr": last_stderr,
+                        "stderr": last_stderr or stderr,
                     }
                 continue
             event_type = _clean(row.get("type"))
@@ -381,8 +408,32 @@ class WorkflowJsNodeRuntime:
                 ).start()
                 continue
             if event_type == "canceled":
+                self._wait_for_exit()
                 self._busy = False
-                return {"ok": False, "reason": "workflow_sandbox_canceled", "detail": {}, "stdout": last_stdout, "stderr": last_stderr}
+                return {
+                    "ok": False,
+                    "reason": "workflow_sandbox_canceled",
+                    "detail": {"message": "JS node runtime canceled"},
+                    "stdout": last_stdout,
+                    "stderr": last_stderr,
+                }
+            if event_type == "process_exit":
+                self._busy = False
+                if self._cancel_requested:
+                    return {
+                        "ok": False,
+                        "reason": "workflow_sandbox_canceled",
+                        "detail": {"message": "JS node runtime canceled"},
+                        "stdout": last_stdout,
+                        "stderr": last_stderr,
+                    }
+                return {
+                    "ok": False,
+                    "reason": _clean(row.get("reason")) or "workflow_sandbox_runtime_error",
+                    "detail": {"message": "JS node runtime exited without result"},
+                    "stdout": last_stdout,
+                    "stderr": last_stderr,
+                }
             if event_type == "result":
                 last_stdout = str(row.get("stdout") or "")
                 last_stderr = str(row.get("stderr") or "")

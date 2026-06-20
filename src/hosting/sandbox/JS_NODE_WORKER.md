@@ -215,6 +215,7 @@ Convenience methods on `api` may wrap dispatcher methods:
 14. `api.fs.mkdirAsync(rootId, relativePath="", options={})`
 15. `api.http.fetch(url, options={})`
 16. `api.http.fetchAsync(url, options={})`
+17. `api.http.fetchJsonAsync(url, options={})`
 
 Transport should reuse the framed host-call pattern from Python node: the child
 harness sends `host_call` messages with `host_call_id`, the host dispatcher
@@ -262,6 +263,8 @@ Supported async forms:
    response.
 4. async convenience wrappers such as `api.fs.readTextAsync(...)` and
    `api.http.fetchAsync(...)` return promises.
+5. `api.http.fetchJsonAsync(...)` returns a promise that parses the brokered
+   HTTP response `body_b64` as JSON.
 
 The synchronous wrappers remain available. `api.call(...)`, `api.fs.readText`,
 and related sync helpers block the child harness until the matching
@@ -273,12 +276,15 @@ Limits and caveats:
 1. no Node timers, Node streams, libuv handles, or npm event-loop behavior
 2. no background task lifetime after the terminal worker result
 3. timeout and cancellation are request-scoped; pending promises fail with the
-   same terminal request failure semantics as the worker
+   same terminal request failure semantics as the worker, and timeout details
+   include pending async `host_call_id` values when available
 4. `host_call_id` remains scoped to the worker/request IPC conversation, not a
    globally routable daemon identifier
 5. sync and async host calls share one response-correlation buffer, so an
    out-of-order async response observed during a sync wait can still be applied
    to the right pending promise later
+6. a `host_response` whose `host_call_id` does not match a pending JS host call
+   fails the request with `host_response_unknown_host_call_id`
 
 ## Module And Import Policy
 

@@ -153,11 +153,18 @@ def _pump_quickjs_until_settled(
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            pending_host_call_ids: list[str] = []
+            try:
+                pending_json = ctx.eval("JSON.stringify(Object.keys(globalThis.__workflowPendingHostCalls || {}))")
+                parsed = json.loads(str(pending_json or "[]"))
+                pending_host_call_ids = [str(item) for item in parsed] if isinstance(parsed, list) else []
+            except Exception:
+                pending_host_call_ids = []
             return json.dumps(
                 {
                     "__workflow_error": {
                         "reason": "workflow_sandbox_timeout",
-                        "detail": {"timeout_ms": timeout_ms},
+                        "detail": {"timeout_ms": timeout_ms, "pending_host_call_ids": pending_host_call_ids},
                     }
                 },
                 ensure_ascii=False,
@@ -300,6 +307,15 @@ globalThis.console = {
 globalThis.__workflowPendingHostCalls = {};
 globalThis.__workflow_async_settled = false;
 globalThis.__workflow_result_json = "";
+globalThis.__workflowSetError = function (reason, detail) {
+  globalThis.__workflow_result_json = JSON.stringify({
+    __workflow_error: {
+      reason: String(reason || "workflow_sandbox_runtime_error"),
+      detail: detail && typeof detail === "object" ? detail : {}
+    }
+  });
+  globalThis.__workflow_async_settled = true;
+};
 globalThis.__workflowHostError = function (row) {
   const detail = row && row.detail && typeof row.detail === "object" ? row.detail : {};
   const message = String((row && (row.message || detail.message || row.reason)) || "host_call_failed");
@@ -314,6 +330,10 @@ globalThis.__workflowHandleHostResponse = function (rowJson) {
   const callId = String(row.host_call_id || "");
   const pending = globalThis.__workflowPendingHostCalls[callId];
   if (!pending) {
+    globalThis.__workflowSetError("host_response_unknown_host_call_id", {
+      host_call_id: callId,
+      message: "host_response did not match a pending JS host call"
+    });
     return;
   }
   delete globalThis.__workflowPendingHostCalls[callId];
@@ -368,6 +388,12 @@ globalThis.api = {
     fetchAsync: function (url, options) {
       options = options || {};
       return api.callAsync("http.fetch", {url: String(url || ""), method: String(options.method || "GET"), headers: options.headers || {}, body_b64: String(options.body_b64 || ""), timeout_seconds: Number(options.timeout_seconds || 30), max_response_bytes: Number(options.max_response_bytes || 1048576)});
+    },
+    fetchJsonAsync: function (url, options) {
+      return api.http.fetchAsync(url, options).then(function (response) {
+        const text = __base64_decode(String((response && response.body_b64) || ""));
+        return JSON.parse(text || "null");
+      });
     }
   },
   codec: {

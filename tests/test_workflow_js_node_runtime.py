@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import threading
 import time
 from typing import Any, Dict
 
-from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntimeRegistry
+from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntime, WorkflowJsNodeRuntimeRegistry
 
 
 def _request(source: str, **overrides: Any) -> Dict[str, Any]:
@@ -223,6 +224,26 @@ exports.run = async function(input, api) {
     assert out["output"] == {"accepted": True}
 
 
+def test_workflow_js_node_supports_fetch_json_async_wrapper() -> None:
+    source = """
+exports.run = async function(input, api) {
+  const value = await api.http.fetchJsonAsync("https://example.test/data.json", {method: "GET"});
+  return {output: value};
+};
+"""
+
+    def dispatcher(call: Dict[str, Any]) -> Dict[str, Any]:
+        assert call["method"] == "http.fetch"
+        assert call["arguments"]["url"] == "https://example.test/data.json"
+        body = base64.b64encode(b'{"accepted":true,"count":2}').decode("ascii")
+        return {"status_code": 200, "headers": {"content-type": "application/json"}, "body_b64": body}
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is True
+    assert out["output"] == {"accepted": True, "count": 2}
+
+
 def test_workflow_js_node_maps_async_host_api_failure_detail() -> None:
     source = "exports.run = async function(input, api) { return await api.callAsync('missing.method', {}); };"
 
@@ -235,6 +256,31 @@ def test_workflow_js_node_maps_async_host_api_failure_detail() -> None:
     assert out["reason"] == "host_call_failed"
     assert out["detail"]["message"] == "policy denied"
     assert out["detail"]["error_type"] == "PermissionError"
+
+
+def test_workflow_js_node_rejects_unknown_async_host_response(monkeypatch) -> None:
+    source = """
+exports.run = async function(input, api) {
+  const value = await api.callAsync("demo.value", {});
+  return {output: value};
+};
+"""
+    original = WorkflowJsNodeRuntime._dispatch_host_call
+
+    def dispatch_with_unknown_response(self: WorkflowJsNodeRuntime, payload: Dict[str, Any], host_dispatcher: Any) -> None:
+        self.respond_host_call(host_call_id="unknown-host-call", result={"value": "wrong"})
+        original(self, payload, host_dispatcher)
+
+    def dispatcher(_call: Dict[str, Any]) -> Dict[str, Any]:
+        return {"value": "right"}
+
+    monkeypatch.setattr(WorkflowJsNodeRuntime, "_dispatch_host_call", dispatch_with_unknown_response)
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is False
+    assert out["reason"] == "host_response_unknown_host_call_id"
+    assert out["detail"]["host_call_id"] == "unknown-host-call"
 
 
 def test_workflow_js_node_returns_structured_runtime_error() -> None:
