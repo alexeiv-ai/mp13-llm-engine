@@ -1544,7 +1544,7 @@ def run_interactive_mode(args: argparse.Namespace) -> int:
                     "l": ("List loaded engines and sandboxes", ""),
                     "o": ("Load engine from config", ""),
                     "d": ("Engine/Sandbox details", ""),
-                    "j": ("Manage workflow helpers", ""),
+                    "j": ("Manage workflow runtimes", ""),
                     "m": ("Print daemon metrics", ""),
                     "t": ("Test loaded model prompt", ""),
                     "c": ("List live consumers", ""),
@@ -2031,20 +2031,29 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
         helpers = {
             eid: info
             for eid, info in engines.items()
-            if str(dict(info or {}).get("executor_kind") or "").strip() == "workflow_python_helper"
+            if str(dict(info or {}).get("executor_kind") or "").strip() in {"workflow_python_helper", "workflow_js_node"}
         }
         if not helpers:
-            print("  No workflow Python helper workers are loaded.")
+            print("  No workflow runtimes are loaded.")
             return session_token
         opts = {}
         for eid, info in helpers.items():
             resources = dict(dict(info or {}).get("process_resources") or {})
             executor = str(dict(info or {}).get("executor_kind") or "").strip()
-            prefix = "workflow_python"
+            is_js = executor == "workflow_js_node"
+            prefix = "workflow_js" if is_js else "workflow_python"
             cap = resources.get(f"{prefix}_capacity")
-            active = resources.get("workflow_helper_pool_active_process_count")
-            total = resources.get("workflow_helper_pool_process_count")
-            label = "Python"
+            active = (
+                resources.get("workflow_js_active_calls")
+                if is_js
+                else resources.get("workflow_helper_pool_active_process_count")
+            )
+            total = (
+                resources.get("workflow_js_node_process_count")
+                if is_js
+                else resources.get("workflow_helper_pool_process_count")
+            )
+            label = "JS node" if is_js else "Python helper"
             env_key = _workflow_environment_key(dict(info or {}))
             hint_bits = [label]
             if env_key:
@@ -2057,20 +2066,21 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                 hint_bits.append(f"total={total}")
             hint = " ".join(hint_bits)
             opts[eid] = (f"Manage {eid}", hint)
-        choice = _prompt_menu("Select Workflow Helper", opts, "b", allow_back=True, allow_changes=False)
+        choice = _prompt_menu("Select Workflow Runtime", opts, "b", allow_back=True, allow_changes=False)
         if choice in ("b", "back"):
             return session_token
         selected_info = dict(helpers.get(choice) or {})
         selected_executor = str(selected_info.get("executor_kind") or "").strip()
         is_python = selected_executor == "workflow_python_helper"
+        runtime_profile = "helper" if is_python else "node"
         runtime_kind = "workflow-python" if is_python else "workflow-js"
         environment_key = _workflow_environment_key(selected_info)
         command_prefix = runtime_kind
-        helper_label = "Workflow Python runtime" if is_python else "Workflow JS runtime"
+        helper_label = "Workflow Python helper runtime" if is_python else "Workflow JS node runtime"
         while True:
             resource_payload = {
                 "engine_id": choice,
-                "profile": "helper",
+                "profile": runtime_profile,
             }
             if environment_key:
                 resource_payload["environment_key"] = environment_key
@@ -2086,16 +2096,16 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
             session_token = _active_session_token(args, session_token)
             workflow_pool = dict(resources.get("workflow_pool") or {})
             workflow_pool_metrics = dict(workflow_pool.get("metrics") or {})
-            pool = dict(resources.get("pool") or resources.get("node_pool") or {})
+            pool = dict(resources.get("pool") or resources.get("node_pool") or resources.get("node_runtime") or {})
             node_rows = [
                 dict(row or {})
                 for row in list(pool.get("processes") or pool.get("node_processes") or [])
                 if isinstance(row, dict)
             ]
             active_request_ids = [
-                str(row.get("active_request_id") or "").strip()
+                str(row.get("active_request_id") or row.get("request_id") or "").strip()
                 for row in node_rows
-                if str(row.get("active_request_id") or "").strip()
+                if str(row.get("active_request_id") or row.get("request_id") or "").strip()
             ]
             if not active_request_ids:
                 active_request_ids = [
@@ -2127,9 +2137,9 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                 ("Active Calls", active_value),
                 ("Available Slots", available_value),
                 ("Processes", (
-                    f"active={pool.get('active_process_count') if pool.get('active_process_count') is not None else pool.get('active_node_process_count')}, "
+                    f"active={pool.get('active_process_count') if pool.get('active_process_count') is not None else pool.get('active_node_process_count') if pool.get('active_node_process_count') is not None else pool.get('active_count')}, "
                     f"idle={pool.get('idle_process_count') if pool.get('idle_process_count') is not None else pool.get('idle_node_process_count')}, "
-                    f"total={pool.get('process_count') if pool.get('process_count') is not None else pool.get('node_process_count')}"
+                    f"total={pool.get('process_count') if pool.get('process_count') is not None else pool.get('node_process_count') if pool.get('node_process_count') is not None else len(node_rows)}"
                 )),
                 ("CPU", _format_percent_or_na(pool.get("cpu_percent") if pool.get("cpu_percent") is not None else pool.get("node_cpu_percent") if pool.get("node_cpu_percent") is not None else resources.get("node_cpu_percent") if not is_python else resources.get("python_cpu_percent"))),
                 ("RSS", _format_mb_or_na(pool.get("memory_mb") if pool.get("memory_mb") is not None else pool.get("node_memory_mb") if pool.get("node_memory_mb") is not None else resources.get("node_memory_mb") if not is_python else resources.get("python_memory_mb"))),
@@ -2170,7 +2180,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                         f"busy={'yes' if bool(node.get('busy')) else 'no'}",
                         f"requests={node.get('request_count')}",
                     ]
-                    active_request_id = str(node.get("active_request_id") or "").strip()
+                    active_request_id = str(node.get("active_request_id") or node.get("request_id") or "").strip()
                     if active_request_id:
                         bits.append(f"request={active_request_id}")
                     if metrics.get("cpu_percent") is not None:
@@ -2181,35 +2191,33 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
             action_opts = {
                 "s": ("Set capacity", ""),
                 "r": ("Refresh", ""),
+                "e": ("Ensure workflow runtime", f"Use {runtime_profile} profile"),
             }
-            if is_python:
-                action_opts["e"] = ("Ensure workflow runtime", "Annotate/use environment-keyed workflow Python")
             if active_request_ids:
                 action_opts["c"] = ("Cancel request", "Kill the child process currently running a request")
             status_prefix = "workflow-python" if is_python else "workflow-js"
             can_use_runtime_status = bool(environment_key)
             if can_use_runtime_status:
                 action_opts["i"] = ("Inspect request", "Show request lifetime/progress by environment key")
-            if is_python:
-                action_opts["v"] = ("Receive stream events", "Read workflow-python stream events by stream id")
-            action = _prompt_menu("Workflow Helper Action", action_opts, "b", allow_back=True, allow_changes=False)
+            action_opts["v"] = ("Receive stream events", f"Read {command_prefix} stream events by stream id")
+            action = _prompt_menu("Workflow Runtime Action", action_opts, "b", allow_back=True, allow_changes=False)
             if action in ("b", "back"):
                 return session_token
             if action == "r":
                 continue
             if action == "e":
                 payload = {
-                    "profile": "helper",
+                    "profile": runtime_profile,
                     "engine_id": choice,
                     "capacity": int(capacity_value or 1),
                 }
                 if environment_key:
                     payload["environment_key"] = environment_key
-                out = _api_invoke(args, "workflow-python-ensure", payload, session_token=session_token)
+                out = _api_invoke(args, f"{command_prefix}-ensure", payload, session_token=session_token)
                 session_token = _active_session_token(args, session_token)
                 result = dict(out or {})
                 environment_key = str(result.get("environment_key") or environment_key or "").strip()
-                print(_c("good", f"Workflow Python runtime ensured for {choice}."))
+                print(_c("good", f"{helper_label} ensured for {choice}."))
                 continue
             if action == "s":
                 raw = input("New capacity [leave blank to keep]: ").strip()
@@ -2225,7 +2233,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                     f"{command_prefix}-set-capacity",
                     {
                         "engine_id": choice,
-                        "profile": "helper",
+                        "profile": runtime_profile,
                         **({"environment_key": environment_key} if environment_key else {}),
                         "capacity": capacity,
                     },
@@ -2247,7 +2255,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                     f"{command_prefix}-cancel-request",
                     {
                         "engine_id": choice,
-                        "profile": "helper",
+                        "profile": runtime_profile,
                         **({"environment_key": environment_key} if environment_key else {}),
                         "request_id": request_id,
                     },
@@ -2256,7 +2264,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                 session_token = _active_session_token(args, session_token)
                 result = dict(out or {})
                 if bool(result.get("canceled")):
-                    print(_c("good", f"Canceled workflow helper request {request_id}."))
+                    print(_c("good", f"Canceled workflow runtime request {request_id}."))
                 else:
                     print(_c("warn", f"Request was not active: {request_id} ({result.get('reason') or 'not_found'})."))
                 continue
@@ -2275,7 +2283,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                     f"{status_prefix}-request-status",
                     {
                         "engine_id": choice,
-                        "profile": "helper",
+                        "profile": runtime_profile,
                         "environment_key": environment_key,
                         "request_id": request_id,
                     },
@@ -2297,7 +2305,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                     continue
                 out = _api_invoke(
                     args,
-                    "workflow-python-stream-recv",
+                    f"{command_prefix}-stream-recv",
                     {"stream_id": stream_id, "max_items": max_items},
                     session_token=session_token,
                 )

@@ -1159,20 +1159,23 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
     ch.workflow_js_environment_spec(
         profile="node",
         node={"runtime_hash": "quickjs-demo"},
+        javascript={"host_api": {"enabled": True}},
         sandbox_policy={"sandbox": {"enabled": True}},
     )
     ch.ensure_workflow_js(
         profile="node",
         environment_key="env-js",
         node={"runtime_hash": "quickjs-demo"},
+        javascript={"host_api": {"enabled": True}},
         engine_id="wf-js",
         capacity=4,
     )
-    ch.workflow_js_resources(profile="node", environment_key="env-js", engine_id="wf-js")
+    ch.workflow_js_resources(profile="node", environment_key="env-js", engine_id="wf-js", javascript={"host_api": {"enabled": True}})
     ch.execute_workflow_js(
         profile="node",
         environment_key="env-js",
         engine_id="wf-js",
+        javascript={"host_api": {"enabled": True}},
         request={
             "request_id": "req-1",
             "module_source": "exports.run = function(input, api) { return { output: { accepted: true } }; };",
@@ -1204,6 +1207,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                 "profile": "node",
                 "environment_name": "workflow-js-node",
                 "node": {"runtime_hash": "quickjs-demo"},
+                "javascript": {"host_api": {"enabled": True}},
                 "sandbox_policy": {"sandbox": {"enabled": True}},
                 "session_token": "tok-123",
             },
@@ -1215,6 +1219,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                 "environment_name": "workflow-js-node",
                 "environment_key": "env-js",
                 "node": {"runtime_hash": "quickjs-demo"},
+                "javascript": {"host_api": {"enabled": True}},
                 "capacity": 4,
                 "sandbox_policy": None,
                 "engine_id": "wf-js",
@@ -1230,6 +1235,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                 "environment_key": "env-js",
                 "engine_id": "wf-js",
                 "node": {},
+                "javascript": {"host_api": {"enabled": True}},
                 "sandbox_policy": None,
                 "session_token": "tok-123",
             },
@@ -1249,6 +1255,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                     "payload": {},
                 },
                 "node": {},
+                "javascript": {"host_api": {"enabled": True}},
                 "capacity": 1,
                 "sandbox_policy": None,
                 "session_token": "tok-123",

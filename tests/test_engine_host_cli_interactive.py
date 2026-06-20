@@ -497,6 +497,125 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
     assert "workflow_python_node_profile_not_implemented" in out
 
 
+def test_manage_workflow_runtimes_supports_js_node_status(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    invocations: list[tuple[str, Dict[str, Any]]] = []
+
+    def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
+        invocations.append((cmd, dict(payload)))
+        if cmd == "discover-running":
+            return {
+                "engines": {
+                    "wf-js": {
+                        "executor_kind": "workflow_js_node",
+                        "environment": {"environment_key": "env-js"},
+                        "process_resources": {"workflow_js_capacity": 2},
+                    }
+                }
+            }
+        if cmd == "workflow-js-resources":
+            return {
+                "status": "ok",
+                "engine_id": "wf-js",
+                "environment_key": "env-js",
+                "workflow_pool": {
+                    "pool_id": "workflow_js/env-js",
+                    "metrics": {
+                        "desired_capacity": 2,
+                        "active_request_ids": ["req-js-1"],
+                        "recent_requests": [{"request_id": "req-js-1", "status": "running"}],
+                    },
+                },
+                "node_runtime": {"active_count": 1, "processes": [{"request_id": "req-js-1", "pid": 123, "alive": True}]},
+            }
+        if cmd == "workflow-js-request-status":
+            return {
+                "status": "ok",
+                "environment_key": "env-js",
+                "request": {
+                    "request_id": "req-js-1",
+                    "status": "running",
+                    "stream_event_count": 2,
+                    "latest_progress": {"message": "js halfway"},
+                },
+            }
+        raise AssertionError(cmd)
+
+    choices = iter(["wf-js", "i", "b"])
+    monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(interactive, "_api_invoke", fake_api)
+    monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
+    monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+
+    interactive._manage_workflow_runtimes(args, session_token="tok-1")
+
+    assert ("workflow-js-resources", {"engine_id": "wf-js", "profile": "node", "environment_key": "env-js"}) in invocations
+    assert (
+        "workflow-js-request-status",
+        {"engine_id": "wf-js", "profile": "node", "environment_key": "env-js", "request_id": "req-js-1"},
+    ) in invocations
+    out = capsys.readouterr().out
+    assert "workflow_js/env-js" in out
+    assert "js halfway" in out
+
+
+def test_manage_workflow_runtimes_can_receive_js_stream_events(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    invocations: list[tuple[str, Dict[str, Any]]] = []
+
+    def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
+        invocations.append((cmd, dict(payload)))
+        if cmd == "discover-running":
+            return {
+                "engines": {
+                    "wf-js": {
+                        "executor_kind": "workflow_js_node",
+                        "environment": {"environment_key": "env-js"},
+                        "process_resources": {"workflow_js_capacity": 2},
+                    }
+                }
+            }
+        if cmd == "workflow-js-resources":
+            return {
+                "status": "ok",
+                "engine_id": "wf-js",
+                "environment_key": "env-js",
+                "workflow_pool": {"pool_id": "workflow_js/env-js", "metrics": {"desired_capacity": 2}},
+            }
+        if cmd == "workflow-js-stream-recv":
+            return {
+                "status": "ok",
+                "events": [
+                    {"type": "started", "payload": {"request_id": "req-js-1"}},
+                    {"type": "progress", "payload": {"message": "js progress"}},
+                    {"type": "result", "payload": {"status": "ok"}},
+                ],
+            }
+        raise AssertionError(cmd)
+
+    choices = iter(["wf-js", "v", "b"])
+    inputs = iter(["js-stream-1", "5"])
+    monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(interactive, "_api_invoke", fake_api)
+    monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
+    monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+
+    interactive._manage_workflow_runtimes(args, session_token="tok-1")
+
+    assert ("workflow-js-stream-recv", {"stream_id": "js-stream-1", "max_items": 5}) in invocations
+    out = capsys.readouterr().out
+    assert "Stream Events" in out
+    assert "js progress" in out
+
+
 def test_print_sessions_marks_current_interactive_cli(capsys: pytest.CaptureFixture[str]) -> None:
     current = "abcdefghijk"
     other = "other-session-token"

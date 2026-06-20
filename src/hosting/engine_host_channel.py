@@ -1781,6 +1781,7 @@ class EngineHostControlChannel:
         profile: str = "node",
         environment_name: str = "workflow-js-node",
         node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
@@ -1789,6 +1790,7 @@ class EngineHostControlChannel:
                 "profile": str(profile or "node").strip() or "node",
                 "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
             },
         )
@@ -1801,6 +1803,7 @@ class EngineHostControlChannel:
         environment_name: str = "workflow-js-node",
         environment_key: Optional[str] = None,
         node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         engine_id: Optional[str] = None,
@@ -1813,6 +1816,7 @@ class EngineHostControlChannel:
                 "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "environment_key": str(environment_key or "").strip() or None,
                 "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
                 "capacity": max(1, min(int(capacity or 1), 256)),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
                 "engine_id": str(engine_id or "").strip() or None,
@@ -1829,6 +1833,7 @@ class EngineHostControlChannel:
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
         node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
@@ -1839,6 +1844,7 @@ class EngineHostControlChannel:
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
             },
         )
@@ -1853,6 +1859,7 @@ class EngineHostControlChannel:
         engine_id: Optional[str] = None,
         request: Optional[Dict[str, Any]] = None,
         node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -1865,6 +1872,7 @@ class EngineHostControlChannel:
                 "engine_id": str(engine_id or "").strip() or None,
                 "request": dict(request or {}),
                 "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
                 "capacity": max(1, min(int(capacity or 1), 256)),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
             },

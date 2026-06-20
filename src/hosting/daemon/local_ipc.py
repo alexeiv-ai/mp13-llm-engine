@@ -2086,6 +2086,7 @@ class EngineHostDaemon:
                 profile=str(payload.get("profile") or "node"),
                 environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                 node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
             )
         if cmd == "workflow-js-ensure":
@@ -2094,6 +2095,7 @@ class EngineHostDaemon:
                 environment_name=str(payload.get("environment_name") or "workflow-js-node"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
@@ -2106,6 +2108,7 @@ class EngineHostDaemon:
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
             )
         if cmd == "workflow-js-execute":
@@ -2116,6 +2119,7 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 request=dict(payload.get("request") or {}),
                 node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
             )

@@ -222,7 +222,7 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     daemon = EngineHostDaemon.__new__(EngineHostDaemon)
     daemon.svc = fake
 
-    assert daemon._call_service("workflow-js-environment-spec", {"profile": "helper"})["environment_key"] == "env-js"
+    assert daemon._call_service("workflow-js-environment-spec", {"profile": "node", "javascript": {"host_api": {"enabled": True}}})["environment_key"] == "env-js"
     assert daemon._call_service("workflow-js-ensure", {"engine_id": "wf-js"})["engine_id"] == "wf-js"
     assert daemon._call_service("workflow-js-execute", {"request": {"request_id": "req-1"}})["ok"] is True
     assert daemon._call_service("workflow-js-resources", {"engine_id": "wf-js"})["status"] == "ok"
@@ -247,6 +247,8 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
         "stream_send",
         "stream_close",
     ]
+    assert fake.calls[0][1]["profile"] == "node"
+    assert fake.calls[0][1]["javascript"] == {"host_api": {"enabled": True}}
     assert fake.calls[-4][1]["profile"] == "node"
     assert fake.calls[-4][1]["environment_name"] == "workflow-js-node"
     assert fake.calls[-4][1]["request"] == {"request_id": "req-js-stream"}

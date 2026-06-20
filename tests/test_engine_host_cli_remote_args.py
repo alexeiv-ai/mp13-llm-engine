@@ -222,9 +222,21 @@ def test_cli_local_workflow_js_facade_commands(
         def authorize_command(self, command: str, payload: Dict[str, Any]) -> None:
             calls.append(("authorize", {"command": command, **dict(payload)}))
 
+        def workflow_js_environment_spec(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("environment", dict(kwargs)))
+            return {"status": "ok", "environment_name": kwargs.get("environment_name")}
+
+        def ensure_workflow_js(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("ensure", dict(kwargs)))
+            return {"status": "ok", "environment_key": kwargs.get("environment_key")}
+
         def workflow_js_resources(self, **kwargs: Any) -> Dict[str, Any]:
             calls.append(("resources", dict(kwargs)))
             return {"status": "ok", "environment_key": kwargs.get("environment_key")}
+
+        def execute_workflow_js(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("execute", dict(kwargs)))
+            return {"status": "ok", "request_id": dict(kwargs.get("request") or {}).get("request_id")}
 
         def set_workflow_js_capacity(self, **kwargs: Any) -> Dict[str, Any]:
             calls.append(("capacity", dict(kwargs)))
@@ -257,11 +269,32 @@ def test_cli_local_workflow_js_facade_commands(
     monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
 
+    environment_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"javascript": {"host_api": {"enabled": True}}}),
+            "workflow-js-environment-spec",
+        ]
+    )
+    ensure_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "javascript": {"host_api": {"enabled": True}}}),
+            "workflow-js-ensure",
+        ]
+    )
     resources_rc = engine_host_cli.main(
         [
             "--payload-json",
-            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "node": {"runtime_hash": "quickjs-demo"}}),
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "node": {"runtime_hash": "quickjs-demo"}, "javascript": {"host_api": {"enabled": True}}}),
             "workflow-js-resources",
+        ]
+    )
+    execute_rc = engine_host_cli.main(
+        [
+            "--payload-json",
+            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "request": {"request_id": "req-js"}, "javascript": {"host_api": {"enabled": True}}}),
+            "workflow-js-execute",
         ]
     )
     resize_rc = engine_host_cli.main(
@@ -323,7 +356,10 @@ def test_cli_local_workflow_js_facade_commands(
         ]
     )
 
+    assert environment_rc == 0
+    assert ensure_rc == 0
     assert resources_rc == 0
+    assert execute_rc == 0
     assert resize_rc == 0
     assert cancel_rc == 0
     assert status_rc == 0
@@ -332,6 +368,30 @@ def test_cli_local_workflow_js_facade_commands(
     assert stream_send_rc == 0
     assert stream_close_rc == 0
     assert (
+        "environment",
+        {
+            "profile": "node",
+            "environment_name": "workflow-js-node",
+            "node": {},
+            "javascript": {"host_api": {"enabled": True}},
+            "sandbox_policy": None,
+        },
+    ) in calls
+    assert (
+        "ensure",
+        {
+            "profile": "node",
+            "environment_name": "workflow-js-node",
+            "environment_key": "env-js",
+            "node": {},
+            "javascript": {"host_api": {"enabled": True}},
+            "capacity": 1,
+            "sandbox_policy": None,
+            "engine_id": "wf-js",
+            "worker_profile_class": "generic",
+        },
+    ) in calls
+    assert (
         "resources",
         {
             "profile": "node",
@@ -339,6 +399,21 @@ def test_cli_local_workflow_js_facade_commands(
             "environment_key": "env-js",
             "engine_id": "wf-js",
             "node": {"runtime_hash": "quickjs-demo"},
+            "javascript": {"host_api": {"enabled": True}},
+            "sandbox_policy": None,
+        },
+    ) in calls
+    assert (
+        "execute",
+        {
+            "profile": "node",
+            "environment_name": "workflow-js-node",
+            "environment_key": "env-js",
+            "engine_id": "wf-js",
+            "request": {"request_id": "req-js"},
+            "node": {},
+            "javascript": {"host_api": {"enabled": True}},
+            "capacity": 1,
             "sandbox_policy": None,
         },
     ) in calls

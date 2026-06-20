@@ -886,13 +886,13 @@ class WorkflowHelperMixin:
             env_row.update(dict(environment or {}))
             env_row["environment_key"] = str(environment_key or "").strip() or None
             env_row["workflow_runtime_kind"] = "workflow_js"
-            env_row["workflow_profile"] = str(profile or "helper").strip() or "helper"
+            env_row["workflow_profile"] = str(profile or "node").strip() or "node"
             row["environment"] = env_row
             capabilities = dict(row.get("capabilities") or {})
             capabilities.update(
                 {
                     "workflow_js": True,
-                    "workflow_js_profile": str(profile or "helper").strip() or "helper",
+                    "workflow_js_profile": str(profile or "node").strip() or "node",
                     "environment_key": str(environment_key or "").strip() or None,
                 }
             )
