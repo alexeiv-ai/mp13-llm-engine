@@ -31,6 +31,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added broker seam for invoking client/toolbox provider sessions through a provider invoker.
 - [x] Kept provider bindings out of the callback envelope and sandbox-facing discovery.
 
+### Host Capability Slice 4: Provider Timeout And Cancellation
+
+- [x] Added structured provider errors for timeout, provider unavailable, and cancellation.
+- [x] Added broker-level provider timeout deadlines and async provider call cancellation.
+- [x] Added broker cancellation control via explicit `cancel(...)` and a `cancel_checker` hook.
+- [x] Mapped broken provider callback transports to `host_capability_provider_unavailable`.
+- [x] Preserved structured host-call error reasons through Python and JavaScript node runtime host responses.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.

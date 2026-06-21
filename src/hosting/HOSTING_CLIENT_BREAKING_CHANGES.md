@@ -192,3 +192,17 @@ or:
 ```
 
 Normal clients should still use hosting library helpers once callback transport is exposed; they should not manually construct low-level callback envelopes unless using raw daemon commands intentionally.
+
+## Host Capability Provider Timeout And Cancellation
+
+Date: 2026-06-21
+
+Scope: provider callback timeout, disconnect, and cancellation slice.
+
+Structured provider failures now preserve their reason through Python and JavaScript node host responses:
+
+- `host_call_timeout` for provider callback timeout
+- `host_capability_provider_unavailable` for missing/disconnected provider transport
+- `host_call_canceled` for broker/request cancellation
+
+Clients that surface sandbox host-call errors should prefer the returned `reason` field when it is available instead of parsing the error message string.

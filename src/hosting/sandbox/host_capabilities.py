@@ -25,6 +25,7 @@ _MAX_DESCRIPTION_CHARS = 4096
 CapabilityHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 AsyncCapabilityHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 ProviderInvoker = Callable[["HostCapabilitySession", "HostCapabilityProviderCall"], Awaitable[Dict[str, Any]] | Dict[str, Any]]
+CancelChecker = Callable[[], bool]
 
 
 def _clean(value: Any) -> str:
@@ -208,6 +209,21 @@ class HostCapabilityProviderError(RuntimeError):
         super().__init__(self.reason if not self.message else f"{self.reason}:{self.message}")
 
 
+class HostCapabilityProviderUnavailable(HostCapabilityProviderError):
+    def __init__(self, message: str = "host capability provider is unavailable", detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__("host_capability_provider_unavailable", message, detail)
+
+
+class HostCapabilityTimeout(HostCapabilityProviderError):
+    def __init__(self, message: str = "host capability provider call timed out", detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__("host_call_timeout", message, detail)
+
+
+class HostCapabilityCanceled(HostCapabilityProviderError):
+    def __init__(self, message: str = "host capability provider call canceled", detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__("host_call_canceled", message, detail)
+
+
 @dataclass(frozen=True)
 class HostCapabilityCallContext:
     request_id: str = ""
@@ -331,6 +347,8 @@ class HostCapabilityBroker:
         policy: Optional[Dict[str, Any]] = None,
         roots: Optional[Dict[str, Any]] = None,
         provider_invoker: Optional[ProviderInvoker] = None,
+        provider_timeout_seconds: float = 30.0,
+        cancel_checker: Optional[CancelChecker] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
@@ -339,7 +357,47 @@ class HostCapabilityBroker:
         self.policy = dict(policy or {})
         self.roots = dict(roots or {})
         self.provider_invoker = provider_invoker
+        self.provider_timeout_seconds = max(0.001, float(provider_timeout_seconds or 30.0))
+        self.cancel_checker = cancel_checker
+        self._cancel_requested = False
+        self._cancel_reason = "host_call_canceled"
         self._sessions: Dict[str, HostCapabilitySession] = {}
+
+    def cancel(self, reason: str = "host_call_canceled") -> None:
+        self._cancel_requested = True
+        self._cancel_reason = _clean(reason) or "host_call_canceled"
+
+    def _check_canceled(self) -> None:
+        if self._cancel_requested or (self.cancel_checker is not None and bool(self.cancel_checker())):
+            raise HostCapabilityCanceled(detail={"reason": self._cancel_reason})
+
+    def _provider_timeout_for_call(self, row: Dict[str, Any]) -> float:
+        raw = row.get("provider_timeout_seconds")
+        if raw is None:
+            raw = row.get("timeout_seconds")
+        if raw is None:
+            args = dict(row.get("arguments") or {})
+            raw = args.get("provider_timeout_seconds")
+        if raw is None:
+            return self.provider_timeout_seconds
+        return max(0.001, float(raw or self.provider_timeout_seconds))
+
+    async def _await_provider_response(self, response: Awaitable[Dict[str, Any]], *, timeout_seconds: float) -> Dict[str, Any]:
+        task = asyncio.ensure_future(response)
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            while True:
+                self._check_canceled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    task.cancel()
+                    raise HostCapabilityTimeout(detail={"timeout_seconds": timeout_seconds})
+                done, _pending = await asyncio.wait({task}, timeout=min(remaining, 0.05))
+                if done:
+                    return dict(await task or {})
+        except HostCapabilityCanceled:
+            task.cancel()
+            raise
 
     def register_session(self, session: HostCapabilitySession) -> None:
         sid = _clean(session.session_id)
@@ -466,9 +524,11 @@ class HostCapabilityBroker:
             method = session.methods.get(method_name)
             if method is not None:
                 if method.handler is None and method.async_handler is None:
+                    self._check_canceled()
                     if self.provider_invoker is None:
-                        raise RuntimeError(f"host_capability_provider_unavailable:{session.session_id}")
+                        raise HostCapabilityProviderUnavailable(detail={"provider_id": session.session_id})
                     provider_call_id = f"cap_call_{uuid.uuid4().hex}"
+                    timeout_seconds = self._provider_timeout_for_call(row)
                     call = HostCapabilityProviderCall(
                         provider_call_id=provider_call_id,
                         method=method_name,
@@ -484,12 +544,24 @@ class HostCapabilityBroker:
                                 for scope in list(method.descriptor.scope_requirements or [])
                                 if scope.get("scope") and scope.get("access")
                             ],
+                            deadline_ms=int((time.time() + timeout_seconds) * 1000),
                         ),
                     )
-                    response = self.provider_invoker(session, call)
-                    if inspect.isawaitable(response):
-                        response = await response
-                    return validate_provider_response(dict(response or {}), provider_call_id=provider_call_id)
+                    try:
+                        response = self.provider_invoker(session, call)
+                        if inspect.isawaitable(response):
+                            response = await self._await_provider_response(response, timeout_seconds=timeout_seconds)
+                        self._check_canceled()
+                        return validate_provider_response(dict(response or {}), provider_call_id=provider_call_id)
+                    except HostCapabilityTimeout as exc:
+                        exc.detail.setdefault("provider_call_id", provider_call_id)
+                        raise
+                    except asyncio.CancelledError as exc:
+                        raise HostCapabilityCanceled(detail={"provider_call_id": provider_call_id}) from exc
+                    except (BrokenPipeError, ConnectionError, EOFError) as exc:
+                        raise HostCapabilityProviderUnavailable(
+                            detail={"provider_call_id": provider_call_id, "provider_id": session.session_id, "error_type": type(exc).__name__}
+                        ) from exc
                 return await method.dispatch_async(dict(row.get("arguments") or {}))
         raise RuntimeError(f"unsupported_host_method:{method_name}")
 
@@ -514,16 +586,20 @@ __all__ = [
     "HOST_CAPABILITY_DISCOVERY_CONTRACT",
     "HOST_CAPABILITY_SESSION_CONTRACT",
     "AsyncCapabilityHandler",
+    "CancelChecker",
     "CapabilityHandler",
     "HostCapabilityApproval",
     "HostCapabilityBroker",
     "HostCapabilityCallContext",
+    "HostCapabilityCanceled",
     "HostCapabilityDescriptor",
     "HostCapabilityMethod",
     "HostCapabilityProviderCall",
     "HostCapabilityProviderError",
+    "HostCapabilityProviderUnavailable",
     "HostCapabilityProviderRef",
     "HostCapabilitySession",
+    "HostCapabilityTimeout",
     "ProviderInvoker",
     "default_group_path",
     "validate_provider_response",

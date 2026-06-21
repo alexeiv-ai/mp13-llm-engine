@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from hosting.sandbox.host_capabilities import (
     HostCapabilityApproval,
     HostCapabilityBroker,
+    HostCapabilityCanceled,
     HostCapabilityProviderCall,
     HostCapabilityProviderError,
+    HostCapabilityProviderUnavailable,
     HostCapabilityDescriptor,
     HostCapabilityMethod,
     HostCapabilityProviderRef,
     HostCapabilitySession,
+    HostCapabilityTimeout,
     validate_provider_response,
 )
 
@@ -148,3 +153,111 @@ def test_host_capability_broker_invokes_client_session_provider() -> None:
     assert calls[0]["call"]["context"]["request_id"] == "req-1"
     assert calls[0]["call"]["context"]["actor"] == "client-a"
     assert "binding" not in calls[0]["call"]
+
+
+def test_host_capability_broker_times_out_async_provider() -> None:
+    async def invoke_provider(_session: HostCapabilitySession, _call: HostCapabilityProviderCall) -> dict:
+        await asyncio.sleep(0.05)
+        return {"status": "ok", "provider_call_id": _call.provider_call_id, "result": {"late": True}}
+
+    descriptor = _descriptor()
+    broker = HostCapabilityBroker(provider_invoker=invoke_provider, provider_timeout_seconds=0.001)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    with pytest.raises(HostCapabilityTimeout) as exc:
+        broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
+
+    assert exc.value.reason == "host_call_timeout"
+    assert exc.value.detail["timeout_seconds"] == 0.001
+
+
+def test_host_capability_broker_maps_provider_disconnect() -> None:
+    def invoke_provider(_session: HostCapabilitySession, _call: HostCapabilityProviderCall) -> dict:
+        raise BrokenPipeError("provider pipe closed")
+
+    descriptor = _descriptor()
+    broker = HostCapabilityBroker(provider_invoker=invoke_provider)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    with pytest.raises(HostCapabilityProviderUnavailable) as exc:
+        broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
+
+    assert exc.value.reason == "host_capability_provider_unavailable"
+    assert exc.value.detail["provider_id"] == "client-crm"
+
+
+def test_host_capability_broker_cancellation_blocks_provider_call() -> None:
+    calls: list[dict] = []
+
+    def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        calls.append(call.to_dict())
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {}}
+
+    descriptor = _descriptor()
+    broker = HostCapabilityBroker(provider_invoker=invoke_provider)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+    broker.cancel("unit_test_cancel")
+
+    with pytest.raises(HostCapabilityCanceled) as exc:
+        broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
+
+    assert calls == []
+    assert exc.value.reason == "host_call_canceled"
+    assert exc.value.detail["reason"] == "unit_test_cancel"
+
+
+def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
+    cancel_checks = {"count": 0}
+
+    async def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        await asyncio.sleep(1.0)
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {}}
+
+    def cancel_checker() -> bool:
+        cancel_checks["count"] += 1
+        return cancel_checks["count"] > 1
+
+    descriptor = _descriptor()
+    broker = HostCapabilityBroker(
+        provider_invoker=invoke_provider,
+        provider_timeout_seconds=5.0,
+        cancel_checker=cancel_checker,
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    with pytest.raises(HostCapabilityCanceled):
+        broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
+
+    assert cancel_checks["count"] > 1

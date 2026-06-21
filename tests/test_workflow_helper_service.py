@@ -14,8 +14,9 @@ import pytest
 from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
+from hosting.sandbox.host_capabilities import HostCapabilityTimeout
 from hosting.sandbox.workflow_python_contract import build_workflow_python_node_snippet_request
-from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
+from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntime, WorkflowPythonNodeRuntimeRegistry
 
 
 def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
@@ -2341,6 +2342,26 @@ def test_workflow_python_node_host_api_matches_out_of_order_responses() -> None:
     assert out["output"]["slow"]["name"] == "slow"
     assert out["output"]["fast"]["name"] == "fast"
     assert out["output"]["slow"]["host_call_id"] != out["output"]["fast"]["host_call_id"]
+
+
+def test_workflow_python_node_preserves_structured_host_api_error_reason() -> None:
+    runtime = object.__new__(WorkflowPythonNodeRuntime)
+    captured: dict = {}
+
+    def respond_host_call(**kwargs: object) -> bool:
+        captured.update(kwargs)
+        return True
+
+    runtime.respond_host_call = respond_host_call  # type: ignore[method-assign]
+
+    def dispatch(_call: dict) -> dict:
+        raise HostCapabilityTimeout(detail={"provider_call_id": "call-1"})
+
+    runtime._dispatch_host_call({"host_call_id": "host-call-1"}, dispatch)
+
+    assert captured["host_call_id"] == "host-call-1"
+    assert captured["error"]["reason"] == "host_call_timeout"
+    assert captured["error"]["provider_call_id"] == "call-1"
 
 
 def test_execute_workflow_python_node_host_api_rejects_input_writes(tmp_path: Path) -> None:

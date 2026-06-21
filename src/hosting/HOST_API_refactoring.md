@@ -378,7 +378,7 @@ Error:
 - [x] 9. Route Python and JavaScript node host calls through the broker.
 - [x] 10. Add client-owned capability session registration/list/close daemon APIs.
 - [x] 11. Add provider callback RPC envelopes and response validation.
-- [ ] 12. Add provider timeout, disconnect, and request-cancel handling.
+- [x] 12. Add provider timeout, disconnect, and request-cancel handling.
 - [ ] 13. Add permission/scope checks for provider ownership, method namespace, and request/workflow/instance visibility.
 - [ ] 14. Add gated approval flow that routes outward to the owning hosting client/user-facing process.
 - [ ] 15. Emit event-stream observations for host calls, host responses, approvals, denials, provider failures, and cancellations.
@@ -402,9 +402,9 @@ Error:
 - [ ] Request-scoped capability is unavailable outside that request.
 - [ ] Workflow-scoped capability is available to allowed requests in that workflow.
 - [ ] Instance-scoped capability requires matching `instance_id`.
-- [ ] Provider timeout returns `host_call_timeout`.
-- [ ] Provider disconnect returns `host_capability_provider_unavailable`.
-- [ ] Request cancellation cancels or closes in-flight provider calls.
+- [x] Provider timeout returns `host_call_timeout`.
+- [x] Provider disconnect returns `host_capability_provider_unavailable`.
+- [x] Request cancellation cancels or closes in-flight provider calls.
 - [ ] Gated method does not execute until external approval is granted.
 - [ ] Approval denial returns a sandbox-visible host-call error and emits audit.
 - [ ] Event stream includes `host_call`, `host_response`, and `approval` observations with correlation IDs.

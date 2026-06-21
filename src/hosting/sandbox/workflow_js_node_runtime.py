@@ -228,9 +228,12 @@ class WorkflowJsNodeRuntime:
                 dispatched = asyncio.run(dispatched)
             self.respond_host_call(host_call_id=str(payload.get("host_call_id") or ""), result=dict(dispatched or {}))
         except Exception as exc:
+            reason = str(getattr(exc, "reason", "") or "host_call_failed")
+            detail = dict(getattr(exc, "detail", {}) or {})
+            detail.setdefault("error_type", type(exc).__name__)
             self.respond_host_call(
                 host_call_id=str(payload.get("host_call_id") or ""),
-                error={"reason": "host_call_failed", "message": str(exc), "error_type": type(exc).__name__},
+                error={"reason": reason, "message": str(getattr(exc, "message", "") or str(exc)), **detail},
             )
 
     def _read_events(self) -> None:

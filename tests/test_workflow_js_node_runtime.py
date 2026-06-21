@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any, Dict
 
+from hosting.sandbox.host_capabilities import HostCapabilityTimeout
 from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntime, WorkflowJsNodeRuntimeRegistry
 
 
@@ -370,3 +371,23 @@ def test_workflow_js_node_preserves_host_api_failure_detail() -> None:
     assert out["reason"] == "host_call_failed"
     assert out["detail"]["message"] == "policy denied"
     assert out["detail"]["error_type"] == "PermissionError"
+
+
+def test_workflow_js_node_preserves_structured_host_api_error_reason() -> None:
+    runtime = object.__new__(WorkflowJsNodeRuntime)
+    captured: Dict[str, Any] = {}
+
+    def respond_host_call(**kwargs: Any) -> bool:
+        captured.update(kwargs)
+        return True
+
+    runtime.respond_host_call = respond_host_call  # type: ignore[method-assign]
+
+    def dispatcher(_call: Dict[str, Any]) -> Dict[str, Any]:
+        raise HostCapabilityTimeout(detail={"provider_call_id": "call-1"})
+
+    runtime._dispatch_host_call({"host_call_id": "host-call-1"}, dispatcher)
+
+    assert captured["host_call_id"] == "host-call-1"
+    assert captured["error"]["reason"] == "host_call_timeout"
+    assert captured["error"]["provider_call_id"] == "call-1"
