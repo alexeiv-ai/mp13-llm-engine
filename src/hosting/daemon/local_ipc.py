@@ -1579,7 +1579,7 @@ class EngineHostDaemon:
                 reason="daemon process started",
                 details={
                     "runtime_profile": str(self._runtime_profile or ""),
-                    "pid_file": str(self.pid_file.path),
+                    "pid_file": str(getattr(self.pid_file, "path", self.pid_file)),
                     "port": int(self.port),
                     "local_transport": dict(self._local_transport or {}),
                 },

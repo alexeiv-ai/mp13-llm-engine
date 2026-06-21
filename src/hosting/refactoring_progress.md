@@ -32,7 +32,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [ ] Run the broader hosting test suite after the next cleanup slice.
+- [x] No pending work remains for the completed Sandbox Event Stream Protocol cleanup slice.
 
 ## Verification
 
@@ -40,3 +40,4 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "daemon_dispatches_workflow or stream"`
 - [x] `pytest tests/test_hosting_sandbox_process_base.py tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_runtime_pool.py -q`
 - [x] `pytest tests/test_hosting_sandbox_process_base.py -q`
+- [x] `$hostingTests = Get-ChildItem -Path tests -Filter 'test_hosting*.py' | ForEach-Object { $_.FullName }; pytest @hostingTests tests/test_engine_host_channel.py tests/test_engine_host_cli_interactive.py tests/test_engine_host_cli_remote_args.py tests/test_workflow_helper_service.py tests/test_engine_worker_ipc_streaming.py -q`
