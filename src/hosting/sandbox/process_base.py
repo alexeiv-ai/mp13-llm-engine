@@ -26,6 +26,7 @@ from .runtime_base import (
     hosted_stream_cancel_message,
     hosted_stream_kind_lane,
     hosted_stream_kind_spec,
+    hosted_stream_normalize_batch,
 )
 from .runtime_pool import HostedProcessPool, HostedProcessPoolRegistry, WorkerFactory
 
@@ -323,12 +324,14 @@ class HostedProcessSandboxBase:
             return {"status": "not_found", "stream_id": sid}
         events = session.recv(max_items)
         loss = session.take_loss()
+        batch = session.batch_from_events(events, loss=loss, more=session.retained_count() > 0)
         return {
             "status": "ok",
             "stream_id": sid,
             "request_id": session.request_id,
             "events": events,
-            "batch": session.batch_from_events(events, loss=loss, more=session.retained_count() > 0),
+            "batch": batch,
+            "normalized_events": hosted_stream_normalize_batch(batch, on_loss="mark"),
             "closed": session.closed,
             "canceled": session.canceled,
             "max_events": max(1, int(session.max_events or 1)),

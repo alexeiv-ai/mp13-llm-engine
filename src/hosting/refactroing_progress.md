@@ -74,3 +74,21 @@ Date: 2026-06-20
 
 - Convert service-generated lifecycle stream responses to rely on batch/helper normalization instead of transitional `events` lists.
 - Start routing Python and JavaScript node live progress through frame-first emitters.
+
+## Slice 5: Normalized Process Stream Responses
+
+- [x] Added `normalized_events` to hosted process stream receive responses.
+- [x] Kept `batch` available for diagnostics and low-level clients.
+- [x] Kept transitional `events` rows so existing service call sites can migrate incrementally.
+- [x] Covered normal and lossy normalized response behavior in process stream tests.
+- [x] Documented the transitional response shapes for dependent clients.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Route Python and JavaScript node live progress through frame-first emitters instead of legacy event payloads.
+- Convert host-call observation events to control frames.

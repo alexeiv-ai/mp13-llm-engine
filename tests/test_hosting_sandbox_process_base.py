@@ -91,6 +91,7 @@ def test_process_base_stream_lifecycle_records_events_and_close() -> None:
     assert opened["status"] == "ok"
     assert [row["type"] for row in received["events"]] == ["started", "progress"]
     assert [row["kind"] for row in received["batch"]["frames"]] == ["started", "progress"]
+    assert [row["kind"] for row in received["normalized_events"]] == ["started", "progress"]
     assert closed["closed"] is True
     assert status["request"]["status"] == "ok"
     assert status["request"]["latest_progress"]["payload"]["progress_percent"] == 40
@@ -121,6 +122,8 @@ def test_process_base_stream_reports_progress_replacement_when_retention_is_exce
     assert received["events"][-1]["payload"].get("value") == 3
     assert received["batch"]["loss"] == {"output": 0, "event": 3, "audit": 0}
     assert received["batch"]["frames"][-1]["value"] == 3
+    assert received["normalized_events"][0]["kind"] == "stream_loss"
+    assert received["normalized_events"][0]["loss"] == {"output": 0, "event": 3, "audit": 0}
     assert status["request"]["stream_event_count"] == 5
 
 

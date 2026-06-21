@@ -20,6 +20,12 @@ Current low-level helper entry points:
 - `hosted_stream_normalize_batch(..., on_loss="mark")`: returns normalized events and inserts a `stream_loss` marker when loss is reported.
 - `hosted_stream_normalize_batch(..., on_loss="raise")`: raises `HostedStreamLossError` when loss is reported.
 
+Transitional stream receive responses may expose all three shapes:
+
+- `normalized_events`: preferred helper-facing events.
+- `batch`: raw compact batch for diagnostics and low-level integrations.
+- `events`: legacy rows kept only while service callers migrate.
+
 ## Helper-Facing Event Model
 
 - [ ] Expect normalized events with named optional fields, similar to the `InferenceResponse` pattern in `mp13_config.py`.
