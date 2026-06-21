@@ -87,6 +87,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Recorded decision that approval reuse is explicit scoped-grant behavior, not an implicit broker cache.
 - [x] Recorded decision that namespace hierarchy is canonical and presentation groups can be derived.
 
+### Host Capability Slice 10: Known Method Registration Migration
+
+- [x] Added hosting client helper descriptors for known broker-supported methods: `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, `fs.stat`, and `http.fetch`.
+- [x] Added `EngineHostControlChannel.host_capability_session_register_known_methods(...)` for client-side registration.
+- [x] Added explicit `allow_override` registration flag.
+- [x] Changed duplicate fully-qualified method registration to fail by default with `host_capability_duplicate_method:<method>`.
+- [x] Removed built-in precedence from broker method resolution; explicit override now wins.
+- [x] Documented that dependent clients should adopt known-method registration before the remaining service-owned fallback is removed.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -114,8 +123,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
-- [ ] Implement the follow-up breaking-change slice that moves known broker-supported methods out of daemon-owned built-ins and into default hosting-client registration.
-- [ ] Request dependent-client adoption only after the follow-up breaking-change slice is implemented, documented, tested, and committed.
+- [x] Implement the follow-up breaking-change slice that exposes known broker-supported method registration through hosting client helpers.
+- [ ] Dependent clients should now adopt current breaking changes.
+- [ ] After dependent-client adoption, remove the remaining service-owned `fs.*` / `http.fetch` fallback and then reset `HOSTING_CLIENT_BREAKING_CHANGES.md` for future phases.
 
 ## Verification
 

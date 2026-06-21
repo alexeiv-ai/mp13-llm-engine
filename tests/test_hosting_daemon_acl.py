@@ -1378,6 +1378,42 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
     assert closed["result"] == {"status": "closed", "session_id": "cap-session-1", "closed": True}
 
 
+def test_daemon_rejects_duplicate_host_capability_method_unless_override_requested(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-cap-dup", "secret-cap-dup")
+    base_payload = {
+        "session_token": token,
+        "scope": {"workflow_id": "wf-cap"},
+        "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
+    }
+
+    first = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload={**base_payload, "session_id": "cap-session-dup-a"},
+    )
+    duplicate = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-register",
+        payload={**base_payload, "session_id": "cap-session-dup-b"},
+    )
+    override = _dispatch(
+        daemon,
+        seq=3,
+        cmd="host-capability-session-register",
+        payload={**base_payload, "session_id": "cap-session-dup-c", "allow_override": True},
+    )
+
+    assert first["ok"] is True
+    assert duplicate["ok"] is False
+    assert duplicate["error_code"] == "host_capability_duplicate_method:crm.customer.lookup"
+    assert override["ok"] is True
+    assert override["result"]["session"]["override"] == {"allow": True}
+
+
 def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
     binding = {"target": "user@example-host", "key_fingerprint": "SHA256:abc"}

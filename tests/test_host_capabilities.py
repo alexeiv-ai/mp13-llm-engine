@@ -339,7 +339,7 @@ def test_host_capability_broker_matches_request_workflow_instance_and_consumer_s
     assert calls == ["request-session", "workflow-session", "instance-session", "consumer-session"]
 
 
-def test_host_capability_broker_duplicate_resolution_prefers_builtin_and_narrower_client_scope() -> None:
+def test_host_capability_broker_duplicate_resolution_requires_explicit_override() -> None:
     calls: list[str] = []
 
     def invoke_provider(session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
@@ -358,7 +358,36 @@ def test_host_capability_broker_duplicate_resolution_prefers_builtin_and_narrowe
         provider_id="builtin.demo",
         methods=[HostCapabilityMethod(descriptor=builtin_descriptor, handler=lambda _args: {"session_id": "builtin"})],
     )
+
+    with pytest.raises(ValueError, match="host_capability_duplicate_method:crm.customer.lookup"):
+        broker.register_session(
+            HostCapabilitySession(
+                session_id="workflow-client",
+                owner="client-a",
+                provider_kind="client_session",
+                visibility="workflow",
+                scope={"workflow_id": "wf-1"},
+                methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
+            )
+        )
+
     broker.register_session(
+        HostCapabilitySession(
+            session_id="workflow-client-override",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
+            allow_override=True,
+        )
+    )
+
+    assert broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {"session_id": "workflow-client-override"}
+    assert calls == ["workflow-client-override"]
+
+    client_only = HostCapabilityBroker(request_id="req-1", workflow_id="wf-1", provider_invoker=invoke_provider)
+    client_only.register_session(
         HostCapabilitySession(
             session_id="workflow-client",
             owner="client-a",
@@ -368,25 +397,28 @@ def test_host_capability_broker_duplicate_resolution_prefers_builtin_and_narrowe
             methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
         )
     )
-
-    assert broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {"session_id": "builtin"}
-    assert calls == []
-
-    client_only = HostCapabilityBroker(request_id="req-1", workflow_id="wf-1", provider_invoker=invoke_provider)
-    for session_id, visibility, scope in [
-        ("workflow-client", "workflow", {"workflow_id": "wf-1"}),
-        ("request-client", "request", {"request_id": "req-1"}),
-    ]:
+    with pytest.raises(ValueError, match="host_capability_duplicate_method:crm.customer.lookup"):
         client_only.register_session(
             HostCapabilitySession(
-                session_id=session_id,
+                session_id="request-client",
                 owner="client-a",
                 provider_kind="client_session",
-                visibility=visibility,
-                scope=scope,
+                visibility="request",
+                scope={"request_id": "req-1"},
                 methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
             )
         )
+    client_only.register_session(
+        HostCapabilitySession(
+            session_id="request-client",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="request",
+            scope={"request_id": "req-1"},
+            methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
+            allow_override=True,
+        )
+    )
 
     assert client_only.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {"session_id": "request-client"}
 

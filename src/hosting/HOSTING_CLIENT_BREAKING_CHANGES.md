@@ -222,7 +222,11 @@ Client-owned provider sessions must include scope fields matching their declared
 - `visibility="instance"` requires `scope.instance_id`
 - `visibility="consumer"` requires `scope.consumer_id`
 
-Sessions outside the current broker scope are omitted from discovery and cannot be called. Duplicate method names resolve deterministically: built-ins win by default, then narrower client scopes win (`request`, `instance`, `workflow`, `consumer`), then session ID is the tie-breaker.
+Sessions outside the current broker scope are omitted from discovery and cannot be called.
+
+Duplicate fully-qualified method names now fail registration by default with `host_capability_duplicate_method:<method>`. A client that intentionally replaces an existing fully-qualified method must pass `allow_override=True`. Method identity is fully qualified, so `crm.lookup` and `erp.lookup` are different methods even though the local suffix matches.
+
+The target model no longer gives daemon-owned built-ins special precedence. Known methods such as `fs.*` and `http.fetch` should be registered by the hosting client library.
 
 ## Host Capability Approval Flow
 
@@ -271,6 +275,31 @@ Date: 2026-06-21
 
 Scope: Host API pillar completion.
 
-The Host API pillar now exposes shared capability descriptors, sandbox discovery, brokered built-in dispatch, client-owned provider session lifecycle APIs, provider callback envelopes, permission/scope gates, approval routing, live event observations, and durable approval audit records.
+The Host API pillar now exposes shared capability descriptors, sandbox discovery, brokered dispatch, client-owned provider session lifecycle APIs, provider callback envelopes, permission/scope gates, approval routing, live event observations, and durable approval audit records.
 
 Recommended client path: use the hosting library helpers for session registration, provider callback handling, stream observations, and audit reads. Raw daemon clients are responsible for auth tokens, SSH binding presentation, provider response validation, and correlation IDs.
+
+## Known Host Method Registration
+
+Date: 2026-06-21
+
+Scope: migration away from daemon-owned built-in host methods.
+
+Dependent clients should now register known broker-supported methods from the hosting client side before relying on sandbox `host.call("fs.*")` or `host.call("http.fetch")`.
+
+Recommended helper:
+
+```python
+channel.host_capability_session_register_known_methods(
+    session_id="known-host-api",
+    visibility="workflow",
+    scope={"workflow_id": workflow_id},
+    binding={"transport": "local_ipc", "address": callback_address},
+)
+```
+
+The helper registers descriptors for `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, `fs.stat`, and `http.fetch` by default. Clients may pass `include_fs=False` or `include_http=False`, or call `host_capability_session_register(...)` with custom descriptors/implementations.
+
+Use `allow_override=True` only when intentionally replacing an already registered fully-qualified method. Otherwise duplicate registration fails.
+
+Adoption point: dependent clients should adopt this registration model now. After adoption, the remaining service-owned fallback registration for `fs.*` and `http.fetch` can be removed, and this breaking-changes file can be reset for future phases.

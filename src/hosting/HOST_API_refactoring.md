@@ -440,11 +440,12 @@ Error:
 
 ## Follow-Up Work From Decisions
 
-- [ ] Remove daemon/service-owned built-in special status from the Host API provider model.
-- [ ] Move registration of known broker-supported methods to hosting client library helpers, enabled by default.
-- [ ] Allow clients to omit known methods or provide custom implementations for those fully-qualified method names.
-- [ ] Add duplicate fully-qualified method registration rejection with an explicit override option.
-- [ ] Preserve fast local IPC as the primary provider callback transport path; keep SSH relay as a corner-case/later path unless already supported by the touched code.
-- [ ] Make namespace hierarchy the canonical capability hierarchy and derive presentation groups from namespace where possible.
-- [ ] Keep approval reuse explicit through scoped grants rather than an implicit broker cache.
-- [ ] Request dependent-client adoption only after the above follow-up breaking-change slice is implemented, documented, and committed.
+- [x] Remove built-in precedence from broker/provider resolution.
+- [x] Move registration of known broker-supported method descriptors to hosting client library helpers, enabled by default.
+- [x] Allow clients to omit known methods or provide custom implementations for those fully-qualified method names.
+- [x] Add duplicate fully-qualified method registration rejection with an explicit override option.
+- [x] Preserve fast local IPC as the primary provider callback transport target in the client-facing registration helper; keep SSH relay as a corner-case/later path unless already supported by the touched code.
+- [x] Make namespace hierarchy the canonical capability hierarchy and derive presentation groups from namespace where possible.
+- [x] Keep approval reuse explicit through scoped grants rather than an implicit broker cache.
+- [x] Request dependent-client adoption after this follow-up breaking-change slice is implemented, documented, and committed.
+- [ ] After dependent-client adoption, remove the remaining service-owned `fs.*` / `http.fetch` fallback registration from workflow node dispatch.

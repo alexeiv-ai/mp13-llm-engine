@@ -558,6 +558,31 @@ def test_sandbox_http_fetch_channel_method_forwards_expected_payload() -> None:
     ]
 
 
+def test_host_capability_register_known_methods_helper_forwards_descriptors() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    out = ch.host_capability_session_register_known_methods(
+        session_id="known-host-api",
+        scope={"workflow_id": "wf-1"},
+        binding={"transport": "local_ipc", "address": "client-callback"},
+        allow_override=True,
+    )
+
+    assert out == {}
+    assert fake.calls[0][0] == "host-capability-session-register"
+    payload = fake.calls[0][1]
+    method_names = [row["name"] for row in payload["methods"]]
+    assert payload["session_id"] == "known-host-api"
+    assert payload["scope"] == {"workflow_id": "wf-1"}
+    assert payload["allow_override"] is True
+    assert "fs.read_text" in method_names
+    assert "fs.write_text" in method_names
+    assert "http.fetch" in method_names
+    assert all("provider" not in row for row in payload["methods"])
+
+
 def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})

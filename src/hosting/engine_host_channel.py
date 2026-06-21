@@ -1994,6 +1994,7 @@ class EngineHostControlChannel:
         binding: Optional[Dict[str, Any]] = None,
         close_on_client_disconnect: bool = True,
         expires_at_ms: Optional[int] = None,
+        allow_override: bool = False,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "session_id": str(session_id or "").strip() or None,
@@ -2003,11 +2004,44 @@ class EngineHostControlChannel:
             "methods": [dict(row or {}) for row in list(methods or [])],
             "binding": dict(binding or {}),
             "close_on_client_disconnect": bool(close_on_client_disconnect),
+            "allow_override": bool(allow_override),
         }
         if expires_at_ms is not None:
             payload["expires_at_ms"] = int(expires_at_ms)
         res = self._invoke("host-capability-session-register", payload)
         return dict(res or {})
+
+    @staticmethod
+    def known_host_capability_methods(*, include_fs: bool = True, include_http: bool = True) -> List[Dict[str, Any]]:
+        from .sandbox.host_api import known_host_capability_method_descriptors
+
+        return known_host_capability_method_descriptors(include_fs=include_fs, include_http=include_http)
+
+    def host_capability_session_register_known_methods(
+        self,
+        *,
+        scope: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        provider_kind: str = "client_session",
+        visibility: str = "workflow",
+        binding: Optional[Dict[str, Any]] = None,
+        close_on_client_disconnect: bool = True,
+        expires_at_ms: Optional[int] = None,
+        include_fs: bool = True,
+        include_http: bool = True,
+        allow_override: bool = False,
+    ) -> Dict[str, Any]:
+        return self.host_capability_session_register(
+            methods=self.known_host_capability_methods(include_fs=include_fs, include_http=include_http),
+            scope=scope,
+            session_id=session_id,
+            provider_kind=provider_kind,
+            visibility=visibility,
+            binding=binding,
+            close_on_client_disconnect=close_on_client_disconnect,
+            expires_at_ms=expires_at_ms,
+            allow_override=allow_override,
+        )
 
     def host_capability_session_list(self, *, include_all: bool = False) -> Dict[str, Any]:
         res = self._invoke("host-capability-session-list", {"include_all": bool(include_all)})

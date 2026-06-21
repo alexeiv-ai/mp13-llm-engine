@@ -1253,6 +1253,7 @@ class EngineHostDaemon:
         if visibility not in {"request", "workflow", "instance", "consumer"}:
             raise ValueError(f"host_capability_invalid_visibility:{visibility}")
         scope = dict(row.get("scope") or {})
+        allow_override = bool(row.get("allow_override") or row.get("override"))
         methods = self._host_capability_session_methods(
             session_id=session_id,
             owner=actor_id,
@@ -1279,10 +1280,17 @@ class EngineHostDaemon:
             created_at_ms=now_ms,
             expires_at_ms=expires_at_ms,
             close_on_client_disconnect=bool(row.get("close_on_client_disconnect", True)),
+            allow_override=allow_override,
         )
         with self._host_capability_sessions_lock:
             if session_id in self._host_capability_sessions:
                 raise ValueError("host_capability_session_already_exists")
+            if not allow_override:
+                incoming_names = set(methods.keys())
+                for existing in self._host_capability_sessions.values():
+                    duplicates = sorted(incoming_names.intersection(dict(existing.methods or {}).keys()))
+                    if duplicates:
+                        raise ValueError(f"host_capability_duplicate_method:{duplicates[0]}")
             self._host_capability_sessions[session_id] = session
         return {
             "status": "ok",

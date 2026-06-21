@@ -313,6 +313,7 @@ class HostCapabilitySession:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: Optional[int] = None
     close_on_client_disconnect: bool = True
+    allow_override: bool = False
 
     def to_public_dict(self) -> Dict[str, Any]:
         return {
@@ -330,6 +331,7 @@ class HostCapabilitySession:
                 "expires_at_ms": self.expires_at_ms,
                 "close_on_client_disconnect": bool(self.close_on_client_disconnect),
             },
+            "override": {"allow": bool(self.allow_override)},
         }
 
     def to_private_dict(self) -> Dict[str, Any]:
@@ -428,13 +430,9 @@ class HostCapabilityBroker:
 
     @staticmethod
     def _visibility_rank(session: HostCapabilitySession) -> int:
-        if session.provider_kind == "builtin":
-            return 0
         return {"request": 1, "instance": 2, "workflow": 3, "consumer": 4}.get(_clean(session.visibility), 9)
 
     def _session_visible(self, session: HostCapabilitySession) -> bool:
-        if session.provider_kind == "builtin":
-            return True
         scope = dict(session.scope or {})
         visibility = _clean(session.visibility)
         if visibility == "request":
@@ -467,7 +465,7 @@ class HostCapabilityBroker:
                     candidates.setdefault(method.descriptor.name, []).append((session, method))
         out: Dict[str, tuple[HostCapabilitySession, HostCapabilityMethod]] = {}
         for name, rows in candidates.items():
-            rows.sort(key=lambda item: (self._visibility_rank(item[0]), _clean(item[0].session_id)))
+            rows.sort(key=lambda item: (0 if bool(item[0].allow_override) else 1, self._visibility_rank(item[0]), _clean(item[0].session_id)))
             out[name] = rows[0]
         return out
 
@@ -606,6 +604,12 @@ class HostCapabilityBroker:
             if name != method.descriptor.name:
                 raise ValueError("host_capability_method_name_mismatch")
             method.descriptor.validate()
+        incoming_names = set(str(name or "").strip() for name in dict(session.methods or {}).keys() if str(name or "").strip())
+        if incoming_names and not bool(session.allow_override):
+            for existing in self._sessions.values():
+                duplicates = sorted(incoming_names.intersection(dict(existing.methods or {}).keys()))
+                if duplicates:
+                    raise ValueError(f"host_capability_duplicate_method:{duplicates[0]}")
         self._sessions[sid] = session
 
     def register_builtin_provider(
@@ -622,6 +626,7 @@ class HostCapabilityBroker:
             visibility="request",
             scope={"request_id": self.request_id or None, "workflow_id": self.workflow_id or None, "package_id": self.package_id or None},
             methods={method.descriptor.name: method for method in methods},
+            allow_override=False,
         )
         self.register_session(session)
         return session
