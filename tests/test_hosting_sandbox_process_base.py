@@ -168,8 +168,38 @@ def test_process_base_stream_keeps_first_bounded_non_stdout_events() -> None:
         received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
 
         assert [row["type"] for row in received["events"]] == ["started", event_type]
-        assert received["events"][1]["payload"] == payload
+        for key, value in payload.items():
+            assert received["events"][1]["payload"][key] == value
         assert received["dropped_event_count"] == 1
+
+
+def test_process_base_stream_adds_text_output_chunk_metadata() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-output-metadata",
+        profile="node",
+        factory=_factory,
+        max_events=8,
+    )
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stdout", payload={"text": "one\n"})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stdout", payload={"text": "two"})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stderr", payload={"text": "err\n"})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="log", payload={"level": "info", "message": "record"})
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
+    frames = [row for row in received["normalized_events"] if row["kind"] in {"stdout", "stderr", "log"}]
+
+    assert frames[0]["offset"] == 0
+    assert frames[0]["length"] == len("one\n".encode("utf-8"))
+    assert frames[0]["boundary"] is True
+    assert frames[1]["offset"] == len("one\n".encode("utf-8"))
+    assert frames[1]["length"] == len("two".encode("utf-8"))
+    assert frames[1]["boundary"] is False
+    assert frames[2]["offset"] == 0
+    assert frames[2]["boundary"] is True
+    assert frames[3]["encoding"] == "utf-8"
+    assert frames[3]["length"] == len("record".encode("utf-8"))
 
 
 def test_process_base_stream_keeps_first_output_and_prioritizes_control() -> None:

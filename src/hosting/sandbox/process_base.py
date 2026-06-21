@@ -50,6 +50,7 @@ class HostedProcessStreamSession:
     sequence: int = 0
     dropped_event_count: int = 0
     pending_loss: Dict[str, int] = field(default_factory=lambda: {"output": 0, "event": 0, "audit": 0})
+    output_offsets: Dict[str, int] = field(default_factory=dict)
 
     def _queued_count(self) -> int:
         return sum(len(queue) for queue in self.events_by_lane.values())
@@ -98,16 +99,34 @@ class HostedProcessStreamSession:
                 return True
         return False
 
+    def _prepare_output_payload(self, event_type: str, payload: Dict[str, object]) -> Dict[str, object]:
+        row = dict(payload or {})
+        text_value = row.get("text")
+        if text_value is None and event_type == "log":
+            text_value = row.get("message")
+        if isinstance(text_value, str):
+            raw_len = len(text_value.encode("utf-8", errors="replace"))
+            offset = max(0, int(self.output_offsets.get(event_type, 0)))
+            row.setdefault("encoding", "utf-8")
+            row.setdefault("offset", offset)
+            row.setdefault("length", raw_len)
+            row.setdefault("boundary", event_type == "log" or text_value.endswith("\n"))
+            self.output_offsets[event_type] = offset + raw_len
+        return row
+
     def append(self, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         self.sequence += 1
+        lane = hosted_stream_kind_lane(event_type)
+        spec = hosted_stream_kind_spec(event_type)
+        payload_row = dict(payload or {})
+        if lane == "output":
+            payload_row = self._prepare_output_payload(event_type, payload_row)
         row = HostedStreamEvent(
             type=event_type,
             request_id=self.request_id,
             sequence=self.sequence,
-            payload=dict(payload or {}),
+            payload=payload_row,
         ).to_dict()
-        lane = hosted_stream_kind_lane(event_type)
-        spec = hosted_stream_kind_spec(event_type)
         if self._replace_existing_latest(lane, row):
             return row
         capacity = max(1, int(self.max_events or 1))

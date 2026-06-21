@@ -359,7 +359,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] 7. Convert service-generated lifecycle events to frames.
 - [x] 8. Convert Python and JavaScript node live `progress` to frames.
 - [x] 9. Convert Python and JavaScript node `host_call` observations to control frames.
-- [ ] 10. Add live stdout/stderr/log valid-JSON chunk emitters.
+- [x] 10. Add live stdout/stderr/log valid-JSON chunk emitters.
 - [ ] 11. Add accept/ack/close credit support for output streams that require complete delivery.
 - [ ] 12. Add daemon event subscription path separate from command RPC.
 - [ ] 13. Add stream decoder, ordering, replacement, ack, and loss tests.
@@ -373,7 +373,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] Terminal frames are delivered when output queue is full.
 - [x] Output frames are always valid JSON objects.
 - [ ] Known-size output streams report `expected_bytes`.
-- [ ] Byte-addressable chunks report `offset` and `length`.
+- [x] Byte-addressable chunks report `offset` and `length`.
 - [ ] Ack-backed streams require client accept before large payload delivery.
 - [ ] Ack-backed streams pause when credit is exhausted and resume after acknowledgement.
 - [ ] Client close propagates a stream-abandoned error to the producer.

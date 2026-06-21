@@ -111,3 +111,19 @@ Note: this slice converts node observations at the hosted process stream boundar
 ## Next Slice
 
 - Add live stdout/stderr/log chunk metadata for valid JSON output frames, including `boundary`, `offset`, and `length` where available.
+
+## Slice 7: Output Chunk Metadata
+
+- [x] Added UTF-8 `encoding`, byte `offset`, byte `length`, and `boundary` defaults for text stdout/stderr/log events.
+- [x] Tracked offsets independently per output kind within a process stream session.
+- [x] Preserved caller-provided output metadata when present.
+- [x] Added process stream tests for stdout, stderr, and log chunk metadata.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Design and implement accept/ack/close credit support for complete-delivery output streams.
