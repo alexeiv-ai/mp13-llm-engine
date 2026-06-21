@@ -161,13 +161,14 @@ def test_host_capability_broker_times_out_async_provider() -> None:
         return {"status": "ok", "provider_call_id": _call.provider_call_id, "result": {"late": True}}
 
     descriptor = _descriptor()
-    broker = HostCapabilityBroker(provider_invoker=invoke_provider, provider_timeout_seconds=0.001)
+    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider, provider_timeout_seconds=0.001)
     broker.register_session(
         HostCapabilitySession(
             session_id="client-crm",
             owner="client-a",
             provider_kind="client_session",
             visibility="workflow",
+            scope={"workflow_id": "wf-1"},
             methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
         )
     )
@@ -184,13 +185,14 @@ def test_host_capability_broker_maps_provider_disconnect() -> None:
         raise BrokenPipeError("provider pipe closed")
 
     descriptor = _descriptor()
-    broker = HostCapabilityBroker(provider_invoker=invoke_provider)
+    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider)
     broker.register_session(
         HostCapabilitySession(
             session_id="client-crm",
             owner="client-a",
             provider_kind="client_session",
             visibility="workflow",
+            scope={"workflow_id": "wf-1"},
             methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
         )
     )
@@ -210,13 +212,14 @@ def test_host_capability_broker_cancellation_blocks_provider_call() -> None:
         return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {}}
 
     descriptor = _descriptor()
-    broker = HostCapabilityBroker(provider_invoker=invoke_provider)
+    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider)
     broker.register_session(
         HostCapabilitySession(
             session_id="client-crm",
             owner="client-a",
             provider_kind="client_session",
             visibility="workflow",
+            scope={"workflow_id": "wf-1"},
             methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
         )
     )
@@ -243,6 +246,7 @@ def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
 
     descriptor = _descriptor()
     broker = HostCapabilityBroker(
+        workflow_id="wf-1",
         provider_invoker=invoke_provider,
         provider_timeout_seconds=5.0,
         cancel_checker=cancel_checker,
@@ -253,6 +257,7 @@ def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
             owner="client-a",
             provider_kind="client_session",
             visibility="workflow",
+            scope={"workflow_id": "wf-1"},
             methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
         )
     )
@@ -261,3 +266,158 @@ def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
         broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
 
     assert cancel_checks["count"] > 1
+
+
+def test_host_capability_broker_hides_unrelated_request_session() -> None:
+    descriptor = _descriptor()
+    broker = HostCapabilityBroker(request_id="req-visible", provider_invoker=lambda _session, call: {})
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="request",
+            scope={"request_id": "req-other"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    described = broker.describe()
+
+    assert described["methods"] == []
+    with pytest.raises(RuntimeError, match="unsupported_host_method:crm.customer.lookup"):
+        broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
+
+
+def test_host_capability_broker_matches_request_workflow_instance_and_consumer_scopes() -> None:
+    calls: list[str] = []
+
+    def invoke_provider(session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        calls.append(session.session_id)
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"session_id": session.session_id}}
+
+    broker = HostCapabilityBroker(
+        request_id="req-1",
+        workflow_id="wf-1",
+        instance_id="inst-1",
+        consumer_id="consumer-1",
+        provider_invoker=invoke_provider,
+    )
+    rows = [
+        ("request-session", "request", {"request_id": "req-1"}, "crm.request.lookup"),
+        ("workflow-session", "workflow", {"workflow_id": "wf-1"}, "crm.workflow.lookup"),
+        ("instance-session", "instance", {"instance_id": "inst-1"}, "crm.instance.lookup"),
+        ("consumer-session", "consumer", {"consumer_id": "consumer-1"}, "crm.consumer.lookup"),
+    ]
+    for session_id, visibility, scope, method_name in rows:
+        descriptor = _descriptor(method_name)
+        broker.register_session(
+            HostCapabilitySession(
+                session_id=session_id,
+                owner="client-a",
+                provider_kind="client_session",
+                visibility=visibility,
+                scope=scope,
+                methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+            )
+        )
+
+    assert broker.method_names() == ["crm.consumer.lookup", "crm.instance.lookup", "crm.request.lookup", "crm.workflow.lookup"]
+    for _session_id, _visibility, _scope, method_name in rows:
+        assert broker.dispatch({"method": method_name, "arguments": {"customer_id": "c-1"}})["session_id"]
+
+    assert calls == ["request-session", "workflow-session", "instance-session", "consumer-session"]
+
+
+def test_host_capability_broker_duplicate_resolution_prefers_builtin_and_narrower_client_scope() -> None:
+    calls: list[str] = []
+
+    def invoke_provider(session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        calls.append(session.session_id)
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"session_id": session.session_id}}
+
+    builtin_descriptor = HostCapabilityDescriptor(
+        name="crm.customer.lookup",
+        namespace="crm",
+        group_path=["CRM"],
+        provider=HostCapabilityProviderRef(provider_id="builtin.demo", kind="builtin", owner="service", visibility="request"),
+    )
+    client_descriptor = _descriptor()
+    broker = HostCapabilityBroker(request_id="req-1", workflow_id="wf-1", provider_invoker=invoke_provider)
+    broker.register_builtin_provider(
+        provider_id="builtin.demo",
+        methods=[HostCapabilityMethod(descriptor=builtin_descriptor, handler=lambda _args: {"session_id": "builtin"})],
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="workflow-client",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
+        )
+    )
+
+    assert broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {"session_id": "builtin"}
+    assert calls == []
+
+    client_only = HostCapabilityBroker(request_id="req-1", workflow_id="wf-1", provider_invoker=invoke_provider)
+    for session_id, visibility, scope in [
+        ("workflow-client", "workflow", {"workflow_id": "wf-1"}),
+        ("request-client", "request", {"request_id": "req-1"}),
+    ]:
+        client_only.register_session(
+            HostCapabilitySession(
+                session_id=session_id,
+                owner="client-a",
+                provider_kind="client_session",
+                visibility=visibility,
+                scope=scope,
+                methods={client_descriptor.name: HostCapabilityMethod(descriptor=client_descriptor)},
+            )
+        )
+
+    assert client_only.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {"session_id": "request-client"}
+
+
+def test_host_capability_broker_enforces_namespace_and_permission_gates() -> None:
+    broker = HostCapabilityBroker(
+        workflow_id="wf-1",
+        allowed_namespaces=["crm"],
+        approved_permissions=["crm.customer.read"],
+        provider_invoker=lambda _session, call: {"status": "ok", "provider_call_id": call.provider_call_id, "result": {}},
+    )
+    read_descriptor = _descriptor("crm.customer.lookup")
+    write_descriptor = HostCapabilityDescriptor(
+        name="crm.customer.write",
+        namespace="crm",
+        group_path=["CRM"],
+        permissions=["crm.customer.write"],
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+    erp_descriptor = HostCapabilityDescriptor(
+        name="erp.customer.lookup",
+        namespace="erp",
+        group_path=["ERP"],
+        permissions=["erp.customer.read"],
+        provider=HostCapabilityProviderRef(provider_id="client-erp", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+    for session_id, descriptor in [("client-crm-read", read_descriptor), ("client-crm-write", write_descriptor), ("client-erp", erp_descriptor)]:
+        broker.register_session(
+            HostCapabilitySession(
+                session_id=session_id,
+                owner="client-a",
+                provider_kind="client_session",
+                visibility="workflow",
+                scope={"workflow_id": "wf-1"},
+                methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+            )
+        )
+
+    assert broker.method_names() == ["crm.customer.lookup"]
+    assert broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {}
+    with pytest.raises(RuntimeError, match="unsupported_host_method:crm.customer.write"):
+        broker.dispatch({"method": "crm.customer.write", "arguments": {}})
+    with pytest.raises(RuntimeError, match="unsupported_host_method:erp.customer.lookup"):
+        broker.dispatch({"method": "erp.customer.lookup", "arguments": {}})

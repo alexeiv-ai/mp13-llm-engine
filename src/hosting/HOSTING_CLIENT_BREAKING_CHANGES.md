@@ -206,3 +206,18 @@ Structured provider failures now preserve their reason through Python and JavaSc
 - `host_call_canceled` for broker/request cancellation
 
 Clients that surface sandbox host-call errors should prefer the returned `reason` field when it is available instead of parsing the error message string.
+
+## Host Capability Scope And Precedence
+
+Date: 2026-06-21
+
+Scope: broker scope, namespace, permission, and duplicate-resolution slice.
+
+Client-owned provider sessions must include scope fields matching their declared visibility:
+
+- `visibility="request"` requires `scope.request_id`
+- `visibility="workflow"` requires `scope.workflow_id`
+- `visibility="instance"` requires `scope.instance_id`
+- `visibility="consumer"` requires `scope.consumer_id`
+
+Sessions outside the current broker scope are omitted from discovery and cannot be called. Duplicate method names resolve deterministically: built-ins win by default, then narrower client scopes win (`request`, `instance`, `workflow`, `consumer`), then session ID is the tie-breaker.

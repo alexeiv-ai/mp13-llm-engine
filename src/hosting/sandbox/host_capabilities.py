@@ -349,10 +349,16 @@ class HostCapabilityBroker:
         provider_invoker: Optional[ProviderInvoker] = None,
         provider_timeout_seconds: float = 30.0,
         cancel_checker: Optional[CancelChecker] = None,
+        instance_id: str = "",
+        consumer_id: str = "",
+        allowed_namespaces: Optional[Any] = None,
+        approved_permissions: Optional[Iterable[str]] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
         self.package_id = _clean(package_id)
+        self.instance_id = _clean(instance_id)
+        self.consumer_id = _clean(consumer_id)
         self.runtime_kind = _clean(runtime_kind)
         self.policy = dict(policy or {})
         self.roots = dict(roots or {})
@@ -361,6 +367,8 @@ class HostCapabilityBroker:
         self.cancel_checker = cancel_checker
         self._cancel_requested = False
         self._cancel_reason = "host_call_canceled"
+        self._allowed_namespaces = self._normalize_allowed_namespaces(allowed_namespaces)
+        self._approved_permissions = set(_string_list(approved_permissions or [])) if approved_permissions is not None else None
         self._sessions: Dict[str, HostCapabilitySession] = {}
 
     def cancel(self, reason: str = "host_call_canceled") -> None:
@@ -381,6 +389,59 @@ class HostCapabilityBroker:
         if raw is None:
             return self.provider_timeout_seconds
         return max(0.001, float(raw or self.provider_timeout_seconds))
+
+    @staticmethod
+    def _normalize_allowed_namespaces(raw: Optional[Any]) -> Optional[set[str]]:
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return {_clean(key) for key, value in raw.items() if _clean(key) and bool(value)}
+        return set(_string_list(raw or []))
+
+    @staticmethod
+    def _visibility_rank(session: HostCapabilitySession) -> int:
+        if session.provider_kind == "builtin":
+            return 0
+        return {"request": 1, "instance": 2, "workflow": 3, "consumer": 4}.get(_clean(session.visibility), 9)
+
+    def _session_visible(self, session: HostCapabilitySession) -> bool:
+        if session.provider_kind == "builtin":
+            return True
+        scope = dict(session.scope or {})
+        visibility = _clean(session.visibility)
+        if visibility == "request":
+            return bool(_clean(scope.get("request_id")) and _clean(scope.get("request_id")) == self.request_id)
+        if visibility == "workflow":
+            return bool(_clean(scope.get("workflow_id")) and _clean(scope.get("workflow_id")) == self.workflow_id)
+        if visibility == "instance":
+            return bool(_clean(scope.get("instance_id")) and _clean(scope.get("instance_id")) == self.instance_id)
+        if visibility == "consumer":
+            return bool(_clean(scope.get("consumer_id")) and _clean(scope.get("consumer_id")) == self.consumer_id)
+        return False
+
+    def _method_allowed(self, method: HostCapabilityMethod) -> bool:
+        descriptor = method.descriptor
+        if self._allowed_namespaces is not None and _clean(descriptor.namespace) not in self._allowed_namespaces:
+            return False
+        if self._approved_permissions is not None:
+            required = set(_string_list(descriptor.permissions or []))
+            if not required.issubset(self._approved_permissions):
+                return False
+        return True
+
+    def _resolved_methods(self) -> Dict[str, tuple[HostCapabilitySession, HostCapabilityMethod]]:
+        candidates: Dict[str, list[tuple[HostCapabilitySession, HostCapabilityMethod]]] = {}
+        for session in self._sessions.values():
+            if not self._session_visible(session):
+                continue
+            for method in session.methods.values():
+                if self._method_allowed(method):
+                    candidates.setdefault(method.descriptor.name, []).append((session, method))
+        out: Dict[str, tuple[HostCapabilitySession, HostCapabilityMethod]] = {}
+        for name, rows in candidates.items():
+            rows.sort(key=lambda item: (self._visibility_rank(item[0]), _clean(item[0].session_id)))
+            out[name] = rows[0]
+        return out
 
     async def _await_provider_response(self, response: Awaitable[Dict[str, Any]], *, timeout_seconds: float) -> Dict[str, Any]:
         task = asyncio.ensure_future(response)
@@ -428,10 +489,7 @@ class HostCapabilityBroker:
         return session
 
     def descriptors(self) -> list[HostCapabilityDescriptor]:
-        rows: list[HostCapabilityDescriptor] = []
-        for session in self._sessions.values():
-            rows.extend(method.descriptor for method in session.methods.values())
-        return sorted(rows, key=lambda item: item.name)
+        return [method.descriptor for _session, method in sorted(self._resolved_methods().values(), key=lambda item: item[1].descriptor.name)]
 
     def method_names(self) -> list[str]:
         return [item.name for item in self.descriptors()]
@@ -447,14 +505,18 @@ class HostCapabilityBroker:
 
     def providers_for_discovery(self) -> list[Dict[str, Any]]:
         out: list[Dict[str, Any]] = []
+        visible_methods = self._resolved_methods()
         for session in sorted(self._sessions.values(), key=lambda item: item.session_id):
+            method_count = sum(1 for visible_session, _method in visible_methods.values() if visible_session.session_id == session.session_id)
+            if method_count <= 0:
+                continue
             out.append(
                 {
                     "provider_id": session.session_id,
                     "kind": session.provider_kind,
                     "owner": session.owner,
                     "visibility": session.visibility,
-                    "method_count": len(session.methods),
+                    "method_count": method_count,
                 }
             )
         return out
@@ -520,8 +582,9 @@ class HostCapabilityBroker:
         method_name = _clean(row.get("method"))
         if method_name in {"sandbox.describe", "host.describe"}:
             return self.describe()
-        for session in self._sessions.values():
-            method = session.methods.get(method_name)
+        resolved = self._resolved_methods().get(method_name)
+        if resolved is not None:
+            session, method = resolved
             if method is not None:
                 if method.handler is None and method.async_handler is None:
                     self._check_canceled()
@@ -573,8 +636,9 @@ class HostCapabilityBroker:
         method_name = _clean(dict(call or {}).get("method"))
         if method_name in {"sandbox.describe", "host.describe"}:
             return self.describe()
-        for session in self._sessions.values():
-            method = session.methods.get(method_name)
+        resolved = self._resolved_methods().get(method_name)
+        if resolved is not None:
+            _session, method = resolved
             if method is not None and method.async_handler is None and method.handler is not None:
                 return dict(method.handler(dict(dict(call or {}).get("arguments") or {})) or {})
         raise RuntimeError("async_host_capability_dispatch_requires_await")

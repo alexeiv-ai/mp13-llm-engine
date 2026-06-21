@@ -39,6 +39,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Mapped broken provider callback transports to `host_capability_provider_unavailable`.
 - [x] Preserved structured host-call error reasons through Python and JavaScript node runtime host responses.
 
+### Host Capability Slice 5: Scope And Permission Resolution
+
+- [x] Added broker visibility checks for request, workflow, instance, and consumer scoped provider sessions.
+- [x] Added namespace and permission gates to broker method resolution.
+- [x] Made sandbox discovery omit invisible or unauthorized provider methods.
+- [x] Added deterministic duplicate resolution: built-ins win, then narrower client scopes win, then session ID tie-breaks.
+- [x] Confirmed built-in workflow host API discovery and dispatch still use the broker correctly.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.

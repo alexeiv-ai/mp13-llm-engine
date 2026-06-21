@@ -379,7 +379,7 @@ Error:
 - [x] 10. Add client-owned capability session registration/list/close daemon APIs.
 - [x] 11. Add provider callback RPC envelopes and response validation.
 - [x] 12. Add provider timeout, disconnect, and request-cancel handling.
-- [ ] 13. Add permission/scope checks for provider ownership, method namespace, and request/workflow/instance visibility.
+- [x] 13. Add permission/scope checks for provider ownership, method namespace, and request/workflow/instance visibility.
 - [ ] 14. Add gated approval flow that routes outward to the owning hosting client/user-facing process.
 - [ ] 15. Emit event-stream observations for host calls, host responses, approvals, denials, provider failures, and cancellations.
 - [ ] 16. Add durable audit records for security-relevant approvals and denials.
@@ -396,12 +396,12 @@ Error:
 - [x] JavaScript `api.callAsync(...)` dispatches a built-in through the broker wrapper.
 - [x] Client-owned provider session registration/list/close daemon APIs sanitize provider bindings from public responses.
 - [x] Provider callback responses validate `provider_call_id` and normalize provider errors.
-- [ ] Client-owned provider session can register one method and receive a sandbox call.
-- [ ] Sandbox cannot call a method registered by an unrelated client/session.
-- [ ] Duplicate method registration follows deterministic precedence rules.
-- [ ] Request-scoped capability is unavailable outside that request.
-- [ ] Workflow-scoped capability is available to allowed requests in that workflow.
-- [ ] Instance-scoped capability requires matching `instance_id`.
+- [x] Client-owned provider session can register one method and receive a sandbox call.
+- [x] Sandbox cannot call a method registered by an unrelated client/session.
+- [x] Duplicate method registration follows deterministic precedence rules.
+- [x] Request-scoped capability is unavailable outside that request.
+- [x] Workflow-scoped capability is available to allowed requests in that workflow.
+- [x] Instance-scoped capability requires matching `instance_id`.
 - [x] Provider timeout returns `host_call_timeout`.
 - [x] Provider disconnect returns `host_capability_provider_unavailable`.
 - [x] Request cancellation cancels or closes in-flight provider calls.
