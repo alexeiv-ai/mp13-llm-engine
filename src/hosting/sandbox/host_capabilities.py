@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 HOST_CAPABILITY_CONTRACT = "hosting.sandbox.host_capability.v1"
 HOST_CAPABILITY_SESSION_CONTRACT = "hosting.sandbox.host_capability_session.v1"
 HOST_CAPABILITY_DISCOVERY_CONTRACT = "hosting.sandbox.discovery.v1"
+HOST_CAPABILITY_CALL_CONTRACT = "hosting.sandbox.host_capability_call.v1"
 
 _METHOD_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -23,6 +24,7 @@ _MAX_DESCRIPTION_CHARS = 4096
 
 CapabilityHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 AsyncCapabilityHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
+ProviderInvoker = Callable[["HostCapabilitySession", "HostCapabilityProviderCall"], Awaitable[Dict[str, Any]] | Dict[str, Any]]
 
 
 def _clean(value: Any) -> str:
@@ -198,6 +200,82 @@ class HostCapabilityMethod:
         return dict(result or {})
 
 
+class HostCapabilityProviderError(RuntimeError):
+    def __init__(self, reason: str, message: str = "", detail: Optional[Dict[str, Any]] = None) -> None:
+        self.reason = _clean(reason) or "host_capability_provider_error"
+        self.message = _clean(message)
+        self.detail = dict(detail or {})
+        super().__init__(self.reason if not self.message else f"{self.reason}:{self.message}")
+
+
+@dataclass(frozen=True)
+class HostCapabilityCallContext:
+    request_id: str = ""
+    instance_id: Optional[str] = None
+    workflow_id: str = ""
+    package_id: str = ""
+    actor: str = ""
+    deadline_ms: Optional[int] = None
+    permissions: list[str] = field(default_factory=list)
+    approved_scopes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "request_id": _clean(self.request_id) or None,
+            "instance_id": _clean(self.instance_id) or None,
+            "workflow_id": _clean(self.workflow_id) or None,
+            "package_id": _clean(self.package_id) or None,
+            "actor": _clean(self.actor) or None,
+            "deadline_ms": int(self.deadline_ms) if self.deadline_ms is not None else None,
+            "permissions": _string_list(self.permissions),
+            "approved_scopes": _string_list(self.approved_scopes),
+        }
+
+
+@dataclass(frozen=True)
+class HostCapabilityProviderCall:
+    provider_call_id: str
+    method: str
+    arguments: Dict[str, Any] = field(default_factory=dict)
+    context: HostCapabilityCallContext = field(default_factory=HostCapabilityCallContext)
+    contract: str = HOST_CAPABILITY_CALL_CONTRACT
+
+    def to_dict(self) -> Dict[str, Any]:
+        provider_call_id = _clean(self.provider_call_id)
+        method = _clean(self.method)
+        if not provider_call_id:
+            raise ValueError("host_capability_provider_call_id_required")
+        if not method:
+            raise ValueError("host_capability_provider_call_method_required")
+        return {
+            "contract": self.contract,
+            "provider_call_id": provider_call_id,
+            "method": method,
+            "arguments": dict(self.arguments or {}),
+            "context": self.context.to_dict(),
+        }
+
+
+def validate_provider_response(payload: Dict[str, Any], *, provider_call_id: str) -> Dict[str, Any]:
+    row = dict(payload or {})
+    expected = _clean(provider_call_id)
+    got = _clean(row.get("provider_call_id"))
+    if not expected:
+        raise ValueError("host_capability_provider_call_id_required")
+    if got != expected:
+        raise ValueError("host_capability_provider_call_id_mismatch")
+    status = _clean(row.get("status")).lower()
+    if status == "ok":
+        return dict(row.get("result") or {})
+    if status == "error":
+        raise HostCapabilityProviderError(
+            reason=_clean(row.get("reason")) or "host_capability_provider_error",
+            message=_clean(row.get("message")),
+            detail=dict(row.get("detail") or {}),
+        )
+    raise ValueError(f"host_capability_invalid_provider_response_status:{status}")
+
+
 @dataclass
 class HostCapabilitySession:
     session_id: str
@@ -252,6 +330,7 @@ class HostCapabilityBroker:
         runtime_kind: str = "",
         policy: Optional[Dict[str, Any]] = None,
         roots: Optional[Dict[str, Any]] = None,
+        provider_invoker: Optional[ProviderInvoker] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
@@ -259,6 +338,7 @@ class HostCapabilityBroker:
         self.runtime_kind = _clean(runtime_kind)
         self.policy = dict(policy or {})
         self.roots = dict(roots or {})
+        self.provider_invoker = provider_invoker
         self._sessions: Dict[str, HostCapabilitySession] = {}
 
     def register_session(self, session: HostCapabilitySession) -> None:
@@ -385,6 +465,31 @@ class HostCapabilityBroker:
         for session in self._sessions.values():
             method = session.methods.get(method_name)
             if method is not None:
+                if method.handler is None and method.async_handler is None:
+                    if self.provider_invoker is None:
+                        raise RuntimeError(f"host_capability_provider_unavailable:{session.session_id}")
+                    provider_call_id = f"cap_call_{uuid.uuid4().hex}"
+                    call = HostCapabilityProviderCall(
+                        provider_call_id=provider_call_id,
+                        method=method_name,
+                        arguments=dict(row.get("arguments") or {}),
+                        context=HostCapabilityCallContext(
+                            request_id=self.request_id,
+                            workflow_id=self.workflow_id,
+                            package_id=self.package_id,
+                            actor=session.owner,
+                            permissions=list(method.descriptor.permissions or []),
+                            approved_scopes=[
+                                f"{scope.get('scope')}:{scope.get('access')}"
+                                for scope in list(method.descriptor.scope_requirements or [])
+                                if scope.get("scope") and scope.get("access")
+                            ],
+                        ),
+                    )
+                    response = self.provider_invoker(session, call)
+                    if inspect.isawaitable(response):
+                        response = await response
+                    return validate_provider_response(dict(response or {}), provider_call_id=provider_call_id)
                 return await method.dispatch_async(dict(row.get("arguments") or {}))
         raise RuntimeError(f"unsupported_host_method:{method_name}")
 
@@ -405,15 +510,21 @@ class HostCapabilityBroker:
 
 __all__ = [
     "HOST_CAPABILITY_CONTRACT",
+    "HOST_CAPABILITY_CALL_CONTRACT",
     "HOST_CAPABILITY_DISCOVERY_CONTRACT",
     "HOST_CAPABILITY_SESSION_CONTRACT",
     "AsyncCapabilityHandler",
     "CapabilityHandler",
     "HostCapabilityApproval",
     "HostCapabilityBroker",
+    "HostCapabilityCallContext",
     "HostCapabilityDescriptor",
     "HostCapabilityMethod",
+    "HostCapabilityProviderCall",
+    "HostCapabilityProviderError",
     "HostCapabilityProviderRef",
     "HostCapabilitySession",
+    "ProviderInvoker",
     "default_group_path",
+    "validate_provider_response",
 ]

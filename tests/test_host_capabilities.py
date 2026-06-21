@@ -5,9 +5,13 @@ import pytest
 from hosting.sandbox.host_capabilities import (
     HostCapabilityApproval,
     HostCapabilityBroker,
+    HostCapabilityProviderCall,
+    HostCapabilityProviderError,
     HostCapabilityDescriptor,
     HostCapabilityMethod,
     HostCapabilityProviderRef,
+    HostCapabilitySession,
+    validate_provider_response,
 )
 
 
@@ -86,3 +90,61 @@ def test_host_capability_broker_dispatches_builtin_and_hides_bindings_from_disco
         "visibility": "request",
     }
     assert "binding" not in described["host_capabilities"]["providers"][0]
+
+
+def test_host_capability_provider_response_validation() -> None:
+    assert validate_provider_response(
+        {"status": "ok", "provider_call_id": "call-1", "result": {"value": 3}},
+        provider_call_id="call-1",
+    ) == {"value": 3}
+
+    with pytest.raises(ValueError, match="host_capability_provider_call_id_mismatch"):
+        validate_provider_response({"status": "ok", "provider_call_id": "other"}, provider_call_id="call-1")
+
+    with pytest.raises(HostCapabilityProviderError, match="crm_missing"):
+        validate_provider_response(
+            {"status": "error", "provider_call_id": "call-1", "reason": "crm_missing", "message": "missing"},
+            provider_call_id="call-1",
+        )
+
+
+def test_host_capability_broker_invokes_client_session_provider() -> None:
+    calls: list[dict] = []
+
+    def invoke_provider(session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        calls.append({"session": session.session_id, "call": call.to_dict()})
+        return {
+            "status": "ok",
+            "provider_call_id": call.provider_call_id,
+            "result": {"customer": call.arguments["customer_id"]},
+        }
+
+    descriptor = _descriptor()
+    broker = HostCapabilityBroker(
+        request_id="req-1",
+        workflow_id="wf-1",
+        package_id="pkg-1",
+        runtime_kind="workflow_python_node",
+        provider_invoker=invoke_provider,
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+            binding={"transport": "daemon_callback", "address": "private"},
+        )
+    )
+
+    result = broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
+
+    assert result == {"customer": "c-1"}
+    assert calls[0]["session"] == "client-crm"
+    assert calls[0]["call"]["contract"] == "hosting.sandbox.host_capability_call.v1"
+    assert calls[0]["call"]["method"] == "crm.customer.lookup"
+    assert calls[0]["call"]["context"]["request_id"] == "req-1"
+    assert calls[0]["call"]["context"]["actor"] == "client-a"
+    assert "binding" not in calls[0]["call"]

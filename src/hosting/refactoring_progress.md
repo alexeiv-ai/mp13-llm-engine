@@ -24,6 +24,13 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added typed `EngineHostControlChannel` helpers for provider session lifecycle management.
 - [x] Added disconnect cleanup for sessions marked `close_on_client_disconnect`.
 
+### Host Capability Slice 3: Provider Callback Envelope
+
+- [x] Added canonical `hosting.sandbox.host_capability_call.v1` provider call envelope.
+- [x] Added provider response validation with `provider_call_id` matching and normalized provider errors.
+- [x] Added broker seam for invoking client/toolbox provider sessions through a provider invoker.
+- [x] Kept provider bindings out of the callback envelope and sandbox-facing discovery.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -50,7 +57,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [ ] Continue Host Capability Protocol with provider callback RPC, permissions/scopes, approval routing, event observations, and durable audit.
+- [ ] Continue Host Capability Protocol with daemon-mediated provider callback transport, permissions/scopes, approval routing, event observations, and durable audit.
 
 ## Verification
 

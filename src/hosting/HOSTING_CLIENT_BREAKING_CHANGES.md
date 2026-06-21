@@ -170,3 +170,25 @@ channel.host_capability_session_close(session_id="crm-provider")
 Public session responses expose descriptor metadata and lifetime fields, but they do not expose provider callback bindings, callback addresses, or provider session tokens.
 
 Provider callback invocation is not public yet in this slice. Registered client-owned methods are lifecycle-managed and discoverable by the daemon registry work, but sandbox calls still only execute built-in providers until the provider callback RPC slice lands.
+
+## Host Capability Provider Callback Envelope
+
+Date: 2026-06-21
+
+Scope: provider callback envelope and response-validation slice.
+
+Provider calls now use the canonical internal contract `hosting.sandbox.host_capability_call.v1` with `provider_call_id`, `method`, `arguments`, and `context`.
+
+Provider responses must echo the exact `provider_call_id` and use either:
+
+```json
+{"status": "ok", "provider_call_id": "...", "result": {}}
+```
+
+or:
+
+```json
+{"status": "error", "provider_call_id": "...", "reason": "provider_reason", "message": "", "detail": {}}
+```
+
+Normal clients should still use hosting library helpers once callback transport is exposed; they should not manually construct low-level callback envelopes unless using raw daemon commands intentionally.
