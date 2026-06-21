@@ -6,7 +6,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
@@ -391,6 +391,7 @@ class WorkflowHelperMixin:
         request: Dict[str, Any],
         artifact_context: Optional[Dict[str, Any]],
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ):
         child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
@@ -661,6 +662,7 @@ class WorkflowHelperMixin:
             runtime_kind="workflow_node",
             policy=dict(registry.policy or {}),
             roots=dict(registry.roots or {}),
+            event_emitter=event_emitter,
         )
         broker.register_builtin_provider(
             provider_id="builtin.workflow_node_host_api",
@@ -1216,6 +1218,10 @@ class WorkflowHelperMixin:
                         {"kind": event_type, "request_id": lifecycle.request_id, "timestamp_ms": int(time.time() * 1000), **dict(payload or {})},
                     )
 
+                def _record_js_broker_event(event_type: str, payload: Dict[str, Any]) -> None:
+                    if str(event_type or "") != "host_call":
+                        _record_js_event(event_type, payload)
+
                 result = self._workflow_js_node_runtime_registry().execute(
                     {
                         **req,
@@ -1230,6 +1236,7 @@ class WorkflowHelperMixin:
                         request={**req, "request_id": lifecycle.request_id},
                         artifact_context=artifact_context,
                         sandbox_policy=sandbox_policy,
+                        event_emitter=_record_js_broker_event,
                     ),
                 )
                 if artifact_context is not None and bool(result.get("ok", False)):
@@ -1368,6 +1375,10 @@ class WorkflowHelperMixin:
                 return
             base.stream_emit(stream_id=stream_id, event_type=event_type, payload=dict(payload or {}))
 
+        def _emit_js_broker_event(event_type: str, payload: Dict[str, Any]) -> None:
+            if str(event_type or "") != "host_call":
+                _emit_js_event(event_type, payload)
+
         artifact_context: Optional[Dict[str, Any]] = None
         if request.get("artifact_inputs") or request.get("artifact_outputs"):
             try:
@@ -1403,6 +1414,7 @@ class WorkflowHelperMixin:
                 request=dict(request or {}),
                 artifact_context=artifact_context,
                 sandbox_policy=sandbox_policy,
+                event_emitter=_emit_js_broker_event,
             ),
         )
         if artifact_context is not None and bool(result.get("ok", False)):
@@ -1739,6 +1751,10 @@ class WorkflowHelperMixin:
                     {"kind": event_type, "request_id": lifecycle.request_id, "timestamp_ms": int(time.time() * 1000), **dict(payload or {})},
                 )
 
+            def _record_node_broker_event(event_type: str, payload: Dict[str, Any]) -> None:
+                if str(event_type or "") != "host_call":
+                    _record_node_event(event_type, payload)
+
             result = self._workflow_python_node_runtime_registry().execute(
                 {
                     **req,
@@ -1753,6 +1769,7 @@ class WorkflowHelperMixin:
                     request={**req, "request_id": lifecycle.request_id},
                     artifact_context=artifact_context,
                     sandbox_policy=sandbox_policy,
+                    event_emitter=_record_node_broker_event,
                 ),
                 max_idle=int(pool.resources().get("metrics", {}).get("desired_capacity") or capacity or 1),
             )
@@ -2216,6 +2233,10 @@ class WorkflowHelperMixin:
         def _emit_node_event(event_type: str, payload: Dict[str, Any]) -> None:
             base.stream_emit(stream_id=stream_id, event_type=event_type, payload=dict(payload or {}))
 
+        def _emit_node_broker_event(event_type: str, payload: Dict[str, Any]) -> None:
+            if str(event_type or "") != "host_call":
+                _emit_node_event(event_type, payload)
+
         artifact_context: Optional[Dict[str, Any]] = None
         if request.get("artifact_inputs") or request.get("artifact_outputs"):
             try:
@@ -2256,6 +2277,7 @@ class WorkflowHelperMixin:
                 request=dict(request or {}),
                 artifact_context=artifact_context,
                 sandbox_policy=sandbox_policy,
+                event_emitter=_emit_node_broker_event,
             ),
             max_idle=capacity,
         )

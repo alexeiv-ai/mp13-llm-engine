@@ -28,6 +28,7 @@ AsyncCapabilityHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 ProviderInvoker = Callable[["HostCapabilitySession", "HostCapabilityProviderCall"], Awaitable[Dict[str, Any]] | Dict[str, Any]]
 CancelChecker = Callable[[], bool]
 ApprovalRequester = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]] | Dict[str, Any]]
+EventEmitter = Callable[[str, Dict[str, Any]], None]
 
 
 def _clean(value: Any) -> str:
@@ -361,6 +362,7 @@ class HostCapabilityBroker:
         allowed_namespaces: Optional[Any] = None,
         approved_permissions: Optional[Iterable[str]] = None,
         approval_requester: Optional[ApprovalRequester] = None,
+        event_emitter: Optional[EventEmitter] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
@@ -378,6 +380,7 @@ class HostCapabilityBroker:
         self._allowed_namespaces = self._normalize_allowed_namespaces(allowed_namespaces)
         self._approved_permissions = set(_string_list(approved_permissions or [])) if approved_permissions is not None else None
         self.approval_requester = approval_requester
+        self.event_emitter = event_emitter
         self._sessions: Dict[str, HostCapabilitySession] = {}
 
     def cancel(self, reason: str = "host_call_canceled") -> None:
@@ -387,6 +390,14 @@ class HostCapabilityBroker:
     def _check_canceled(self) -> None:
         if self._cancel_requested or (self.cancel_checker is not None and bool(self.cancel_checker())):
             raise HostCapabilityCanceled(detail={"reason": self._cancel_reason})
+
+    def _emit_event(self, kind: str, payload: Dict[str, Any]) -> None:
+        if self.event_emitter is None:
+            return
+        try:
+            self.event_emitter(_clean(kind), dict(payload or {}))
+        except Exception:
+            return
 
     def _provider_timeout_for_call(self, row: Dict[str, Any]) -> float:
         raw = row.get("provider_timeout_seconds")
@@ -480,6 +491,7 @@ class HostCapabilityBroker:
         session: HostCapabilitySession,
         method: HostCapabilityMethod,
         provider_call: HostCapabilityProviderCall,
+        host_call_id: str = "",
     ) -> None:
         if not self._approval_required(method):
             return
@@ -508,6 +520,8 @@ class HostCapabilityBroker:
                 "visibility": session.visibility,
             },
         }
+        call_id = _clean(host_call_id) or provider_call.provider_call_id
+        self._emit_event("approval", {"status": "requested", "call_id": call_id, "host_call_id": _clean(host_call_id) or None, **request})
         decision = self.approval_requester(request)
         if inspect.isawaitable(decision):
             decision = await decision
@@ -515,6 +529,18 @@ class HostCapabilityBroker:
         status = _clean(row.get("status")).lower()
         approved = bool(row.get("approved", status in {"ok", "approved"}))
         if not approved or status in {"denied", "rejected", "error"}:
+            self._emit_event(
+                "approval",
+                {
+                    "status": "denied",
+                    "call_id": call_id,
+                    "host_call_id": _clean(host_call_id) or None,
+                    "approval_id": approval_id,
+                    "provider_call_id": provider_call.provider_call_id,
+                    "method": provider_call.method,
+                    "decision": row,
+                },
+            )
             raise HostCapabilityApprovalDenied(
                 message=_clean(row.get("message")) or "host capability call approval denied",
                 detail={
@@ -524,6 +550,18 @@ class HostCapabilityBroker:
                     "decision": row,
                 },
             )
+        self._emit_event(
+            "approval",
+            {
+                "status": "approved",
+                "call_id": call_id,
+                "host_call_id": _clean(host_call_id) or None,
+                "approval_id": approval_id,
+                "provider_call_id": provider_call.provider_call_id,
+                "method": provider_call.method,
+                "decision": row,
+            },
+        )
 
     def register_session(self, session: HostCapabilitySession) -> None:
         sid = _clean(session.session_id)
@@ -656,6 +694,8 @@ class HostCapabilityBroker:
                     if self.provider_invoker is None:
                         raise HostCapabilityProviderUnavailable(detail={"provider_id": session.session_id})
                     provider_call_id = f"cap_call_{uuid.uuid4().hex}"
+                    host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
+                    event_call_id = host_call_id or provider_call_id
                     timeout_seconds = self._provider_timeout_for_call(row)
                     call = HostCapabilityProviderCall(
                         provider_call_id=provider_call_id,
@@ -675,23 +715,112 @@ class HostCapabilityBroker:
                             deadline_ms=int((time.time() + timeout_seconds) * 1000),
                         ),
                     )
+                    self._emit_event(
+                        "host_call",
+                        {
+                            "method": method_name,
+                            "call_id": event_call_id,
+                            "host_call_id": host_call_id or None,
+                            "provider_call_id": provider_call_id,
+                            "provider_id": session.session_id,
+                            "provider_kind": session.provider_kind,
+                            "request_id": self.request_id or None,
+                            "workflow_id": self.workflow_id or None,
+                            "instance_id": self.instance_id or None,
+                        },
+                    )
                     try:
-                        await self._request_approval(session=session, method=method, provider_call=call)
+                        await self._request_approval(session=session, method=method, provider_call=call, host_call_id=host_call_id)
                         response = self.provider_invoker(session, call)
                         if inspect.isawaitable(response):
                             response = await self._await_provider_response(response, timeout_seconds=timeout_seconds)
                         self._check_canceled()
-                        return validate_provider_response(dict(response or {}), provider_call_id=provider_call_id)
+                        result = validate_provider_response(dict(response or {}), provider_call_id=provider_call_id)
+                        self._emit_event(
+                            "host_response",
+                            {
+                                "status": "ok",
+                                "method": method_name,
+                                "call_id": event_call_id,
+                                "host_call_id": host_call_id or None,
+                                "provider_call_id": provider_call_id,
+                                "provider_id": session.session_id,
+                            },
+                        )
+                        return result
                     except HostCapabilityTimeout as exc:
                         exc.detail.setdefault("provider_call_id", provider_call_id)
+                        self._emit_event("provider_failure", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason, "detail": dict(exc.detail or {})})
+                        self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason})
                         raise
                     except asyncio.CancelledError as exc:
+                        self._emit_event("canceled", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_canceled"})
+                        self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_canceled"})
                         raise HostCapabilityCanceled(detail={"provider_call_id": provider_call_id}) from exc
                     except (BrokenPipeError, ConnectionError, EOFError) as exc:
+                        self._emit_event(
+                            "provider_failure",
+                            {
+                                "method": method_name,
+                                "call_id": event_call_id,
+                                "host_call_id": host_call_id or None,
+                                "provider_call_id": provider_call_id,
+                                "reason": "host_capability_provider_unavailable",
+                                "error_type": type(exc).__name__,
+                                "provider_id": session.session_id,
+                            },
+                        )
+                        self._emit_event(
+                            "host_response",
+                            {
+                                "status": "error",
+                                "method": method_name,
+                                "call_id": event_call_id,
+                                "host_call_id": host_call_id or None,
+                                "provider_call_id": provider_call_id,
+                                "reason": "host_capability_provider_unavailable",
+                            },
+                        )
                         raise HostCapabilityProviderUnavailable(
                             detail={"provider_call_id": provider_call_id, "provider_id": session.session_id, "error_type": type(exc).__name__}
                         ) from exc
-                return await method.dispatch_async(dict(row.get("arguments") or {}))
+                    except HostCapabilityCanceled as exc:
+                        self._emit_event("canceled", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason, "detail": dict(exc.detail or {})})
+                        self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason})
+                        raise
+                    except HostCapabilityApprovalDenied as exc:
+                        self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason})
+                        raise
+                    except HostCapabilityProviderError as exc:
+                        self._emit_event("provider_failure", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason, "detail": dict(exc.detail or {})})
+                        self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason})
+                        raise
+                    except Exception as exc:
+                        self._emit_event("provider_failure", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_failed", "error_type": type(exc).__name__})
+                        self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_failed"})
+                        raise
+                host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
+                self._emit_event(
+                    "host_call",
+                    {
+                        "method": method_name,
+                        "call_id": host_call_id or None,
+                        "host_call_id": host_call_id or None,
+                        "provider_id": session.session_id,
+                        "provider_kind": session.provider_kind,
+                        "request_id": self.request_id or None,
+                        "workflow_id": self.workflow_id or None,
+                        "instance_id": self.instance_id or None,
+                    },
+                )
+                try:
+                    result = await method.dispatch_async(dict(row.get("arguments") or {}))
+                    self._emit_event("host_response", {"status": "ok", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.session_id})
+                    return result
+                except Exception as exc:
+                    reason = str(getattr(exc, "reason", "") or "host_call_failed")
+                    self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.session_id, "reason": reason})
+                    raise
         raise RuntimeError(f"unsupported_host_method:{method_name}")
 
     def dispatch(self, call: Dict[str, Any]) -> Dict[str, Any]:
@@ -720,6 +849,7 @@ __all__ = [
     "AsyncCapabilityHandler",
     "CancelChecker",
     "CapabilityHandler",
+    "EventEmitter",
     "HostCapabilityApproval",
     "HostCapabilityApprovalDenied",
     "HostCapabilityBroker",

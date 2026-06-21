@@ -1218,7 +1218,13 @@ exports.run = function(input, api) {
     assert status["request"]["status"] == "ok"
     assert status["request"]["stream_event_count"] >= len(normalized_events)
     assert any(row.get("filename") == "stream.txt" for row in normalized_events if row["kind"] == "artifact")
-    assert any(row.get("kind") == "host_call" and row.get("call_id") for row in normalized_events)
+    host_calls = [row for row in normalized_events if row.get("kind") == "host_call" and row.get("call_id")]
+    host_responses = [row for row in normalized_events if row.get("kind") == "host_response" and row.get("call_id")]
+    assert host_calls
+    assert any(
+        row.get("method") == "fs.write_text" and row.get("status") == "ok" and row.get("call_id") == host_calls[0].get("call_id")
+        for row in host_responses
+    )
 
 
 def test_workflow_js_stream_retention_reports_dropped_events(tmp_path: Path) -> None:

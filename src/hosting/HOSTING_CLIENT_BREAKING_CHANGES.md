@@ -232,4 +232,21 @@ Descriptors with `approval.mode` other than `none` now require an outward approv
 
 Approval requests use internal contract `hosting.sandbox.host_capability_approval.v1` and include method, arguments, context, approval metadata, and sandbox-safe provider metadata. Provider callback bindings and provider session tokens are not included.
 
-Audit persistence and event-stream observations for approvals are still pending later slices; clients should not rely on live approval events yet.
+Audit persistence for approval decisions is still pending the durable audit slice.
+
+## Host Capability Event Observations
+
+Date: 2026-06-21
+
+Scope: broker event observations for host API calls.
+
+Workflow event subscribers can now observe broker-generated host API events in addition to worker-generated `host_call` events:
+
+- `host_response` for successful and failed broker dispatch
+- `approval` for approval requested, approved, or denied
+- `provider_failure` for provider timeout, disconnect, validation, or provider error
+- `canceled` for canceled in-flight provider calls
+
+Events include `method` and correlation fields. When the worker supplied a `host_call_id`, broker events expose it as both `host_call_id` and `call_id`; provider-backed calls also include `provider_call_id`. Client code should correlate on `call_id` for stream UX and use `provider_call_id` only for provider callback/debug flows.
+
+Hosting library helpers should hide this wire shape for normal clients. Raw stream consumers should treat these events as observations, not as the sandbox-visible host response protocol itself.

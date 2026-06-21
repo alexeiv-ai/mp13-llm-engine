@@ -53,7 +53,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added broker `approval_requester` hook for outward/user-facing approval decisions.
 - [x] Prevented gated provider execution until approval is granted.
 - [x] Mapped approval denial and missing approval requester to structured `host_call_approval_denied` errors.
-- [x] Kept approval audit and event-stream observations pending for the dedicated audit/event slices.
+- [x] Kept durable approval audit pending for the dedicated audit slice.
+
+### Host Capability Slice 7: Event Observations
+
+- [x] Added broker event observations for `host_call`, `host_response`, `approval`, `provider_failure`, and `canceled`.
+- [x] Added worker `host_call_id` propagation into broker observations as `call_id` so clients can correlate worker calls with broker responses.
+- [x] Wired broker observations into direct and streaming Python/JavaScript node execution paths while suppressing duplicate broker `host_call` stream frames.
+- [x] Verified approval request/approval/denial events include approval and provider call correlation fields.
+- [x] Verified workflow JS stream subscribers receive `host_response` observations for built-in host calls.
 
 ### Slice 1: Workflow Event Subscribe Cleanup
 
@@ -81,7 +89,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [ ] Continue Host Capability Protocol with daemon-mediated provider callback transport, permissions/scopes, approval routing, event observations, and durable audit.
+- [ ] Continue Host Capability Protocol with durable audit and remaining SSH-bound provider callback coverage.
 
 ## Verification
 
@@ -90,3 +98,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_hosting_sandbox_process_base.py tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_runtime_pool.py -q`
 - [x] `pytest tests/test_hosting_sandbox_process_base.py -q`
 - [x] `$hostingTests = Get-ChildItem -Path tests -Filter 'test_hosting*.py' | ForEach-Object { $_.FullName }; pytest @hostingTests tests/test_engine_host_channel.py tests/test_engine_host_cli_interactive.py tests/test_engine_host_cli_remote_args.py tests/test_workflow_helper_service.py tests/test_engine_worker_ipc_streaming.py -q`
+- [x] `python -m py_compile src/hosting/sandbox/host_capabilities.py src/hosting/service/workflow_helpers.py`
+- [x] `pytest tests/test_host_capabilities.py -q`
+- [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
+- [x] `pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`

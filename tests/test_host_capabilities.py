@@ -182,11 +182,13 @@ def test_host_capability_broker_times_out_async_provider() -> None:
 
 
 def test_host_capability_broker_maps_provider_disconnect() -> None:
+    events: list[tuple[str, dict]] = []
+
     def invoke_provider(_session: HostCapabilitySession, _call: HostCapabilityProviderCall) -> dict:
         raise BrokenPipeError("provider pipe closed")
 
     descriptor = _descriptor()
-    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider)
+    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider, event_emitter=lambda kind, payload: events.append((kind, payload)))
     broker.register_session(
         HostCapabilitySession(
             session_id="client-crm",
@@ -203,6 +205,8 @@ def test_host_capability_broker_maps_provider_disconnect() -> None:
 
     assert exc.value.reason == "host_capability_provider_unavailable"
     assert exc.value.detail["provider_id"] == "client-crm"
+    assert [kind for kind, _payload in events] == ["host_call", "provider_failure", "host_response"]
+    assert events[1][1]["reason"] == "host_capability_provider_unavailable"
 
 
 def test_host_capability_broker_cancellation_blocks_provider_call() -> None:
@@ -236,6 +240,7 @@ def test_host_capability_broker_cancellation_blocks_provider_call() -> None:
 
 def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
     cancel_checks = {"count": 0}
+    events: list[tuple[str, dict]] = []
 
     async def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
         await asyncio.sleep(1.0)
@@ -251,6 +256,7 @@ def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
         provider_invoker=invoke_provider,
         provider_timeout_seconds=5.0,
         cancel_checker=cancel_checker,
+        event_emitter=lambda kind, payload: events.append((kind, payload)),
     )
     broker.register_session(
         HostCapabilitySession(
@@ -267,6 +273,9 @@ def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
         broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
 
     assert cancel_checks["count"] > 1
+    assert "canceled" in [kind for kind, _payload in events]
+    assert events[-1][0] == "host_response"
+    assert events[-1][1]["reason"] == "host_call_canceled"
 
 
 def test_host_capability_broker_hides_unrelated_request_session() -> None:
@@ -427,6 +436,7 @@ def test_host_capability_broker_enforces_namespace_and_permission_gates() -> Non
 def test_host_capability_broker_requests_approval_before_gated_provider_call() -> None:
     approval_requests: list[dict] = []
     provider_calls: list[dict] = []
+    events: list[tuple[str, dict]] = []
     descriptor = HostCapabilityDescriptor(
         name="crm.customer.delete",
         namespace="crm",
@@ -444,7 +454,12 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
         provider_calls.append(call.to_dict())
         return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"deleted": True}}
 
-    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider, approval_requester=approve)
+    broker = HostCapabilityBroker(
+        workflow_id="wf-1",
+        provider_invoker=invoke_provider,
+        approval_requester=approve,
+        event_emitter=lambda kind, payload: events.append((kind, payload)),
+    )
     broker.register_session(
         HostCapabilitySession(
             session_id="client-crm",
@@ -463,10 +478,14 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
     assert approval_requests[0]["provider_call_id"] == provider_calls[0]["provider_call_id"]
     assert approval_requests[0]["approval"]["mode"] == "always"
     assert "binding" not in approval_requests[0]["provider"]
+    assert [kind for kind, _payload in events] == ["host_call", "approval", "approval", "host_response"]
+    assert events[1][1]["status"] == "requested"
+    assert events[2][1]["status"] == "approved"
 
 
 def test_host_capability_broker_denies_gated_provider_call_before_execution() -> None:
     provider_calls: list[dict] = []
+    events: list[tuple[str, dict]] = []
     descriptor = HostCapabilityDescriptor(
         name="crm.customer.delete",
         namespace="crm",
@@ -483,6 +502,7 @@ def test_host_capability_broker_denies_gated_provider_call_before_execution() ->
         workflow_id="wf-1",
         provider_invoker=invoke_provider,
         approval_requester=lambda _request: {"status": "denied", "approved": False, "message": "user denied"},
+        event_emitter=lambda kind, payload: events.append((kind, payload)),
     )
     broker.register_session(
         HostCapabilitySession(
@@ -501,6 +521,9 @@ def test_host_capability_broker_denies_gated_provider_call_before_execution() ->
     assert provider_calls == []
     assert exc.value.reason == "host_call_approval_denied"
     assert exc.value.message == "user denied"
+    assert [kind for kind, _payload in events] == ["host_call", "approval", "approval", "host_response"]
+    assert events[2][1]["status"] == "denied"
+    assert events[-1][1]["reason"] == "host_call_approval_denied"
 
 
 def test_host_capability_broker_requires_approval_requester_for_gated_call() -> None:
