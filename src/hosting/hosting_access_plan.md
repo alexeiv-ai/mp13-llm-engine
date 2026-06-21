@@ -1,401 +1,708 @@
-# Hosted Workflow Runtime Goals And Discrepancies
-
-Date: 2026-06-14
-
-Purpose: keep the implementation pointed at the intended hosted workflow runtime behavior. This file intentionally avoids prescribing internal module names, worker contract strings, or transport details unless they are already part of the public API.
-
-## Goals
-
-- `workflow_python` is the public Python workflow runtime with two profiles:
-  - `profile=helper`: short helper execution, source-in / JSON-out, compatible with existing helper behavior.
-  - `profile=node`: first-class workflow node execution with a richer node response and streaming model.
-- `workflow_js(profile=node)` is the public JavaScript workflow runtime facade, backed by QuickJS.
-- Runtime routing is by host-derived `environment_key`, not by raw engine ID alone.
-- Environment identity includes runtime intent, dependency/import intent, and sandbox policy identity so incompatible work does not share a worker pool.
-- Dependency installation is not triggered implicitly by workflow execution. Dependency-bearing work must execute against an explicitly prepared/verified runtime environment or fail with a structured environment error.
-- Shared hosting concerns remain common across runtimes: process lifecycle, sandbox policy attachment, pool capacity, cancellation, request status, metrics, and resource reporting.
-- Node-profile Python must not be limited by the narrower helper input/output contract. Helper compatibility may reuse implementation where appropriate, but it must not define node semantics.
-
-## Current State
-
-- `workflow_python(profile=helper)` exists as a public facade and is backed by the existing Python helper worker.
-- Helper-profile execution has source hash verification, operation allowlisting, JSON payload/result handling, import allowlist enforcement, timeout/output limits, capacity, cancellation, and request metrics.
-- `workflow_python(profile=node)` now has a direct node execution path:
-  - It validates node-profile request fields.
-  - It executes node requests through node-owned Python child runtime code.
-  - It no longer translates node execution through `execute_workflow_python_helper`.
-  - It preserves the node response envelope.
-  - Its stream API routes execution through the node runtime and emits node events through the shared stream/session plumbing.
-- `workflow_js(profile=node)` exists as a public facade over the QuickJS workflow JS node runtime.
-- Host-side environment-key routing and pool/request accounting exist for the workflow facades.
-- Node-profile artifact storage has a local host-provisioned implementation for declared input refs and output slots, including inline artifacts, alias refs, file masks, and recursive path collection. It returns `artifact_store.status=ok` only when refs are minted from declared output files or declared inline outputs.
-- Node-profile routing now uses host-derived `environment_key` plus shared pool capacity. Compatible node requests share the same pool, incompatible environment/import/dependency/sandbox identities route to separate pools, and runtime capacity can be adjusted through host capacity APIs. Compatible module/snippet requests can reuse warm harness workers sequentially; project execution and explicit recycling policy are still next-phase work.
-
-## Current Discrepancies
-
-- Node-profile artifact refs are implemented as local host-controlled alias refs such as `@artifacts/...`. Registered prefixes resolve to absolute paths on the worker-process host; authorization, lifetime, cleanup, and external read/download APIs remain basic/local rather than a full durable artifact service.
-- Node-profile cancellation, output-limit, truncation, environment-policy, and artifact behavior now have focused coverage; broader integration coverage can still be added when real dependency installs and artifact consumers exist.
-- Cleanup is incomplete: the Python helper worker remains the actual execution substrate for helper-profile execution.
-
-## Work Items
-
-### Baseline Already Present
-
-- [x] Keep `workflow_python(profile=helper)` available as the short helper execution profile.
-- [x] Keep public workflow JS facade commands available for QuickJS node execution.
-- [x] Keep public workflow Python facade commands available for helper-profile execution.
-- [x] Keep public workflow JS facade commands available for helper-profile execution.
-- [x] Derive and report `environment_key` for workflow facade calls.
-- [x] Record host-side request lifecycle metrics for current helper-backed workflow execution.
-- [x] Preserve node-profile public request normalization and response envelope scaffolding.
-- [x] Preserve node-profile stream command surfaces while replacing the backing implementation.
-
-### Node Execution Path
-
-- [x] Add a direct `workflow_python(profile=node)` execution path that does not call `execute_workflow_python_helper`.
-- [x] Route node-profile sync execution through the new node execution path.
-- [x] Route node-profile stream execution through the new node execution path.
-- [x] Keep helper-profile execution behavior unchanged while node execution is replaced.
-- [x] Keep the public node request fields stable:
-  - [x] `request_id`
-  - [x] `module_source`
-  - [x] `module_sha256`
-  - [x] `package_id`
-  - [x] `workflow_id`
-  - [x] `package_source_digest`
-  - [x] `export_name` or `operation`
-  - [x] `payload`
-  - [x] `provenance`
-  - [x] `limits`
-  - [x] `policy`
-  - [x] `python`
-- [x] Keep the public node response fields stable:
-  - [x] `status`
-  - [x] `ok`
-  - [x] `output`
-  - [x] `state_patch`
-  - [x] `artifacts`
-  - [x] `artifact_store`
-  - [x] `progress`
-  - [x] `logs`
-  - [x] `metrics`
-  - [x] `error`
-  - [x] `audit`
-- [x] Return a structured error when required node request fields are missing.
-- [x] Return a structured error when `module_sha256` does not match `module_source`.
-- [x] Return a structured error when the requested export/operation cannot be executed.
-
-### Import Policy
-
-- [x] Move node-profile import enforcement into node-owned execution code.
-- [x] Default-deny imports when `python.import_allowlist` is empty or absent.
-- [x] Allow only explicitly listed root modules when `python.import_allowlist` is present.
-- [x] Reject imports whose root module is not allowlisted.
-- [x] Preserve safe builtin behavior appropriate for node execution.
-- [x] Ensure import policy failures produce structured node errors.
-- [x] Add tests for default-deny imports.
-- [x] Add tests for allowlisted imports.
-- [x] Add tests for unallowlisted imports.
-
-### Runtime Environment Policy
-
-- [x] Derive node `environment_key` from environment name, runtime intent, import intent, dependency intent, and sandbox policy identity.
-- [x] Reject caller-supplied `environment_key` values that do not match host-derived identity.
-- [x] Ensure different dependency/import/runtime/sandbox-policy identities do not share node workers.
-- [x] Ensure compatible node requests route through the same environment-keyed worker pool.
-- [x] Ensure host runtime capacity controls trim or expand the reserved slots for a node pool.
-- [x] Ensure dependency-bearing node requests execute only against a selected verified runtime environment.
-- [x] Return a structured environment error when required dependency environment preparation is missing.
-- [x] Return a structured environment error when install receipt verification failed or is absent.
-- [x] Keep normal node execution from installing dependencies implicitly.
-- [x] Add tests for environment-key mismatch.
-- [x] Add tests for dependency-bearing execution without verified environment.
-- [x] Add tests proving incompatible identities do not share live workers or hot child pools.
-
-### Streaming And Events
-
-- [x] Emit `started` when node execution begins.
-- [x] Capture and emit bounded `stdout` events from executed Python code.
-- [x] Capture and emit bounded `stderr` events from executed Python code.
-- [x] Emit `log` events for host/runtime diagnostics that are safe to expose.
-- [x] Emit `progress` during execution, not only after final return.
-- [x] Emit `artifact` events when artifact refs are created.
-- [x] Emit `result` for successful terminal output.
-- [x] Emit `error` for structured terminal failures.
-- [x] Emit `canceled` when cancellation wins.
-- [x] Emit `done` exactly once for each stream.
-- [x] Keep stream queues bounded and enforce `max_items` on receive.
-- [x] Add tests proving progress can be observed before final result.
-- [x] Add tests for stdout/stderr/log truncation.
-- [x] Add tests for terminal event ordering.
-
-### Result Semantics
-
-- [x] Preserve node `output` as the primary successful result value.
-- [x] Preserve `state_patch` as JSON object or `null`.
-- [x] Preserve `progress` as latest progress snapshot where available.
-- [x] Preserve `logs` as bounded summaries that do not expose raw source by default.
-- [x] Preserve `audit` fields for package, workflow, source digest, module hash, provenance, runtime, and request identifiers.
-- [x] Return structured runtime errors with safe traceback/message summaries.
-- [x] Return structured timeout errors.
-- [x] Return structured output-limit errors.
-- [x] Add tests for successful output/state patch.
-- [x] Add tests for structured runtime errors.
-- [x] Add tests for timeout.
-- [x] Add tests for output limit.
-
-### Artifacts
-
-Decision: artifact I/O belongs in the first-class node sandbox contract, and this pass implements the local host-provisioned version. The node response keeps `artifacts` and `artifact_store` stable; `artifact_store.status=ok` is returned only when the host mints refs from declared output files or declared inline outputs, while requests with no declared output artifacts still report the store as unavailable for that response.
-
-How artifacts fit the sandbox model: input artifacts are either alias refs such as `@artifacts/...` or `@project/...`, inline bytes/text, or inline zip bundles that the host expands into sandbox-visible input paths before execution. Output artifacts are either files written by sandboxed code only to host-provided output paths/directories, inline outputs returned by sandboxed code only when a matching inline output declaration exists, or multi-file outputs exported as one inline zip. Ref outputs remain producer-owned when an explicit output ref is used. The host takes over a ref output only when the output declaration asks for takeover or omits `ref`, in which case the host copies files into `@artifacts/...`. Request-local worker output paths are cleaned after collection. The sandbox should never let code mint artifact identity by returning a path, URL, or opaque token directly.
-
-Rationale: this keeps artifact management aligned with sandbox file access. The sandbox may consume files and produce files, but the host owns the capability boundary: which configured alias refs are readable, which exact output files are writable, what inline bytes cross back out, which refs clients may later read, and how registered aliases resolve to host paths. Direct filesystem paths returned by sandboxed code are not promoted as artifact refs.
-
-Untrusted artifact refs means any artifact-looking value produced by sandboxed code rather than by the host artifact manager. Examples include returned dicts such as `{"path": "/tmp/report.csv"}`, `{"url": "file:///..."}`, `{"artifact_id": "abc"}`, or `{"ref": "../other-run/output"}`. These values may be useful as ordinary JSON output if the workflow wants them, but the host must not treat them as authorized downloadable artifacts, emit them as `artifact` stream events, or store them in the response `artifacts` list until the host has verified the file came from an allowed output path and has created/registered the reference.
-
-- [x] Decide whether first-class node supports artifacts in this implementation pass.
-- [x] Choose host-provisioned artifact I/O as the intended sandbox model.
-- [x] Keep a deliberate structured unavailable response when no host-minted artifact refs exist for a response.
-- [x] Define request fields for input artifact refs and host-provided output artifact slots/directories.
-- [x] Support alias-ref artifact inputs with relative refs such as `@artifacts/...` or policy-configured roots such as `@project/...`.
-- [x] Support input artifact file masks with `path_mask` or `mask`.
-- [x] Support recursive input artifact matching with `recursive=true`.
-- [x] Support inline artifact inputs by writing declared bytes/text to sandbox input paths.
-- [x] Support inline zip artifact inputs by expanding zip members into sandbox input directories.
-- [x] Support alias-ref artifact outputs by returning host-minted or host-validated relative alias refs.
-- [x] Support output artifact file masks with `path_mask` or `mask`.
-- [x] Support recursive output artifact collection with `recursive=true`.
-- [x] Support host takeover of selected output ref artifacts with `host_takeover`.
-- [x] Support multi-file output export as inline zip without changing producer ownership.
-- [x] Support declared inline artifact outputs without trusting undeclared sandbox artifact returns.
-- [x] Configure artifact root alias to physical path mappings through sandbox policy.
-- [x] Treat input-side size/count/lifetime/encoding metadata as optional advisory metadata.
-- [x] Resolve input artifact refs into sandbox-visible input paths before execution.
-- [x] Provide output artifact paths scoped to the current request.
-- [x] Collect only files written under host-provided output locations.
-- [x] Register collected output files into host-controlled artifact storage and return host-minted refs.
-- [x] Clean request-local worker artifact directories after collection.
-- [x] Ensure direct node execution ignores or rejects untrusted returned artifact refs instead of treating them as host-created artifacts.
-- [x] Ensure stream execution emits `artifact` events only for host-minted refs.
-- [x] Keep artifact-looking values from sandbox code as ordinary `output` only, unless the host artifact manager creates the reference.
-- [x] Add tests for no-host-minted-artifact behavior on successful node execution.
-- [x] Add tests proving returned artifact-like data from user code is not promoted to host artifact refs.
-- [x] Add tests for input artifact ref resolution to sandbox paths.
-- [x] Add tests for recursive masked input artifact refs.
-- [x] Add tests for inline zip input artifact expansion.
-- [x] Add tests for output artifact collection from allowed output paths.
-- [x] Add tests for recursive masked output artifact collection.
-- [x] Add tests for host takeover of ref outputs.
-- [x] Add tests for multi-file inline zip export.
-- [x] Add tests rejecting artifact collection from paths outside host-provided output locations.
-- [x] Document the artifact-storage requirements before enabling artifacts:
-  - [x] host-controlled storage root
-  - [x] stable reference shape
-  - [x] authorization model for reads and writes
-  - [x] lifetime/expiry policy
-  - [x] cleanup policy
-  - [x] size/count limits
-  - [x] input-ref-to-read-only-path mapping
-  - [x] output-slot-to-writable-path mapping
-  - [x] brokered write API from sandboxed execution if path-based output is insufficient
-  - [x] stream `artifact` event semantics
-  - [x] response artifact ref semantics
-
-### Cancellation, Status, And Resources
-
-- [x] Make `workflow-python-stream-send` cancellation interrupt active node execution.
-- [x] Make host-level `workflow-python-cancel-request` cancellation interrupt active node execution.
-- [x] Record terminal request state for canceled node executions.
-- [x] Report active node request status by `environment_key + request_id`.
-- [x] Report latest progress in node request status.
-- [x] Report node resources by `environment_key`.
-- [x] Report node capacity, active calls, available slots, active request IDs, and process count.
-- [x] Report latency, timeout, cancellation, saturation, and error counters.
-- [x] Report per-process CPU/RSS where the host can sample them.
-- [x] Add tests for stream cancellation.
-- [x] Add tests for host-level cancellation.
-- [x] Add tests for request status during active execution.
-- [x] Add tests for resource metrics after success, error, timeout, and cancel.
-
-### Compatibility And Cleanup
-
-Cleanup decision: the Python helper worker is no longer part of node-profile execution, but it is still the intentional backing implementation for `workflow_python(profile=helper)`. Reducing or removing it would now be a separate helper-profile replacement project, not required for first-class node sandboxing.
-
-- [x] Keep existing helper-profile clients working while node implementation changes.
-- [x] Remove the current helper-backed node facade as the temporary compatibility path during migration.
-- [x] Remove helper-backed node execution once direct node execution is verified.
-- [x] Revisit whether the Python helper worker can be reduced after node no longer depends on it.
-- [x] Document why node does not fully subsume helper-profile compatibility yet.
-- [x] Compare Python node, Python helper, and toolbox worker architecture for shared base/refactoring opportunities.
-- [x] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` only for remaining dependent-project actions.
-- [x] Update public hosting docs after first-class node behavior is implemented and tested.
-- [x] Remove or rewrite stale docs that imply helper-backed node execution is complete first-class node sandboxing.
-
-### Verification
-
-- [x] Add focused unit tests for node request normalization and validation.
-- [x] Add focused unit tests for node import policy.
-- [x] Add focused unit tests for node runtime environment policy.
-- [x] Add service-level sync execution tests for node success and failure.
-- [x] Add service-level streaming tests for node events.
-- [x] Add service-level streaming tests for node cancellation.
-- [x] Add CLI/channel payload forwarding tests for node sync and stream commands.
-- [x] Add resource/request-status tests for node metrics.
-- [x] Add regression tests proving helper-profile behavior remains unchanged.
-- [x] Run the focused hosting workflow test suite.
-- [x] Record the verified behavior in `hosting_status.md`.
-
-## Non-Goals
-
-- Do not require a specific internal worker file name or contract string in the planning docs.
-- Do not merge generic/model worker semantics into workflow runtime semantics.
-- Do not promise strong OS-level filesystem/network isolation beyond what the shared sandbox launcher and brokered I/O actually enforce.
-- Do not implement implicit dependency installation during normal workflow execution.
-
-## Next Phase: Python Node Runtime Generalization
-
-These items are intentionally separate from the completed first-class node contract above. They address the next concern: Python node should become a general hosted Python runtime for concurrent, long-running, snippet, and project execution while sharing more host-side sandbox management code.
-
-Priority order:
-
-1. Implement warm long-lived Python node harness workers per environment-keyed pool.
-2. Move low-level contract complexity behind host-owned templates/classes for common caller scenarios.
-3. Generalize the node host API dispatcher with built-in policy-gated services and host-registered functions.
-4. Reassess helper/toolbox reuse after warm node workers exist, because that is the point where the real overlap becomes measurable.
-
-Current investigation notes:
-
-- Toolbox executor workers are long-lived registered workers. They carry toolbox manifests, tool routing, callback/broker state, registration/repair/GC orchestration, and execution pools beyond a single request.
-- Toolbox has reusable host-interaction ideas: native in-process toolbox harness mode, async execution, callback relay, brokered fs/http clients, approval/permission checks, and tool/view constraints.
-- Toolbox is not reusable as-is for node host API: toolbox manifests, tool assignment, bundle staging, registration, rollout, repair, and GC are tool-distribution semantics, not generic sandbox host-call semantics.
-- Python helper workers also keep hot process state and a worker-local runtime pool. Current decision: keep helper internals minimally changed for now; do not spend migration effort adapting helper over node unless helper-profile maintenance becomes more expensive than retiring or replacing it.
-- Python node workers now support warm sequential reuse for compatible module/snippet requests. Project requests remain one-shot until cwd/sys.path/env/import-cache recycling policy is implemented. Idle module/snippet workers are recycled when the same logical environment name derives a changed environment identity, when capacity shrinks, or when resource inspection finds unhealthy idle workers.
-- Toolbox registration/repair/GC is not automatically replaced by the base pool layer. Current decision: keep persisted toolbox registration/repair/GC state toolbox-specific, and use shared lifecycle metadata only for runtime request/resource accounting. This avoids duplicating state ownership and minimizes maintenance cost while toolbox owns bundles, assignments, rollout state, and repair semantics.
-- Artifact authorization should remain lean. Artifact access should piggyback on normal hosting roles and sandbox policy checks unless a concrete external artifact-read API requires more.
-
-### Base Class Completeness
-
-Current assessment: `HostedProcessSandboxBase` plus the shared child/artifact helpers now cover the lean host-side lifecycle layer: pool, request lifecycle, request status, stream queues, capacity, cancellation bookkeeping, pending-cancel handling during child startup, active child tracking, child cancel/resource listing, and artifact prepare/collect/cleanup. Toolbox executor runtime calls now also record execute/cancel/request-status/resource accounting through the shared hosted pool layer. Node execution now launches a built-in Python harness file with a dedicated control channel instead of using stdout as the host RPC transport. Runtime-specific code still owns child process launch details, control-channel protocol parsing, import policy, result normalization, warm process reuse, project staging, venv selection, and toolbox registration/repair/GC orchestration.
-
-- [x] Define a small hosted child-runtime interface with `execute`, `cancel`, and `resources`.
-- [x] Move active child cancel/resource tracking behind the shared child-runtime base.
-- [x] Move reusable artifact preparation/collection/cleanup into a shared host-side component.
-- [x] Make node runtime use the shared child-runtime interface.
-- [x] Keep child process launch and control-channel protocol parsing runtime-specific for now.
-- [x] Investigate whether Python helper should remain as a small/hot compatibility worker for simple helper use cases or become a compatibility adapter over the node runtime after warm node workers are implemented.
-- [x] Route toolbox executor execute/cancel/request-status/resource accounting through the same normalized host pool/resource shapes while preserving toolbox registration/repair orchestration.
-- [x] Decide whether persisted toolbox registration/repair/GC state should gain shared lifecycle metadata or remain toolbox-specific; do not remove it just because pool metrics now exist.
-- [x] Add base-layer tests for pool/request/status/cancel behavior and active child resource/cancel tracking.
-
-### Node Host API Back Channel
-
-Target assumption: node workers may need cooperative host interactions like toolbox brokered filesystem/http callbacks, especially once node workers become long-lived. The host API should be discoverable from Python code and should use a dispatcher-based request/response protocol that can be reused by one-shot and future long-lived workers.
-
-Recommended shape: keep the node host API dispatcher-based, async-capable, and host-owned. The host should provide a default in-process dispatcher with policy-gated filesystem and HTTP-style services where enabled, plus a registration surface for host-defined functions. The closest toolbox reuse is a stripped/native scoped toolbox-like dispatcher: in-process function registry, permissions checks, callback/broker patterns, and async execution. It should not be a hosted toolbox instance and should not inherit toolbox manifests, bundle staging, assignment rollout, registration, repair, or GC semantics.
-
-Transport requirement: use async-capable framed messages with `host_call_id` correlation from the start. The host dispatcher must support both synchronous handlers and asynchronous handlers. Worker code should be able to issue host calls without assuming the host response is immediate or serialized with unrelated host calls.
-
-- [x] Define a node host API contract exposed through `host.describe`.
-- [x] Add a built-in Python node worker harness with a dedicated control channel for node execution.
-- [x] Add bidirectional child-process protocol messages for `host_call` and `host_response` without using stdout as the host RPC transport.
-- [x] Route active node execution through the built-in harness control channel instead of the embedded `python -c` stdout event bridge.
-- [x] Launch the built-in harness as the node worker entrypoint while keeping stdout/stderr reserved for user logs.
-- [x] Remove the legacy embedded `python -c` node runner after harness parity coverage remains stable.
-- [x] Expose a Python `host` object with `call`, `describe`, and filesystem convenience methods.
-- [x] Implement artifact-scoped `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`, and `fs.stat` through the host dispatcher.
-- [x] Enforce read-only input roots and writable output roots for node host API filesystem calls.
-- [x] Include host API metadata in the machine-readable node contract.
-- [x] Extract a reusable host-dispatch registry for built-in and host-registered node functions.
-- [x] Model the dispatch registry as a native scoped toolbox-like capability registry without toolbox manifests or hosted toolbox lifecycle.
-- [x] Include method descriptions, argument schemas, result schemas, and permissions in sandbox-visible `host.describe` discovery.
-- [x] Support async-capable framed host API messages with `host_call_id` correlation and out-of-order-safe responses.
-- [x] Support synchronous and asynchronous host API handlers behind the same dispatcher API.
-- [x] Add policy controls for enabling/disabling built-in host API namespaces per sandbox policy.
-- [x] Add policy-gated HTTP host API support using the same dispatcher shape.
-- [x] Add a long-lived worker transport loop that reuses the same host API protocol across sequential compatible requests and avoids per-request cold-start cost for warm hits.
-- [x] Add tests for host API discovery, artifact-root read/write, and rejected input-root writes.
-
-### Long-Running And Concurrent Node Jobs
-
-Target assumption: many different Python node jobs may run concurrently, and several instances of the same Python node code may run concurrently. Long-running node jobs are expected and should be managed explicitly by host pool capacity, request IDs, status, stream backpressure, cancellation, and resource reporting.
-
-Warm-worker obstacles to solve:
-
-1. The current harness reads one request, executes it, returns a terminal result, and exits.
-2. A warm harness needs a control loop with request start/cancel/status messages and per-request event correlation.
-3. A warm pool needs host-side routing from `environment_key` plus code revision to a live idle worker or a new worker slot.
-4. Code edits need revision-scoped routing. Corrected snippets/modules should run as new revisions, while in-flight requests keep their original revision.
-5. Warm workers need cleanup/restart policy for worker-owned request artifacts, leaked module state, dependency/runtime changes, and canceled or unhealthy children.
-6. Stream backpressure must be per request, not only per process.
-
-- [x] Define node job lifecycle states for long-running execution beyond short helper calls.
-- [x] Ensure concurrent requests for the same `environment_key` are admitted up to configured capacity.
-- [x] Ensure multiple instances of the same `module_sha256` can run concurrently with distinct `request_id` values.
-- [x] Implement a warm harness worker loop that accepts many sequential requests over one control channel.
-- [x] Keep warm harness workers per environment-keyed pool so capacity represents reusable reserved workers, not only per-request slots.
-- [x] Add worker routing that chooses an idle compatible warm worker or starts another worker up to configured capacity.
-- [x] Add explicit capacity-shrink cleanup for idle warm workers.
-- [x] Add worker recycling for changed environment identity, unhealthy workers, and policy changes.
-- [x] Define code revision lifecycle for long-lived module/snippet workers so edited snippets/modules run as new revisions instead of mutating loaded code in place.
-- [x] Implement restart/reroute semantics for module/snippet code edits; keep explicit unload/reload as future project-mode work.
-- [x] Add per-request stream backpressure and bounded event retention policy suitable for long-running jobs.
-- [x] Add opt-in long-running heartbeat/status behavior.
-- [x] Add tests for concurrent different node jobs.
-- [x] Add tests for concurrent same-code node jobs.
-- [x] Add tests for warm worker reuse across compatible sequential requests.
-- [x] Add tests for edited module/snippet source routing to a new revision worker.
-- [x] Add tests for opt-in long-running heartbeat stream events.
-- [x] Add tests for bounded stream retention and dropped-event accounting.
-- [x] Add tests for long-running stream/status/cancel behavior under capacity pressure.
-
-### Snippets And Python Projects
-
-Target assumption: node execution should support both arbitrary Python snippets and Python projects made of multiple modules. `module_source` remains useful for single-file execution, but it is not enough for project execution.
-
-Contract simplification target: dependent projects should not need to hand-author every low-level field for common scenarios. The hosting API should expose host-side request builders/templates for module functions, snippets, staged projects, and uv projects. Templates should fill implied defaults such as empty project source hash, default project root input name, default masks, advisory artifact metadata, and standard artifact ownership.
-
-- [x] Define request shape for snippet execution where source is arbitrary Python code and not necessarily a named workflow export.
-- [x] Define request shape for project execution with a project root artifact/ref, entrypoint module, callable, argv, environment variables, and working directory.
-- [x] Stage project files into a request/runtime workspace using artifact refs or configured alias roots.
-- [x] Support multi-module imports from the staged project root without weakening global import policy.
-- [x] Preserve source/package digest audit fields for staged projects.
-- [x] Add host-owned request templates/builders for common node scenarios: module function, arbitrary snippet, staged project, uv project.
-- [x] Reduce project-mode awkwardness by making project identity explicit, while keeping `module_source` / `module_sha256` compatibility for existing callers.
-- [x] Add tests for snippet execution.
-- [x] Add tests for multi-module project execution.
-- [x] Add tests that project import paths cannot escape the staged project root.
-
-### Artifact API Simplification
-
-Target assumption: artifacts are first-class sandbox objects, but dependent projects should usually choose a scenario template rather than manually combine low-level knobs. Inline artifacts remain receiver-managed. Ref artifacts remain producer-managed unless the host takes over. Authorization should piggyback on general hosting roles plus sandbox policy; additional artifact-specific auth should stay out of scope unless an external read/write API is introduced.
-
-- [x] Consolidate artifact request/response rows into first-class artifact object helpers with stable constructors/serializers.
-- [x] Add artifact templates with reasonable defaults:
-  - [x] single inline input
-  - [x] inline zip project input
-  - [x] single ref input
-  - [x] masked/recursive ref input
-  - [x] single file ref output
-  - [x] host-takeover output
-  - [x] producer-owned output
-  - [x] inline zip export
-- [x] Make lifetime/count/encoding hints mostly implied by artifact kind/template and keep explicit values optional.
-- [x] Keep local cleanup semantics aligned with ownership: request-local worker paths are cleaned after collection, host-takeover refs live under host artifact root, producer-owned refs remain under producer roots, inline payload lifetime is owned by the receiver.
-- [x] Document that artifact access control uses existing hosting roles and sandbox policy unless a future external artifact API requires more.
-- [x] Add tests for template defaults and cleanup/ownership behavior.
-
-### uv-Managed Environments
-
-Target assumption: Python node projects need deterministic, host-managed environments. Dependency installation remains explicit; normal execution must not install implicitly.
-
-- [x] Add uv availability detection and version reporting.
-- [x] Extend environment specs to represent uv-managed environments.
-- [x] Support `pyproject.toml`, `uv.lock`, and dependency-group inputs.
-- [x] Prepare deterministic uv install plans without executing them.
-- [x] Lock/verify uv plans before execution.
-- [x] Execute uv environment creation only through explicit prepare/install APIs.
-- [x] Select the uv-managed Python interpreter for dependency-bearing node execution.
-- [x] Record uv lock/install receipts and verify them before execution.
-- [x] Add cleanup/GC for stale uv-managed runtime environments.
-- [x] Add tests for missing uv, prepared uv plan, verified uv receipt, selected uv runtime, and uv-shaped runtime GC.
+# Hosted Sandbox Contract Feasibility Study
+
+Date: 2026-06-20
+
+Purpose: evaluate a broader redesign of hosted sandbox contracts around first-class streaming, client-owned host APIs, toolbox-backed capabilities, long-lived node instances, sandbox state, and workflow/card action discovery.
+
+This replaces the previous implementation checklist. The prior work left the Python and JavaScript node runtimes functional, but the next step is architectural: decide which contracts should become stable public surfaces before adding more modes and integrations.
+
+## Executive Summary
+
+The proposed redesign is feasible, but it should not be attempted as one large change. The current implementation has useful building blocks:
+
+- node child runtimes with dedicated control channels
+- bounded stream sessions and request lifecycle accounting
+- host API frames with `host_call_id` correlation
+- host-side `HostApiRegistry`
+- toolbox callback relay and gated approval machinery
+- artifact prepare/collect/cleanup helpers
+- warm worker reuse for compatible module/snippet requests
+
+The largest gap is contract ownership. Today the daemon/service owns too much of the node host API and streaming behavior, while dependent clients need to own host-provided capabilities, approvals, user-facing actions, and workflow-local state. The recommended direction is to split the redesign into five explicit contracts:
+
+1. Sandbox Control Protocol
+2. Sandbox Event Stream Protocol
+3. Host Capability Protocol
+4. Sandbox Instance And State Protocol
+5. Workflow Action Manifest Protocol
+
+The host capability protocol should reuse toolbox concepts, but it should be a sandbox-to-host capability toolbox rather than a normal hosted toolbox worker. It needs toolbox-style discovery, schemas, permissions, scopes, and approval gates, while allowing the callable implementation to live in the hosting client process.
+
+## Current Gaps
+
+### Streaming
+
+Current Python node live streaming is limited. Python code can call `progress(...)` / `emit_progress(...)`, which sends a live `progress` frame. `stdout`, `stderr`, `log`, `artifact`, `result`, `error`, and `done` stream records are mostly synthesized by the service around terminal execution results.
+
+Gap: clients see a stream API with many event types, but the worker contract does not expose first-class live event emission for most of them.
+
+Direction: formalize event kinds as a first-class protocol. Worker harnesses should advertise which event kinds they can emit directly, and host layers should identify which events are host-generated.
+
+### Host API Ownership
+
+Current Python node `host.call(...)` routes to an in-process dispatcher built by the hosting service. Built-ins like `fs.*` and `http.fetch` are service-owned. There is no public mechanism for a dependent client process to register custom host calls for a node request.
+
+Gap: dependent clients cannot naturally provide host API methods from their own process. Cross-process callbacks would require an RPC relay similar to the toolbox callback binding.
+
+Direction: make host API methods client-owned capabilities. The daemon/service can broker and enforce capability sessions, but callable implementations should be able to live in the client process.
+
+### Harness Discovery
+
+Current `host.describe()` describes host API methods. It does not clearly separate:
+
+- harness-provided runtime APIs
+- host-provided extension APIs
+- host-generated stream events
+- worker-generated stream events
+- supported execution modes
+- action entry points
+
+Gap: sandboxed code and host clients cannot reliably discover the boundary between the harness contract and extension capabilities.
+
+Direction: add an explicit `sandbox.describe` or equivalent capability document that separates harness features from host extensions.
+
+### Toolbox Reuse
+
+Toolbox already has many of the right concepts: discoverable methods, metadata, scopes, gated approval, callback relay, and hosted execution accounting. However, normal toolbox execution is host-to-worker, while node `host.call(...)` is sandbox-to-host.
+
+Gap: there are two similar but separate capability systems: toolbox callbacks/brokered IO and node host API.
+
+Direction: define a "host capability toolbox" model that reuses toolbox metadata, schemas, permissions, scopes, and approval flow, but reverses the call direction.
+
+### Long-Lived Instances
+
+Current Python node workers can be reused sequentially for compatible module/snippet requests. They are not routable public instances, and project mode remains one-shot because it mutates process-global state such as cwd, `sys.path`, environment variables, and import caches.
+
+Gap: clients cannot address a specific live sandbox instance or preserve mutated runtime state through restart.
+
+Direction: introduce explicit sandbox instance IDs, routing policy, and state snapshot/restore hooks.
+
+### Sandbox State
+
+Current node responses support `state_patch`, but there is no durable, scoped state store managed by the host for sandbox instances, backend-global partitions, or workflow-local partitions.
+
+Gap: long-lived and restarted instances need state recovery, and workflows need scoped read/write state without relying on arbitrary files.
+
+Direction: define host-managed state partitions with explicit scope, permissions, versioning, and conflict semantics.
+
+### Workflow/Card Actions
+
+Current node execution is centered on a simple callable such as `run(payload)`. Card designers cannot discover a structured action manifest from a sandbox and bind buttons to supported entry points.
+
+Gap: workflow composition needs action discovery without abandoning simple `run(payload)` for small nodes.
+
+Direction: support an optional action manifest. `run(payload)` remains the minimal default, while richer sandboxes can expose toolbox-like action entries.
+
+## Feasibility By Direction
+
+### 1. First-Class Streaming For Stdout, Stderr, Logs, And Events
+
+Feasibility: High.
+
+Effort: Medium to High.
+
+Current state:
+
+- `progress` is live from worker to host.
+- Python stdout/stderr are captured and emitted after completion.
+- Host emits service-level `log`, `artifact`, `result`, `error`, `canceled`, and `done` events.
+- Shared stream retention already supports bounded queues and drop counts.
+
+Needed changes:
+
+- Add explicit worker event APIs, for example `emit_event(kind, payload)`, `log(payload)`, `metric(payload)`.
+- Add live stdout/stderr forwarding with emitter-controlled chunks. Host policy should set maximum chunk size, but emitters should choose natural boundaries such as lines, log records, or semantic output records. Streams with known total size should announce that size up front.
+- Keep host-generated events distinguishable from worker-generated events.
+- Add lane-derived retention policy: control frames are non-droppable, ack-backed output/request streams use backpressure, non-ack observability output is bounded/droppable, progress and heartbeat are coalescible, and audit frames are bounded live with durable audit where security-sensitive.
+- Add a daemon event subscription path so high-volume event reads do not block cancel/status/control commands on the same client control channel.
+- Extend contract discovery to advertise supported event kinds and whether they are live, terminal, host-generated, or worker-generated.
+
+Risks:
+
+- Live stdout/stderr can be noisy and high-volume.
+- Event ordering needs a clear rule when worker events, host heartbeats, host calls, and terminal events interleave.
+- Backpressure behavior must be explicit so long-running noisy workers cannot exhaust memory.
+- A verbose per-event object shape repeats request id, timestamp, sequence, type, and payload wrapper on every frame; that becomes unnecessary overhead for high-volume output.
+
+Recommended direction:
+
+Adopt a batched event stream shape. Compactness should come from shared batch context and kind-specific optional fields, not from unreadable field names or rigid positional payload arrays. Hosting client libraries should expose typed helper events so normal clients do not parse this wire shape directly:
+
+```json
+{
+  "version": 1,
+  "context": {
+    "stream_id": "stream-id",
+    "request_id": "request-id",
+    "instance_id": "instance-id"
+  },
+  "base": {
+    "sequence": 100,
+    "timestamp_ms": 1781913600000
+  },
+  "loss": {
+    "output": 0,
+    "event": 0,
+    "audit": 0
+  },
+  "frames": [
+    {"dt_ms": 0, "kind": "progress", "pct": 40, "message": "installing"},
+    {"dt_ms": 8, "kind": "stdout", "text": "Installing package\n", "boundary": true},
+    {"dt_ms": 11, "kind": "done", "status": "ok"}
+  ],
+  "more": true
+}
+```
+
+Reserve `result`, `error`, `canceled`, and `done` as terminal lifecycle events. Derive lane and retention policy from event kind instead of repeating it on every frame. Use simple loss handling for clients: helpers either raise on loss or yield a `stream_loss` marker and continue. For ack-backed request/output streams, helper-managed accept/ack/close signals should provide backpressure instead of dropping chunks. The contract should define a minimum client acceptance window, not a maximum total stream size, because artifacts/results may be large. Keep the streaming pillar focused on events: it may reserve `instance_id`, correlation metadata, `state_notice`, and `action_notice`, but state stores, host capability ownership, approval routing, and action manifests remain separate pillars.
+
+Sequencing recommendation: implement the event stream protocol first. It is the least coupled foundation slice because every later pillar needs stable observation, terminal semantics, loss reporting, and instance/request identity. Do not implement the other pillars inside this slice; only reserve the stream semantics they will use.
+
+### 2. Host API Owned By Hosting Clients
+
+Feasibility: High, but requires a new public contract.
+
+Effort: High.
+
+Current state:
+
+- Python node host API calls are handled by the daemon/service process.
+- Built-ins are service-owned.
+- Dependent clients cannot register arbitrary methods from another process.
+- Toolbox callback relay already proves callback-to-client RPC is possible.
+
+Needed changes:
+
+- Introduce host capability sessions registered by clients.
+- Include callable endpoint binding, auth token, lifetime, close semantics, and capability descriptors.
+- Route sandbox `host.call(...)` to either service built-ins or client-owned capability endpoints.
+- Define cancellation, timeout, backpressure, and retry behavior for in-flight host calls.
+- Define whether the daemon is a relay, a policy broker, or only a session registry.
+
+Risks:
+
+- Cross-process host calls need robust auth and ownership checks.
+- Client process death must produce clean sandbox-visible failures.
+- Host call routing must not let one sandbox call another client's capabilities without explicit scope grant.
+
+Recommended direction:
+
+Make client-owned host APIs use a callback-binding model similar to toolbox, but with method descriptors and scope references:
+
+```json
+{
+  "contract": "hosting.sandbox.host_capabilities.v1",
+  "session_id": "cap-session",
+  "owner": "client-or-actor",
+  "methods": [
+    {
+      "name": "crm.lookup_customer",
+      "group": "crm",
+      "args_schema": {},
+      "result_schema": {},
+      "permissions": ["crm.read"],
+      "approval": "none|gated|required"
+    }
+  ],
+  "binding": {
+    "family": "AF_PIPE|AF_UNIX|daemon_channel",
+    "address": "...",
+    "session_token": "..."
+  }
+}
+```
+
+### 3. Harness Versus Host Extension Discovery
+
+Feasibility: High.
+
+Effort: Medium.
+
+Current state:
+
+- `host.describe()` describes host API methods and transport features.
+- Worker harness capabilities are implicit in docs and code.
+
+Needed changes:
+
+- Add a stable discovery response that separates harness features from extension features.
+- Include execution modes, globals, stream event capabilities, state scopes, action entries, and host capabilities.
+
+Recommended direction:
+
+Add `sandbox.describe` or extend `host.describe` with top-level sections:
+
+```json
+{
+  "harness": {
+    "language": "python",
+    "execution_modes": ["module", "snippet", "project"],
+    "globals": ["payload", "progress", "emit_progress", "host", "artifact_inputs", "artifact_outputs"],
+    "event_capabilities": {
+      "worker_live": ["progress"],
+      "host_generated": ["started", "heartbeat", "stdout", "stderr", "log", "artifact", "result", "error", "canceled", "done"]
+    }
+  },
+  "host_extensions": {
+    "capability_sets": []
+  },
+  "state": {
+    "scopes": []
+  },
+  "actions": {
+    "entries": []
+  }
+}
+```
+
+### 4. Toolbox As The Host API Model
+
+Feasibility: High.
+
+Effort: High.
+
+Current state:
+
+- `HostApiRegistry` mirrors a small part of toolbox-like discovery.
+- Toolbox has richer native and hosted machinery, including scopes, gating, callback relay, and metadata.
+
+Needed changes:
+
+- Extract toolbox method metadata into a direction-neutral capability model.
+- Define host capability toolbox refs, for example `host_toolbox://client/session/name`.
+- Let sandbox code discover methods and call them via `host.call(...)`.
+- Let host clients implement methods in their own process.
+
+Risks:
+
+- Normal toolbox and host capability toolbox have opposite call directions.
+- Reusing too much hosted toolbox orchestration could import bundle staging and repair complexity where it is not needed.
+
+Recommended direction:
+
+Create a minimal shared capability core:
+
+- method identity
+- hierarchical group
+- display metadata
+- args/result schemas
+- permissions
+- scope requirements
+- approval policy
+
+Then adapt both normal toolbox and host capability toolbox to that core.
+
+### 5. Permissions, Approved Scopes, And Gated User Approval
+
+Feasibility: High.
+
+Effort: High.
+
+Current state:
+
+- Toolbox already supports visible/hidden/gated states and callback processors for approval-like flows.
+- Node host API has basic policy gates for built-in namespaces.
+
+Needed changes:
+
+- Define approval requests as host-directed events, not sandbox-directed events.
+- Add approval result caching by scope, actor, method, and arguments if appropriate.
+- Ensure sandbox cannot approve its own capability escalation.
+- Add explicit denial/error semantics visible to sandbox code.
+
+Recommended direction:
+
+Use a policy decision pipeline:
+
+1. Method registered with required permissions and approval policy.
+2. Sandbox call arrives with instance/request identity.
+3. Host broker checks static policy and scope grants.
+4. If gated, host emits approval request to the owning client/user-facing process.
+5. Decision is recorded with scope and TTL.
+6. Handler runs only after approval.
+
+### 6. Rework Brokered IO Around `host.call()`
+
+Feasibility: Medium to High.
+
+Effort: Medium.
+
+Current state:
+
+- Node built-ins already expose `fs.*` and `http.fetch` as host calls.
+- Toolbox brokered IO has separate callback/broker code paths.
+
+Needed changes:
+
+- Represent fs/http as built-in host capability toolbox methods.
+- Align node and toolbox brokered IO schemas.
+- Preserve existing toolbox callback context attribution.
+- Preserve sandbox policy enforcement.
+
+Risks:
+
+- Existing toolbox consumers may rely on current callback shapes.
+- Filesystem and HTTP policies have subtle differences between node artifact roots and toolbox sandbox roots.
+
+Recommended direction:
+
+Unify method metadata and dispatch, not necessarily all storage/path semantics at once. Start with shared schema and policy description; migrate transport internals after behavior parity tests.
+
+### 7. Hierarchical Tool Groups
+
+Feasibility: High.
+
+Effort: Medium.
+
+Current state:
+
+- Methods are mostly flat names such as `fs.read_text` or toolbox tool names.
+- Permissions and UI navigation would benefit from structured groups.
+
+Needed changes:
+
+- Add `group`, `path`, or `namespace_tree` metadata to toolbox and host capabilities.
+- Support group-level permissions/scopes.
+- Preserve flat method names for execution compatibility.
+
+Recommended direction:
+
+Use flat executable method IDs plus hierarchical metadata:
+
+```json
+{
+  "name": "crm.customer.lookup",
+  "group_path": ["CRM", "Customer"],
+  "scope_path": ["crm", "customer", "read"]
+}
+```
+
+### 8. Long-Lived Routable Node Instances
+
+Feasibility: High.
+
+Effort: High.
+
+Current state:
+
+- Warm workers are internal idle runtime instances.
+- Clients cannot route to a specific worker instance.
+- Project mode is one-shot.
+
+Needed changes:
+
+- Add public `instance_id`.
+- Add create/list/status/route/close/restart APIs.
+- Separate compatibility routing from explicit instance routing.
+- Add per-instance capability sessions and state scopes.
+- Add cooperative shutdown and mutation boundaries.
+
+Risks:
+
+- Long-lived instances increase leak and stale-state risk.
+- Project mode requires import/cache/cwd/env reset or intentional persistence semantics.
+
+Recommended direction:
+
+Support two modes:
+
+- `ephemeral`: current request-scoped behavior.
+- `instance`: explicit long-lived actor with stable instance ID and declared persistence model.
+
+### 9. State Recovery For Mutated Long-Lived Instances
+
+Feasibility: Medium.
+
+Effort: High.
+
+Current state:
+
+- Node response can include `state_patch`.
+- There is no host-managed instance snapshot/restore protocol.
+
+Needed changes:
+
+- Define snapshotable state API.
+- Decide whether state is opaque JSON, files, or both.
+- Add versioning and conflict rules.
+- Define when snapshots happen: explicit, on terminal result, on interval, before shutdown.
+- Define restore hooks for restarted instances.
+
+Risks:
+
+- Python process memory is not safely serializable in general.
+- File-backed state and JSON state have different lifetimes and security properties.
+
+Recommended direction:
+
+Do not try to snapshot arbitrary Python memory. Provide explicit state APIs:
+
+- `state.get(scope, key)`
+- `state.set(scope, key, value, version=None)`
+- `state.patch(scope, patch, version=None)`
+- `state.list(scope, prefix=None)`
+
+For process-local caches, let sandbox code rebuild from host-managed state on startup.
+
+### 10. Backend Global State And Workflow Local State
+
+Feasibility: High.
+
+Effort: Medium to High.
+
+Current state:
+
+- No first-class scoped state store exists for node sandboxes.
+- Artifact refs are available, but they are not a general state API.
+
+Needed changes:
+
+- Define state scopes:
+  - backend global
+  - workflow local
+  - instance local
+  - request local
+- Define partition keys and authorization.
+- Add read/write policy per sandbox.
+- Add audit trail and versioning.
+
+Recommended direction:
+
+Expose scoped state as a host capability group:
+
+```text
+state.backend.get
+state.backend.set
+state.workflow.get
+state.workflow.set
+state.instance.get
+state.instance.set
+```
+
+Access should be granted by capability scope, not by raw key strings supplied by sandbox code.
+
+### 11. Card Actions And Workflow Composition
+
+Feasibility: Medium to High.
+
+Effort: High.
+
+Current state:
+
+- Python node defaults to `run(payload)`.
+- Project mode can select an entrypoint/callable, but there is no discoverable action manifest for UI cards.
+
+Needed changes:
+
+- Define action manifest schema.
+- Let sandboxes advertise actions with labels, schemas, permissions, and entrypoints.
+- Let card designers bind buttons to actions.
+- Route action invocation to a sandbox instance or ephemeral request.
+- Preserve simple `run(payload)` for minimal nodes.
+
+Risks:
+
+- A toolbox-like action model can become too heavy for simple workflow nodes.
+- UI/card action discovery introduces versioning and compatibility concerns.
+
+Recommended direction:
+
+Use a layered contract:
+
+- simple node: `run(payload)`
+- action node: optional `actions.describe()` manifest
+- toolbox-like node: full capability/action manifest with grouped entries and permissions
+
+Example action manifest:
+
+```json
+{
+  "default_action": "run",
+  "actions": [
+    {
+      "name": "approve_invoice",
+      "label": "Approve Invoice",
+      "entrypoint": "approve_invoice",
+      "args_schema": {},
+      "result_schema": {},
+      "permissions": ["invoice.approve"],
+      "ui": {"button": true, "style": "primary"}
+    }
+  ]
+}
+```
+
+## Proposed Target Architecture
+
+### Contract 1: Sandbox Control Protocol
+
+Responsible for:
+
+- start request
+- cancel request
+- shutdown instance
+- restart instance
+- route to instance
+- report status
+- report resources
+
+This remains host/runtime owned.
+
+### Contract 2: Sandbox Event Stream Protocol
+
+Responsible for:
+
+- worker-generated events
+- host-generated lifecycle events
+- event ordering
+- backpressure and dropped counts
+- terminal event rules
+- compact batched frame format
+- emitter-controlled output chunking
+- event subscription separate from command control
+
+This should be stable across Python, JavaScript, and future runtimes.
+
+### Contract 3: Host Capability Protocol
+
+Responsible for:
+
+- discover host-provided methods
+- call methods from sandbox to host
+- correlate responses
+- enforce scopes and approvals
+- route calls to service built-ins or client-owned callback endpoints
+
+This should be toolbox-inspired and direction-neutral.
+
+### Contract 4: Sandbox Instance And State Protocol
+
+Responsible for:
+
+- long-lived instance identity
+- mutable instance state
+- restart recovery
+- backend/workflow/instance/request state scopes
+- state authorization and versioning
+
+This should be optional for ephemeral nodes.
+
+### Contract 5: Workflow Action Manifest Protocol
+
+Responsible for:
+
+- discover callable actions
+- expose card button/action metadata
+- bind UI actions to sandbox entrypoints
+- support subworkflow/library composition
+
+This should not replace `run(payload)` for simple nodes.
+
+## Suggested Implementation Phases
+
+### Phase 0: Freeze Current Behavior In Docs
+
+Goal: clarify what is current behavior versus target behavior.
+
+Work:
+
+- Update worker docs to distinguish worker-live events from service-generated stream records.
+- Mark current `HostApiRegistry` as service-owned built-in dispatcher.
+- Document that custom client-owned host APIs are not yet public.
+
+### Phase 1: Event Protocol Cleanup
+
+Goal: make streaming semantics first-class before adding more stateful behavior.
+
+Work:
+
+- Add event frame schema with `origin`, `kind`, `sequence`, and `timestamp`.
+- Add worker APIs for `log` and `metric`.
+- Optionally add live stdout/stderr wrappers.
+- Add capability discovery for event kinds.
+- Preserve existing stream API response shape for clients during migration.
+
+### Phase 2: Host Capability Toolbox Core
+
+Goal: unify node host API and toolbox capability metadata.
+
+Work:
+
+- Extract shared capability method model.
+- Add hierarchical group metadata.
+- Add capability descriptors to `host.describe`.
+- Register current `fs.*` and `http.fetch` as built-in capability toolbox methods.
+
+### Phase 3: Client-Owned Host Capabilities
+
+Goal: let dependent client processes provide host APIs.
+
+Work:
+
+- Add host capability session registration.
+- Add callback binding for method execution.
+- Add method-scoped auth and lifecycle.
+- Add service broker path from sandbox `host.call` to client callback.
+- Add tests for client process death, denial, timeout, and concurrent calls.
+
+### Phase 4: Permission And Approval Unification
+
+Goal: reuse toolbox-style gating for host capabilities.
+
+Work:
+
+- Add scope refs and approval policies to capability descriptors.
+- Route approvals to user-facing client process.
+- Record approval decisions with TTL and audit.
+- Preserve sandbox-visible denial errors.
+
+### Phase 5: State And Long-Lived Instances
+
+Goal: add routable, recoverable node instances.
+
+Work:
+
+- Add explicit instance create/route/close APIs.
+- Add state scopes and state host capability methods.
+- Add snapshot/restore hooks for instance-local state.
+- Make project mode long-lived only after cwd/sys.path/env/import-cache policy is explicit.
+
+### Phase 6: Action Manifest And Card Integration
+
+Goal: support card buttons and workflow composition.
+
+Work:
+
+- Add optional action manifest.
+- Add card-facing action discovery.
+- Add action invocation routing.
+- Keep `run(payload)` as default action.
+
+## Migration Notes
+
+- Existing `workflow_python(profile=node)` and `workflow_js(profile=node)` should remain as compatibility facades while contracts are generalized.
+- Existing `host.call("fs.*")` and `host.call("http.fetch")` should remain available as built-in capability methods.
+- Existing stream clients should keep receiving `started`, `progress`, `stdout`, `stderr`, `log`, `artifact`, `result`, `error`, `canceled`, and `done`.
+- New event metadata should be additive where possible.
+- Client-owned host APIs should be opt-in; built-ins should not require a client callback endpoint.
+
+## Open Questions
+
+1. Should daemon relay client-owned host capability calls, or should the worker/service connect directly to the client callback endpoint?
+2. Should approvals be stored in hosting state, client state, or both?
+3. Should state partitions be JSON-only initially, or should file/blob state be first-class from the start?
+4. Should action manifests be produced by static metadata, by executing sandbox discovery code, or both?
+5. Should long-lived project instances preserve import caches intentionally, or reset imports between action calls?
+6. How much of toolbox persisted lifecycle state should be shared with host capability toolbox state?
+7. What are the trust boundaries when host capability providers are remote clients over SSH/HTTP relay?
+
+## Recommendation
+
+Proceed, but only after establishing the event and host capability contracts. The highest-leverage path is:
+
+1. cleanly specify streaming event origins and live versus terminal events;
+2. extract a shared toolbox-like capability descriptor model;
+3. add client-owned host capability sessions using a toolbox-style callback relay;
+4. then build stateful long-lived instances and card action manifests on top.
+
+Avoid making project mode long-lived or adding card action discovery before host capabilities and state scopes are explicit. Those features need stable capability, event, and state boundaries to avoid another round of contract churn.
