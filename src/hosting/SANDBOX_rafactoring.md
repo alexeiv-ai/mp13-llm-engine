@@ -96,7 +96,7 @@ It intentionally does not implement client-owned host APIs, toolbox-host capabil
 
 ## Event Kind Registry
 
-- [ ] Define kind policy in one registry used by runtime, service, and helpers.
+- [x] Define kind policy in one registry used by runtime, service, and helpers.
 
 | Kind | Lane | Queue Decision |
 | --- | --- | --- |
@@ -350,10 +350,10 @@ Review result: the object-frame shape fits later pillars if the first implementa
 
 ## Implementation Checklist
 
-- [ ] 1. Define Pydantic-style stream batch and event frame models.
+- [x] 1. Define Pydantic-style stream batch and event frame models.
 - [ ] 2. Update `HOSTING_CLIENT_BREAKING_CHANGES.md` to direct clients to helper APIs first.
 - [ ] 3. Replace `HostedStreamEvent.to_dict()` with a frame/batch builder that validates event kinds.
-- [ ] 4. Add event kind registry with lane, replacement key, and loss policy.
+- [x] 4. Add event kind registry with lane, replacement key, and loss policy.
 - [ ] 5. Add lane-aware queues and loss counters to hosted process streams.
 - [ ] 6. Implement helper-side `on_loss="raise"|"mark"` behavior.
 - [ ] 7. Convert service-generated lifecycle events to frames.
@@ -366,9 +366,9 @@ Review result: the object-frame shape fits later pillars if the first implementa
 
 ## Test Checklist
 
-- [ ] Batch decoder expands timestamps and sequences from `base`.
-- [ ] Unknown stream version fails validation.
-- [ ] Unknown event kind fails validation.
+- [x] Batch decoder expands timestamps and sequences from `base`.
+- [x] Unknown stream version fails validation.
+- [x] Unknown event kind fails validation.
 - [ ] Control frames bypass output backlog.
 - [ ] Terminal frames are delivered when output queue is full.
 - [ ] Output frames are always valid JSON objects.

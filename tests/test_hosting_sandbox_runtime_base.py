@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import pytest
+
 from hosting.sandbox.runtime_base import (
     HostedEnvironmentKeySpec,
     HostedPoolKey,
     HostedPoolMetrics,
     HostedRequestLifecycle,
     HostedRuntimeIdentity,
+    HostedStreamBatch,
+    HostedStreamContext,
     HostedStreamEvent,
+    HostedStreamFrame,
+    HostedStreamLoss,
     HostedWorkerSlot,
     HOSTED_IPC_MESSAGE_FAMILIES,
+    HOSTED_STREAM_CONTRACT_VERSION,
+    HOSTED_STREAM_KIND_REGISTRY,
     hosted_cancellation_result,
     hosted_log_summary,
     hosted_registration_environment_metadata,
     hosted_resource_response,
+    hosted_stream_kind_lane,
+    hosted_stream_kind_spec,
+    hosted_stream_validate_kind,
     sandbox_policy_hash,
 )
 
@@ -165,6 +176,92 @@ def test_stream_event_and_pool_metrics_shapes() -> None:
     assert row["active_calls"] == 1
     assert row["available_slots"] == 1
     assert row["errors_by_reason"] == {"boom": 4}
+
+
+def test_stream_kind_registry_declares_lane_and_queue_policy() -> None:
+    assert hosted_stream_kind_lane("stdout") == "output"
+    assert hosted_stream_kind_spec("progress").replacement_fields == ("key",)
+    assert hosted_stream_kind_spec("host_call").queue_decision == "non_droppable"
+    assert hosted_stream_kind_spec("done").final is True
+    assert HOSTED_STREAM_KIND_REGISTRY["approval"].decision_bearing is True
+
+    with pytest.raises(ValueError, match="unsupported_stream_event_kind"):
+        hosted_stream_validate_kind("unknown-kind")
+
+
+def test_stream_frame_and_batch_shape_are_compact_and_expandable() -> None:
+    frame = HostedStreamFrame(
+        kind="stdout",
+        dt_ms=8,
+        text="Installing package\n",
+        boundary=True,
+        expected_bytes=1024,
+        offset=0,
+        length=19,
+        extra={"producer": "pip"},
+    )
+    batch = HostedStreamBatch(
+        context=HostedStreamContext(stream_id="stream-1", request_id="req-1", instance_id="worker-1"),
+        frames=[
+            HostedStreamFrame(kind="progress", pct=40, message="installing"),
+            frame,
+            HostedStreamFrame(kind="done", dt_ms=11, status="ok"),
+        ],
+        sequence=100,
+        timestamp_ms=1781913600000,
+        loss=HostedStreamLoss(output=1),
+        more=True,
+    )
+
+    row = batch.to_dict()
+    assert row == {
+        "version": HOSTED_STREAM_CONTRACT_VERSION,
+        "context": {"stream_id": "stream-1", "request_id": "req-1", "instance_id": "worker-1"},
+        "base": {"sequence": 100, "timestamp_ms": 1781913600000},
+        "loss": {"output": 1, "event": 0, "audit": 0},
+        "frames": [
+            {"dt_ms": 0, "kind": "progress", "message": "installing", "pct": 40.0},
+            {
+                "dt_ms": 8,
+                "kind": "stdout",
+                "expected_bytes": 1024,
+                "offset": 0,
+                "length": 19,
+                "text": "Installing package\n",
+                "boundary": True,
+                "producer": "pip",
+            },
+            {"dt_ms": 11, "kind": "done", "status": "ok"},
+        ],
+        "more": True,
+    }
+    expanded = batch.expanded_frames()
+    assert expanded[0]["sequence"] == 100
+    assert expanded[1]["timestamp_ms"] == 1781913600008
+    assert expanded[2]["request_id"] == "req-1"
+
+
+def test_stream_batch_parser_validates_version_and_event_kind() -> None:
+    with pytest.raises(ValueError, match="unsupported_stream_version"):
+        HostedStreamBatch.from_dict({"version": 99, "frames": []})
+
+    with pytest.raises(ValueError, match="unsupported_stream_event_kind"):
+        HostedStreamBatch(
+            context=HostedStreamContext(request_id="req-1"),
+            frames=[HostedStreamFrame(kind="unknown")],
+        ).to_dict()
+
+    parsed = HostedStreamBatch.from_dict(
+        {
+            "version": HOSTED_STREAM_CONTRACT_VERSION,
+            "context": {"request_id": "req-1"},
+            "base": {"sequence": 7, "timestamp_ms": 10},
+            "loss": {"event": 2},
+            "frames": [{"kind": "metric", "name": "rows", "current": 3, "unit": "count"}],
+        }
+    )
+    assert parsed.to_dict()["frames"] == [{"dt_ms": 0, "kind": "metric", "current": 3.0, "name": "rows", "unit": "count"}]
+    assert parsed.loss.detected() is True
 
 
 def test_shared_registration_resource_and_cancel_shapes() -> None:
