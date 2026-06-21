@@ -11,10 +11,27 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, List, Optional
 
-from .runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot, hosted_stream_cancel_message
+from .runtime_base import (
+    HOSTED_STREAM_LANES,
+    HostedPoolKey,
+    HostedRequestLifecycle,
+    HostedStreamBatch,
+    HostedStreamContext,
+    HostedStreamEvent,
+    HostedStreamFrame,
+    HostedStreamLoss,
+    HostedWorkerSlot,
+    hosted_stream_cancel_message,
+    hosted_stream_kind_lane,
+    hosted_stream_kind_spec,
+)
 from .runtime_pool import HostedProcessPool, HostedProcessPoolRegistry, WorkerFactory
+
+
+_PROCESS_STREAM_LANE_ORDER = ["control", "audit", "event", "output"]
+_PROCESS_STREAM_DROPPABLE_LANE_ORDER = ["output", "event", "audit"]
 
 
 @dataclass
@@ -24,11 +41,61 @@ class HostedProcessStreamSession:
     request_id: str
     profile: str
     max_events: int = 256
-    events: Deque[Dict[str, object]] = field(default_factory=deque)
+    events_by_lane: Dict[str, Deque[Dict[str, object]]] = field(
+        default_factory=lambda: {lane: deque() for lane in HOSTED_STREAM_LANES}
+    )
     closed: bool = False
     canceled: bool = False
     sequence: int = 0
     dropped_event_count: int = 0
+    pending_loss: Dict[str, int] = field(default_factory=lambda: {"output": 0, "event": 0, "audit": 0})
+
+    def _queued_count(self) -> int:
+        return sum(len(queue) for queue in self.events_by_lane.values())
+
+    def _loss_lane(self, lane: str) -> Optional[str]:
+        if lane in {"output", "event", "audit"}:
+            return lane
+        return None
+
+    def _record_loss(self, lane: str, count: int = 1) -> None:
+        loss_lane = self._loss_lane(lane)
+        if loss_lane is not None:
+            self.pending_loss[loss_lane] = max(0, int(self.pending_loss.get(loss_lane, 0))) + max(0, int(count or 0))
+        self.dropped_event_count += max(0, int(count or 0))
+
+    def _replacement_value(self, row: Dict[str, object]) -> str:
+        spec = hosted_stream_kind_spec(str(row.get("type") or ""))
+        payload = dict(row.get("payload") or {})
+        if spec.queue_decision == "latest":
+            return str(row.get("type") or "")
+        for field_name in spec.replacement_fields:
+            value = str(payload.get(field_name) or row.get(field_name) or "").strip()
+            if value:
+                return f"{field_name}:{value}"
+        return str(row.get("type") or "")
+
+    def _replace_existing_latest(self, lane: str, row: Dict[str, object]) -> bool:
+        spec = hosted_stream_kind_spec(str(row.get("type") or ""))
+        if spec.queue_decision not in {"latest", "latest_by_key"}:
+            return False
+        queue = self.events_by_lane.setdefault(lane, deque())
+        replacement_value = self._replacement_value(row)
+        for index, existing in enumerate(list(queue)):
+            if str(existing.get("type") or "") == str(row.get("type") or "") and self._replacement_value(existing) == replacement_value:
+                queue[index] = row
+                self._record_loss(lane)
+                return True
+        return False
+
+    def _drop_one_for_capacity(self) -> bool:
+        for lane in _PROCESS_STREAM_DROPPABLE_LANE_ORDER:
+            queue = self.events_by_lane.setdefault(lane, deque())
+            if queue:
+                queue.popleft()
+                self._record_loss(lane)
+                return True
+        return False
 
     def append(self, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         self.sequence += 1
@@ -38,18 +105,86 @@ class HostedProcessStreamSession:
             sequence=self.sequence,
             payload=dict(payload or {}),
         ).to_dict()
-        self.events.append(row)
-        while len(self.events) > max(1, int(self.max_events or 1)):
-            self.events.popleft()
-            self.dropped_event_count += 1
+        lane = hosted_stream_kind_lane(event_type)
+        spec = hosted_stream_kind_spec(event_type)
+        if self._replace_existing_latest(lane, row):
+            return row
+        capacity = max(1, int(self.max_events or 1))
+        if self._queued_count() >= capacity and lane != "control" and spec.queue_decision in {"keep_first", "keep_first_by_window"}:
+            self._record_loss(lane)
+            return row
+        self.events_by_lane.setdefault(lane, deque()).append(row)
+        while self._queued_count() > capacity:
+            if not self._drop_one_for_capacity():
+                break
         return row
 
-    def recv(self, max_items: int) -> list[Dict[str, object]]:
-        out: list[Dict[str, object]] = []
+    def recv(self, max_items: int) -> List[Dict[str, object]]:
         limit = max(1, int(max_items or 1))
-        while self.events and len(out) < limit:
-            out.append(dict(self.events.popleft()))
-        return out
+        queued: List[tuple[str, Dict[str, object]]] = []
+        for lane in _PROCESS_STREAM_LANE_ORDER:
+            queued.extend((lane, dict(row)) for row in self.events_by_lane.setdefault(lane, deque()))
+        if len(queued) <= limit:
+            selected = sorted(queued, key=lambda item: int(item[1].get("sequence") or 0))
+        else:
+            control = sorted((item for item in queued if item[0] == "control"), key=lambda item: int(item[1].get("sequence") or 0))
+            selected = control[:limit]
+            selected_sequences = {int(row.get("sequence") or 0) for _, row in selected}
+            if len(selected) < limit:
+                remainder = sorted(
+                    (item for item in queued if int(item[1].get("sequence") or 0) not in selected_sequences),
+                    key=lambda item: int(item[1].get("sequence") or 0),
+                )
+                selected.extend(remainder[: limit - len(selected)])
+            selected = sorted(selected, key=lambda item: int(item[1].get("sequence") or 0))
+
+        selected_sequences = {int(row.get("sequence") or 0) for _, row in selected}
+        for lane in _PROCESS_STREAM_LANE_ORDER:
+            queue = self.events_by_lane.setdefault(lane, deque())
+            retained = deque(row for row in queue if int(row.get("sequence") or 0) not in selected_sequences)
+            self.events_by_lane[lane] = retained
+        return [dict(row) for _, row in selected]
+
+    def retained_count(self) -> int:
+        return self._queued_count()
+
+    def take_loss(self) -> HostedStreamLoss:
+        loss = HostedStreamLoss(
+            output=max(0, int(self.pending_loss.get("output", 0))),
+            event=max(0, int(self.pending_loss.get("event", 0))),
+            audit=max(0, int(self.pending_loss.get("audit", 0))),
+        )
+        self.pending_loss = {"output": 0, "event": 0, "audit": 0}
+        return loss
+
+    def batch_from_events(self, events: List[Dict[str, object]], *, loss: HostedStreamLoss, more: bool) -> Dict[str, object]:
+        frames: List[HostedStreamFrame] = []
+        sequence = 0
+        timestamp_ms = int(time.time() * 1000)
+        for index, event in enumerate(events):
+            payload = dict(event.get("payload") or {})
+            payload.pop("kind", None)
+            payload.pop("type", None)
+            frame = HostedStreamFrame.from_dict(
+                {
+                    "kind": str(event.get("type") or ""),
+                    **payload,
+                    "sequence": max(0, int(event.get("sequence") or 0)),
+                    "timestamp_ms": max(0, int(float(event.get("timestamp") or 0.0) * 1000)),
+                }
+            )
+            if index == 0:
+                sequence = max(0, int(event.get("sequence") or 0))
+                timestamp_ms = max(0, int(float(event.get("timestamp") or time.time()) * 1000))
+            frames.append(frame)
+        return HostedStreamBatch(
+            context=HostedStreamContext(stream_id=self.stream_id, request_id=self.request_id),
+            frames=frames,
+            sequence=sequence,
+            timestamp_ms=timestamp_ms,
+            loss=loss,
+            more=more,
+        ).to_dict()
 
 
 class HostedProcessSandboxBase:
@@ -187,15 +322,17 @@ class HostedProcessSandboxBase:
         if session is None:
             return {"status": "not_found", "stream_id": sid}
         events = session.recv(max_items)
+        loss = session.take_loss()
         return {
             "status": "ok",
             "stream_id": sid,
             "request_id": session.request_id,
             "events": events,
+            "batch": session.batch_from_events(events, loss=loss, more=session.retained_count() > 0),
             "closed": session.closed,
             "canceled": session.canceled,
             "max_events": max(1, int(session.max_events or 1)),
-            "retained_event_count": len(session.events),
+            "retained_event_count": session.retained_count(),
             "dropped_event_count": max(0, int(session.dropped_event_count or 0)),
             "next_sequence": max(0, int(session.sequence or 0)) + 1,
         }

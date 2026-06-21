@@ -354,7 +354,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [ ] 2. Update `HOSTING_CLIENT_BREAKING_CHANGES.md` to direct clients to helper APIs first.
 - [ ] 3. Replace `HostedStreamEvent.to_dict()` with a frame/batch builder that validates event kinds.
 - [x] 4. Add event kind registry with lane, replacement key, and loss policy.
-- [ ] 5. Add lane-aware queues and loss counters to hosted process streams.
+- [x] 5. Add lane-aware queues and loss counters to hosted process streams.
 - [ ] 6. Implement helper-side `on_loss="raise"|"mark"` behavior.
 - [ ] 7. Convert service-generated lifecycle events to frames.
 - [ ] 8. Convert Python and JavaScript node live `progress` to frames.
@@ -369,17 +369,17 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] Batch decoder expands timestamps and sequences from `base`.
 - [x] Unknown stream version fails validation.
 - [x] Unknown event kind fails validation.
-- [ ] Control frames bypass output backlog.
-- [ ] Terminal frames are delivered when output queue is full.
-- [ ] Output frames are always valid JSON objects.
+- [x] Control frames bypass output backlog.
+- [x] Terminal frames are delivered when output queue is full.
+- [x] Output frames are always valid JSON objects.
 - [ ] Known-size output streams report `expected_bytes`.
 - [ ] Byte-addressable chunks report `offset` and `length`.
 - [ ] Ack-backed streams require client accept before large payload delivery.
 - [ ] Ack-backed streams pause when credit is exhausted and resume after acknowledgement.
 - [ ] Client close propagates a stream-abandoned error to the producer.
 - [ ] Output loss yields either a helper exception or a `stream_loss` marker depending on helper policy.
-- [ ] Latest-replaces policy works for heartbeat/progress/metric.
-- [ ] First-kept/drop-later policy works for stdout/stderr/log/artifact.
+- [x] Latest-replaces policy works for heartbeat/progress/metric.
+- [x] First-kept/drop-later policy works for stdout/stderr/log/artifact.
 - [ ] Emitter-controlled chunk size is respected below policy maximum.
 - [ ] Runtime splits or rejects chunks above policy maximum.
 - [ ] Daemon event subscription does not block cancel/status on the control channel.

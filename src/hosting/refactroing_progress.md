@@ -35,3 +35,24 @@ Date: 2026-06-20
 
 - Move hosted process stream sessions from one FIFO event deque to lane-aware queues using the stream kind registry.
 - Return compact batches from `stream_recv` while keeping request status/progress accounting coherent during migration.
+
+## Slice 3: Hosted Process Lane Queues
+
+- [x] Replaced the hosted process stream FIFO retention queue with lane-aware retained queues.
+- [x] Added lane-specific pending loss counters and batch loss reporting.
+- [x] Added compact `batch` responses beside transitional legacy `events` responses.
+- [x] Added latest-replaces behavior for progress-style events.
+- [x] Added first-kept/drop-later behavior for output-style events under retention pressure.
+- [x] Added control-priority selection when receive limits or backlog pressure would otherwise hide control events.
+- [x] Preserved chronological delivery when a receive can drain all retained events.
+- [x] Prevented artifact payload metadata such as `kind` or `type` from overriding the event kind during frame conversion.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Introduce helper-side normalized stream iteration with `on_loss="raise"|"mark"`.
+- Start moving service/runtime stream consumers from transitional `events` to `batch` helpers.

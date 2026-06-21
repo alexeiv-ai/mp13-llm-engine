@@ -90,12 +90,13 @@ def test_process_base_stream_lifecycle_records_events_and_close() -> None:
 
     assert opened["status"] == "ok"
     assert [row["type"] for row in received["events"]] == ["started", "progress"]
+    assert [row["kind"] for row in received["batch"]["frames"]] == ["started", "progress"]
     assert closed["closed"] is True
     assert status["request"]["status"] == "ok"
     assert status["request"]["latest_progress"]["payload"]["progress_percent"] == 40
 
 
-def test_process_base_stream_reports_dropped_events_when_retention_is_exceeded() -> None:
+def test_process_base_stream_reports_progress_replacement_when_retention_is_exceeded() -> None:
     base = WorkflowPythonProcessBase()
 
     opened = base.stream_open(
@@ -116,8 +117,81 @@ def test_process_base_stream_reports_dropped_events_when_retention_is_exceeded()
 
     assert received["max_events"] == 2
     assert received["dropped_event_count"] == 3
-    assert [row["payload"].get("value") for row in received["events"]] == [2, 3]
+    assert [row["type"] for row in received["events"]] == ["started", "progress"]
+    assert received["events"][-1]["payload"].get("value") == 3
+    assert received["batch"]["loss"] == {"output": 0, "event": 3, "audit": 0}
+    assert received["batch"]["frames"][-1]["value"] == 3
     assert status["request"]["stream_event_count"] == 5
+
+
+def test_process_base_stream_replaces_latest_heartbeat_and_metric() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-replacement",
+        profile="node",
+        factory=_factory,
+        max_events=8,
+    )
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="heartbeat", payload={"status": "first"})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="heartbeat", payload={"status": "second"})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="metric", payload={"name": "rows", "current": 1})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="metric", payload={"name": "rows", "current": 2})
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
+
+    assert [row["type"] for row in received["events"]] == ["started", "heartbeat", "metric"]
+    assert received["events"][1]["payload"]["status"] == "second"
+    assert received["events"][2]["payload"]["current"] == 2
+    assert received["batch"]["loss"] == {"output": 0, "event": 2, "audit": 0}
+
+
+def test_process_base_stream_keeps_first_bounded_non_stdout_events() -> None:
+    for event_type, payload in [
+        ("stderr", {"text": "first"}),
+        ("log", {"level": "info", "message": "first"}),
+        ("artifact", {"name": "report", "ref": "artifact://first"}),
+    ]:
+        base = WorkflowPythonProcessBase()
+        opened = base.stream_open(
+            environment_key="env-a",
+            request_id=f"req-stream-{event_type}",
+            profile="node",
+            factory=_factory,
+            max_events=2,
+        )
+        base.stream_emit(stream_id=str(opened["stream_id"]), event_type=event_type, payload=payload)
+        base.stream_emit(stream_id=str(opened["stream_id"]), event_type=event_type, payload={**payload, "message": "dropped", "text": "dropped"})
+        received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
+
+        assert [row["type"] for row in received["events"]] == ["started", event_type]
+        assert received["events"][1]["payload"] == payload
+        assert received["dropped_event_count"] == 1
+
+
+def test_process_base_stream_keeps_first_output_and_prioritizes_control() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-lanes",
+        profile="node",
+        factory=_factory,
+        max_events=2,
+    )
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stdout", payload={"text": "first"})
+    base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stdout", payload={"text": "dropped"})
+    canceled = base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "cancel", "reason": "user"},
+    )
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=1)
+
+    assert canceled["accepted"] is True
+    assert [row["type"] for row in received["events"]] == ["canceled"]
+    assert received["batch"]["loss"] == {"output": 2, "event": 0, "audit": 0}
+    assert received["batch"]["frames"][0]["kind"] == "canceled"
+    assert received["retained_event_count"] == 1
 
 
 def test_process_base_stream_cancel_uses_pool_cancellation() -> None:
