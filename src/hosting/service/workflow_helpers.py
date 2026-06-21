@@ -1483,6 +1483,9 @@ class WorkflowHelperMixin:
     def workflow_js_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         return dict(self._workflow_js_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
 
+    def workflow_js_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        return dict(self._workflow_js_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
+
     def workflow_js_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         base = self._workflow_js_stream_base()
         msg = dict(message or {})
@@ -2346,6 +2349,9 @@ class WorkflowHelperMixin:
         )
 
     def workflow_python_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        return dict(self._workflow_python_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
+
+    def workflow_python_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         return dict(self._workflow_python_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
 
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

@@ -26,6 +26,12 @@ Transitional stream receive responses may expose all three shapes:
 - `batch`: raw compact batch for diagnostics and low-level integrations.
 - `events`: legacy rows kept only while service callers migrate.
 
+Event subscription commands:
+
+- Use `workflow-python-event-subscribe` instead of `workflow-python-stream-recv` for the event-read path.
+- Use `workflow-js-event-subscribe` instead of `workflow-js-stream-recv` for the event-read path.
+- Keep `workflow-*-stream-send`, `workflow-*-stream-close`, cancel, and status calls on the control path.
+
 ## Helper-Facing Event Model
 
 - [ ] Expect normalized events with named optional fields, similar to the `InferenceResponse` pattern in `mp13_config.py`.

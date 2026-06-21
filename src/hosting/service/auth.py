@@ -40,6 +40,7 @@ _WORKFLOW_PYTHON_COMMANDS = {
     "workflow-python-request-status",
     "workflow-python-stream-open",
     "workflow-python-stream-recv",
+    "workflow-python-event-subscribe",
     "workflow-python-stream-send",
     "workflow-python-stream-close",
 }
@@ -51,6 +52,7 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-resources",
     "workflow-python-request-status",
     "workflow-python-stream-recv",
+    "workflow-python-event-subscribe",
 }
 
 _WORKFLOW_JS_COMMANDS = {
@@ -63,6 +65,7 @@ _WORKFLOW_JS_COMMANDS = {
     "workflow-js-request-status",
     "workflow-js-stream-open",
     "workflow-js-stream-recv",
+    "workflow-js-event-subscribe",
     "workflow-js-stream-send",
     "workflow-js-stream-close",
 }
@@ -72,6 +75,7 @@ _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-resources",
     "workflow-js-request-status",
     "workflow-js-stream-recv",
+    "workflow-js-event-subscribe",
 }
 
 

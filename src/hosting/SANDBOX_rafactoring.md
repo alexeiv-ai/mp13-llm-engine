@@ -361,7 +361,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] 9. Convert Python and JavaScript node `host_call` observations to control frames.
 - [x] 10. Add live stdout/stderr/log valid-JSON chunk emitters.
 - [x] 11. Add accept/ack/close credit support for output streams that require complete delivery.
-- [ ] 12. Add daemon event subscription path separate from command RPC.
+- [x] 12. Add daemon event subscription path separate from command RPC.
 - [ ] 13. Add stream decoder, ordering, replacement, ack, and loss tests.
 
 ## Test Checklist
@@ -382,7 +382,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] First-kept/drop-later policy works for stdout/stderr/log/artifact.
 - [ ] Emitter-controlled chunk size is respected below policy maximum.
 - [ ] Runtime splits or rejects chunks above policy maximum.
-- [ ] Daemon event subscription does not block cancel/status on the control channel.
+- [x] Daemon event subscription does not block cancel/status on the control channel.
 - [x] Request-scoped batches include `request_id` and `instance_id`.
 - [ ] Instance-scoped batches can omit `request_id` without breaking decoding.
 

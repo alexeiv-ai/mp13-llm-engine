@@ -145,6 +145,28 @@ Note: this slice converts node observations at the hosted process stream boundar
 
 - Add daemon event subscription path separate from command RPC.
 
+## Slice 10: Daemon Event Subscription Commands
+
+- [x] Added `workflow-python-event-subscribe` service, daemon, channel, auth, and policy routing.
+- [x] Added `workflow-js-event-subscribe` service, daemon, channel, auth, and policy routing.
+- [x] Kept `workflow-*-stream-recv` as a transitional polling command.
+- [x] Documented the subscription commands for clients.
+- [x] Added daemon dispatch and channel facade tests for the new subscription commands.
+
+Note: this slice creates a distinct command path and client helper surface over the existing local IPC transport. It does not add a second physical socket or SSH relay implementation.
+
+## Verification
+
+- `pytest tests/test_engine_host_channel.py::test_workflow_python_channel_facade_forwards_expected_payloads tests/test_engine_host_channel.py::test_workflow_js_channel_facade_forwards_expected_payloads`
+- `pytest tests/test_workflow_helper_service.py -k "daemon_dispatches_workflow_python_facade or daemon_dispatches_workflow_js_facade"`
+- `pytest tests/test_hosting_auth_roles.py -q -k "stream-recv or workflow"`
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Close remaining decoder/test checklist gaps: known-size `expected_bytes`, chunk-size cap behavior, runtime split/reject behavior, and instance-scoped batch decode.
+
 ## Slice 8: Frame-First Process Retention
 
 - [x] Changed hosted process streams to retain expanded frame rows internally.

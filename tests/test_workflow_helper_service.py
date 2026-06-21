@@ -126,6 +126,10 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
             self.calls.append(("stream_recv", dict(kwargs)))
             return {"status": "ok", "events": []}
 
+        def workflow_python_event_subscribe(self, **kwargs):
+            self.calls.append(("event_subscribe", dict(kwargs)))
+            return {"status": "ok", "batch": {"frames": []}, "normalized_events": []}
+
         def workflow_python_stream_send(self, **kwargs):
             self.calls.append(("stream_send", dict(kwargs)))
             return {"status": "ok", "accepted": True}
@@ -146,6 +150,7 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert daemon._call_service("workflow-python-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})["request_id"] == "req-1"
     assert daemon._call_service("workflow-python-stream-open", {"profile": "node", "request": {"request_id": "req-node"}})["stream_id"] == "stream-1"
     assert daemon._call_service("workflow-python-stream-recv", {"stream_id": "stream-1", "max_items": 2})["events"] == []
+    assert daemon._call_service("workflow-python-event-subscribe", {"stream_id": "stream-1", "max_items": 2})["normalized_events"] == []
     assert daemon._call_service("workflow-python-stream-send", {"stream_id": "stream-1", "message": {"action": "cancel"}})["accepted"] is True
     assert daemon._call_service("workflow-python-stream-close", {"stream_id": "stream-1"})["closed"] is True
 
@@ -158,12 +163,14 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
         "cancel",
         "stream_open",
         "stream_recv",
+        "event_subscribe",
         "stream_send",
         "stream_close",
     ]
-    assert fake.calls[-4][1]["profile"] == "node"
-    assert fake.calls[-4][1]["environment_name"] == "workflow-python-node"
-    assert fake.calls[-4][1]["request"] == {"request_id": "req-node"}
+    assert fake.calls[-5][1]["profile"] == "node"
+    assert fake.calls[-5][1]["environment_name"] == "workflow-python-node"
+    assert fake.calls[-5][1]["request"] == {"request_id": "req-node"}
+    assert fake.calls[-4][1] == {"stream_id": "stream-1", "max_items": 2}
     assert fake.calls[-3][1] == {"stream_id": "stream-1", "max_items": 2}
     assert fake.calls[-2][1] == {"stream_id": "stream-1", "message": {"action": "cancel"}}
     assert fake.calls[-1][1] == {"stream_id": "stream-1"}
@@ -210,6 +217,10 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
             self.calls.append(("stream_recv", dict(kwargs)))
             return {"status": "ok", "events": []}
 
+        def workflow_js_event_subscribe(self, **kwargs):
+            self.calls.append(("event_subscribe", dict(kwargs)))
+            return {"status": "ok", "batch": {"frames": []}, "normalized_events": []}
+
         def workflow_js_stream_send(self, **kwargs):
             self.calls.append(("stream_send", dict(kwargs)))
             return {"status": "ok", "accepted": True}
@@ -231,6 +242,7 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     assert daemon._call_service("workflow-js-request-status", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
     assert daemon._call_service("workflow-js-stream-open", {"profile": "node", "request": {"request_id": "req-js-stream"}})["stream_id"] == "js-stream-1"
     assert daemon._call_service("workflow-js-stream-recv", {"stream_id": "js-stream-1", "max_items": 2})["events"] == []
+    assert daemon._call_service("workflow-js-event-subscribe", {"stream_id": "js-stream-1", "max_items": 2})["normalized_events"] == []
     assert daemon._call_service("workflow-js-stream-send", {"stream_id": "js-stream-1", "message": {"action": "cancel"}})["accepted"] is True
     assert daemon._call_service("workflow-js-stream-close", {"stream_id": "js-stream-1"})["closed"] is True
 
@@ -244,14 +256,16 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
         "status",
         "stream_open",
         "stream_recv",
+        "event_subscribe",
         "stream_send",
         "stream_close",
     ]
     assert fake.calls[0][1]["profile"] == "node"
     assert fake.calls[0][1]["javascript"] == {"host_api": {"enabled": True}}
-    assert fake.calls[-4][1]["profile"] == "node"
-    assert fake.calls[-4][1]["environment_name"] == "workflow-js-node"
-    assert fake.calls[-4][1]["request"] == {"request_id": "req-js-stream"}
+    assert fake.calls[-5][1]["profile"] == "node"
+    assert fake.calls[-5][1]["environment_name"] == "workflow-js-node"
+    assert fake.calls[-5][1]["request"] == {"request_id": "req-js-stream"}
+    assert fake.calls[-4][1] == {"stream_id": "js-stream-1", "max_items": 2}
     assert fake.calls[-3][1] == {"stream_id": "js-stream-1", "max_items": 2}
     assert fake.calls[-2][1] == {"stream_id": "js-stream-1", "message": {"action": "cancel"}}
     assert fake.calls[-1][1] == {"stream_id": "js-stream-1"}

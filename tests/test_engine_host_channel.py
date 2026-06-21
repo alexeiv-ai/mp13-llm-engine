@@ -974,6 +974,7 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
         capacity=3,
     )
     ch.workflow_python_stream_recv(stream_id="stream-1", max_items=5)
+    ch.workflow_python_event_subscribe(stream_id="stream-1", max_items=5)
     ch.workflow_python_stream_send(stream_id="stream-1", message={"action": "cancel"})
     ch.workflow_python_stream_close(stream_id="stream-1")
 
@@ -1133,6 +1134,14 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
             },
         ),
         (
+            "workflow-python-event-subscribe",
+            {
+                "stream_id": "stream-1",
+                "max_items": 5,
+                "session_token": "tok-123",
+            },
+        ),
+        (
             "workflow-python-stream-send",
             {
                 "stream_id": "stream-1",
@@ -1197,6 +1206,7 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         capacity=3,
     )
     ch.workflow_js_stream_recv(stream_id="js-stream-1", max_items=5)
+    ch.workflow_js_event_subscribe(stream_id="js-stream-1", max_items=5)
     ch.workflow_js_stream_send(stream_id="js-stream-1", message={"action": "cancel"})
     ch.workflow_js_stream_close(stream_id="js-stream-1")
 
@@ -1308,6 +1318,14 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         ),
         (
             "workflow-js-stream-recv",
+            {
+                "stream_id": "js-stream-1",
+                "max_items": 5,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-event-subscribe",
             {
                 "stream_id": "js-stream-1",
                 "max_items": 5,

@@ -1764,6 +1764,13 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-event-subscribe",
+            {"stream_id": str(stream_id or "").strip(), "max_items": max(1, min(int(max_items or 64), 4096))},
+        )
+        return dict(res or {})
+
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-python-stream-send",
@@ -1968,6 +1975,13 @@ class EngineHostControlChannel:
     def workflow_js_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-js-stream-recv",
+            {"stream_id": str(stream_id or "").strip(), "max_items": max(1, min(int(max_items or 64), 4096))},
+        )
+        return dict(res or {})
+
+    def workflow_js_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-event-subscribe",
             {"stream_id": str(stream_id or "").strip(), "max_items": max(1, min(int(max_items or 64), 4096))},
         )
         return dict(res or {})
