@@ -2156,11 +2156,6 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 capacity=int(payload.get("capacity") or 1),
             )
-        if cmd == "workflow-js-stream-recv":
-            return svc.workflow_js_stream_recv(
-                stream_id=str(payload.get("stream_id") or ""),
-                max_items=int(payload.get("max_items") or 64),
-            )
         if cmd == "workflow-js-event-subscribe":
             return svc.workflow_js_event_subscribe(
                 stream_id=str(payload.get("stream_id") or ""),
@@ -2260,11 +2255,6 @@ class EngineHostDaemon:
                 python=dict(payload.get("python") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 capacity=int(payload.get("capacity") or 1),
-            )
-        if cmd == "workflow-python-stream-recv":
-            return svc.workflow_python_stream_recv(
-                stream_id=str(payload.get("stream_id") or ""),
-                max_items=int(payload.get("max_items") or 64),
             )
         if cmd == "workflow-python-event-subscribe":
             return svc.workflow_python_event_subscribe(

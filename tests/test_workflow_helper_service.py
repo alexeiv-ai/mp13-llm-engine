@@ -122,10 +122,6 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
             self.calls.append(("stream_open", dict(kwargs)))
             return {"status": "ok", "stream_id": "stream-1"}
 
-        def workflow_python_stream_recv(self, **kwargs):
-            self.calls.append(("stream_recv", dict(kwargs)))
-            return {"status": "ok", "events": []}
-
         def workflow_python_event_subscribe(self, **kwargs):
             self.calls.append(("event_subscribe", dict(kwargs)))
             return {"status": "ok", "batch": {"frames": []}, "normalized_events": []}
@@ -149,7 +145,6 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert daemon._call_service("workflow-python-set-capacity", {"engine_id": "wf-py", "capacity": 5})["capacity"] == 5
     assert daemon._call_service("workflow-python-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})["request_id"] == "req-1"
     assert daemon._call_service("workflow-python-stream-open", {"profile": "node", "request": {"request_id": "req-node"}})["stream_id"] == "stream-1"
-    assert daemon._call_service("workflow-python-stream-recv", {"stream_id": "stream-1", "max_items": 2})["events"] == []
     assert daemon._call_service("workflow-python-event-subscribe", {"stream_id": "stream-1", "max_items": 2})["normalized_events"] == []
     assert daemon._call_service("workflow-python-stream-send", {"stream_id": "stream-1", "message": {"action": "cancel"}})["accepted"] is True
     assert daemon._call_service("workflow-python-stream-close", {"stream_id": "stream-1"})["closed"] is True
@@ -162,15 +157,13 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
         "set_capacity",
         "cancel",
         "stream_open",
-        "stream_recv",
         "event_subscribe",
         "stream_send",
         "stream_close",
     ]
-    assert fake.calls[-5][1]["profile"] == "node"
-    assert fake.calls[-5][1]["environment_name"] == "workflow-python-node"
-    assert fake.calls[-5][1]["request"] == {"request_id": "req-node"}
-    assert fake.calls[-4][1] == {"stream_id": "stream-1", "max_items": 2}
+    assert fake.calls[-4][1]["profile"] == "node"
+    assert fake.calls[-4][1]["environment_name"] == "workflow-python-node"
+    assert fake.calls[-4][1]["request"] == {"request_id": "req-node"}
     assert fake.calls[-3][1] == {"stream_id": "stream-1", "max_items": 2}
     assert fake.calls[-2][1] == {"stream_id": "stream-1", "message": {"action": "cancel"}}
     assert fake.calls[-1][1] == {"stream_id": "stream-1"}
@@ -213,10 +206,6 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
             self.calls.append(("stream_open", dict(kwargs)))
             return {"status": "ok", "stream_id": "js-stream-1"}
 
-        def workflow_js_stream_recv(self, **kwargs):
-            self.calls.append(("stream_recv", dict(kwargs)))
-            return {"status": "ok", "events": []}
-
         def workflow_js_event_subscribe(self, **kwargs):
             self.calls.append(("event_subscribe", dict(kwargs)))
             return {"status": "ok", "batch": {"frames": []}, "normalized_events": []}
@@ -241,7 +230,6 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     assert daemon._call_service("workflow-js-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
     assert daemon._call_service("workflow-js-request-status", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
     assert daemon._call_service("workflow-js-stream-open", {"profile": "node", "request": {"request_id": "req-js-stream"}})["stream_id"] == "js-stream-1"
-    assert daemon._call_service("workflow-js-stream-recv", {"stream_id": "js-stream-1", "max_items": 2})["events"] == []
     assert daemon._call_service("workflow-js-event-subscribe", {"stream_id": "js-stream-1", "max_items": 2})["normalized_events"] == []
     assert daemon._call_service("workflow-js-stream-send", {"stream_id": "js-stream-1", "message": {"action": "cancel"}})["accepted"] is True
     assert daemon._call_service("workflow-js-stream-close", {"stream_id": "js-stream-1"})["closed"] is True
@@ -255,17 +243,15 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
         "cancel",
         "status",
         "stream_open",
-        "stream_recv",
         "event_subscribe",
         "stream_send",
         "stream_close",
     ]
     assert fake.calls[0][1]["profile"] == "node"
     assert fake.calls[0][1]["javascript"] == {"host_api": {"enabled": True}}
-    assert fake.calls[-5][1]["profile"] == "node"
-    assert fake.calls[-5][1]["environment_name"] == "workflow-js-node"
-    assert fake.calls[-5][1]["request"] == {"request_id": "req-js-stream"}
-    assert fake.calls[-4][1] == {"stream_id": "js-stream-1", "max_items": 2}
+    assert fake.calls[-4][1]["profile"] == "node"
+    assert fake.calls[-4][1]["environment_name"] == "workflow-js-node"
+    assert fake.calls[-4][1]["request"] == {"request_id": "req-js-stream"}
     assert fake.calls[-3][1] == {"stream_id": "js-stream-1", "max_items": 2}
     assert fake.calls[-2][1] == {"stream_id": "js-stream-1", "message": {"action": "cancel"}}
     assert fake.calls[-1][1] == {"stream_id": "js-stream-1"}
@@ -1153,15 +1139,13 @@ exports.run = function(input, api) {
             "artifact_outputs": [{"name": "report", "filename": "stream.txt", "media_type": "text/plain"}],
         },
     )
-    events: list[dict] = []
     normalized_events: list[dict] = []
     deadline = time.time() + 10.0
     received = {}
     while time.time() < deadline:
-        received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=8)
-        events.extend(list(received.get("events") or []))
+        received = svc.workflow_js_event_subscribe(stream_id=opened["stream_id"], max_items=8)
         normalized_events.extend(list(received.get("normalized_events") or []))
-        if any(row["type"] == "done" for row in events):
+        if any(row["kind"] == "done" for row in normalized_events):
             break
         time.sleep(0.05)
     status = svc.workflow_js_request_status(
@@ -1171,7 +1155,7 @@ exports.run = function(input, api) {
     )
     svc.workflow_js_stream_close(stream_id=opened["stream_id"])
 
-    event_types = [row["type"] for row in events]
+    event_types = [row["kind"] for row in normalized_events]
     assert opened["status"] == "ok"
     assert "started" in event_types
     assert "stdout" in event_types
@@ -1181,8 +1165,8 @@ exports.run = function(input, api) {
     assert "result" in event_types
     assert event_types[-1] == "done"
     assert status["request"]["status"] == "ok"
-    assert status["request"]["stream_event_count"] >= len(events)
-    assert any(dict(row.get("payload") or {}).get("filename") == "stream.txt" for row in events if row["type"] == "artifact")
+    assert status["request"]["stream_event_count"] >= len(normalized_events)
+    assert any(row.get("filename") == "stream.txt" for row in normalized_events if row["kind"] == "artifact")
     assert any(row.get("kind") == "host_call" and row.get("call_id") for row in normalized_events)
 
 
@@ -1216,16 +1200,16 @@ exports.run = function(input, api) {
     deadline = time.time() + 10.0
     received = {}
     while time.time() < deadline:
-        received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=10)
+        received = svc.workflow_js_event_subscribe(stream_id=opened["stream_id"], max_items=10)
         if bool(received.get("closed")):
             break
         time.sleep(0.05)
     svc.workflow_js_stream_close(stream_id=opened["stream_id"])
 
     assert opened["status"] == "ok"
-    assert received["max_events"] == 3
-    assert received["dropped_event_count"] > 0
-    assert len(received["events"]) <= 3
+    loss = dict(dict(received.get("batch") or {}).get("loss") or {})
+    assert sum(int(value or 0) for value in loss.values()) > 0
+    assert len(dict(received.get("batch") or {}).get("frames") or []) <= 3
 
 
 def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> None:
@@ -1263,9 +1247,9 @@ def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> No
     events: list[dict] = []
     deadline = time.time() + 10.0
     while time.time() < deadline:
-        received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=8)
-        events.extend(list(received.get("events") or []))
-        if any(row["type"] == "done" for row in events):
+        received = svc.workflow_js_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+        events.extend(list(received.get("normalized_events") or []))
+        if any(row["kind"] == "done" for row in events):
             break
         time.sleep(0.05)
     status = svc.workflow_js_request_status(
@@ -1275,7 +1259,7 @@ def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> No
     )
     svc.workflow_js_stream_close(stream_id=opened["stream_id"])
 
-    event_types = [row["type"] for row in events]
+    event_types = [row["kind"] for row in events]
     assert sent["accepted"] is True
     assert sent["worker_cancel"]["canceled"] is True
     assert "canceled" in event_types
@@ -3033,9 +3017,9 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
         events = []
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
-            events.extend(list(received.get("events") or []))
-            if any(dict(row or {}).get("type") == "done" for row in events):
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
         status = svc.workflow_python_request_status(
@@ -3048,10 +3032,10 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
         svc.shutdown(str(opened.get("engine_id") or "workflow-python-node"), timeout_seconds=5.0)
 
     assert opened["status"] == "ok"
-    assert [row["type"] for row in events] == ["started", "log", "progress", "result", "done"]
-    assert events[1]["payload"]["logs"]["output_limit_bytes"] == 1024
-    assert events[2]["payload"]["message"] == "finished"
-    assert events[3]["payload"]["output"] == {"accepted": True}
+    assert [row["kind"] for row in events] == ["started", "log", "progress", "result", "done"]
+    assert events[1]["logs"]["output_limit_bytes"] == 1024
+    assert events[2]["message"] == "finished"
+    assert events[3]["output"] == {"accepted": True}
     assert status["request"]["status"] == "ok"
     assert closed["closed"] is True
 
@@ -3082,18 +3066,18 @@ def test_workflow_python_node_stream_emits_runtime_progress_and_stdout(tmp_path:
         events = []
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
-            events.extend(list(received.get("events") or []))
-            if any(dict(row or {}).get("type") == "done" for row in events):
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
     finally:
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
 
-    event_types = [row["type"] for row in events]
+    event_types = [row["kind"] for row in events]
     assert event_types.index("progress") < event_types.index("result")
-    assert any(row["type"] == "stdout" and "node stdout" in row["payload"]["text"] for row in events)
+    assert any(row["kind"] == "stdout" and "node stdout" in row["text"] for row in events)
 
 
 def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_request(tmp_path: Path) -> None:
@@ -3123,9 +3107,9 @@ def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_re
         events = []
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
-            events.extend(list(received.get("events") or []))
-            if any(dict(row or {}).get("type") == "done" for row in events):
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
         status = svc.workflow_python_request_status(
@@ -3137,12 +3121,12 @@ def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_re
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
 
-    heartbeats = [row for row in events if row["type"] == "heartbeat"]
+    heartbeats = [row for row in events if row["kind"] == "heartbeat"]
     assert opened["status"] == "ok"
     assert heartbeats
-    assert heartbeats[0]["payload"]["request_id"] == "req-node-stream-heartbeat"
-    assert heartbeats[0]["payload"]["status"] == "running"
-    assert any(row["type"] == "result" for row in events)
+    assert heartbeats[0]["request_id"] == "req-node-stream-heartbeat"
+    assert heartbeats[0]["status"] == "running"
+    assert any(row["kind"] == "result" for row in events)
     assert status["request"]["status"] == "ok"
     assert status["request"]["stream_event_count"] >= len(heartbeats)
 
@@ -3173,8 +3157,8 @@ def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: P
         received = {}
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=10)
-            if any(dict(row or {}).get("type") == "done" for row in list(received.get("events") or [])):
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=10)
+            if any(dict(row or {}).get("kind") == "done" for row in list(received.get("normalized_events") or [])):
                 break
             time.sleep(0.05)
         status = svc.workflow_python_request_status(
@@ -3187,11 +3171,11 @@ def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: P
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
 
     assert opened["status"] == "ok"
-    assert received["max_events"] == 3
-    assert received["dropped_event_count"] > 0
-    assert len(received["events"]) <= 3
-    assert received["events"][-1]["type"] == "done"
-    assert status["request"]["stream_event_count"] >= received["dropped_event_count"] + len(received["events"])
+    loss = dict(dict(received.get("batch") or {}).get("loss") or {})
+    assert sum(int(value or 0) for value in loss.values()) > 0
+    assert len(dict(received.get("batch") or {}).get("frames") or []) <= 3
+    assert list(received.get("normalized_events") or [])[-1]["kind"] == "done"
+    assert status["request"]["stream_event_count"] >= len(received.get("normalized_events") or [])
 
 
 def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp_path: Path) -> None:
@@ -3226,19 +3210,19 @@ def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp
         events = []
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
-            events.extend(list(received.get("events") or []))
-            if any(dict(row or {}).get("type") == "done" for row in events):
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
     finally:
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
 
-    assert "artifact" not in [row["type"] for row in events]
-    result_events = [row for row in events if row["type"] == "result"]
+    assert "artifact" not in [row["kind"] for row in events]
+    result_events = [row for row in events if row["kind"] == "result"]
     assert result_events
-    assert result_events[0]["payload"]["artifacts"] == []
+    assert result_events[0]["artifacts"] == []
 
 
 def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_path: Path) -> None:
@@ -3274,24 +3258,24 @@ def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_pa
         events = []
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=opened["stream_id"], max_items=8)
-            events.extend(list(received.get("events") or []))
-            if any(dict(row or {}).get("type") == "done" for row in events):
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
     finally:
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
 
-    event_types = [row["type"] for row in events]
+    event_types = [row["kind"] for row in events]
     assert "artifact" in event_types
     assert event_types.index("artifact") < event_types.index("result")
-    artifact_events = [row for row in events if row["type"] == "artifact"]
-    result_events = [row for row in events if row["type"] == "result"]
-    assert artifact_events[0]["payload"]["ref"].startswith("@artifacts/")
-    assert artifact_events[0]["payload"]["filename"] == "stream.txt"
-    assert result_events[0]["payload"]["artifacts"][0]["ref"] == artifact_events[0]["payload"]["ref"]
-    assert result_events[0]["payload"]["artifacts"][0]["filename"] == artifact_events[0]["payload"]["filename"]
+    artifact_events = [row for row in events if row["kind"] == "artifact"]
+    result_events = [row for row in events if row["kind"] == "result"]
+    assert artifact_events[0]["ref"].startswith("@artifacts/")
+    assert artifact_events[0]["filename"] == "stream.txt"
+    assert result_events[0]["artifacts"][0]["ref"] == artifact_events[0]["ref"]
+    assert result_events[0]["artifacts"][0]["filename"] == artifact_events[0]["filename"]
 
 
 def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path: Path) -> None:
@@ -3565,9 +3549,9 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
         events = []
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            received = svc.workflow_python_stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
-            events.extend(list(received.get("events") or []))
-            if any(dict(row or {}).get("type") == "done" for row in events):
+            received = svc.workflow_python_event_subscribe(stream_id=str(opened["stream_id"]), max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
         status = svc.workflow_python_request_status(
@@ -3579,13 +3563,13 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
 
-    event_types = [row["type"] for row in events]
-    done_events = [row for row in events if row["type"] == "done"]
+    event_types = [row["kind"] for row in events]
+    done_events = [row for row in events if row["kind"] == "done"]
     assert saw_running is True
     assert sent["accepted"] is True
     assert sent["worker_cancel"]["canceled"] is True
     assert "canceled" in event_types
-    assert done_events and done_events[-1]["payload"]["status"] == "canceled"
+    assert done_events and done_events[-1]["status"] == "canceled"
     assert status["request"]["status"] == "canceled"
 
 

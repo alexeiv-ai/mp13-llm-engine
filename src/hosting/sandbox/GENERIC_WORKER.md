@@ -91,6 +91,8 @@ Current limit environment variables:
 
 The CLI/channel exposes these through `proxy-rpc-open`, `proxy-rpc-recv`, `proxy-rpc-send`, and `proxy-rpc-close`.
 
+Workflow runtime facades do not expose the generic worker `stream_recv` shape as their public event read API. Workflow Python and JavaScript node streams use `workflow-*-event-subscribe`, which returns the hosted event batch contract plus helper-normalized events. The generic/proxy `stream_recv` primitive remains a lower-level model-worker IPC surface until the proxy stream cleanup decision is made.
+
 ## Workflow Runtime Relationship
 
 Workflow Python helper workers intentionally stay outside `hosting.engine_worker_ipc` so workflow execution does not inherit model-worker routing or `mp13_engine` tool dispatch. Workflow JavaScript is launched as a request-scoped QuickJS child harness by the workflow JS node runtime.

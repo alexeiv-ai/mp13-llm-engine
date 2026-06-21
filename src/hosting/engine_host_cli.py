@@ -770,7 +770,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-js-cancel-request",
         "workflow-js-request-status",
         "workflow-js-stream-open",
-        "workflow-js-stream-recv",
+        "workflow-js-event-subscribe",
         "workflow-js-stream-send",
         "workflow-js-stream-close",
         "workflow-python-environment-spec",
@@ -786,7 +786,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-python-cancel-request",
         "workflow-python-request-status",
         "workflow-python-stream-open",
-        "workflow-python-stream-recv",
+        "workflow-python-event-subscribe",
         "workflow-python-stream-send",
         "workflow-python-stream-close",
         "get-registration",
@@ -1213,9 +1213,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "workflow-js-stream-recv":
+        if cmd == "workflow-js-event-subscribe":
             _print_ok(
-                svc.workflow_js_stream_recv(
+                svc.workflow_js_event_subscribe(
                     stream_id=str(payload.get("stream_id") or ""),
                     max_items=int(payload.get("max_items") or 64),
                 )
@@ -1353,9 +1353,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "workflow-python-stream-recv":
+        if cmd == "workflow-python-event-subscribe":
             _print_ok(
-                svc.workflow_python_stream_recv(
+                svc.workflow_python_event_subscribe(
                     stream_id=str(payload.get("stream_id") or ""),
                     max_items=int(payload.get("max_items") or 64),
                 )

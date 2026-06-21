@@ -254,9 +254,9 @@ def test_cli_local_workflow_js_facade_commands(
             calls.append(("stream_open", dict(kwargs)))
             return {"status": "ok", "stream_id": "js-stream-1"}
 
-        def workflow_js_stream_recv(self, **kwargs: Any) -> Dict[str, Any]:
-            calls.append(("stream_recv", dict(kwargs)))
-            return {"status": "ok", "events": []}
+        def workflow_js_event_subscribe(self, **kwargs: Any) -> Dict[str, Any]:
+            calls.append(("event_subscribe", dict(kwargs)))
+            return {"status": "ok", "normalized_events": []}
 
         def workflow_js_stream_send(self, **kwargs: Any) -> Dict[str, Any]:
             calls.append(("stream_send", dict(kwargs)))
@@ -334,11 +334,11 @@ def test_cli_local_workflow_js_facade_commands(
             "workflow-js-stream-open",
         ]
     )
-    stream_recv_rc = engine_host_cli.main(
+    event_subscribe_rc = engine_host_cli.main(
         [
             "--payload-json",
             json.dumps({"stream_id": "js-stream-1", "max_items": 2}),
-            "workflow-js-stream-recv",
+            "workflow-js-event-subscribe",
         ]
     )
     stream_send_rc = engine_host_cli.main(
@@ -364,7 +364,7 @@ def test_cli_local_workflow_js_facade_commands(
     assert cancel_rc == 0
     assert status_rc == 0
     assert stream_open_rc == 0
-    assert stream_recv_rc == 0
+    assert event_subscribe_rc == 0
     assert stream_send_rc == 0
     assert stream_close_rc == 0
     assert (
@@ -434,7 +434,7 @@ def test_cli_local_workflow_js_facade_commands(
             "capacity": 3,
         },
     ) in calls
-    assert ("stream_recv", {"stream_id": "js-stream-1", "max_items": 2}) in calls
+    assert ("event_subscribe", {"stream_id": "js-stream-1", "max_items": 2}) in calls
     assert ("stream_send", {"stream_id": "js-stream-1", "message": {"action": "cancel"}}) in calls
     assert ("stream_close", {"stream_id": "js-stream-1"}) in calls
     out = capsys.readouterr().out

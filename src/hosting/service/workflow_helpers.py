@@ -14,7 +14,7 @@ from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
 from ..sandbox.broker_http import BrokeredHttpClient
 from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
 from ..sandbox.policy import WorkerSandboxPolicy
-from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedStreamEvent, HostedWorkerSlot, hosted_log_summary
+from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot, hosted_log_summary
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
 from ..sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntimeRegistry
 from ..sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntimeRegistry
@@ -1198,7 +1198,7 @@ class WorkflowHelperMixin:
                 def _record_js_event(event_type: str, payload: Dict[str, Any]) -> None:
                     pool.record_stream_event(
                         lifecycle.request_id,
-                        HostedStreamEvent(type=event_type, request_id=lifecycle.request_id, payload=dict(payload or {})),
+                        {"kind": event_type, "request_id": lifecycle.request_id, "timestamp_ms": int(time.time() * 1000), **dict(payload or {})},
                     )
 
                 result = self._workflow_js_node_runtime_registry().execute(
@@ -1480,11 +1480,8 @@ class WorkflowHelperMixin:
             reason=reason,
         )
 
-    def workflow_js_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
-        return dict(self._workflow_js_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
-
     def workflow_js_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
-        return dict(self._workflow_js_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
+        return dict(self._workflow_js_stream_base().event_subscribe(stream_id=stream_id, max_items=max_items))
 
     def workflow_js_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         base = self._workflow_js_stream_base()
@@ -1721,7 +1718,7 @@ class WorkflowHelperMixin:
             def _record_node_event(event_type: str, payload: Dict[str, Any]) -> None:
                 pool.record_stream_event(
                     lifecycle.request_id,
-                    HostedStreamEvent(type=event_type, request_id=lifecycle.request_id, payload=dict(payload or {})),
+                    {"kind": event_type, "request_id": lifecycle.request_id, "timestamp_ms": int(time.time() * 1000), **dict(payload or {})},
                 )
 
             result = self._workflow_python_node_runtime_registry().execute(
@@ -2348,11 +2345,8 @@ class WorkflowHelperMixin:
             reason=str(response.get("reason") or "workflow_python_node_execution_failed"),
         )
 
-    def workflow_python_stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
-        return dict(self._workflow_python_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
-
     def workflow_python_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
-        return dict(self._workflow_python_stream_base().stream_recv(stream_id=stream_id, max_items=max_items))
+        return dict(self._workflow_python_stream_base().event_subscribe(stream_id=stream_id, max_items=max_items))
 
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         base = self._workflow_python_stream_base()

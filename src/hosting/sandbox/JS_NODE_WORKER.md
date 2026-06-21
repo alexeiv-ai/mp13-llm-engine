@@ -23,7 +23,7 @@ The public entrypoints are the workflow facade commands and channel methods:
 
 1. `workflow-js-execute`
 2. `workflow-js-stream-open`
-3. `workflow-js-stream-recv`
+3. `workflow-js-event-subscribe`
 4. `workflow-js-stream-send`
 5. `workflow-js-stream-close`
 6. `workflow-js-resources`

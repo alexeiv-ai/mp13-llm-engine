@@ -804,16 +804,16 @@ Work:
 
 Deferred legacy cleanup from the completed streaming pillar:
 
-- [ ] Remove public `workflow-python-stream-recv` and `workflow-js-stream-recv` command paths once `workflow-*-event-subscribe` is the only documented event consumption API.
-- [ ] Replace `workflow_python_event_subscribe(...)` and `workflow_js_event_subscribe(...)` service implementations that currently delegate to `stream_recv(...)` with the final subscription/session implementation.
-- [ ] Remove `workflow-*-stream-recv` wrappers from `engine_host_channel.py`, CLI command tables, interactive CLI flows, daemon local IPC dispatch, auth allowlists, and policy allowlists.
+- [x] Remove public `workflow-python-stream-recv` and `workflow-js-stream-recv` command paths once `workflow-*-event-subscribe` is the only documented event consumption API.
+- [x] Replace `workflow_python_event_subscribe(...)` and `workflow_js_event_subscribe(...)` service implementations that currently delegate to `stream_recv(...)` with the final subscription/session implementation.
+- [x] Remove `workflow-*-stream-recv` wrappers from `engine_host_channel.py`, CLI command tables, interactive CLI flows, daemon local IPC dispatch, auth allowlists, and policy allowlists.
 - [ ] Decide whether `proxy-stream-recv` remains a generic worker IPC primitive or is renamed/replaced by the same event subscription API; then remove the unused compatibility route.
-- [ ] Replace remaining internal `HostedStreamEvent(type=..., payload=...)` construction sites with direct frame/batch builders, then remove compatibility-oriented `HostedStreamEvent.to_dict()` use from stream paths.
-- [ ] Update `PY_NODE_WORKER.md`, `JS_NODE_WORKER.md`, `GENERIC_WORKER.md`, `HOSTING.md`, and `ENGINE_HOST_CLI.md` so `event-subscribe` and helper-normalized events are the primary documented model.
-- [ ] Remove docs that describe old retained-event fields such as `dropped_event_count`, `retained_event_count`, and `next_sequence` as the public stream contract; replace them with batch `loss` and helper `stream_loss` behavior.
+- [x] Replace remaining internal `HostedStreamEvent(type=..., payload=...)` construction sites with direct frame/batch builders, then remove compatibility-oriented `HostedStreamEvent.to_dict()` use from stream paths.
+- [x] Update `PY_NODE_WORKER.md`, `JS_NODE_WORKER.md`, `GENERIC_WORKER.md`, `HOSTING.md`, and `ENGINE_HOST_CLI.md` so `event-subscribe` and helper-normalized events are the primary documented model.
+- [x] Remove docs that describe old retained-event fields such as `dropped_event_count`, `retained_event_count`, and `next_sequence` as the public stream contract; replace them with batch `loss` and helper `stream_loss` behavior.
 - [ ] Remove tests that assert the legacy one-event/recv response shape after equivalent helper/batch tests are in place.
 - [ ] Audit terminal output summaries versus live output frames and keep only intentional post-run summary fields, avoiding duplicate compatibility copies of stdout/stderr/log data.
-- [ ] Remove any migration-only fallback that accepts unknown event kinds, legacy `type`/`payload` event rows, or old recv-only client shapes after all in-repo clients use helper APIs.
+- [x] Remove any migration-only fallback that accepts unknown event kinds, legacy `type`/`payload` event rows, or old recv-only client shapes after all in-repo clients use helper APIs.
 
 ### Phase 2: Host Capability Toolbox Core
 

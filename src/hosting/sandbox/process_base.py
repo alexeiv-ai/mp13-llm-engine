@@ -206,6 +206,19 @@ class HostedProcessStreamSession:
             }
         }
 
+    def _event_row(self, event_type: str, payload: Dict[str, object]) -> Dict[str, object]:
+        row = dict(payload or {})
+        row.pop("kind", None)
+        row.pop("type", None)
+        frame = HostedStreamFrame.from_dict({"kind": event_type, **row})
+        batch = HostedStreamBatch(
+            context=HostedStreamContext(stream_id=self.stream_id, request_id=self.request_id),
+            frames=[frame],
+            sequence=self.sequence,
+            timestamp_ms=int(time.time() * 1000),
+        )
+        return batch.expanded_frames()[0]
+
     def _legacy_event_from_frame(self, row: Dict[str, object]) -> Dict[str, object]:
         timestamp_ms = max(0, int(row.get("timestamp_ms") or 0))
         payload = self._payload_from_frame(row)
@@ -232,19 +245,8 @@ class HostedProcessStreamSession:
                 length = self._output_length(payload_row)
                 if limit > 0 and max(0, int(self.non_ack_output_bytes or 0)) + length > limit:
                     self._record_loss(lane)
-                    return HostedStreamEvent(
-                        type=event_type,
-                        request_id=self.request_id,
-                        sequence=self.sequence,
-                        payload=payload_row,
-                    ).to_batch(stream_id=self.stream_id).expanded_frames()[0]
-        event = HostedStreamEvent(
-            type=event_type,
-            request_id=self.request_id,
-            sequence=self.sequence,
-            payload=payload_row,
-        )
-        row = event.to_batch(stream_id=self.stream_id).expanded_frames()[0]
+                    return self._event_row(event_type, payload_row)
+        row = self._event_row(event_type, payload_row)
         if self._replace_existing_latest(lane, row):
             return row
         capacity = max(1, int(self.max_events or 1))
@@ -489,6 +491,24 @@ class HostedProcessSandboxBase:
             "retained_event_count": session.retained_count(),
             "dropped_event_count": max(0, int(session.dropped_event_count or 0)),
             "next_sequence": max(0, int(session.sequence or 0)) + 1,
+        }
+
+    def event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, object]:
+        sid = str(stream_id or "").strip()
+        session = self._streams.get(sid)
+        if session is None:
+            return {"status": "not_found", "stream_id": sid}
+        events = session.recv(max_items)
+        loss = session.take_loss()
+        batch = session.batch_from_events(events, loss=loss, more=session.retained_count() > 0)
+        return {
+            "status": "ok",
+            "stream_id": sid,
+            "request_id": session.request_id,
+            "batch": batch,
+            "normalized_events": hosted_stream_normalize_batch(batch, on_loss="mark"),
+            "closed": session.closed,
+            "canceled": session.canceled,
         }
 
     def stream_send(self, *, stream_id: str, message: Optional[Dict[str, object]] = None) -> Dict[str, object]:

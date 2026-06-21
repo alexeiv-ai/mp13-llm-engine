@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from hosting.sandbox.runtime_base import (
     HOSTED_STREAM_EVENT_TYPES,
     HostedPoolKey,
@@ -125,11 +127,13 @@ def test_common_stream_event_contract_and_cancel_message() -> None:
     assert "artifact" in HOSTED_STREAM_EVENT_TYPES
     assert "done" in HOSTED_STREAM_EVENT_TYPES
 
-    event = HostedStreamEvent(type="custom-debug", request_id="req-1", payload={"message": "debug"}).to_dict()
+    event = HostedStreamEvent(type="log", request_id="req-1", payload={"message": "debug"}).to_dict()
     cancel = hosted_stream_cancel_message("req-1", reason="user")
 
     assert event["type"] == "log"
     assert event["payload"] == {"message": "debug"}
+    with pytest.raises(ValueError, match="unsupported_stream_event_kind"):
+        HostedStreamEvent(type="custom-debug", request_id="req-1", payload={"message": "debug"}).to_dict()
     assert cancel == {"action": "cancel", "request_id": "req-1", "reason": "user"}
 
 

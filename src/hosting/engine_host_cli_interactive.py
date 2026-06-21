@@ -1796,35 +1796,52 @@ def _print_workflow_request_status(result: Dict[str, Any]) -> None:
 
 
 def _print_workflow_stream_events(result: Dict[str, Any]) -> None:
-    events = [dict(row or {}) for row in list(dict(result or {}).get("events") or []) if isinstance(row, dict)]
+    data = dict(result or {})
+    events = [dict(row or {}) for row in list(data.get("normalized_events") or []) if isinstance(row, dict)]
     if not events:
-        print("  No stream events available.")
+        batch = dict(data.get("batch") or {})
+        context = dict(batch.get("context") or {})
+        base = dict(batch.get("base") or {})
+        sequence_base = int(base.get("sequence") or 0)
+        timestamp_base = int(base.get("timestamp_ms") or 0)
+        for index, frame in enumerate(list(batch.get("frames") or [])):
+            if not isinstance(frame, dict):
+                continue
+            row = {**context, **dict(frame or {})}
+            row.setdefault("sequence", sequence_base + index)
+            row.setdefault("timestamp_ms", timestamp_base + int(row.get("dt_ms") or 0))
+            events.append(row)
+    if not events:
+        print("  No events available.")
         return
-    print("Stream Events:")
+    print("Events:")
     for event in events:
-        payload = dict(event.get("payload") or {}) if isinstance(event.get("payload"), dict) else {}
+        payload = dict(event.get("payload") or {}) if isinstance(event.get("payload"), dict) else dict(event)
         summary = ""
-        if event.get("type") == "error":
+        kind = str(event.get("kind") or event.get("type") or "").strip()
+        if kind == "stream_loss":
+            summary = str(event.get("loss") or {}).strip()
+        elif kind == "error":
             error = dict(payload.get("error") or {})
             summary = str(error.get("code") or error.get("message") or "").strip()
-        elif event.get("type") == "log":
+        elif kind == "log":
             logs = dict(payload.get("logs") or {})
             summary = str(logs.get("summary") or "").strip() or f"limit={logs.get('output_limit_bytes')}"
-        elif event.get("type") in {"progress", "metric"}:
+        elif kind in {"progress", "metric"}:
             summary = str(payload.get("message") or payload.get("stage") or payload).strip()
-        elif event.get("type") == "artifact":
+        elif kind == "artifact":
             bits = [
                 str(payload.get("name") or "").strip(),
-                str(payload.get("kind") or "").strip(),
+                str(payload.get("artifact_kind") or payload.get("kind_label") or "").strip(),
                 str(payload.get("ref") or "").strip(),
                 str(payload.get("filename") or "").strip(),
             ]
             summary = " ".join(bit for bit in bits if bit)
             if payload.get("size_bytes") is not None:
                 summary = f"{summary} size={payload.get('size_bytes')}".strip()
-        elif event.get("type") in {"result", "done", "canceled", "started"}:
+        elif kind in {"result", "done", "canceled", "started"}:
             summary = str(payload.get("status") or payload.get("request_id") or "").strip()
-        print(f"  - {event.get('type')}: {summary}")
+        print(f"  - {kind}: {summary}")
 
 
 def _list_engines(args: argparse.Namespace, session_token: Optional[str]) -> Optional[str]:
@@ -2305,7 +2322,7 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                     continue
                 out = _api_invoke(
                     args,
-                    f"{command_prefix}-stream-recv",
+                    f"{command_prefix}-event-subscribe",
                     {"stream_id": stream_id, "max_items": max_items},
                     session_token=session_token,
                 )

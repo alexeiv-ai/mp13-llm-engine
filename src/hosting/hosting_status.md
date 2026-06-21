@@ -23,16 +23,16 @@ Purpose: record the current implementation state and the discrepancies against `
 - `workflow_python(profile=node)` request/response facade.
 - Node-profile stream command surfaces:
   - `workflow-python-stream-open`
-  - `workflow-python-stream-recv`
+  - `workflow-python-event-subscribe`
   - `workflow-python-stream-send`
   - `workflow-python-stream-close`
 - Shared stream/session plumbing for node-profile stream events.
 - `workflow_js(profile=node)` public facade and `workflow-js-execute` through QuickJS.
-- QuickJS JS node stream service support for open/recv/send/close, including
+- QuickJS JS node stream service support for open/event-subscribe/send/close, including
   console/stdout, progress, artifact, result, error, cancel, done, and bounded
-  retention/drop counts.
+  batch loss counts.
 - QuickJS JS node stream commands are exposed through the daemon, CLI, and
-  control channel with the same open/recv/send/close shape as Python node.
+  control channel with the same open/event-subscribe/send/close shape as Python node.
 - RBAC/daemon/channel/CLI support for the workflow command families.
 - Toolbox shared identity/process-base migration while preserving toolbox semantics.
 - Direct node-profile Python execution path that no longer calls `execute_workflow_python_helper`.

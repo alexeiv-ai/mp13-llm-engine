@@ -466,15 +466,15 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
                 "environment_key": "env-demo",
                 "workflow_pool": {"pool_id": "workflow_python/env-demo", "metrics": {"desired_capacity": 2}},
             }
-        if cmd == "workflow-python-stream-recv":
+        if cmd == "workflow-python-event-subscribe":
             return {
                 "status": "ok",
-                "events": [
-                    {"type": "started", "payload": {"request_id": "req-1"}},
-                    {"type": "log", "payload": {"logs": {"output_limit_bytes": 4096, "summary": ""}}},
-                    {"type": "artifact", "payload": {"name": "report", "kind": "ref", "ref": "@artifacts/a/report.txt", "size_bytes": 12}},
-                    {"type": "artifact", "payload": {"name": "summary", "kind": "inline", "filename": "summary.txt", "size_bytes": 7}},
-                    {"type": "error", "payload": {"error": {"code": "workflow_python_node_profile_not_implemented"}}},
+                "normalized_events": [
+                    {"kind": "started", "request_id": "req-1"},
+                    {"kind": "log", "logs": {"output_limit_bytes": 4096, "summary": ""}},
+                    {"kind": "artifact", "name": "report", "ref": "@artifacts/a/report.txt", "size_bytes": 12},
+                    {"kind": "artifact", "name": "summary", "artifact_kind": "inline", "filename": "summary.txt", "size_bytes": 7},
+                    {"kind": "error", "error": {"code": "workflow_python_node_profile_not_implemented"}},
                 ],
             }
         raise AssertionError(cmd)
@@ -489,9 +489,9 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
 
     interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
-    assert ("workflow-python-stream-recv", {"stream_id": "stream-1", "max_items": 5}) in invocations
+    assert ("workflow-python-event-subscribe", {"stream_id": "stream-1", "max_items": 5}) in invocations
     out = capsys.readouterr().out
-    assert "Stream Events" in out
+    assert "Events" in out
     assert "@artifacts/a/report.txt" in out
     assert "summary inline summary.txt" in out
     assert "workflow_python_node_profile_not_implemented" in out
@@ -589,13 +589,13 @@ def test_manage_workflow_runtimes_can_receive_js_stream_events(
                 "environment_key": "env-js",
                 "workflow_pool": {"pool_id": "workflow_js/env-js", "metrics": {"desired_capacity": 2}},
             }
-        if cmd == "workflow-js-stream-recv":
+        if cmd == "workflow-js-event-subscribe":
             return {
                 "status": "ok",
-                "events": [
-                    {"type": "started", "payload": {"request_id": "req-js-1"}},
-                    {"type": "progress", "payload": {"message": "js progress"}},
-                    {"type": "result", "payload": {"status": "ok"}},
+                "normalized_events": [
+                    {"kind": "started", "request_id": "req-js-1"},
+                    {"kind": "progress", "message": "js progress"},
+                    {"kind": "result", "status": "ok"},
                 ],
             }
         raise AssertionError(cmd)
@@ -610,9 +610,9 @@ def test_manage_workflow_runtimes_can_receive_js_stream_events(
 
     interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
-    assert ("workflow-js-stream-recv", {"stream_id": "js-stream-1", "max_items": 5}) in invocations
+    assert ("workflow-js-event-subscribe", {"stream_id": "js-stream-1", "max_items": 5}) in invocations
     out = capsys.readouterr().out
-    assert "Stream Events" in out
+    assert "Events" in out
     assert "js progress" in out
 
 
