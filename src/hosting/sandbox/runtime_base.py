@@ -584,6 +584,44 @@ class HostedStreamBatch:
         )
 
 
+class HostedStreamLossError(RuntimeError):
+    def __init__(self, loss: Dict[str, int], *, batch: Optional[Dict[str, Any]] = None) -> None:
+        self.loss = dict(loss or {})
+        self.batch = dict(batch or {}) if batch is not None else None
+        super().__init__(f"stream_loss:{stable_json(self.loss)}")
+
+
+def hosted_stream_normalize_batch(
+    batch: HostedStreamBatch | Dict[str, Any],
+    *,
+    on_loss: str = "mark",
+) -> List[Dict[str, Any]]:
+    mode = _clean(on_loss) or "mark"
+    if mode not in {"mark", "raise"}:
+        raise ValueError(f"unsupported_stream_loss_policy:{mode}")
+    parsed = batch if isinstance(batch, HostedStreamBatch) else HostedStreamBatch.from_dict(dict(batch or {}))
+    row = parsed.to_dict()
+    loss = parsed.loss.to_dict()
+    loss_detected = parsed.loss.detected()
+    if loss_detected and mode == "raise":
+        raise HostedStreamLossError(loss, batch=row)
+
+    events: List[Dict[str, Any]] = []
+    context = dict(row.get("context") or {})
+    if loss_detected:
+        events.append(
+            {
+                "kind": "stream_loss",
+                **context,
+                "loss": loss,
+                "loss_detected": True,
+            }
+        )
+    for frame in parsed.expanded_frames():
+        events.append({**frame, "loss_detected": False})
+    return events
+
+
 @dataclass(frozen=True)
 class HostedStreamEvent:
     type: str
@@ -780,6 +818,7 @@ __all__ = [
     "HostedStreamFrame",
     "HostedStreamKindSpec",
     "HostedStreamLoss",
+    "HostedStreamLossError",
     "HostedWorkerSlot",
     "HOSTED_IPC_MESSAGE_FAMILIES",
     "HOSTED_STREAM_CONTRACT_VERSION",
@@ -794,6 +833,7 @@ __all__ = [
     "hosted_stream_cancel_message",
     "hosted_stream_kind_lane",
     "hosted_stream_kind_spec",
+    "hosted_stream_normalize_batch",
     "hosted_stream_validate_kind",
     "normalize_sandbox_policy",
     "sandbox_policy_hash",

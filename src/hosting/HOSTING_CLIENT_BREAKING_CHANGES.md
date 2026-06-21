@@ -13,6 +13,13 @@ This document tracks dependent-client changes required by the sandbox event-stre
   - `on_loss="mark"`: receive a `stream_loss` marker and continue with available events
 - [ ] Treat helper-returned events as the public API. Raw batches are for diagnostics and low-level integrations.
 
+Current low-level helper entry points:
+
+- `HostedStreamBatch.from_dict(...)`: validates the raw batch version and event kinds.
+- `HostedStreamBatch.expanded_frames()`: expands shared context, sequence, and timestamp values.
+- `hosted_stream_normalize_batch(..., on_loss="mark")`: returns normalized events and inserts a `stream_loss` marker when loss is reported.
+- `hosted_stream_normalize_batch(..., on_loss="raise")`: raises `HostedStreamLossError` when loss is reported.
+
 ## Helper-Facing Event Model
 
 - [ ] Expect normalized events with named optional fields, similar to the `InferenceResponse` pattern in `mp13_config.py`.

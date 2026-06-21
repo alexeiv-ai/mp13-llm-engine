@@ -351,11 +351,11 @@ Review result: the object-frame shape fits later pillars if the first implementa
 ## Implementation Checklist
 
 - [x] 1. Define Pydantic-style stream batch and event frame models.
-- [ ] 2. Update `HOSTING_CLIENT_BREAKING_CHANGES.md` to direct clients to helper APIs first.
+- [x] 2. Update `HOSTING_CLIENT_BREAKING_CHANGES.md` to direct clients to helper APIs first.
 - [ ] 3. Replace `HostedStreamEvent.to_dict()` with a frame/batch builder that validates event kinds.
 - [x] 4. Add event kind registry with lane, replacement key, and loss policy.
 - [x] 5. Add lane-aware queues and loss counters to hosted process streams.
-- [ ] 6. Implement helper-side `on_loss="raise"|"mark"` behavior.
+- [x] 6. Implement helper-side `on_loss="raise"|"mark"` behavior.
 - [ ] 7. Convert service-generated lifecycle events to frames.
 - [ ] 8. Convert Python and JavaScript node live `progress` to frames.
 - [ ] 9. Convert Python and JavaScript node `host_call` observations to control frames.
@@ -377,13 +377,13 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [ ] Ack-backed streams require client accept before large payload delivery.
 - [ ] Ack-backed streams pause when credit is exhausted and resume after acknowledgement.
 - [ ] Client close propagates a stream-abandoned error to the producer.
-- [ ] Output loss yields either a helper exception or a `stream_loss` marker depending on helper policy.
+- [x] Output loss yields either a helper exception or a `stream_loss` marker depending on helper policy.
 - [x] Latest-replaces policy works for heartbeat/progress/metric.
 - [x] First-kept/drop-later policy works for stdout/stderr/log/artifact.
 - [ ] Emitter-controlled chunk size is respected below policy maximum.
 - [ ] Runtime splits or rejects chunks above policy maximum.
 - [ ] Daemon event subscription does not block cancel/status on the control channel.
-- [ ] Request-scoped batches include `request_id` and `instance_id`.
+- [x] Request-scoped batches include `request_id` and `instance_id`.
 - [ ] Instance-scoped batches can omit `request_id` without breaking decoding.
 
 ## Remaining Decisions

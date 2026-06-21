@@ -56,3 +56,21 @@ Date: 2026-06-20
 
 - Introduce helper-side normalized stream iteration with `on_loss="raise"|"mark"`.
 - Start moving service/runtime stream consumers from transitional `events` to `batch` helpers.
+
+## Slice 4: Stream Batch Normalization Helper
+
+- [x] Added `HostedStreamLossError` for strict helper-side loss handling.
+- [x] Added `hosted_stream_normalize_batch(..., on_loss="mark")` to emit a synthetic `stream_loss` marker before normalized frames.
+- [x] Added `hosted_stream_normalize_batch(..., on_loss="raise")` to fail deterministic clients on reported loss.
+- [x] Added low-level helper guidance to `HOSTING_CLIENT_BREAKING_CHANGES.md`.
+- [x] Added tests for marker mode, raise mode, invalid loss policy, and expanded request/instance context.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Convert service-generated lifecycle stream responses to rely on batch/helper normalization instead of transitional `events` lists.
+- Start routing Python and JavaScript node live progress through frame-first emitters.

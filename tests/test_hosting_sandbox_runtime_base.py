@@ -13,6 +13,7 @@ from hosting.sandbox.runtime_base import (
     HostedStreamEvent,
     HostedStreamFrame,
     HostedStreamLoss,
+    HostedStreamLossError,
     HostedWorkerSlot,
     HOSTED_IPC_MESSAGE_FAMILIES,
     HOSTED_STREAM_CONTRACT_VERSION,
@@ -23,6 +24,7 @@ from hosting.sandbox.runtime_base import (
     hosted_resource_response,
     hosted_stream_kind_lane,
     hosted_stream_kind_spec,
+    hosted_stream_normalize_batch,
     hosted_stream_validate_kind,
     sandbox_policy_hash,
 )
@@ -285,6 +287,46 @@ def test_stream_batch_parser_validates_version_and_event_kind() -> None:
     )
     assert parsed.to_dict()["frames"] == [{"dt_ms": 0, "kind": "metric", "current": 3.0, "name": "rows", "unit": "count"}]
     assert parsed.loss.detected() is True
+
+
+def test_stream_normalizer_marks_or_raises_on_loss() -> None:
+    batch = HostedStreamBatch(
+        context=HostedStreamContext(stream_id="stream-1", request_id="req-1", instance_id="worker-1"),
+        frames=[HostedStreamFrame(kind="stdout", text="after loss")],
+        sequence=10,
+        timestamp_ms=1000,
+        loss=HostedStreamLoss(output=2),
+    )
+
+    marked = hosted_stream_normalize_batch(batch, on_loss="mark")
+    assert marked == [
+        {
+            "kind": "stream_loss",
+            "stream_id": "stream-1",
+            "request_id": "req-1",
+            "instance_id": "worker-1",
+            "loss": {"output": 2, "event": 0, "audit": 0},
+            "loss_detected": True,
+        },
+        {
+            "stream_id": "stream-1",
+            "request_id": "req-1",
+            "instance_id": "worker-1",
+            "dt_ms": 0,
+            "kind": "stdout",
+            "text": "after loss",
+            "sequence": 10,
+            "timestamp_ms": 1000,
+            "loss_detected": False,
+        },
+    ]
+
+    with pytest.raises(HostedStreamLossError) as exc:
+        hosted_stream_normalize_batch(batch.to_dict(), on_loss="raise")
+    assert exc.value.loss == {"output": 2, "event": 0, "audit": 0}
+
+    with pytest.raises(ValueError, match="unsupported_stream_loss_policy"):
+        hosted_stream_normalize_batch(batch, on_loss="ignore")
 
 
 def test_shared_registration_resource_and_cancel_shapes() -> None:
