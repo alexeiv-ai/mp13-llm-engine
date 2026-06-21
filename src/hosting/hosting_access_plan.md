@@ -346,17 +346,17 @@ Effort: High.
 Current state:
 
 - Python node host API calls are handled by the daemon/service process.
-- Built-ins are service-owned.
-- Dependent clients cannot register arbitrary methods from another process.
+- Built-ins are currently service-owned in code, but the target model removes daemon-owned built-in special status.
+- Dependent clients can register provider sessions, but known broker-supported methods still need to move to hosting client library registration.
 - Toolbox callback relay already proves callback-to-client RPC is possible.
 
 Needed changes:
 
 - Introduce host capability sessions registered by clients.
 - Include callable endpoint binding, auth token, lifetime, close semantics, and capability descriptors.
-- Route sandbox `host.call(...)` to either service built-ins or client-owned capability endpoints.
+- Route sandbox `host.call(...)` to client-owned capability endpoints, including hosting library registered default methods such as filesystem and HTTP helpers.
 - Define cancellation, timeout, backpressure, and retry behavior for in-flight host calls.
-- Define whether the daemon is a relay, a policy broker, or only a session registry.
+- Keep the daemon as registry/policy/audit owner while optimizing local IPC as the primary provider callback transport. SSH relay remains a corner-case path.
 
 Risks:
 
@@ -390,6 +390,8 @@ Make client-owned host APIs use a callback-binding model similar to toolbox, but
   }
 }
 ```
+
+Default hosting clients should be able to register known broker-supported methods automatically, but may omit or replace them. Duplicate fully-qualified method names fail by default unless override is requested. Namespace hierarchy is canonical; presentation grouping can be derived from namespace.
 
 ### 3. Harness Versus Host Extension Discovery
 
@@ -508,12 +510,13 @@ Effort: Medium.
 
 Current state:
 
-- Node built-ins already expose `fs.*` and `http.fetch` as host calls.
+- Node filesystem and HTTP helpers are currently exposed as daemon/service built-ins.
+- Target Host API model moves those known helper methods into default hosting-client registration.
 - Toolbox brokered IO has separate callback/broker code paths.
 
 Needed changes:
 
-- Represent fs/http as built-in host capability toolbox methods.
+- Represent fs/http as default host capability methods registered by the hosting client library.
 - Align node and toolbox brokered IO schemas.
 - Preserve existing toolbox callback context attribution.
 - Preserve sandbox policy enforcement.

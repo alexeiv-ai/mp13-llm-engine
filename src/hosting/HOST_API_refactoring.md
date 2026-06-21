@@ -151,8 +151,10 @@ Session shape:
 ```
 
 - [ ] The broker stores binding details, but `sandbox.describe` must never return them.
-- [ ] Built-in service methods should be represented as a reserved built-in provider session.
-- [ ] Client sessions must not override built-ins unless a policy explicitly allows shadowing for a specific scope.
+- [ ] Service-owned built-in methods should be removed from the daemon-owned provider model.
+- [ ] Known broker-supported methods such as `fs.*` and `http.fetch` should be registered by the hosting client library by default, with custom client implementations allowed.
+- [ ] Duplicate fully-qualified method registration must fail by default with a clear duplicate error unless the registration explicitly requests override.
+- [ ] Different namespaces may use the same local method suffix because calls use fully-qualified method names.
 
 ### Scoped Toolbox Reference
 
@@ -180,10 +182,9 @@ Session shape:
 - [ ] Runtime forwards the call to the request/instance capability broker.
 - [ ] Broker resolves the method against:
   - active provider sessions
-  - built-in providers
   - request/workflow/instance/consumer scopes
   - namespace permissions
-  - shadowing/precedence policy
+  - duplicate/override policy
 - [ ] Broker checks static permissions and approved scopes.
 - [ ] If approval is needed, broker emits an approval request toward the user-facing hosting client and waits for a decision.
 - [ ] Broker invokes the provider.
@@ -413,20 +414,37 @@ Error:
 
 ## Remaining Decisions
 
-- [ ] Confirm provider callback transport for first implementation:
-  - recommended: daemon-mediated callback binding over existing local IPC/SSH relay command channel
-  - alternative: separate AF_PIPE/AF_UNIX callback listener registered by the client
-- [ ] Confirm provider session lifetime defaults:
-  - close on client disconnect
-  - optional explicit expiry
-  - request/workflow/instance/consumer visibility
-- [ ] Confirm duplicate method precedence:
-  - built-ins win by default
-  - client providers cannot shadow built-ins unless policy grants explicit shadowing
-  - narrower scope wins among client providers
-- [ ] Confirm approval cache defaults:
-  - no cache for write/destructive methods
-  - optional TTL for read-only methods
-  - cache key includes method, actor, scope, and provider session
-- [ ] Confirm whether hierarchical groups should be added to native toolbox first or shared descriptors first.
-- [ ] Confirm whether HostedToolbox brokered IO unification is a later pillar or should be part of this host API pillar after broker dispatch is stable.
+- [x] Confirm provider callback transport for first implementation:
+  - prioritize optimized local IPC because SSH is a corner case for `host.call`
+  - if current code does not yet support SSH callbacks for `host.call`, leave SSH as a later relay path
+  - if SSH support exists in a path being touched, keep the least invasive relay behavior
+- [x] Confirm provider session lifetime defaults:
+  - provider session controls registered method descriptors, owner, scope visibility, private callback binding, expiry, and disconnect cleanup
+  - explicit `close()` removes the provider session from daemon registry and future discovery/call resolution
+  - close does not imply worker shutdown, artifact cleanup, or guaranteed provider-side cancellation unless separately wired
+- [x] Confirm duplicate method precedence:
+  - remove daemon-owned built-in precedence from the target model
+  - hosting client library may register known broker-supported methods by default
+  - duplicate fully-qualified method names fail by default unless override is explicitly requested
+  - method identity is fully qualified; same local suffix in different namespaces is not a duplicate
+- [x] Confirm approval cache defaults:
+  - no implicit broker approval cache
+  - approval reuse must be explicit, scoped, and toolbox-style, for example by adding a grant to request/workflow/instance/actor context
+  - one-time approval/rejection remains valid only for the current call
+- [x] Confirm hierarchical modeling:
+  - namespace hierarchy is canonical
+  - group/path metadata is optional presentation metadata or derived from namespace
+  - search should support namespace-only queries and name-pattern search across namespaces
+- [x] Confirm HostedToolbox brokered IO unification timing:
+  - later uber-plan pillar, not part of the current Host API implementation slice
+
+## Follow-Up Work From Decisions
+
+- [ ] Remove daemon/service-owned built-in special status from the Host API provider model.
+- [ ] Move registration of known broker-supported methods to hosting client library helpers, enabled by default.
+- [ ] Allow clients to omit known methods or provide custom implementations for those fully-qualified method names.
+- [ ] Add duplicate fully-qualified method registration rejection with an explicit override option.
+- [ ] Preserve fast local IPC as the primary provider callback transport path; keep SSH relay as a corner-case/later path unless already supported by the touched code.
+- [ ] Make namespace hierarchy the canonical capability hierarchy and derive presentation groups from namespace where possible.
+- [ ] Keep approval reuse explicit through scoped grants rather than an implicit broker cache.
+- [ ] Request dependent-client adoption only after the above follow-up breaking-change slice is implemented, documented, and committed.

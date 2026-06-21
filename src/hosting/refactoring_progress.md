@@ -78,6 +78,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Verified matching SSH binding allows registration while public responses still omit provider bindings.
 - [x] Marked Host API implementation checklist and public breaking-change notes complete.
 
+### Host Capability Decision Update: Client-Owned Known Methods
+
+- [x] Recorded decision to optimize local IPC for `host.call` provider callbacks and treat SSH relay as a corner case.
+- [x] Recorded decision to remove daemon-owned built-in special status from the target Host API model.
+- [x] Recorded decision that hosting client library helpers should register known broker-supported methods by default, while allowing clients to omit or replace them.
+- [x] Recorded decision that duplicate fully-qualified method registration fails by default unless override is explicit.
+- [x] Recorded decision that approval reuse is explicit scoped-grant behavior, not an implicit broker cache.
+- [x] Recorded decision that namespace hierarchy is canonical and presentation groups can be derived.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -104,8 +113,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [x] Host Capability Protocol implementation checklist is complete.
-- [ ] Remaining open items are design confirmations for later pillars, not implementation blockers in this slice.
+- [x] Original Host Capability Protocol implementation checklist is complete.
+- [ ] Implement the follow-up breaking-change slice that moves known broker-supported methods out of daemon-owned built-ins and into default hosting-client registration.
+- [ ] Request dependent-client adoption only after the follow-up breaking-change slice is implemented, documented, tested, and committed.
 
 ## Verification
 
