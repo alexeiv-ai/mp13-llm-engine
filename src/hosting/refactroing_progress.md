@@ -128,6 +128,23 @@ Note: this slice converts node observations at the hosted process stream boundar
 
 - Design and implement accept/ack/close credit support for complete-delivery output streams.
 
+## Slice 9: Ack-Backed Output Credit
+
+- [x] Added `stream_accept` handling with initial credit and optional max chunk size.
+- [x] Added `stream_ack` handling with consumed-byte accounting and credit replenishment.
+- [x] Added `stream_close` handling for client abandon.
+- [x] Added fail-fast behavior for ack-backed output before accept, when credit is exhausted, and after client abandon.
+- [x] Added focused process stream tests for accept-before-output, pause/resume by credit, and stream-abandoned producer errors.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Add daemon event subscription path separate from command RPC.
+
 ## Slice 8: Frame-First Process Retention
 
 - [x] Changed hosted process streams to retain expanded frame rows internally.

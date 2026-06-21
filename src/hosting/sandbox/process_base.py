@@ -51,6 +51,13 @@ class HostedProcessStreamSession:
     dropped_event_count: int = 0
     pending_loss: Dict[str, int] = field(default_factory=lambda: {"output": 0, "event": 0, "audit": 0})
     output_offsets: Dict[str, int] = field(default_factory=dict)
+    accepted_output_stream: bool = False
+    output_credit_bytes: int = 0
+    output_inflight_bytes: int = 0
+    output_acked_bytes: int = 0
+    output_max_chunk_size: Optional[int] = None
+    output_closed_by_client: bool = False
+    output_close_reason: Optional[str] = None
 
     def _queued_count(self) -> int:
         return sum(len(queue) for queue in self.events_by_lane.values())
@@ -114,6 +121,62 @@ class HostedProcessStreamSession:
             self.output_offsets[event_type] = offset + raw_len
         return row
 
+    def _requires_ack(self, payload: Dict[str, object]) -> bool:
+        return bool(payload.get("requires_ack") or payload.get("ack_id"))
+
+    def _consume_output_credit(self, payload: Dict[str, object]) -> None:
+        if not self._requires_ack(payload):
+            return
+        if self.output_closed_by_client:
+            raise ValueError("stream_abandoned")
+        if not self.accepted_output_stream:
+            raise ValueError("stream_not_accepted")
+        length = max(0, int(payload.get("length") or 0))
+        if length > max(0, int(self.output_credit_bytes or 0)):
+            raise ValueError("stream_credit_exhausted")
+        self.output_credit_bytes -= length
+        self.output_inflight_bytes += length
+
+    def accept_output_stream(self, *, credit_bytes: int, max_chunk_size: Optional[int] = None) -> Dict[str, object]:
+        credit = max(0, int(credit_bytes or 0))
+        self.accepted_output_stream = True
+        self.output_closed_by_client = False
+        self.output_close_reason = None
+        self.output_credit_bytes += credit
+        if max_chunk_size is not None:
+            self.output_max_chunk_size = max(1, int(max_chunk_size or 1))
+        return {
+            "accepted": True,
+            "stream_id": self.stream_id,
+            "credit_bytes": max(0, int(self.output_credit_bytes or 0)),
+            "max_chunk_size": self.output_max_chunk_size,
+        }
+
+    def ack_output_stream(self, *, consumed_bytes: int = 0, additional_credit_bytes: int = 0, ack_id: Optional[str] = None) -> Dict[str, object]:
+        consumed = max(0, int(consumed_bytes or 0))
+        additional = max(0, int(additional_credit_bytes or 0))
+        self.output_inflight_bytes = max(0, int(self.output_inflight_bytes or 0) - consumed)
+        self.output_acked_bytes += consumed
+        self.output_credit_bytes += additional
+        return {
+            "accepted": True,
+            "stream_id": self.stream_id,
+            "ack_id": str(ack_id or "").strip() or None,
+            "acked_bytes": max(0, int(self.output_acked_bytes or 0)),
+            "inflight_bytes": max(0, int(self.output_inflight_bytes or 0)),
+            "credit_bytes": max(0, int(self.output_credit_bytes or 0)),
+        }
+
+    def abandon_output_stream(self, *, reason: Optional[str] = None) -> Dict[str, object]:
+        self.output_closed_by_client = True
+        self.output_close_reason = str(reason or "").strip() or "stream_closed_by_client"
+        return {
+            "accepted": True,
+            "stream_id": self.stream_id,
+            "closed": True,
+            "reason": self.output_close_reason,
+        }
+
     def _payload_from_frame(self, row: Dict[str, object]) -> Dict[str, object]:
         return {
             key: value
@@ -155,6 +218,7 @@ class HostedProcessStreamSession:
         payload_row = dict(payload or {})
         if lane == "output":
             payload_row = self._prepare_output_payload(event_type, payload_row)
+            self._consume_output_credit(payload_row)
         event = HostedStreamEvent(
             type=event_type,
             request_id=self.request_id,
@@ -375,7 +439,10 @@ class HostedProcessSandboxBase:
         session = self._streams.get(sid)
         if session is None:
             return {"status": "not_found", "stream_id": sid}
-        event = session.append(event_type, payload)
+        try:
+            event = session.append(event_type, payload)
+        except ValueError as exc:
+            return {"status": "error", "stream_id": sid, "reason": str(exc), "event_type": str(event_type or "").strip()}
         self.record_stream_event(environment_key=session.environment_key, request_id=session.request_id, event=event)
         return {"status": "ok", "stream_id": sid, "event": event}
 
@@ -409,7 +476,25 @@ class HostedProcessSandboxBase:
         if session is None:
             return {"status": "not_found", "stream_id": sid}
         msg = dict(message or {})
-        if str(msg.get("action") or "").strip() != "cancel":
+        action = str(msg.get("action") or "").strip()
+        if action == "stream_accept":
+            credit = int(msg.get("initial_credit_bytes") or msg.get("credit_bytes") or 1048576)
+            max_chunk_size = msg.get("max_chunk_size")
+            return {"status": "ok", "stream_id": sid, "action": action, **session.accept_output_stream(credit_bytes=credit, max_chunk_size=int(max_chunk_size) if max_chunk_size is not None else None)}
+        if action == "stream_ack":
+            return {
+                "status": "ok",
+                "stream_id": sid,
+                "action": action,
+                **session.ack_output_stream(
+                    consumed_bytes=int(msg.get("consumed_bytes") or msg.get("length") or 0),
+                    additional_credit_bytes=int(msg.get("additional_credit_bytes") or msg.get("credit_bytes") or 0),
+                    ack_id=str(msg.get("ack_id") or ""),
+                ),
+            }
+        if action == "stream_close":
+            return {"status": "ok", "stream_id": sid, "action": action, **session.abandon_output_stream(reason=str(msg.get("reason") or ""))}
+        if action != "cancel":
             return {"status": "ok", "stream_id": sid, "accepted": False, "message": "unsupported_action"}
         session.canceled = True
         cancel = hosted_stream_cancel_message(session.request_id, reason=str(msg.get("reason") or "client_cancel"))

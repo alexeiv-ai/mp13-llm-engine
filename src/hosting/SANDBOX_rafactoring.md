@@ -360,7 +360,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] 8. Convert Python and JavaScript node live `progress` to frames.
 - [x] 9. Convert Python and JavaScript node `host_call` observations to control frames.
 - [x] 10. Add live stdout/stderr/log valid-JSON chunk emitters.
-- [ ] 11. Add accept/ack/close credit support for output streams that require complete delivery.
+- [x] 11. Add accept/ack/close credit support for output streams that require complete delivery.
 - [ ] 12. Add daemon event subscription path separate from command RPC.
 - [ ] 13. Add stream decoder, ordering, replacement, ack, and loss tests.
 
@@ -374,9 +374,9 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] Output frames are always valid JSON objects.
 - [ ] Known-size output streams report `expected_bytes`.
 - [x] Byte-addressable chunks report `offset` and `length`.
-- [ ] Ack-backed streams require client accept before large payload delivery.
-- [ ] Ack-backed streams pause when credit is exhausted and resume after acknowledgement.
-- [ ] Client close propagates a stream-abandoned error to the producer.
+- [x] Ack-backed streams require client accept before large payload delivery.
+- [x] Ack-backed streams pause when credit is exhausted and resume after acknowledgement.
+- [x] Client close propagates a stream-abandoned error to the producer.
 - [x] Output loss yields either a helper exception or a `stream_loss` marker depending on helper policy.
 - [x] Latest-replaces policy works for heartbeat/progress/metric.
 - [x] First-kept/drop-later policy works for stdout/stderr/log/artifact.

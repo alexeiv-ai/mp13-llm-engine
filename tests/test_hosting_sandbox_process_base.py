@@ -228,6 +228,108 @@ def test_process_base_stream_keeps_first_output_and_prioritizes_control() -> Non
     assert received["retained_event_count"] == 1
 
 
+def test_process_base_ack_backed_output_requires_accept_and_acknowledges_credit() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-ack",
+        profile="node",
+        factory=_factory,
+    )
+    rejected = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "data", "requires_ack": True, "ack_id": "chunk-1"},
+    )
+    accepted = base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_accept", "initial_credit_bytes": 8, "max_chunk_size": 64},
+    )
+    emitted = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "data", "requires_ack": True, "ack_id": "chunk-1"},
+    )
+    acked = base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_ack", "ack_id": "chunk-1", "consumed_bytes": 4, "additional_credit_bytes": 4},
+    )
+
+    assert rejected["status"] == "error"
+    assert rejected["reason"] == "stream_not_accepted"
+    assert accepted["accepted"] is True
+    assert accepted["credit_bytes"] == 8
+    assert emitted["status"] == "ok"
+    assert emitted["event"]["ack_id"] == "chunk-1"
+    assert acked["acked_bytes"] == 4
+    assert acked["inflight_bytes"] == 0
+    assert acked["credit_bytes"] == 8
+
+
+def test_process_base_ack_backed_output_pauses_until_credit_resumes() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-credit",
+        profile="node",
+        factory=_factory,
+    )
+    base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_accept", "initial_credit_bytes": 3},
+    )
+    exhausted = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "data", "requires_ack": True, "ack_id": "chunk-1"},
+    )
+    resumed = base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_ack", "additional_credit_bytes": 4},
+    )
+    emitted = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "data", "requires_ack": True, "ack_id": "chunk-1"},
+    )
+
+    assert exhausted["status"] == "error"
+    assert exhausted["reason"] == "stream_credit_exhausted"
+    assert resumed["credit_bytes"] == 7
+    assert emitted["status"] == "ok"
+
+
+def test_process_base_ack_backed_output_close_abandons_producer() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-close",
+        profile="node",
+        factory=_factory,
+    )
+    base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_accept", "initial_credit_bytes": 8},
+    )
+    closed = base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_close", "reason": "client_done"},
+    )
+    emitted = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "data", "requires_ack": True, "ack_id": "chunk-1"},
+    )
+
+    assert closed["closed"] is True
+    assert closed["reason"] == "client_done"
+    assert emitted["status"] == "error"
+    assert emitted["reason"] == "stream_abandoned"
+
+
 def test_process_base_stream_cancel_uses_pool_cancellation() -> None:
     base = WorkflowPythonProcessBase()
 
