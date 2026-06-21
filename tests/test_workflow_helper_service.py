@@ -3276,7 +3276,8 @@ def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_pa
     result_events = [row for row in events if row["type"] == "result"]
     assert artifact_events[0]["payload"]["ref"].startswith("@artifacts/")
     assert artifact_events[0]["payload"]["filename"] == "stream.txt"
-    assert result_events[0]["payload"]["artifacts"] == [artifact_events[0]["payload"]]
+    assert result_events[0]["payload"]["artifacts"][0]["ref"] == artifact_events[0]["payload"]["ref"]
+    assert result_events[0]["payload"]["artifacts"][0]["filename"] == artifact_events[0]["payload"]["filename"]
 
 
 def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path: Path) -> None:

@@ -67,24 +67,24 @@ class HostedProcessStreamSession:
         self.dropped_event_count += max(0, int(count or 0))
 
     def _replacement_value(self, row: Dict[str, object]) -> str:
-        spec = hosted_stream_kind_spec(str(row.get("type") or ""))
-        payload = dict(row.get("payload") or {})
+        spec = hosted_stream_kind_spec(str(row.get("kind") or row.get("type") or ""))
+        payload = self._payload_from_frame(row)
         if spec.queue_decision == "latest":
-            return str(row.get("type") or "")
+            return str(row.get("kind") or row.get("type") or "")
         for field_name in spec.replacement_fields:
             value = str(payload.get(field_name) or row.get(field_name) or "").strip()
             if value:
                 return f"{field_name}:{value}"
-        return str(row.get("type") or "")
+        return str(row.get("kind") or row.get("type") or "")
 
     def _replace_existing_latest(self, lane: str, row: Dict[str, object]) -> bool:
-        spec = hosted_stream_kind_spec(str(row.get("type") or ""))
+        spec = hosted_stream_kind_spec(str(row.get("kind") or row.get("type") or ""))
         if spec.queue_decision not in {"latest", "latest_by_key"}:
             return False
         queue = self.events_by_lane.setdefault(lane, deque())
         replacement_value = self._replacement_value(row)
         for index, existing in enumerate(list(queue)):
-            if str(existing.get("type") or "") == str(row.get("type") or "") and self._replacement_value(existing) == replacement_value:
+            if str(existing.get("kind") or existing.get("type") or "") == str(row.get("kind") or row.get("type") or "") and self._replacement_value(existing) == replacement_value:
                 queue[index] = row
                 self._record_loss(lane)
                 return True
@@ -114,6 +114,40 @@ class HostedProcessStreamSession:
             self.output_offsets[event_type] = offset + raw_len
         return row
 
+    def _payload_from_frame(self, row: Dict[str, object]) -> Dict[str, object]:
+        return {
+            key: value
+            for key, value in dict(row or {}).items()
+            if key
+            not in {
+                "kind",
+                "type",
+                "dt_ms",
+                "request_id",
+                "stream_id",
+                "instance_id",
+                "sequence",
+                "timestamp",
+                "timestamp_ms",
+                "origin",
+                "visibility",
+                "loss_detected",
+            }
+        }
+
+    def _legacy_event_from_frame(self, row: Dict[str, object]) -> Dict[str, object]:
+        timestamp_ms = max(0, int(row.get("timestamp_ms") or 0))
+        payload = self._payload_from_frame(row)
+        if str(row.get("kind") or "") == "heartbeat":
+            payload.setdefault("request_id", self.request_id)
+        return {
+            "type": str(row.get("kind") or ""),
+            "request_id": self.request_id,
+            "sequence": max(0, int(row.get("sequence") or 0)),
+            "timestamp": float(timestamp_ms / 1000.0),
+            "payload": payload,
+        }
+
     def append(self, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         self.sequence += 1
         lane = hosted_stream_kind_lane(event_type)
@@ -121,12 +155,13 @@ class HostedProcessStreamSession:
         payload_row = dict(payload or {})
         if lane == "output":
             payload_row = self._prepare_output_payload(event_type, payload_row)
-        row = HostedStreamEvent(
+        event = HostedStreamEvent(
             type=event_type,
             request_id=self.request_id,
             sequence=self.sequence,
             payload=payload_row,
-        ).to_dict()
+        )
+        row = event.to_batch(stream_id=self.stream_id).expanded_frames()[0]
         if self._replace_existing_latest(lane, row):
             return row
         capacity = max(1, int(self.max_events or 1))
@@ -182,22 +217,28 @@ class HostedProcessStreamSession:
         sequence = 0
         timestamp_ms = int(time.time() * 1000)
         for index, event in enumerate(events):
-            payload = dict(event.get("payload") or {})
+            payload = dict(event.get("payload") or self._payload_from_frame(event))
             if payload.get("host_call_id") is not None and payload.get("call_id") is None:
                 payload["call_id"] = payload.get("host_call_id")
             payload.pop("kind", None)
             payload.pop("type", None)
             frame = HostedStreamFrame.from_dict(
                 {
-                    "kind": str(event.get("type") or ""),
+                    "kind": str(event.get("kind") or event.get("type") or ""),
                     **payload,
                     "sequence": max(0, int(event.get("sequence") or 0)),
-                    "timestamp_ms": max(0, int(float(event.get("timestamp") or 0.0) * 1000)),
+                    "timestamp_ms": max(
+                        0,
+                        int(event.get("timestamp_ms") or int(float(event.get("timestamp") or 0.0) * 1000)),
+                    ),
                 }
             )
             if index == 0:
                 sequence = max(0, int(event.get("sequence") or 0))
-                timestamp_ms = max(0, int(float(event.get("timestamp") or time.time()) * 1000))
+                timestamp_ms = max(
+                    0,
+                    int(event.get("timestamp_ms") or int(float(event.get("timestamp") or time.time()) * 1000)),
+                )
             frames.append(frame)
         return HostedStreamBatch(
             context=HostedStreamContext(stream_id=self.stream_id, request_id=self.request_id),
@@ -346,11 +387,12 @@ class HostedProcessSandboxBase:
         events = session.recv(max_items)
         loss = session.take_loss()
         batch = session.batch_from_events(events, loss=loss, more=session.retained_count() > 0)
+        legacy_events = [session._legacy_event_from_frame(event) for event in events]
         return {
             "status": "ok",
             "stream_id": sid,
             "request_id": session.request_id,
-            "events": events,
+            "events": legacy_events,
             "batch": batch,
             "normalized_events": hosted_stream_normalize_batch(batch, on_loss="mark"),
             "closed": session.closed,

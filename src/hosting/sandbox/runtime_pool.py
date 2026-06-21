@@ -121,7 +121,7 @@ class HostedProcessPool:
         request = self.requests.get(rid)
         if request is None:
             return {"status": "not_found", "request_id": rid}
-        row = event.to_dict() if isinstance(event, HostedStreamEvent) else dict(event or {})
+        row = event.to_batch().expanded_frames()[0] if isinstance(event, HostedStreamEvent) else dict(event or {})
         request.record_stream_event(row)
         return {"status": "ok", "request": request.to_dict(), "event": row}
 

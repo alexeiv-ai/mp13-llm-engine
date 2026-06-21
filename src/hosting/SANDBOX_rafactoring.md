@@ -352,7 +352,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 
 - [x] 1. Define Pydantic-style stream batch and event frame models.
 - [x] 2. Update `HOSTING_CLIENT_BREAKING_CHANGES.md` to direct clients to helper APIs first.
-- [ ] 3. Replace `HostedStreamEvent.to_dict()` with a frame/batch builder that validates event kinds.
+- [x] 3. Replace `HostedStreamEvent.to_dict()` with a frame/batch builder that validates event kinds.
 - [x] 4. Add event kind registry with lane, replacement key, and loss policy.
 - [x] 5. Add lane-aware queues and loss counters to hosted process streams.
 - [x] 6. Implement helper-side `on_loss="raise"|"mark"` behavior.

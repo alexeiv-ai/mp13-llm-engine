@@ -79,7 +79,7 @@ def test_process_base_stream_lifecycle_records_events_and_close() -> None:
         profile="node",
         factory=_factory,
     )
-    base.stream_emit(
+    emitted = base.stream_emit(
         stream_id=str(opened["stream_id"]),
         event_type="progress",
         payload={"progress_percent": 40},
@@ -89,6 +89,7 @@ def test_process_base_stream_lifecycle_records_events_and_close() -> None:
     status = base.request_status(environment_key="env-a", request_id="req-stream")
 
     assert opened["status"] == "ok"
+    assert emitted["event"]["kind"] == "progress"
     assert [row["type"] for row in received["events"]] == ["started", "progress"]
     assert [row["kind"] for row in received["batch"]["frames"]] == ["started", "progress"]
     assert [row["kind"] for row in received["normalized_events"]] == ["started", "progress"]

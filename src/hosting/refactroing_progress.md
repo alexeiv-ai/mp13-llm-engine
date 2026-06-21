@@ -127,3 +127,23 @@ Note: this slice converts node observations at the hosted process stream boundar
 ## Next Slice
 
 - Design and implement accept/ack/close credit support for complete-delivery output streams.
+
+## Slice 8: Frame-First Process Retention
+
+- [x] Changed hosted process streams to retain expanded frame rows internally.
+- [x] Changed process stream event creation to use `HostedStreamEvent.to_batch(...).expanded_frames()` instead of `HostedStreamEvent.to_dict()`.
+- [x] Changed pool stream-event recording to use frame expansion for `HostedStreamEvent` inputs.
+- [x] Kept transitional legacy `events` synthesized at receive boundaries while service callers migrate.
+- [x] Preserved lifecycle progress/status accounting with frame rows.
+- [x] Updated stream tests to assert frame-shaped `stream_emit` output.
+
+Note: `HostedStreamEvent.to_dict()` still exists as a transitional legacy serializer, but the hosted process stream path no longer depends on it.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Design and implement accept/ack/close credit support for complete-delivery output streams.
