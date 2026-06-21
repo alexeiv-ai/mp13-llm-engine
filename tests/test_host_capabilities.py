@@ -6,6 +6,7 @@ import pytest
 
 from hosting.sandbox.host_capabilities import (
     HostCapabilityApproval,
+    HostCapabilityApprovalDenied,
     HostCapabilityBroker,
     HostCapabilityCanceled,
     HostCapabilityProviderCall,
@@ -421,3 +422,113 @@ def test_host_capability_broker_enforces_namespace_and_permission_gates() -> Non
         broker.dispatch({"method": "crm.customer.write", "arguments": {}})
     with pytest.raises(RuntimeError, match="unsupported_host_method:erp.customer.lookup"):
         broker.dispatch({"method": "erp.customer.lookup", "arguments": {}})
+
+
+def test_host_capability_broker_requests_approval_before_gated_provider_call() -> None:
+    approval_requests: list[dict] = []
+    provider_calls: list[dict] = []
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.delete",
+        namespace="crm",
+        group_path=["CRM"],
+        permissions=["crm.customer.write"],
+        approval=HostCapabilityApproval(mode="always", cache_key="method+scope+actor", ttl_seconds=0),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+
+    def approve(request: dict) -> dict:
+        approval_requests.append(dict(request))
+        return {"status": "approved", "approved": True}
+
+    def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        provider_calls.append(call.to_dict())
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"deleted": True}}
+
+    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider, approval_requester=approve)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    assert broker.dispatch({"method": "crm.customer.delete", "arguments": {"customer_id": "c-1"}}) == {"deleted": True}
+    assert len(approval_requests) == 1
+    assert len(provider_calls) == 1
+    assert approval_requests[0]["contract"] == "hosting.sandbox.host_capability_approval.v1"
+    assert approval_requests[0]["provider_call_id"] == provider_calls[0]["provider_call_id"]
+    assert approval_requests[0]["approval"]["mode"] == "always"
+    assert "binding" not in approval_requests[0]["provider"]
+
+
+def test_host_capability_broker_denies_gated_provider_call_before_execution() -> None:
+    provider_calls: list[dict] = []
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.delete",
+        namespace="crm",
+        group_path=["CRM"],
+        approval=HostCapabilityApproval(mode="always"),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+
+    def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        provider_calls.append(call.to_dict())
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"deleted": True}}
+
+    broker = HostCapabilityBroker(
+        workflow_id="wf-1",
+        provider_invoker=invoke_provider,
+        approval_requester=lambda _request: {"status": "denied", "approved": False, "message": "user denied"},
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    with pytest.raises(HostCapabilityApprovalDenied) as exc:
+        broker.dispatch({"method": "crm.customer.delete", "arguments": {"customer_id": "c-1"}})
+
+    assert provider_calls == []
+    assert exc.value.reason == "host_call_approval_denied"
+    assert exc.value.message == "user denied"
+
+
+def test_host_capability_broker_requires_approval_requester_for_gated_call() -> None:
+    provider_calls: list[dict] = []
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.delete",
+        namespace="crm",
+        group_path=["CRM"],
+        approval=HostCapabilityApproval(mode="always"),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+    broker = HostCapabilityBroker(
+        workflow_id="wf-1",
+        provider_invoker=lambda _session, call: provider_calls.append(call.to_dict()) or {"status": "ok", "provider_call_id": call.provider_call_id},
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    with pytest.raises(HostCapabilityApprovalDenied) as exc:
+        broker.dispatch({"method": "crm.customer.delete", "arguments": {"customer_id": "c-1"}})
+
+    assert provider_calls == []
+    assert exc.value.detail["reason"] == "approval_requester_unavailable"

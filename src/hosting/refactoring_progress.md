@@ -47,6 +47,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added deterministic duplicate resolution: built-ins win, then narrower client scopes win, then session ID tie-breaks.
 - [x] Confirmed built-in workflow host API discovery and dispatch still use the broker correctly.
 
+### Host Capability Slice 6: Gated Approval Flow
+
+- [x] Added sandbox-safe approval request contract `hosting.sandbox.host_capability_approval.v1`.
+- [x] Added broker `approval_requester` hook for outward/user-facing approval decisions.
+- [x] Prevented gated provider execution until approval is granted.
+- [x] Mapped approval denial and missing approval requester to structured `host_call_approval_denied` errors.
+- [x] Kept approval audit and event-stream observations pending for the dedicated audit/event slices.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.

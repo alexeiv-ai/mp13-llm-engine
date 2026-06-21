@@ -221,3 +221,15 @@ Client-owned provider sessions must include scope fields matching their declared
 - `visibility="consumer"` requires `scope.consumer_id`
 
 Sessions outside the current broker scope are omitted from discovery and cannot be called. Duplicate method names resolve deterministically: built-ins win by default, then narrower client scopes win (`request`, `instance`, `workflow`, `consumer`), then session ID is the tie-breaker.
+
+## Host Capability Approval Flow
+
+Date: 2026-06-21
+
+Scope: broker-level gated approval flow slice.
+
+Descriptors with `approval.mode` other than `none` now require an outward approval decision before provider execution. Denial is surfaced as structured reason `host_call_approval_denied`, and the provider callback is not invoked.
+
+Approval requests use internal contract `hosting.sandbox.host_capability_approval.v1` and include method, arguments, context, approval metadata, and sandbox-safe provider metadata. Provider callback bindings and provider session tokens are not included.
+
+Audit persistence and event-stream observations for approvals are still pending later slices; clients should not rely on live approval events yet.

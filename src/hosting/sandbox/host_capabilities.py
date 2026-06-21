@@ -14,6 +14,7 @@ HOST_CAPABILITY_CONTRACT = "hosting.sandbox.host_capability.v1"
 HOST_CAPABILITY_SESSION_CONTRACT = "hosting.sandbox.host_capability_session.v1"
 HOST_CAPABILITY_DISCOVERY_CONTRACT = "hosting.sandbox.discovery.v1"
 HOST_CAPABILITY_CALL_CONTRACT = "hosting.sandbox.host_capability_call.v1"
+HOST_CAPABILITY_APPROVAL_CONTRACT = "hosting.sandbox.host_capability_approval.v1"
 
 _METHOD_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -26,6 +27,7 @@ CapabilityHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 AsyncCapabilityHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 ProviderInvoker = Callable[["HostCapabilitySession", "HostCapabilityProviderCall"], Awaitable[Dict[str, Any]] | Dict[str, Any]]
 CancelChecker = Callable[[], bool]
+ApprovalRequester = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]] | Dict[str, Any]]
 
 
 def _clean(value: Any) -> str:
@@ -224,6 +226,11 @@ class HostCapabilityCanceled(HostCapabilityProviderError):
         super().__init__("host_call_canceled", message, detail)
 
 
+class HostCapabilityApprovalDenied(HostCapabilityProviderError):
+    def __init__(self, message: str = "host capability call approval denied", detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__("host_call_approval_denied", message, detail)
+
+
 @dataclass(frozen=True)
 class HostCapabilityCallContext:
     request_id: str = ""
@@ -353,6 +360,7 @@ class HostCapabilityBroker:
         consumer_id: str = "",
         allowed_namespaces: Optional[Any] = None,
         approved_permissions: Optional[Iterable[str]] = None,
+        approval_requester: Optional[ApprovalRequester] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
@@ -369,6 +377,7 @@ class HostCapabilityBroker:
         self._cancel_reason = "host_call_canceled"
         self._allowed_namespaces = self._normalize_allowed_namespaces(allowed_namespaces)
         self._approved_permissions = set(_string_list(approved_permissions or [])) if approved_permissions is not None else None
+        self.approval_requester = approval_requester
         self._sessions: Dict[str, HostCapabilitySession] = {}
 
     def cancel(self, reason: str = "host_call_canceled") -> None:
@@ -459,6 +468,62 @@ class HostCapabilityBroker:
         except HostCapabilityCanceled:
             task.cancel()
             raise
+
+    @staticmethod
+    def _approval_required(method: HostCapabilityMethod) -> bool:
+        mode = _clean(method.descriptor.approval.mode).lower()
+        return bool(mode and mode != "none")
+
+    async def _request_approval(
+        self,
+        *,
+        session: HostCapabilitySession,
+        method: HostCapabilityMethod,
+        provider_call: HostCapabilityProviderCall,
+    ) -> None:
+        if not self._approval_required(method):
+            return
+        approval_id = f"cap_approval_{uuid.uuid4().hex}"
+        if self.approval_requester is None:
+            raise HostCapabilityApprovalDenied(
+                detail={
+                    "approval_id": approval_id,
+                    "provider_call_id": provider_call.provider_call_id,
+                    "method": provider_call.method,
+                    "reason": "approval_requester_unavailable",
+                }
+            )
+        request = {
+            "contract": HOST_CAPABILITY_APPROVAL_CONTRACT,
+            "approval_id": approval_id,
+            "provider_call_id": provider_call.provider_call_id,
+            "method": provider_call.method,
+            "arguments": dict(provider_call.arguments or {}),
+            "context": provider_call.context.to_dict(),
+            "approval": method.descriptor.approval.to_dict(),
+            "provider": {
+                "provider_id": session.session_id,
+                "kind": session.provider_kind,
+                "owner": session.owner,
+                "visibility": session.visibility,
+            },
+        }
+        decision = self.approval_requester(request)
+        if inspect.isawaitable(decision):
+            decision = await decision
+        row = dict(decision or {})
+        status = _clean(row.get("status")).lower()
+        approved = bool(row.get("approved", status in {"ok", "approved"}))
+        if not approved or status in {"denied", "rejected", "error"}:
+            raise HostCapabilityApprovalDenied(
+                message=_clean(row.get("message")) or "host capability call approval denied",
+                detail={
+                    "approval_id": approval_id,
+                    "provider_call_id": provider_call.provider_call_id,
+                    "method": provider_call.method,
+                    "decision": row,
+                },
+            )
 
     def register_session(self, session: HostCapabilitySession) -> None:
         sid = _clean(session.session_id)
@@ -611,6 +676,7 @@ class HostCapabilityBroker:
                         ),
                     )
                     try:
+                        await self._request_approval(session=session, method=method, provider_call=call)
                         response = self.provider_invoker(session, call)
                         if inspect.isawaitable(response):
                             response = await self._await_provider_response(response, timeout_seconds=timeout_seconds)
@@ -647,12 +713,15 @@ class HostCapabilityBroker:
 __all__ = [
     "HOST_CAPABILITY_CONTRACT",
     "HOST_CAPABILITY_CALL_CONTRACT",
+    "HOST_CAPABILITY_APPROVAL_CONTRACT",
     "HOST_CAPABILITY_DISCOVERY_CONTRACT",
     "HOST_CAPABILITY_SESSION_CONTRACT",
+    "ApprovalRequester",
     "AsyncCapabilityHandler",
     "CancelChecker",
     "CapabilityHandler",
     "HostCapabilityApproval",
+    "HostCapabilityApprovalDenied",
     "HostCapabilityBroker",
     "HostCapabilityCallContext",
     "HostCapabilityCanceled",

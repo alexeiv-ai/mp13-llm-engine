@@ -380,7 +380,7 @@ Error:
 - [x] 11. Add provider callback RPC envelopes and response validation.
 - [x] 12. Add provider timeout, disconnect, and request-cancel handling.
 - [x] 13. Add permission/scope checks for provider ownership, method namespace, and request/workflow/instance visibility.
-- [ ] 14. Add gated approval flow that routes outward to the owning hosting client/user-facing process.
+- [x] 14. Add gated approval flow that routes outward to the owning hosting client/user-facing process.
 - [ ] 15. Emit event-stream observations for host calls, host responses, approvals, denials, provider failures, and cancellations.
 - [ ] 16. Add durable audit records for security-relevant approvals and denials.
 - [ ] 17. Update client breaking-change notes once this pillar exposes new public APIs.
@@ -405,7 +405,7 @@ Error:
 - [x] Provider timeout returns `host_call_timeout`.
 - [x] Provider disconnect returns `host_capability_provider_unavailable`.
 - [x] Request cancellation cancels or closes in-flight provider calls.
-- [ ] Gated method does not execute until external approval is granted.
+- [x] Gated method does not execute until external approval is granted.
 - [ ] Approval denial returns a sandbox-visible host-call error and emits audit.
 - [ ] Event stream includes `host_call`, `host_response`, and `approval` observations with correlation IDs.
 - [ ] Durable audit contains security-relevant approval/denial records.
