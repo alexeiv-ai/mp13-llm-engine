@@ -64,6 +64,40 @@ def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, 
     assert seen["capabilities"]["capacity"] == 3
 
 
+def test_host_capability_audit_event_persists_in_control_state(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    svc._append_host_capability_audit_event(
+        {
+            "event_type": "host_capability_approval",
+            "result": "denied",
+            "reason": "user denied",
+            "approval_id": "approval-1",
+            "call_id": "call-1",
+            "host_call_id": "call-1",
+            "provider_call_id": "provider-call-1",
+            "method": "crm.customer.delete",
+            "context": {"request_id": "req-1", "workflow_id": "wf-1", "package_id": "pkg-1"},
+            "provider": {"provider_id": "client-crm", "kind": "client_session"},
+            "approval": {"mode": "always"},
+            "argument_keys": ["customer_id"],
+            "decision": {"status": "denied"},
+        }
+    )
+
+    control = svc._read_control()
+    rows = list(control.get("host_capability_audit_events") or [])
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "host_capability_approval"
+    assert rows[0]["result"] == "denied"
+    assert rows[0]["approval_id"] == "approval-1"
+    assert rows[0]["provider_call_id"] == "provider-call-1"
+    assert rows[0]["request_id"] == "req-1"
+
+
 def test_daemon_spawn_preserves_worker_profile_class() -> None:
     class FakeService:
         def __init__(self) -> None:

@@ -382,7 +382,7 @@ Error:
 - [x] 13. Add permission/scope checks for provider ownership, method namespace, and request/workflow/instance visibility.
 - [x] 14. Add gated approval flow that routes outward to the owning hosting client/user-facing process.
 - [x] 15. Emit event-stream observations for host calls, host responses, approvals, denials, provider failures, and cancellations.
-- [ ] 16. Add durable audit records for security-relevant approvals and denials.
+- [x] 16. Add durable audit records for security-relevant approvals and denials.
 - [ ] 17. Update client breaking-change notes once this pillar exposes new public APIs.
 
 ## Test Checklist
@@ -406,9 +406,9 @@ Error:
 - [x] Provider disconnect returns `host_capability_provider_unavailable`.
 - [x] Request cancellation cancels or closes in-flight provider calls.
 - [x] Gated method does not execute until external approval is granted.
-- [ ] Approval denial returns a sandbox-visible host-call error and emits durable audit.
+- [x] Approval denial returns a sandbox-visible host-call error and emits durable audit.
 - [x] Event stream includes `host_call`, `host_response`, and `approval` observations with correlation IDs.
-- [ ] Durable audit contains security-relevant approval/denial records.
+- [x] Durable audit contains security-relevant approval/denial records.
 - [ ] SSH-bound client provider sessions preserve normal hosting auth and SSH binding checks.
 
 ## Remaining Decisions

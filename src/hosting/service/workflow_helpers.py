@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import os
 import json
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -70,6 +71,37 @@ class WorkflowHelperMixin:
             registry = WorkflowJsNodeRuntimeRegistry()
             setattr(self, "_workflow_js_node_runtime_registry_instance", registry)
         return registry
+
+    def _append_host_capability_audit_event(self, event: Dict[str, Any]) -> None:
+        control = self._read_control()
+        rows = list(control.get("host_capability_audit_events") or [])
+        row = dict(event or {})
+        rows.append(
+            {
+                "schema_version": 1,
+                "event_id": secrets.token_urlsafe(10),
+                "timestamp": time.time(),
+                "event_type": str(row.get("event_type") or "host_capability_event"),
+                "result": str(row.get("result") or "") or None,
+                "reason": str(row.get("reason") or "") or None,
+                "approval_id": str(row.get("approval_id") or "") or None,
+                "call_id": str(row.get("call_id") or "") or None,
+                "host_call_id": str(row.get("host_call_id") or "") or None,
+                "provider_call_id": str(row.get("provider_call_id") or "") or None,
+                "method": str(row.get("method") or "") or None,
+                "request_id": str(dict(row.get("context") or {}).get("request_id") or "") or None,
+                "workflow_id": str(dict(row.get("context") or {}).get("workflow_id") or "") or None,
+                "package_id": str(dict(row.get("context") or {}).get("package_id") or "") or None,
+                "provider": dict(row.get("provider") or {}),
+                "approval": dict(row.get("approval") or {}),
+                "argument_keys": list(row.get("argument_keys") or []),
+                "decision": dict(row.get("decision") or {}),
+            }
+        )
+        if len(rows) > 500:
+            rows = rows[-500:]
+        control["host_capability_audit_events"] = rows
+        self._write_control(control)
 
     def _workflow_python_node_recycle_changed_environment(
         self,
@@ -392,6 +424,7 @@ class WorkflowHelperMixin:
         artifact_context: Optional[Dict[str, Any]],
         sandbox_policy: Optional[Dict[str, Any]] = None,
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        audit_emitter: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
@@ -663,6 +696,7 @@ class WorkflowHelperMixin:
             policy=dict(registry.policy or {}),
             roots=dict(registry.roots or {}),
             event_emitter=event_emitter,
+            audit_emitter=audit_emitter or self._append_host_capability_audit_event,
         )
         broker.register_builtin_provider(
             provider_id="builtin.workflow_node_host_api",

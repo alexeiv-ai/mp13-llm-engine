@@ -63,6 +63,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Verified approval request/approval/denial events include approval and provider call correlation fields.
 - [x] Verified workflow JS stream subscribers receive `host_response` observations for built-in host calls.
 
+### Host Capability Slice 8: Durable Approval Audit
+
+- [x] Added broker `audit_emitter` hook for security-relevant host capability audit records.
+- [x] Recorded approved, denied, and approval-requester-unavailable outcomes for gated host capability calls.
+- [x] Persisted host capability audit rows in service control state under `audit/host_capability_audit.json`.
+- [x] Kept raw provider bindings and provider session tokens out of durable audit rows.
+- [x] Verified broker approval audit records and service persistence.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -89,7 +97,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [ ] Continue Host Capability Protocol with durable audit and remaining SSH-bound provider callback coverage.
+- [ ] Continue Host Capability Protocol with remaining SSH-bound provider callback coverage and public API finalization.
 
 ## Verification
 
@@ -102,3 +110,5 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_host_capabilities.py -q`
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
 - [x] `pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`
+- [x] `python -m py_compile src/hosting/sandbox/host_capabilities.py src/hosting/service/workflow_helpers.py src/hosting/service/state.py`
+- [x] `pytest tests/test_workflow_helper_service.py -q -k "host_capability_audit_event_persists_in_control_state or workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`

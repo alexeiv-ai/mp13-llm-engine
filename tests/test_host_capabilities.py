@@ -437,6 +437,7 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
     approval_requests: list[dict] = []
     provider_calls: list[dict] = []
     events: list[tuple[str, dict]] = []
+    audit_records: list[dict] = []
     descriptor = HostCapabilityDescriptor(
         name="crm.customer.delete",
         namespace="crm",
@@ -459,6 +460,7 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
         provider_invoker=invoke_provider,
         approval_requester=approve,
         event_emitter=lambda kind, payload: events.append((kind, payload)),
+        audit_emitter=lambda payload: audit_records.append(dict(payload)),
     )
     broker.register_session(
         HostCapabilitySession(
@@ -481,11 +483,16 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
     assert [kind for kind, _payload in events] == ["host_call", "approval", "approval", "host_response"]
     assert events[1][1]["status"] == "requested"
     assert events[2][1]["status"] == "approved"
+    assert len(audit_records) == 1
+    assert audit_records[0]["result"] == "approved"
+    assert audit_records[0]["approval_id"] == events[2][1]["approval_id"]
+    assert audit_records[0]["provider_call_id"] == provider_calls[0]["provider_call_id"]
 
 
 def test_host_capability_broker_denies_gated_provider_call_before_execution() -> None:
     provider_calls: list[dict] = []
     events: list[tuple[str, dict]] = []
+    audit_records: list[dict] = []
     descriptor = HostCapabilityDescriptor(
         name="crm.customer.delete",
         namespace="crm",
@@ -503,6 +510,7 @@ def test_host_capability_broker_denies_gated_provider_call_before_execution() ->
         provider_invoker=invoke_provider,
         approval_requester=lambda _request: {"status": "denied", "approved": False, "message": "user denied"},
         event_emitter=lambda kind, payload: events.append((kind, payload)),
+        audit_emitter=lambda payload: audit_records.append(dict(payload)),
     )
     broker.register_session(
         HostCapabilitySession(
@@ -524,10 +532,15 @@ def test_host_capability_broker_denies_gated_provider_call_before_execution() ->
     assert [kind for kind, _payload in events] == ["host_call", "approval", "approval", "host_response"]
     assert events[2][1]["status"] == "denied"
     assert events[-1][1]["reason"] == "host_call_approval_denied"
+    assert len(audit_records) == 1
+    assert audit_records[0]["result"] == "denied"
+    assert audit_records[0]["reason"] == "user denied"
+    assert audit_records[0]["provider_call_id"] == events[2][1]["provider_call_id"]
 
 
 def test_host_capability_broker_requires_approval_requester_for_gated_call() -> None:
     provider_calls: list[dict] = []
+    audit_records: list[dict] = []
     descriptor = HostCapabilityDescriptor(
         name="crm.customer.delete",
         namespace="crm",
@@ -538,6 +551,7 @@ def test_host_capability_broker_requires_approval_requester_for_gated_call() -> 
     broker = HostCapabilityBroker(
         workflow_id="wf-1",
         provider_invoker=lambda _session, call: provider_calls.append(call.to_dict()) or {"status": "ok", "provider_call_id": call.provider_call_id},
+        audit_emitter=lambda payload: audit_records.append(dict(payload)),
     )
     broker.register_session(
         HostCapabilitySession(
@@ -555,3 +569,6 @@ def test_host_capability_broker_requires_approval_requester_for_gated_call() -> 
 
     assert provider_calls == []
     assert exc.value.detail["reason"] == "approval_requester_unavailable"
+    assert len(audit_records) == 1
+    assert audit_records[0]["result"] == "denied"
+    assert audit_records[0]["reason"] == "approval_requester_unavailable"

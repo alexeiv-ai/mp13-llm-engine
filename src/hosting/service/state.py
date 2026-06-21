@@ -234,6 +234,7 @@ class StateMixin:
             "resource_tokens": {},
             "claim_owner_keepalive": {},
             "claim_audit_events": [],
+            "host_capability_audit_events": [],
             "ownership_change_notices": {},
             "auth_audit_events": [],
         }
@@ -248,6 +249,7 @@ class StateMixin:
             "runtime_state": self.hosting_root / "state" / "runtime_state.json",
             "auth_audit": self.hosting_root / "audit" / "auth_audit.json",
             "claim_audit": self.hosting_root / "audit" / "claim_audit.json",
+            "host_capability_audit": self.hosting_root / "audit" / "host_capability_audit.json",
         }
 
     def hosting_secure_state_status(self) -> Dict[str, Any]:
@@ -261,6 +263,7 @@ class StateMixin:
             "runtime_state": layout["runtime_state"],
             "auth_audit": layout["auth_audit"],
             "claim_audit": layout["claim_audit"],
+            "host_capability_audit": layout["host_capability_audit"],
             "bootstrap_state": bootstrap_root / "bootstrap_state.json",
             "client_key_map": bootstrap_root / "client_key_map.json",
         }
@@ -346,6 +349,10 @@ class StateMixin:
             layout["claim_audit"],
             {"version": 1, "updated_at": 0.0, "events": []},
         )
+        host_capability_audit_payload = self._read_json(
+            layout["host_capability_audit"],
+            {"version": 1, "updated_at": 0.0, "events": []},
+        )
         payload = {
             "version": 1,
             "updated_at": max(
@@ -356,6 +363,7 @@ class StateMixin:
                 float(challenges_payload.get("updated_at") or 0.0),
                 float(auth_audit_payload.get("updated_at") or 0.0),
                 float(claim_audit_payload.get("updated_at") or 0.0),
+                float(host_capability_audit_payload.get("updated_at") or 0.0),
             ),
             "control_config": dict(access_payload.get("control_config") or access_default),
             "claims_by_engine": dict(runtime_payload.get("claims_by_engine") or {}),
@@ -368,6 +376,7 @@ class StateMixin:
             "claim_owner_keepalive": dict(runtime_payload.get("claim_owner_keepalive") or {}),
             "ownership_change_notices": dict(runtime_payload.get("ownership_change_notices") or {}),
             "claim_audit_events": list(claim_audit_payload.get("events") or []),
+            "host_capability_audit_events": list(host_capability_audit_payload.get("events") or []),
             "auth_audit_events": list(auth_audit_payload.get("events") or []),
         }
         cfg = dict(payload.get("control_config") or {})
@@ -404,6 +413,7 @@ class StateMixin:
         payload.setdefault("resource_tokens", {})
         payload.setdefault("claim_owner_keepalive", {})
         payload.setdefault("claim_audit_events", [])
+        payload.setdefault("host_capability_audit_events", [])
         payload.setdefault("ownership_change_notices", {})
         payload.setdefault("auth_audit_events", [])
         cfg = dict(payload.get("control_config") or {})
@@ -509,6 +519,10 @@ class StateMixin:
         self._write_json(
             layout["claim_audit"],
             {"version": 1, "updated_at": out["updated_at"], "events": list(out.get("claim_audit_events") or [])},
+        )
+        self._write_json(
+            layout["host_capability_audit"],
+            {"version": 1, "updated_at": out["updated_at"], "events": list(out.get("host_capability_audit_events") or [])},
         )
 
     @classmethod

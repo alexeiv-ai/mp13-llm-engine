@@ -29,6 +29,7 @@ ProviderInvoker = Callable[["HostCapabilitySession", "HostCapabilityProviderCall
 CancelChecker = Callable[[], bool]
 ApprovalRequester = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]] | Dict[str, Any]]
 EventEmitter = Callable[[str, Dict[str, Any]], None]
+AuditEmitter = Callable[[Dict[str, Any]], None]
 
 
 def _clean(value: Any) -> str:
@@ -363,6 +364,7 @@ class HostCapabilityBroker:
         approved_permissions: Optional[Iterable[str]] = None,
         approval_requester: Optional[ApprovalRequester] = None,
         event_emitter: Optional[EventEmitter] = None,
+        audit_emitter: Optional[AuditEmitter] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
@@ -381,6 +383,7 @@ class HostCapabilityBroker:
         self._approved_permissions = set(_string_list(approved_permissions or [])) if approved_permissions is not None else None
         self.approval_requester = approval_requester
         self.event_emitter = event_emitter
+        self.audit_emitter = audit_emitter
         self._sessions: Dict[str, HostCapabilitySession] = {}
 
     def cancel(self, reason: str = "host_call_canceled") -> None:
@@ -398,6 +401,11 @@ class HostCapabilityBroker:
             self.event_emitter(_clean(kind), dict(payload or {}))
         except Exception:
             return
+
+    def _emit_audit(self, payload: Dict[str, Any]) -> None:
+        if self.audit_emitter is None:
+            return
+        self.audit_emitter(dict(payload or {}))
 
     def _provider_timeout_for_call(self, row: Dict[str, Any]) -> float:
         raw = row.get("provider_timeout_seconds")
@@ -496,7 +504,26 @@ class HostCapabilityBroker:
         if not self._approval_required(method):
             return
         approval_id = f"cap_approval_{uuid.uuid4().hex}"
+        call_id = _clean(host_call_id) or provider_call.provider_call_id
+        audit_base = {
+            "event_type": "host_capability_approval",
+            "approval_id": approval_id,
+            "call_id": call_id,
+            "host_call_id": _clean(host_call_id) or None,
+            "provider_call_id": provider_call.provider_call_id,
+            "method": provider_call.method,
+            "argument_keys": sorted(str(key) for key in dict(provider_call.arguments or {}).keys()),
+            "context": provider_call.context.to_dict(),
+            "approval": method.descriptor.approval.to_dict(),
+            "provider": {
+                "provider_id": session.session_id,
+                "kind": session.provider_kind,
+                "owner": session.owner,
+                "visibility": session.visibility,
+            },
+        }
         if self.approval_requester is None:
+            self._emit_audit({**audit_base, "result": "denied", "reason": "approval_requester_unavailable"})
             raise HostCapabilityApprovalDenied(
                 detail={
                     "approval_id": approval_id,
@@ -520,7 +547,6 @@ class HostCapabilityBroker:
                 "visibility": session.visibility,
             },
         }
-        call_id = _clean(host_call_id) or provider_call.provider_call_id
         self._emit_event("approval", {"status": "requested", "call_id": call_id, "host_call_id": _clean(host_call_id) or None, **request})
         decision = self.approval_requester(request)
         if inspect.isawaitable(decision):
@@ -529,6 +555,14 @@ class HostCapabilityBroker:
         status = _clean(row.get("status")).lower()
         approved = bool(row.get("approved", status in {"ok", "approved"}))
         if not approved or status in {"denied", "rejected", "error"}:
+            self._emit_audit(
+                {
+                    **audit_base,
+                    "result": "denied",
+                    "reason": _clean(row.get("reason") or row.get("message")) or "approval_denied",
+                    "decision": row,
+                }
+            )
             self._emit_event(
                 "approval",
                 {
@@ -550,6 +584,7 @@ class HostCapabilityBroker:
                     "decision": row,
                 },
             )
+        self._emit_audit({**audit_base, "result": "approved", "reason": None, "decision": row})
         self._emit_event(
             "approval",
             {
@@ -845,6 +880,7 @@ __all__ = [
     "HOST_CAPABILITY_APPROVAL_CONTRACT",
     "HOST_CAPABILITY_DISCOVERY_CONTRACT",
     "HOST_CAPABILITY_SESSION_CONTRACT",
+    "AuditEmitter",
     "ApprovalRequester",
     "AsyncCapabilityHandler",
     "CancelChecker",

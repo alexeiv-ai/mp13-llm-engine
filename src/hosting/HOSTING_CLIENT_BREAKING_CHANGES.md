@@ -232,7 +232,7 @@ Descriptors with `approval.mode` other than `none` now require an outward approv
 
 Approval requests use internal contract `hosting.sandbox.host_capability_approval.v1` and include method, arguments, context, approval metadata, and sandbox-safe provider metadata. Provider callback bindings and provider session tokens are not included.
 
-Audit persistence for approval decisions is still pending the durable audit slice.
+Approval decisions are also written to durable host capability audit state.
 
 ## Host Capability Event Observations
 
@@ -250,3 +250,15 @@ Workflow event subscribers can now observe broker-generated host API events in a
 Events include `method` and correlation fields. When the worker supplied a `host_call_id`, broker events expose it as both `host_call_id` and `call_id`; provider-backed calls also include `provider_call_id`. Client code should correlate on `call_id` for stream UX and use `provider_call_id` only for provider callback/debug flows.
 
 Hosting library helpers should hide this wire shape for normal clients. Raw stream consumers should treat these events as observations, not as the sandbox-visible host response protocol itself.
+
+## Host Capability Durable Approval Audit
+
+Date: 2026-06-21
+
+Scope: durable audit for gated host capability approvals.
+
+Gated host capability approval outcomes are now persisted in hosting control state under `audit/host_capability_audit.json`. Records are decision-bearing and include approval/provider/call correlation IDs, method name, request/workflow/package context, provider metadata, approval metadata, argument key names, and sanitized decision details.
+
+Provider bindings, callback addresses, provider session tokens, and raw argument values are not written to these audit records.
+
+Clients using hosting library helpers should not need to parse this file directly. Raw clients that inspect hosting audit state should expect the new `host_capability_audit_events` bucket when reading merged control state.
