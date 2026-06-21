@@ -130,3 +130,43 @@ Important changes for clients:
 - Provider discovery intentionally omits callback binding addresses and provider session tokens.
 
 Clients that only check for method presence should continue using `methods`. Clients that need schemas, scopes, groups, providers, or future client-owned capabilities should switch to `host_capabilities.methods`.
+
+## Host Capability Provider Sessions
+
+Date: 2026-06-21
+
+Scope: provider session lifecycle API slice.
+
+### New Daemon Commands
+
+The daemon now accepts authenticated control-scope commands:
+
+- `host-capability-session-register`
+- `host-capability-session-list`
+- `host-capability-session-close`
+
+Normal clients should prefer the hosting channel helpers:
+
+```python
+channel.host_capability_session_register(
+    session_id="crm-provider",
+    visibility="workflow",
+    scope={"workflow_id": "wf-1"},
+    methods=[
+        {
+            "name": "crm.customer.lookup",
+            "group_path": ["CRM", "Customer"],
+            "args_schema": {"type": "object"},
+            "result_schema": {"type": "object"},
+        }
+    ],
+)
+channel.host_capability_session_list()
+channel.host_capability_session_close(session_id="crm-provider")
+```
+
+### Public Response Shape
+
+Public session responses expose descriptor metadata and lifetime fields, but they do not expose provider callback bindings, callback addresses, or provider session tokens.
+
+Provider callback invocation is not public yet in this slice. Registered client-owned methods are lifecycle-managed and discoverable by the daemon registry work, but sandbox calls still only execute built-in providers until the provider callback RPC slice lands.

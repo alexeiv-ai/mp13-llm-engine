@@ -18,6 +18,12 @@ from multiprocessing.connection import Listener as MPListener
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..sandbox.host_capabilities import (
+    HostCapabilityDescriptor,
+    HostCapabilityMethod,
+    HostCapabilityProviderRef,
+    HostCapabilitySession,
+)
 from ..service.host_service import EngineHostService
 from .constants import DEFAULT_DAEMON_PORT
 from .diagnostics import write_daemon_report
@@ -77,6 +83,8 @@ class EngineHostDaemon:
         self._actor_connections: Dict[str, int] = {}
         self._actor_connections_lock = threading.Lock()
         self._live_connections: Dict[str, Dict[str, Any]] = {}
+        self._host_capability_sessions: Dict[str, HostCapabilitySession] = {}
+        self._host_capability_sessions_lock = threading.RLock()
         self._last_shutdown_checkpoints: Dict[str, Any] = {}
         self._shutdown_stage_events: List[Dict[str, Any]] = []
         self._shutdown_report: Dict[str, Any] = {
@@ -1174,6 +1182,164 @@ class EngineHostDaemon:
             "actors": actors,
         }
 
+    @staticmethod
+    def _host_capability_session_public(session: HostCapabilitySession) -> Dict[str, Any]:
+        return session.to_public_dict()
+
+    @staticmethod
+    def _host_capability_session_methods(
+        *,
+        session_id: str,
+        owner: str,
+        provider_kind: str,
+        visibility: str,
+        methods: List[Dict[str, Any]],
+    ) -> Dict[str, HostCapabilityMethod]:
+        if not methods:
+            raise ValueError("host_capability_methods_required")
+        if len(methods) > 128:
+            raise ValueError("host_capability_method_limit_exceeded")
+        out: Dict[str, HostCapabilityMethod] = {}
+        for raw in methods:
+            row = dict(raw or {})
+            name = str(row.get("name") or "").strip()
+            if not name:
+                raise ValueError("host_capability_method_name_required")
+            provider = HostCapabilityProviderRef(
+                provider_id=session_id,
+                kind=provider_kind,
+                owner=owner,
+                visibility=visibility,
+            )
+            row["provider"] = provider.to_dict()
+            row.setdefault("namespace", name.split(".", 1)[0])
+            row.setdefault("group_path", [part.replace("_", " ").title() for part in name.split(".")[:-1]] or ["Host"])
+            descriptor = HostCapabilityDescriptor.from_dict(row)
+            if descriptor.name in out:
+                raise ValueError(f"host_capability_duplicate_method:{descriptor.name}")
+            out[descriptor.name] = HostCapabilityMethod(descriptor=descriptor)
+        return out
+
+    @staticmethod
+    def _normalize_host_capability_binding(payload: Dict[str, Any], *, transport: str) -> Dict[str, Any]:
+        binding = dict(payload.get("binding") or {})
+        transport_name = str(binding.get("transport") or "").strip().lower()
+        if not transport_name:
+            transport_name = "ssh_relay" if str(transport or "").strip() == "tcp" else "daemon_callback"
+        if transport_name not in {"daemon_callback", "local_ipc", "ssh_relay"}:
+            raise ValueError(f"host_capability_invalid_binding_transport:{transport_name}")
+        out = dict(binding)
+        out["transport"] = transport_name
+        return out
+
+    def _register_host_capability_session(
+        self,
+        payload: Dict[str, Any],
+        *,
+        transport: str,
+        peer_host: str,
+        peer_pid: Optional[int],
+        peer_process_info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        row = dict(payload.get("session") or payload or {})
+        actor_id = str(payload.get("_claim_actor_id") or row.get("owner") or "").strip()
+        if not actor_id:
+            actor_id = self.svc._actor_id_from_payload(self.svc._read_control(), payload)  # noqa: SLF001
+        session_id = str(row.get("session_id") or "").strip() or f"cap_{secrets.token_urlsafe(18)}"
+        provider_kind = str(row.get("provider_kind") or dict(row.get("provider") or {}).get("kind") or "client_session").strip()
+        visibility = str(row.get("visibility") or dict(row.get("provider") or {}).get("visibility") or "workflow").strip()
+        if provider_kind not in {"client_session", "toolbox_session"}:
+            raise ValueError(f"host_capability_invalid_provider_kind:{provider_kind}")
+        if visibility not in {"request", "workflow", "instance", "consumer"}:
+            raise ValueError(f"host_capability_invalid_visibility:{visibility}")
+        scope = dict(row.get("scope") or {})
+        methods = self._host_capability_session_methods(
+            session_id=session_id,
+            owner=actor_id,
+            provider_kind=provider_kind,
+            visibility=visibility,
+            methods=[dict(item or {}) for item in list(row.get("methods") or [])],
+        )
+        binding = self._normalize_host_capability_binding(row, transport=transport)
+        binding.setdefault("peer_host", str(peer_host or "") or None)
+        binding.setdefault("peer_pid", int(peer_pid or 0) or None)
+        binding.setdefault("peer_process", dict(peer_process_info or {}))
+        now_ms = int(time.time() * 1000)
+        expires_at_ms = row.get("expires_at_ms")
+        if expires_at_ms is not None:
+            expires_at_ms = max(now_ms, int(expires_at_ms or 0))
+        session = HostCapabilitySession(
+            session_id=session_id,
+            owner=actor_id,
+            provider_kind=provider_kind,
+            visibility=visibility,
+            scope=scope,
+            methods=methods,
+            binding=binding,
+            created_at_ms=now_ms,
+            expires_at_ms=expires_at_ms,
+            close_on_client_disconnect=bool(row.get("close_on_client_disconnect", True)),
+        )
+        with self._host_capability_sessions_lock:
+            if session_id in self._host_capability_sessions:
+                raise ValueError("host_capability_session_already_exists")
+            self._host_capability_sessions[session_id] = session
+        return {
+            "status": "ok",
+            "session": self._host_capability_session_public(session),
+        }
+
+    def _list_host_capability_sessions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        actor_id = str(payload.get("_claim_actor_id") or "").strip()
+        if not actor_id:
+            actor_id = self.svc._actor_id_from_payload(self.svc._read_control(), payload)  # noqa: SLF001
+        include_all = bool(payload.get("include_all", False))
+        now_ms = int(time.time() * 1000)
+        with self._host_capability_sessions_lock:
+            expired = [
+                sid
+                for sid, session in self._host_capability_sessions.items()
+                if session.expires_at_ms is not None and int(session.expires_at_ms or 0) <= now_ms
+            ]
+            for sid in expired:
+                self._host_capability_sessions.pop(sid, None)
+            sessions = [
+                self._host_capability_session_public(session)
+                for session in self._host_capability_sessions.values()
+                if include_all or str(session.owner or "") == actor_id
+            ]
+        sessions.sort(key=lambda item: str(item.get("session_id") or ""))
+        return {"status": "ok", "sessions": sessions, "count": len(sessions)}
+
+    def _close_host_capability_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
+            raise ValueError("host_capability_session_id_required")
+        actor_id = str(payload.get("_claim_actor_id") or "").strip()
+        if not actor_id:
+            actor_id = self.svc._actor_id_from_payload(self.svc._read_control(), payload)  # noqa: SLF001
+        force = bool(payload.get("force", False))
+        with self._host_capability_sessions_lock:
+            session = self._host_capability_sessions.get(session_id)
+            if session is None:
+                return {"status": "not_found", "session_id": session_id, "closed": False}
+            if str(session.owner or "") != actor_id and not force:
+                raise PermissionError("host_capability_session_not_owned")
+            self._host_capability_sessions.pop(session_id, None)
+        return {"status": "closed", "session_id": session_id, "closed": True}
+
+    def _close_host_capability_sessions_for_actor(self, actor_id: str, *, reason: str) -> int:
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return 0
+        closed = 0
+        with self._host_capability_sessions_lock:
+            for sid, session in list(self._host_capability_sessions.items()):
+                if str(session.owner or "") == aid and bool(session.close_on_client_disconnect):
+                    self._host_capability_sessions.pop(sid, None)
+                    closed += 1
+        return closed
+
     def _should_shutdown_on_owner_disconnect(self) -> bool:
         policy = self.svc.get_lifecycle_policy_effective()
         eff = dict(policy.get("effective") or {})
@@ -1186,6 +1352,7 @@ class EngineHostDaemon:
             remaining = self._track_actor_disconnected(actor_id)
             if remaining > 0:
                 continue
+            self._close_host_capability_sessions_for_actor(actor_id, reason="owner_disconnect")
             if self.svc.is_actor_exclusive_endpoint_owner(actor_id):
                 if self._stop_event is not None:
                     self._stop_event.set()
@@ -1980,6 +2147,21 @@ class EngineHostDaemon:
                     "error_details": dict(acl.get("error_details") or {}),
                 }
             payload = dict(acl.get("payload") or payload)
+            if cmd == "host-capability-session-register":
+                result = self._register_host_capability_session(
+                    payload,
+                    transport=transport,
+                    peer_host=peer_host,
+                    peer_pid=peer_pid,
+                    peer_process_info=peer_process_info,
+                )
+                return {"seq": seq, "ok": True, "result": result}
+            if cmd == "host-capability-session-list":
+                result = self._list_host_capability_sessions(payload)
+                return {"seq": seq, "ok": True, "result": result}
+            if cmd == "host-capability-session-close":
+                result = self._close_host_capability_session(payload)
+                return {"seq": seq, "ok": True, "result": result}
             if cmd in {"discover-running", "shutdown", "remove-registration"}:
                 registry_before = self._engine_registry_by_id()
             service_call_started = True

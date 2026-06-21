@@ -16,6 +16,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Wrapped request-local built-ins behind `HostCapabilityBroker`.
 - [x] Routed Python and JavaScript workflow node host calls through the broker while preserving existing built-in behavior.
 
+### Host Capability Slice 2: Client Provider Session Lifecycle
+
+- [x] Added private binding storage and sanitized public output to `HostCapabilitySession`.
+- [x] Added daemon runtime registry for client-owned provider sessions.
+- [x] Added authenticated daemon commands for `host-capability-session-register`, `host-capability-session-list`, and `host-capability-session-close`.
+- [x] Added typed `EngineHostControlChannel` helpers for provider session lifecycle management.
+- [x] Added disconnect cleanup for sessions marked `close_on_client_disconnect`.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -42,7 +50,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [ ] Continue Host Capability Protocol with client-owned capability sessions, provider callback RPC, permissions/scopes, approval routing, event observations, and durable audit.
+- [ ] Continue Host Capability Protocol with provider callback RPC, permissions/scopes, approval routing, event observations, and durable audit.
 
 ## Verification
 

@@ -1312,3 +1312,100 @@ def test_daemon_endpoint_mode_override_requires_auth_token(tmp_path: Path) -> No
     assert out["ok"] is False
     assert out["error"] == "auth_failed"
     assert out["error_code"] == "session_token_required"
+
+
+def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-cap", "secret-cap")
+    actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
+
+    registered = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload={
+            "session_token": token,
+            "session_id": "cap-session-1",
+            "scope": {"workflow_id": "wf-cap"},
+            "binding": {
+                "transport": "daemon_callback",
+                "address": "private-address",
+                "session_token": "private-provider-token",
+            },
+            "methods": [
+                {
+                    "name": "crm.customer.lookup",
+                    "description": "Look up a customer.",
+                    "args_schema": {"type": "object"},
+                    "result_schema": {"type": "object"},
+                    "permissions": ["crm.customer.read"],
+                    "scope_requirements": [{"scope": "crm.customer", "access": "read"}],
+                    "approval": {"mode": "none"},
+                    "group_path": ["CRM", "Customer"],
+                }
+            ],
+        },
+    )
+    listed = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-list",
+        payload={"session_token": token},
+    )
+    closed = _dispatch(
+        daemon,
+        seq=3,
+        cmd="host-capability-session-close",
+        payload={"session_token": token, "session_id": "cap-session-1"},
+    )
+
+    assert registered["ok"] is True
+    session = registered["result"]["session"]
+    assert session["session_id"] == "cap-session-1"
+    assert session["owner"] == actor_id
+    assert "binding" not in session
+    assert session["methods"][0]["provider"] == {
+        "provider_id": "cap-session-1",
+        "kind": "client_session",
+        "owner": actor_id,
+        "visibility": "workflow",
+    }
+    assert listed["ok"] is True
+    assert listed["result"]["count"] == 1
+    assert "binding" not in listed["result"]["sessions"][0]
+    assert closed["ok"] is True
+    assert closed["result"] == {"status": "closed", "session_id": "cap-session-1", "closed": True}
+
+
+def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-disconnect-cap", "secret-disconnect-cap")
+    actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
+    assert actor_id
+
+    out = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload={
+            "session_token": token,
+            "session_id": "cap-session-disconnect",
+            "close_on_client_disconnect": True,
+            "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
+        },
+    )
+    assert out["ok"] is True
+
+    closed = daemon._close_host_capability_sessions_for_actor(actor_id, reason="unit_test")  # noqa: SLF001
+    listed = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-list",
+        payload={"session_token": token},
+    )
+
+    assert closed == 1
+    assert listed["ok"] is True
+    assert listed["result"]["sessions"] == []

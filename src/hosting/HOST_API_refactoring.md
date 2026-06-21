@@ -376,7 +376,7 @@ Error:
 - [x] 7. Add capability broker with `describe(...)` and `dispatch_async(...)`.
 - [x] 8. Wrap existing `HostApiRegistry` as a built-in provider behind the broker.
 - [x] 9. Route Python and JavaScript node host calls through the broker.
-- [ ] 10. Add client-owned capability session registration/list/close daemon APIs.
+- [x] 10. Add client-owned capability session registration/list/close daemon APIs.
 - [ ] 11. Add provider callback RPC envelopes and response validation.
 - [ ] 12. Add provider timeout, disconnect, and request-cancel handling.
 - [ ] 13. Add permission/scope checks for provider ownership, method namespace, and request/workflow/instance visibility.
@@ -394,6 +394,7 @@ Error:
 - [x] Provider bindings and tokens are absent from sandbox-facing discovery.
 - [x] Python `host.call(...)` dispatches a built-in through the broker wrapper.
 - [x] JavaScript `api.callAsync(...)` dispatches a built-in through the broker wrapper.
+- [x] Client-owned provider session registration/list/close daemon APIs sanitize provider bindings from public responses.
 - [ ] Client-owned provider session can register one method and receive a sandbox call.
 - [ ] Sandbox cannot call a method registered by an unrelated client/session.
 - [ ] Duplicate method registration follows deterministic precedence rules.

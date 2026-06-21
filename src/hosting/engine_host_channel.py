@@ -1983,6 +1983,43 @@ class EngineHostControlChannel:
         res = self._invoke("workflow-js-stream-close", {"stream_id": str(stream_id or "").strip()})
         return dict(res or {})
 
+    def host_capability_session_register(
+        self,
+        *,
+        methods: List[Dict[str, Any]],
+        scope: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        provider_kind: str = "client_session",
+        visibility: str = "workflow",
+        binding: Optional[Dict[str, Any]] = None,
+        close_on_client_disconnect: bool = True,
+        expires_at_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "session_id": str(session_id or "").strip() or None,
+            "provider_kind": str(provider_kind or "client_session").strip() or "client_session",
+            "visibility": str(visibility or "workflow").strip() or "workflow",
+            "scope": dict(scope or {}),
+            "methods": [dict(row or {}) for row in list(methods or [])],
+            "binding": dict(binding or {}),
+            "close_on_client_disconnect": bool(close_on_client_disconnect),
+        }
+        if expires_at_ms is not None:
+            payload["expires_at_ms"] = int(expires_at_ms)
+        res = self._invoke("host-capability-session-register", payload)
+        return dict(res or {})
+
+    def host_capability_session_list(self, *, include_all: bool = False) -> Dict[str, Any]:
+        res = self._invoke("host-capability-session-list", {"include_all": bool(include_all)})
+        return dict(res or {})
+
+    def host_capability_session_close(self, *, session_id: str, force: bool = False) -> Dict[str, Any]:
+        res = self._invoke(
+            "host-capability-session-close",
+            {"session_id": str(session_id or "").strip(), "force": bool(force)},
+        )
+        return dict(res or {})
+
     def shutdown_managed(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         res = self._invoke("shutdown", {"engine_id": str(engine_id), "timeout_seconds": float(timeout_seconds)})
         return dict(res or {})

@@ -74,6 +74,12 @@ _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-event-subscribe",
 }
 
+_HOST_CAPABILITY_SESSION_COMMANDS = {
+    "host-capability-session-register",
+    "host-capability-session-list",
+    "host-capability-session-close",
+}
+
 
 class AuthMixin:
     @staticmethod
@@ -363,6 +369,7 @@ class AuthMixin:
             "set-endpoint-mode-override",
             "get-endpoint-mode-effective",
             "get-lifecycle-policy-effective",
+            *_HOST_CAPABILITY_SESSION_COMMANDS,
         }
         if r == ROLE_ADMIN:
             return all_non_bootstrap
@@ -430,6 +437,7 @@ class AuthMixin:
                 "connect-from-config",
                 "get-control-config",
                 "get-lifecycle-policy-effective",
+                *_HOST_CAPABILITY_SESSION_COMMANDS,
                 "auth-status",
                 "hosting-setup-status",
                 "hosting-secure-state-status",
@@ -503,6 +511,7 @@ class AuthMixin:
                 "proxy-stream-send",
                 "proxy-stream-recv",
                 "proxy-stream-close",
+                *_HOST_CAPABILITY_SESSION_COMMANDS,
                 "auth-status",
             }
         if r == ROLE_MODEL_USER_WITH_MODEL_CONTROL:

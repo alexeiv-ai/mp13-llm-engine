@@ -206,11 +206,12 @@ class HostCapabilitySession:
     visibility: str = "request"
     scope: Dict[str, Any] = field(default_factory=dict)
     methods: Dict[str, HostCapabilityMethod] = field(default_factory=dict)
+    binding: Dict[str, Any] = field(default_factory=dict)
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: Optional[int] = None
     close_on_client_disconnect: bool = True
 
-    def to_private_dict(self) -> Dict[str, Any]:
+    def to_public_dict(self) -> Dict[str, Any]:
         return {
             "contract": HOST_CAPABILITY_SESSION_CONTRACT,
             "session_id": _clean(self.session_id),
@@ -227,6 +228,11 @@ class HostCapabilitySession:
                 "close_on_client_disconnect": bool(self.close_on_client_disconnect),
             },
         }
+
+    def to_private_dict(self) -> Dict[str, Any]:
+        out = self.to_public_dict()
+        out["binding"] = dict(self.binding or {})
+        return out
 
 
 class HostCapabilityBroker:
