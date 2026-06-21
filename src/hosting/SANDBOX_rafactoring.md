@@ -357,8 +357,8 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] 5. Add lane-aware queues and loss counters to hosted process streams.
 - [x] 6. Implement helper-side `on_loss="raise"|"mark"` behavior.
 - [x] 7. Convert service-generated lifecycle events to frames.
-- [ ] 8. Convert Python and JavaScript node live `progress` to frames.
-- [ ] 9. Convert Python and JavaScript node `host_call` observations to control frames.
+- [x] 8. Convert Python and JavaScript node live `progress` to frames.
+- [x] 9. Convert Python and JavaScript node `host_call` observations to control frames.
 - [ ] 10. Add live stdout/stderr/log valid-JSON chunk emitters.
 - [ ] 11. Add accept/ack/close credit support for output streams that require complete delivery.
 - [ ] 12. Add daemon event subscription path separate from command RPC.

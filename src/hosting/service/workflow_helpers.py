@@ -1346,7 +1346,7 @@ class WorkflowHelperMixin:
                 )
                 return
             if event_type == "host_call":
-                base.stream_emit(stream_id=stream_id, event_type="log", payload={"host_call": dict(payload or {})})
+                base.stream_emit(stream_id=stream_id, event_type="host_call", payload=dict(payload or {}))
                 return
             base.stream_emit(stream_id=stream_id, event_type=event_type, payload=dict(payload or {}))
 

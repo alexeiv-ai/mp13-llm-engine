@@ -164,6 +164,8 @@ class HostedProcessStreamSession:
         timestamp_ms = int(time.time() * 1000)
         for index, event in enumerate(events):
             payload = dict(event.get("payload") or {})
+            if payload.get("host_call_id") is not None and payload.get("call_id") is None:
+                payload["call_id"] = payload.get("host_call_id")
             payload.pop("kind", None)
             payload.pop("type", None)
             frame = HostedStreamFrame.from_dict(

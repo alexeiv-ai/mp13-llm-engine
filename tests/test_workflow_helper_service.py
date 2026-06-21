@@ -1140,11 +1140,13 @@ exports.run = function(input, api) {
         },
     )
     events: list[dict] = []
+    normalized_events: list[dict] = []
     deadline = time.time() + 10.0
     received = {}
     while time.time() < deadline:
         received = svc.workflow_js_stream_recv(stream_id=opened["stream_id"], max_items=8)
         events.extend(list(received.get("events") or []))
+        normalized_events.extend(list(received.get("normalized_events") or []))
         if any(row["type"] == "done" for row in events):
             break
         time.sleep(0.05)
@@ -1159,6 +1161,7 @@ exports.run = function(input, api) {
     assert opened["status"] == "ok"
     assert "started" in event_types
     assert "stdout" in event_types
+    assert "host_call" in event_types
     assert "progress" in event_types
     assert "artifact" in event_types
     assert "result" in event_types
@@ -1166,6 +1169,7 @@ exports.run = function(input, api) {
     assert status["request"]["status"] == "ok"
     assert status["request"]["stream_event_count"] >= len(events)
     assert any(dict(row.get("payload") or {}).get("filename") == "stream.txt" for row in events if row["type"] == "artifact")
+    assert any(row.get("kind") == "host_call" and row.get("call_id") for row in normalized_events)
 
 
 def test_workflow_js_stream_retention_reports_dropped_events(tmp_path: Path) -> None:

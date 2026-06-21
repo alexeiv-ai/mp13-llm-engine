@@ -92,3 +92,22 @@ Date: 2026-06-20
 
 - Route Python and JavaScript node live progress through frame-first emitters instead of legacy event payloads.
 - Convert host-call observation events to control frames.
+
+## Slice 6: Node Progress And Host-Call Frames
+
+- [x] Preserved Python node live progress as `progress` frames through process stream batch conversion.
+- [x] Preserved JavaScript node live progress as `progress` frames through process stream batch conversion.
+- [x] Changed JavaScript node `host_call` observations from `log` events to `host_call` control-lane events.
+- [x] Added `host_call_id` to `call_id` aliasing during frame conversion for helper-facing consistency.
+- [x] Covered JavaScript stream host-call observations via normalized events.
+
+Note: this slice converts node observations at the hosted process stream boundary. A later IPC slice can make child runtimes emit frame objects directly if needed.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+
+## Next Slice
+
+- Add live stdout/stderr/log chunk metadata for valid JSON output frames, including `boundary`, `offset`, and `length` where available.
