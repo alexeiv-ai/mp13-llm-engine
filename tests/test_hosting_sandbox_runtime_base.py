@@ -178,6 +178,29 @@ def test_stream_event_and_pool_metrics_shapes() -> None:
     assert row["errors_by_reason"] == {"boom": 4}
 
 
+def test_stream_event_is_strict_and_can_build_frame_batch() -> None:
+    event = HostedStreamEvent(
+        type="progress",
+        request_id="req-1",
+        sequence=5,
+        timestamp=12.25,
+        payload={"pct": 50, "message": "halfway"},
+    )
+
+    assert event.to_frame().to_dict() == {"dt_ms": 0, "kind": "progress", "message": "halfway", "pct": 50.0}
+    assert event.to_batch(stream_id="stream-1", instance_id="worker-1").to_dict() == {
+        "version": HOSTED_STREAM_CONTRACT_VERSION,
+        "context": {"stream_id": "stream-1", "request_id": "req-1", "instance_id": "worker-1"},
+        "base": {"sequence": 5, "timestamp_ms": 12250},
+        "loss": {"output": 0, "event": 0, "audit": 0},
+        "frames": [{"dt_ms": 0, "kind": "progress", "message": "halfway", "pct": 50.0}],
+        "more": False,
+    }
+
+    with pytest.raises(ValueError, match="unsupported_stream_event_kind"):
+        HostedStreamEvent(type="unknown", request_id="req-1").to_dict()
+
+
 def test_stream_kind_registry_declares_lane_and_queue_policy() -> None:
     assert hosted_stream_kind_lane("stdout") == "output"
     assert hosted_stream_kind_spec("progress").replacement_fields == ("key",)

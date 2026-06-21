@@ -17,7 +17,7 @@ It intentionally does not implement client-owned host APIs, toolbox-host capabil
 - [ ] Replace the old public event shape:
   - old: one full object per event with repeated `type`, `request_id`, `sequence`, `timestamp`, and `payload`
   - new: one batch with shared context plus independently valid JSON frame objects
-- [ ] Remove the old fallback where unknown event types degrade to `log`.
+- [x] Remove the old fallback where unknown event types degrade to `log`.
 
 ## Why Streaming First
 

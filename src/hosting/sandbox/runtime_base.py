@@ -300,12 +300,21 @@ class HostedRequestLifecycle:
     def record_stream_event(self, event: Dict[str, Any]) -> None:
         row = dict(event or {})
         self.stream_event_count += 1
-        event_type = _clean(row.get("type"))
+        event_type = _clean(row.get("type") or row.get("kind"))
         if event_type == "progress":
             payload = dict(row.get("payload") or {})
+            if not payload:
+                payload = {
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"type", "kind", "request_id", "stream_id", "instance_id", "sequence", "timestamp", "timestamp_ms", "dt_ms"}
+                }
             self.latest_progress = {
                 "type": event_type,
-                "timestamp": float(row.get("timestamp") or time.time()),
+                "timestamp": float(
+                    row.get("timestamp")
+                    or (float(row.get("timestamp_ms")) / 1000.0 if row.get("timestamp_ms") is not None else time.time())
+                ),
                 "sequence": max(0, int(row.get("sequence") or 0)),
                 "payload": payload,
             }
@@ -583,10 +592,36 @@ class HostedStreamEvent:
     sequence: int = 0
     timestamp: float = field(default_factory=time.time)
 
+    def to_frame(self) -> HostedStreamFrame:
+        event_type = hosted_stream_validate_kind(self.type)
+        row = dict(self.payload or {})
+        row.pop("kind", None)
+        row.pop("type", None)
+        return HostedStreamFrame.from_dict({"kind": event_type, **row})
+
+    def to_batch(
+        self,
+        *,
+        stream_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        loss: Optional[HostedStreamLoss] = None,
+        more: bool = False,
+    ) -> HostedStreamBatch:
+        return HostedStreamBatch(
+            context=HostedStreamContext(
+                stream_id=_clean(stream_id) or None,
+                request_id=_clean(self.request_id) or None,
+                instance_id=_clean(instance_id) or None,
+            ),
+            frames=[self.to_frame()],
+            sequence=max(0, int(self.sequence or 0)),
+            timestamp_ms=max(0, int(float(self.timestamp) * 1000)),
+            loss=loss or HostedStreamLoss(),
+            more=more,
+        )
+
     def to_dict(self) -> Dict[str, Any]:
-        event_type = _clean(self.type) or "event"
-        if event_type not in HOSTED_STREAM_EVENT_TYPES:
-            event_type = "log"
+        event_type = hosted_stream_validate_kind(self.type)
         return {
             "type": event_type,
             "request_id": _clean(self.request_id),
