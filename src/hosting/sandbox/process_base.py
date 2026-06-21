@@ -132,6 +132,8 @@ class HostedProcessStreamSession:
         if not self.accepted_output_stream:
             raise ValueError("stream_not_accepted")
         length = max(0, int(payload.get("length") or 0))
+        if self.output_max_chunk_size is not None and length > max(1, int(self.output_max_chunk_size or 1)):
+            raise ValueError("stream_chunk_too_large")
         if length > max(0, int(self.output_credit_bytes or 0)):
             raise ValueError("stream_credit_exhausted")
         self.output_credit_bytes -= length

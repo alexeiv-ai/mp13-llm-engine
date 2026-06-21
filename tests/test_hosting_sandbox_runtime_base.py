@@ -329,6 +329,30 @@ def test_stream_normalizer_marks_or_raises_on_loss() -> None:
         hosted_stream_normalize_batch(batch, on_loss="ignore")
 
 
+def test_stream_normalizer_accepts_instance_scoped_batches_without_request_id() -> None:
+    batch = HostedStreamBatch(
+        context=HostedStreamContext(stream_id="stream-1", instance_id="worker-1"),
+        frames=[HostedStreamFrame(kind="heartbeat", status="running")],
+        sequence=1,
+        timestamp_ms=100,
+    )
+
+    normalized = hosted_stream_normalize_batch(batch)
+
+    assert normalized == [
+        {
+            "stream_id": "stream-1",
+            "instance_id": "worker-1",
+            "dt_ms": 0,
+            "kind": "heartbeat",
+            "status": "running",
+            "sequence": 1,
+            "timestamp_ms": 100,
+            "loss_detected": False,
+        }
+    ]
+
+
 def test_shared_registration_resource_and_cancel_shapes() -> None:
     env = hosted_registration_environment_metadata(
         environment={

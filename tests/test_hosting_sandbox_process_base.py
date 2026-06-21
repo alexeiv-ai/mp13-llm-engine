@@ -301,6 +301,39 @@ def test_process_base_ack_backed_output_pauses_until_credit_resumes() -> None:
     assert emitted["status"] == "ok"
 
 
+def test_process_base_ack_backed_output_reports_expected_bytes_and_respects_chunk_cap() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-known-size",
+        profile="node",
+        factory=_factory,
+    )
+    base.stream_send(
+        stream_id=str(opened["stream_id"]),
+        message={"action": "stream_accept", "initial_credit_bytes": 32, "max_chunk_size": 4},
+    )
+    emitted = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "data", "requires_ack": True, "ack_id": "chunk-1", "expected_bytes": 8},
+    )
+    too_large = base.stream_emit(
+        stream_id=str(opened["stream_id"]),
+        event_type="stdout",
+        payload={"text": "12345", "requires_ack": True, "ack_id": "chunk-2", "expected_bytes": 8},
+    )
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
+    stdout = [row for row in received["normalized_events"] if row["kind"] == "stdout"][0]
+
+    assert emitted["status"] == "ok"
+    assert stdout["expected_bytes"] == 8
+    assert stdout["length"] == 4
+    assert too_large["status"] == "error"
+    assert too_large["reason"] == "stream_chunk_too_large"
+
+
 def test_process_base_ack_backed_output_close_abandons_producer() -> None:
     base = WorkflowPythonProcessBase()
 

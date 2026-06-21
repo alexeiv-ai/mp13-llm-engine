@@ -362,7 +362,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] 10. Add live stdout/stderr/log valid-JSON chunk emitters.
 - [x] 11. Add accept/ack/close credit support for output streams that require complete delivery.
 - [x] 12. Add daemon event subscription path separate from command RPC.
-- [ ] 13. Add stream decoder, ordering, replacement, ack, and loss tests.
+- [x] 13. Add stream decoder, ordering, replacement, ack, and loss tests.
 
 ## Test Checklist
 
@@ -372,7 +372,7 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] Control frames bypass output backlog.
 - [x] Terminal frames are delivered when output queue is full.
 - [x] Output frames are always valid JSON objects.
-- [ ] Known-size output streams report `expected_bytes`.
+- [x] Known-size output streams report `expected_bytes`.
 - [x] Byte-addressable chunks report `offset` and `length`.
 - [x] Ack-backed streams require client accept before large payload delivery.
 - [x] Ack-backed streams pause when credit is exhausted and resume after acknowledgement.
@@ -380,11 +380,11 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] Output loss yields either a helper exception or a `stream_loss` marker depending on helper policy.
 - [x] Latest-replaces policy works for heartbeat/progress/metric.
 - [x] First-kept/drop-later policy works for stdout/stderr/log/artifact.
-- [ ] Emitter-controlled chunk size is respected below policy maximum.
-- [ ] Runtime splits or rejects chunks above policy maximum.
+- [x] Emitter-controlled chunk size is respected below policy maximum.
+- [x] Runtime splits or rejects chunks above policy maximum.
 - [x] Daemon event subscription does not block cancel/status on the control channel.
 - [x] Request-scoped batches include `request_id` and `instance_id`.
-- [ ] Instance-scoped batches can omit `request_id` without breaking decoding.
+- [x] Instance-scoped batches can omit `request_id` without breaking decoding.
 
 ## Remaining Decisions
 

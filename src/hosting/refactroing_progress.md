@@ -167,6 +167,21 @@ Note: this slice creates a distinct command path and client helper surface over 
 
 - Close remaining decoder/test checklist gaps: known-size `expected_bytes`, chunk-size cap behavior, runtime split/reject behavior, and instance-scoped batch decode.
 
+## Slice 11: Final Decoder And Chunk Policy Coverage
+
+- [x] Added instance-scoped batch normalization coverage without `request_id`.
+- [x] Added known-size output coverage through `expected_bytes`.
+- [x] Added chunk cap behavior for ack-backed output streams.
+- [x] Chose reject-over-split for oversized chunks in this implementation slice, matching the constrained tradeoff in the plan.
+- [x] Completed the implementation and focused test checklist for the event-streaming pillar.
+
+## Verification
+
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
+- `pytest tests/test_workflow_helper_service.py -k "daemon_dispatches_workflow_python_facade or daemon_dispatches_workflow_js_facade"`
+- `pytest tests/test_engine_host_channel.py::test_workflow_python_channel_facade_forwards_expected_payloads tests/test_engine_host_channel.py::test_workflow_js_channel_facade_forwards_expected_payloads`
+
 ## Slice 8: Frame-First Process Retention
 
 - [x] Changed hosted process streams to retain expanded frame rows internally.
