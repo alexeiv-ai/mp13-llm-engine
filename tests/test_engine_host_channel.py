@@ -367,13 +367,25 @@ def test_ssh_mode_injects_binding_without_auto_shared_secret_bootstrap() -> None
     ch._get_connection = lambda: fake  # type: ignore[method-assign]
 
     _ = ch.discover_running()
-    assert len(fake.calls) == 1
+    _ = ch.workflow_python_event_subscribe(stream_id="stream-1")
+    _ = ch.workflow_js_event_subscribe(stream_id="stream-js")
+    assert len(fake.calls) == 3
     assert fake.calls[0][0] == "discover-running"
     assert fake.calls[0][1]["_ssh_session_binding"] == {
         "target": "user@example-host",
         "key_fingerprint": "SHA256:abc",
     }
     assert "session_token" not in fake.calls[0][1]
+    assert fake.calls[1][0] == "workflow-python-event-subscribe"
+    assert fake.calls[1][1]["_ssh_session_binding"] == {
+        "target": "user@example-host",
+        "key_fingerprint": "SHA256:abc",
+    }
+    assert fake.calls[2][0] == "workflow-js-event-subscribe"
+    assert fake.calls[2][1]["_ssh_session_binding"] == {
+        "target": "user@example-host",
+        "key_fingerprint": "SHA256:abc",
+    }
 
 
 def test_channel_init_resolves_client_profile_into_ssh_settings(tmp_path: Path) -> None:

@@ -191,6 +191,13 @@ Note: this slice creates a distinct command path and client helper surface over 
 - [x] Recorded that `expected_bytes` is optional.
 - [x] Recorded no default ack timeout and no separate in-flight cap beyond granted credit.
 - [x] Recorded SSH relay as required for the pillar, using the same project-owned command/event protocol.
+- [x] Added SSH-mode channel coverage showing event subscription commands carry the same SSH session binding as other control commands.
+
+## Verification
+
+- `pytest tests/test_engine_host_channel.py::test_ssh_mode_injects_binding_without_auto_shared_secret_bootstrap tests/test_engine_host_channel.py::test_workflow_python_channel_facade_forwards_expected_payloads tests/test_engine_host_channel.py::test_workflow_js_channel_facade_forwards_expected_payloads`
+- `pytest tests/test_hosting_sandbox_runtime_base.py tests/test_hosting_sandbox_process_base.py`
+- `pytest tests/test_workflow_helper_service.py -k "stream"`
 
 ## Slice 8: Frame-First Process Retention
 
