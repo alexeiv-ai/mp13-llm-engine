@@ -1333,8 +1333,10 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]],
     ) -> None:
         base = self._workflow_js_stream_base()
+        live_stdout_seen = False
 
         def _emit_js_event(event_type: str, payload: Dict[str, Any]) -> None:
+            nonlocal live_stdout_seen
             if event_type == "console":
                 base.stream_emit(
                     stream_id=stream_id,
@@ -1344,6 +1346,7 @@ class WorkflowHelperMixin:
                         "level": str(dict(payload or {}).get("level") or "log"),
                     },
                 )
+                live_stdout_seen = True
                 return
             if event_type == "host_call":
                 base.stream_emit(stream_id=stream_id, event_type="host_call", payload=dict(payload or {}))
@@ -1419,7 +1422,7 @@ class WorkflowHelperMixin:
         )
         base.stream_emit(stream_id=stream_id, event_type="log", payload={"logs": dict(response.get("logs") or {})})
         logs = dict(response.get("logs") or {})
-        if str(logs.get("stdout") or ""):
+        if str(logs.get("stdout") or "") and not live_stdout_seen:
             base.stream_emit(stream_id=stream_id, event_type="stdout", payload={"text": str(logs.get("stdout") or ""), "truncated": bool(logs.get("stdout_truncated"))})
         if str(logs.get("stderr") or ""):
             base.stream_emit(stream_id=stream_id, event_type="stderr", payload={"text": str(logs.get("stderr") or ""), "truncated": bool(logs.get("stderr_truncated"))})

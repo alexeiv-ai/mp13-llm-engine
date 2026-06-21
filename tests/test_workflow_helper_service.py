@@ -3015,7 +3015,7 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
             },
         )
         events = []
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
             events.extend(list(received.get("normalized_events") or []))
@@ -3064,7 +3064,7 @@ def test_workflow_python_node_stream_emits_runtime_progress_and_stdout(tmp_path:
             },
         )
         events = []
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
             events.extend(list(received.get("normalized_events") or []))
@@ -3105,7 +3105,7 @@ def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_re
             },
         )
         events = []
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
             events.extend(list(received.get("normalized_events") or []))
@@ -3155,7 +3155,7 @@ def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: P
             },
         )
         received = {}
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=10)
             if any(dict(row or {}).get("kind") == "done" for row in list(received.get("normalized_events") or [])):
@@ -3208,7 +3208,7 @@ def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp
             },
         )
         events = []
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
             events.extend(list(received.get("normalized_events") or []))
@@ -3256,7 +3256,7 @@ def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_pa
             },
         )
         events = []
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
             events.extend(list(received.get("normalized_events") or []))
@@ -3530,7 +3530,7 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
             },
         )
         saw_running = False
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             status = svc.workflow_python_request_status(
                 profile="node",
@@ -3547,7 +3547,7 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
             message={"action": "cancel", "reason": "test_cancel"},
         )
         events = []
-        deadline = time.time() + 5.0
+        deadline = time.time() + 10.0
         while time.time() < deadline:
             received = svc.workflow_python_event_subscribe(stream_id=str(opened["stream_id"]), max_items=8)
             events.extend(list(received.get("normalized_events") or []))

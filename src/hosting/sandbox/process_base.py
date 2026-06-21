@@ -48,7 +48,7 @@ class HostedProcessStreamSession:
     closed: bool = False
     canceled: bool = False
     sequence: int = 0
-    dropped_event_count: int = 0
+    dropped_frame_count: int = 0
     pending_loss: Dict[str, int] = field(default_factory=lambda: {"output": 0, "event": 0, "audit": 0})
     output_offsets: Dict[str, int] = field(default_factory=dict)
     non_ack_output_limit_bytes: int = 4 * 1024 * 1024
@@ -73,7 +73,7 @@ class HostedProcessStreamSession:
         loss_lane = self._loss_lane(lane)
         if loss_lane is not None:
             self.pending_loss[loss_lane] = max(0, int(self.pending_loss.get(loss_lane, 0))) + max(0, int(count or 0))
-        self.dropped_event_count += max(0, int(count or 0))
+        self.dropped_frame_count += max(0, int(count or 0))
 
     def _replacement_value(self, row: Dict[str, object]) -> str:
         spec = hosted_stream_kind_spec(str(row.get("kind") or row.get("type") or ""))
@@ -218,19 +218,6 @@ class HostedProcessStreamSession:
             timestamp_ms=int(time.time() * 1000),
         )
         return batch.expanded_frames()[0]
-
-    def _legacy_event_from_frame(self, row: Dict[str, object]) -> Dict[str, object]:
-        timestamp_ms = max(0, int(row.get("timestamp_ms") or 0))
-        payload = self._payload_from_frame(row)
-        if str(row.get("kind") or "") == "heartbeat":
-            payload.setdefault("request_id", self.request_id)
-        return {
-            "type": str(row.get("kind") or ""),
-            "request_id": self.request_id,
-            "sequence": max(0, int(row.get("sequence") or 0)),
-            "timestamp": float(timestamp_ms / 1000.0),
-            "payload": payload,
-        }
 
     def append(self, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         self.sequence += 1
@@ -468,30 +455,6 @@ class HostedProcessSandboxBase:
             return {"status": "error", "stream_id": sid, "reason": str(exc), "event_type": str(event_type or "").strip()}
         self.record_stream_event(environment_key=session.environment_key, request_id=session.request_id, event=event)
         return {"status": "ok", "stream_id": sid, "event": event}
-
-    def stream_recv(self, *, stream_id: str, max_items: int = 64) -> Dict[str, object]:
-        sid = str(stream_id or "").strip()
-        session = self._streams.get(sid)
-        if session is None:
-            return {"status": "not_found", "stream_id": sid}
-        events = session.recv(max_items)
-        loss = session.take_loss()
-        batch = session.batch_from_events(events, loss=loss, more=session.retained_count() > 0)
-        legacy_events = [session._legacy_event_from_frame(event) for event in events]
-        return {
-            "status": "ok",
-            "stream_id": sid,
-            "request_id": session.request_id,
-            "events": legacy_events,
-            "batch": batch,
-            "normalized_events": hosted_stream_normalize_batch(batch, on_loss="mark"),
-            "closed": session.closed,
-            "canceled": session.canceled,
-            "max_events": max(1, int(session.max_events or 1)),
-            "retained_event_count": session.retained_count(),
-            "dropped_event_count": max(0, int(session.dropped_event_count or 0)),
-            "next_sequence": max(0, int(session.sequence or 0)) + 1,
-        }
 
     def event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, object]:
         sid = str(stream_id or "").strip()
