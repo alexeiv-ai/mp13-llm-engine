@@ -165,11 +165,13 @@ channel.host_capability_session_list()
 channel.host_capability_session_close(session_id="crm-provider")
 ```
 
+SSH-bound sessions use normal hosting auth behavior. When a control session is bound to SSH, raw daemon calls for `host-capability-session-register`, `host-capability-session-list`, and `host-capability-session-close` must present the matching `_ssh_session_binding`; hosting library channel helpers attach this automatically for SSH targets.
+
 ### Public Response Shape
 
 Public session responses expose descriptor metadata and lifetime fields, but they do not expose provider callback bindings, callback addresses, or provider session tokens.
 
-Provider callback invocation is not public yet in this slice. Registered client-owned methods are lifecycle-managed and discoverable by the daemon registry work, but sandbox calls still only execute built-in providers until the provider callback RPC slice lands.
+Provider callback invocation uses the internal provider callback envelope described below. Normal clients should use hosting library helpers rather than constructing raw provider callback envelopes directly.
 
 ## Host Capability Provider Callback Envelope
 
@@ -262,3 +264,13 @@ Gated host capability approval outcomes are now persisted in hosting control sta
 Provider bindings, callback addresses, provider session tokens, and raw argument values are not written to these audit records.
 
 Clients using hosting library helpers should not need to parse this file directly. Raw clients that inspect hosting audit state should expect the new `host_capability_audit_events` bucket when reading merged control state.
+
+## Host API Public Contract Completion
+
+Date: 2026-06-21
+
+Scope: Host API pillar completion.
+
+The Host API pillar now exposes shared capability descriptors, sandbox discovery, brokered built-in dispatch, client-owned provider session lifecycle APIs, provider callback envelopes, permission/scope gates, approval routing, live event observations, and durable approval audit records.
+
+Recommended client path: use the hosting library helpers for session registration, provider callback handling, stream observations, and audit reads. Raw daemon clients are responsible for auth tokens, SSH binding presentation, provider response validation, and correlation IDs.

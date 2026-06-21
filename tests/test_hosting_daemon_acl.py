@@ -1378,6 +1378,60 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
     assert closed["result"] == {"status": "closed", "session_id": "cap-session-1", "closed": True}
 
 
+def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    binding = {"target": "user@example-host", "key_fingerprint": "SHA256:abc"}
+    daemon.svc.auth_upsert_key(key_id="admin-cap-ssh", key_secret="secret-cap-ssh", role="admin")
+    daemon.svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
+    issued = daemon.svc.auth_issue_session(
+        key_id="admin-cap-ssh",
+        key_secret="secret-cap-ssh",
+        scope="control",
+        ttl_seconds=600,
+        ssh_binding=binding,
+    )
+    token = str(issued["token"])
+    daemon.svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "ssh_tunnel_only"})
+    payload = {
+        "session_token": token,
+        "session_id": "cap-session-ssh",
+        "scope": {"workflow_id": "wf-cap"},
+        "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
+    }
+
+    missing = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload=payload,
+        peer_host="203.0.113.10",
+    )
+    mismatched = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-register",
+        payload={**payload, "_ssh_session_binding": {"target": "other@example-host", "key_fingerprint": "SHA256:abc"}},
+        peer_host="203.0.113.10",
+    )
+    registered = _dispatch(
+        daemon,
+        seq=3,
+        cmd="host-capability-session-register",
+        payload={**payload, "_ssh_session_binding": binding},
+        peer_host="203.0.113.10",
+    )
+
+    assert missing["ok"] is False
+    assert missing["error_code"] in {"ssh_binding_required", "ssh_binding_required_for_remote_connectivity"}
+    assert mismatched["ok"] is False
+    assert mismatched["error_code"] == "ssh_binding_mismatch"
+    assert registered["ok"] is True
+    assert registered["result"]["session"]["session_id"] == "cap-session-ssh"
+    assert "binding" not in registered["result"]["session"]
+    stored = daemon._host_capability_sessions["cap-session-ssh"]  # noqa: SLF001
+    assert stored.binding["peer_host"] == "203.0.113.10"
+
+
 def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
     daemon.svc.set_control_config(require_auth=True)

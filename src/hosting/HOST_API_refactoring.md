@@ -383,7 +383,7 @@ Error:
 - [x] 14. Add gated approval flow that routes outward to the owning hosting client/user-facing process.
 - [x] 15. Emit event-stream observations for host calls, host responses, approvals, denials, provider failures, and cancellations.
 - [x] 16. Add durable audit records for security-relevant approvals and denials.
-- [ ] 17. Update client breaking-change notes once this pillar exposes new public APIs.
+- [x] 17. Update client breaking-change notes once this pillar exposes new public APIs.
 
 ## Test Checklist
 
@@ -409,7 +409,7 @@ Error:
 - [x] Approval denial returns a sandbox-visible host-call error and emits durable audit.
 - [x] Event stream includes `host_call`, `host_response`, and `approval` observations with correlation IDs.
 - [x] Durable audit contains security-relevant approval/denial records.
-- [ ] SSH-bound client provider sessions preserve normal hosting auth and SSH binding checks.
+- [x] SSH-bound client provider sessions preserve normal hosting auth and SSH binding checks.
 
 ## Remaining Decisions
 

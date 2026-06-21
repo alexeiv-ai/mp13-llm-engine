@@ -71,6 +71,13 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Kept raw provider bindings and provider session tokens out of durable audit rows.
 - [x] Verified broker approval audit records and service persistence.
 
+### Host Capability Slice 9: Public Contract Finalization
+
+- [x] Added daemon regression coverage for SSH-bound provider session registration.
+- [x] Verified missing or mismatched SSH binding denies `host-capability-session-register`.
+- [x] Verified matching SSH binding allows registration while public responses still omit provider bindings.
+- [x] Marked Host API implementation checklist and public breaking-change notes complete.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -97,7 +104,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [ ] Continue Host Capability Protocol with remaining SSH-bound provider callback coverage and public API finalization.
+- [x] Host Capability Protocol implementation checklist is complete.
+- [ ] Remaining open items are design confirmations for later pillars, not implementation blockers in this slice.
 
 ## Verification
 
@@ -112,3 +120,5 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`
 - [x] `python -m py_compile src/hosting/sandbox/host_capabilities.py src/hosting/service/workflow_helpers.py src/hosting/service/state.py`
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "host_capability_audit_event_persists_in_control_state or workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
+- [x] `python -m py_compile tests/test_hosting_daemon_acl.py`
+- [x] `pytest tests/test_hosting_daemon_acl.py -q -k "host_capability_session"`
