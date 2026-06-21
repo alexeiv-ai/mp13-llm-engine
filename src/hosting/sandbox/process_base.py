@@ -51,6 +51,8 @@ class HostedProcessStreamSession:
     dropped_event_count: int = 0
     pending_loss: Dict[str, int] = field(default_factory=lambda: {"output": 0, "event": 0, "audit": 0})
     output_offsets: Dict[str, int] = field(default_factory=dict)
+    non_ack_output_limit_bytes: int = 4 * 1024 * 1024
+    non_ack_output_bytes: int = 0
     accepted_output_stream: bool = False
     output_credit_bytes: int = 0
     output_inflight_bytes: int = 0
@@ -101,7 +103,9 @@ class HostedProcessStreamSession:
         for lane in _PROCESS_STREAM_DROPPABLE_LANE_ORDER:
             queue = self.events_by_lane.setdefault(lane, deque())
             if queue:
-                queue.popleft()
+                dropped = queue.popleft()
+                if lane == "output" and not self._requires_ack(self._payload_from_frame(dropped)):
+                    self.non_ack_output_bytes = max(0, int(self.non_ack_output_bytes or 0) - self._output_length(dropped))
                 self._record_loss(lane)
                 return True
         return False
@@ -124,6 +128,10 @@ class HostedProcessStreamSession:
     def _requires_ack(self, payload: Dict[str, object]) -> bool:
         return bool(payload.get("requires_ack") or payload.get("ack_id"))
 
+    def _output_length(self, payload: Dict[str, object]) -> int:
+        row = self._payload_from_frame(payload) if "kind" in payload else dict(payload or {})
+        return max(0, int(row.get("length") or 0))
+
     def _consume_output_credit(self, payload: Dict[str, object]) -> None:
         if not self._requires_ack(payload):
             return
@@ -132,8 +140,6 @@ class HostedProcessStreamSession:
         if not self.accepted_output_stream:
             raise ValueError("stream_not_accepted")
         length = max(0, int(payload.get("length") or 0))
-        if self.output_max_chunk_size is not None and length > max(1, int(self.output_max_chunk_size or 1)):
-            raise ValueError("stream_chunk_too_large")
         if length > max(0, int(self.output_credit_bytes or 0)):
             raise ValueError("stream_credit_exhausted")
         self.output_credit_bytes -= length
@@ -221,6 +227,17 @@ class HostedProcessStreamSession:
         if lane == "output":
             payload_row = self._prepare_output_payload(event_type, payload_row)
             self._consume_output_credit(payload_row)
+            if not self._requires_ack(payload_row):
+                limit = max(0, int(self.non_ack_output_limit_bytes or 0))
+                length = self._output_length(payload_row)
+                if limit > 0 and max(0, int(self.non_ack_output_bytes or 0)) + length > limit:
+                    self._record_loss(lane)
+                    return HostedStreamEvent(
+                        type=event_type,
+                        request_id=self.request_id,
+                        sequence=self.sequence,
+                        payload=payload_row,
+                    ).to_batch(stream_id=self.stream_id).expanded_frames()[0]
         event = HostedStreamEvent(
             type=event_type,
             request_id=self.request_id,
@@ -235,6 +252,8 @@ class HostedProcessStreamSession:
             self._record_loss(lane)
             return row
         self.events_by_lane.setdefault(lane, deque()).append(row)
+        if lane == "output" and not self._requires_ack(payload_row):
+            self.non_ack_output_bytes += self._output_length(payload_row)
         while self._queued_count() > capacity:
             if not self._drop_one_for_capacity():
                 break

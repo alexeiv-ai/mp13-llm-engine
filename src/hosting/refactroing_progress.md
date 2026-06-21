@@ -182,6 +182,16 @@ Note: this slice creates a distinct command path and client helper surface over 
 - `pytest tests/test_workflow_helper_service.py -k "daemon_dispatches_workflow_python_facade or daemon_dispatches_workflow_js_facade"`
 - `pytest tests/test_engine_host_channel.py::test_workflow_python_channel_facade_forwards_expected_payloads tests/test_engine_host_channel.py::test_workflow_js_channel_facade_forwards_expected_payloads`
 
+## Slice 12: Stream Policy Decisions
+
+- [x] Removed hard rejection for chunks larger than receiver `max_chunk_size`; that value is now advisory.
+- [x] Kept credit as the mechanism that prevents ack-backed writes from completing.
+- [x] Added a 4 MiB default retained-byte budget for non-ack observability output.
+- [x] Kept non-ack over-budget behavior lossy with `loss.output`; no truncation is introduced.
+- [x] Recorded that `expected_bytes` is optional.
+- [x] Recorded no default ack timeout and no separate in-flight cap beyond granted credit.
+- [x] Recorded SSH relay as required for the pillar, using the same project-owned command/event protocol.
+
 ## Slice 8: Frame-First Process Retention
 
 - [x] Changed hosted process streams to retain expanded frame rows internally.

@@ -116,12 +116,16 @@ Example normalized event:
   - `stream_id`
 - [ ] Do not assume uniform chunk size.
 - [ ] Emitters choose chunk boundaries; clients should use `boundary` only as display help.
-- [ ] If `expected_bytes` is present, helpers should expose total size/progress and detect incomplete streams.
+- [ ] Treat `max_chunk_size` as a preference. Credit, not chunk size, controls whether ack-backed writes can complete.
+- [ ] If `expected_bytes` is present, helpers should expose total size/progress and detect incomplete streams. It is optional because producers may not know the final size.
 - [ ] Hosting helpers should accept and acknowledge ack-backed streams; normal clients should not manually implement ack handling.
 - [ ] Helpers should expose a close/abandon operation for streams the client no longer wants to receive.
 - [ ] Client close should propagate an error to the producer instead of silently discarding the stream.
-- [ ] The stream protocol defines a minimum accepted credit window, not a maximum total stream size. Large artifacts/results may exceed the initial window and continue as helpers acknowledge chunks.
-- [ ] Dropping applies to non-ack observability output. Ack-backed streams should pause/resume through helper-managed backpressure instead of dropping chunks.
+- [ ] The stream protocol defines an explicit accepted credit window, not a maximum total stream size. Large artifacts/results may exceed the initial window and continue as helpers acknowledge chunks.
+- [ ] If a helper omits initial credit, hosting uses a 1 MiB default. Clients may grant smaller explicit credit windows.
+- [ ] Dropping applies to non-ack observability output. The default retained non-ack output budget is 4 MiB per stream, and excess output is lost/reported rather than truncated.
+- [ ] Ack-backed streams should pause/resume through helper-managed backpressure instead of dropping chunks.
+- [ ] There is no default acknowledgement timeout and no separate in-flight byte cap beyond granted credit.
 
 ## Raw Batch Format
 
@@ -169,7 +173,7 @@ Most clients should not consume raw batches. Low-level clients may use the raw f
   - `stream_ack`
   - `stream_close`
 - [ ] Treat existing `workflow-*-stream-recv` command polling as transitional.
-- [ ] SSH relay is not a different stream contract. If a helper supports remote targets, it should expose the same stream helper semantics and handle relay framing/timeouts internally.
+- [ ] SSH relay is not a different stream contract. Helpers should expose the same stream helper semantics over SSH because the project owns both client and daemon sides.
 
 ## Instance Identity
 

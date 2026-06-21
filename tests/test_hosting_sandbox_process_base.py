@@ -301,7 +301,7 @@ def test_process_base_ack_backed_output_pauses_until_credit_resumes() -> None:
     assert emitted["status"] == "ok"
 
 
-def test_process_base_ack_backed_output_reports_expected_bytes_and_respects_chunk_cap() -> None:
+def test_process_base_ack_backed_output_reports_expected_bytes_and_treats_chunk_cap_as_preference() -> None:
     base = WorkflowPythonProcessBase()
 
     opened = base.stream_open(
@@ -325,13 +325,37 @@ def test_process_base_ack_backed_output_reports_expected_bytes_and_respects_chun
         payload={"text": "12345", "requires_ack": True, "ack_id": "chunk-2", "expected_bytes": 8},
     )
     received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
-    stdout = [row for row in received["normalized_events"] if row["kind"] == "stdout"][0]
+    stdout = [row for row in received["normalized_events"] if row["kind"] == "stdout"]
 
     assert emitted["status"] == "ok"
-    assert stdout["expected_bytes"] == 8
-    assert stdout["length"] == 4
-    assert too_large["status"] == "error"
-    assert too_large["reason"] == "stream_chunk_too_large"
+    assert stdout[0]["expected_bytes"] == 8
+    assert stdout[0]["length"] == 4
+    assert too_large["status"] == "ok"
+    assert stdout[1]["length"] == 5
+
+
+def test_process_base_non_ack_output_uses_byte_budget_and_reports_loss() -> None:
+    base = WorkflowPythonProcessBase()
+
+    opened = base.stream_open(
+        environment_key="env-a",
+        request_id="req-stream-non-ack-budget",
+        profile="node",
+        factory=_factory,
+        max_events=8,
+    )
+    session = base._streams[str(opened["stream_id"])]
+    session.non_ack_output_limit_bytes = 5
+
+    first = base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stdout", payload={"text": "12345"})
+    dropped = base.stream_emit(stream_id=str(opened["stream_id"]), event_type="stdout", payload={"text": "6"})
+    received = base.stream_recv(stream_id=str(opened["stream_id"]), max_items=8)
+    stdout = [row for row in received["normalized_events"] if row["kind"] == "stdout"]
+
+    assert first["status"] == "ok"
+    assert dropped["status"] == "ok"
+    assert [row["text"] for row in stdout] == ["12345"]
+    assert received["batch"]["loss"]["output"] == 1
 
 
 def test_process_base_ack_backed_output_close_abandons_producer() -> None:

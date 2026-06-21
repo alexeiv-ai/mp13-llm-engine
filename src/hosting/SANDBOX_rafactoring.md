@@ -187,16 +187,16 @@ It intentionally does not implement client-owned host APIs, toolbox-host capabil
 - [ ] When total output size is known, communicate it before or on the first chunk using `expected_bytes`.
 - [ ] Chunks should carry `offset` and `length` when the output stream is ordered and byte-addressable.
 - [ ] Emitters control chunk size and boundaries:
-  - host policy declares maximum bytes per chunk
-  - emitter chooses natural chunk boundaries below that maximum
-  - runtime splits only as a safety fallback
+  - emitter chooses natural chunk boundaries
+  - `max_chunk_size` is a preference communicated by the receiver/helper, not a hard rejection rule
+  - if an ack-backed write exceeds remaining credit, the producer does not complete that write until credit is available
 - [ ] Natural chunk boundaries:
   - stdout/stderr prefer line boundaries
   - log prefers one record per chunk
   - generated/structured output prefers semantic chunks
 - [ ] No uniform chunk size requirement. Natural alignment is more important.
 - [ ] Chunk maximum should align with producer write blob sizes where known. Do not choose a tiny default that forces artificial fragmentation.
-- [ ] Proposed initial maximum chunk size: 64 KiB, with producer-specific override up to a host policy cap.
+- [ ] No hard default maximum chunk size is required for ack-backed streams; credit controls completion.
 - [ ] Do not define a maximum total stream size in the event contract. Artifact/result streams may be much larger than memory-safe event retention limits.
 
 ## Backpressure And Loss
@@ -226,24 +226,24 @@ It intentionally does not implement client-owned host APIs, toolbox-host capabil
 ### Output Policy
 
 - [ ] Default output target chunk size should follow producer write blob size when known.
-- [ ] Default maximum chunk size: 64 KiB.
+- [ ] Default retained non-ack observability output budget: 4 MiB per stream.
 - [ ] Do not set a default maximum total stream size.
 - [ ] Define a minimum acceptance contract instead:
-  - clients/helpers that open an ack-backed stream must accept at least the negotiated initial credit window
-  - proposed minimum initial accepted credit: 1 MiB per stream
-  - clients that cannot accept the minimum should not open the stream
+  - clients/helpers grant an explicit initial credit window
+  - default initial accepted credit is 1 MiB when the helper/client does not specify a value
+  - no hard protocol minimum is required
   - producers may stream beyond the initial credit only as acknowledgements grant more credit
 - [ ] For ack-capable output/request streams:
   - require a client accept/open signal before producer sends large payload chunks
   - include accepted initial credit and optional `expected_bytes` in the stream-open/accept handshake
   - include `ack_id` on chunks that consume stream credit
   - advance producer credit only after receiver acknowledgement
-  - keep bounded in-flight bytes per stream
   - pause async producers when credit is exhausted
-  - fail the stream on acknowledgement timeout
+  - do not impose an acknowledgement timeout by default
+  - do not impose a separate in-flight byte cap beyond granted credit
   - support a client close/abandon signal that tells the producer to stop and receive a stream-abandoned error
 - [ ] For known-size streams:
-  - emit `expected_bytes` before or on the first chunk
+  - emit `expected_bytes` before or on the first chunk when known
   - emit `offset` and `length` on byte-addressable chunks
   - allow helpers to report progress and detect incomplete delivery
 - [ ] When output queue is full:
@@ -252,6 +252,7 @@ It intentionally does not implement client-owned host APIs, toolbox-host capabil
   - increment `loss.output`
   - set `dropped_before=true` on the next delivered output frame for that stream/kind
 - [ ] Dropping applies only to non-ack observability output. Do not silently drop ack-backed request stream chunks.
+- [ ] Non-ack observability output over the retained-byte budget is dropped and counted as `loss.output`; it is not truncated.
 - [ ] Preserve a bounded terminal output summary separately from live output for post-run diagnostics.
 
 ### Event Policy
@@ -292,8 +293,8 @@ It intentionally does not implement client-owned host APIs, toolbox-host capabil
 - [ ] Do not require full multiplexed request/response on one daemon connection for the first streaming slice.
 - [ ] Require client helpers to maintain one control channel and one event subscription channel internally.
 - [ ] Keep `workflow-*-stream-recv` as an implementation stepping stone only while the event subscription path is introduced.
-- [ ] Do not restrict the first subscription path to local IPC only unless implementation proves SSH relay cannot carry the same batch/ack protocol.
-- [ ] Treat SSH support as the same protocol over a different transport. The unresolved work is transport framing and timeout behavior, not the event model.
+- [ ] SSH relay is required for this pillar and uses the same command/event protocol because this project owns both ends of the relay.
+- [ ] Treat SSH as the same protocol over a different transport; no separate event schema or compatibility fallback is needed.
 
 ### Client Stream Signals
 
@@ -380,17 +381,18 @@ Review result: the object-frame shape fits later pillars if the first implementa
 - [x] Output loss yields either a helper exception or a `stream_loss` marker depending on helper policy.
 - [x] Latest-replaces policy works for heartbeat/progress/metric.
 - [x] First-kept/drop-later policy works for stdout/stderr/log/artifact.
-- [x] Emitter-controlled chunk size is respected below policy maximum.
-- [x] Runtime splits or rejects chunks above policy maximum.
+- [x] Emitter-controlled chunk size is preserved when credit is available.
+- [x] Runtime does not complete ack-backed writes when credit is exhausted.
 - [x] Daemon event subscription does not block cancel/status on the control channel.
 - [x] Request-scoped batches include `request_id` and `instance_id`.
 - [x] Instance-scoped batches can omit `request_id` without breaking decoding.
 
 ## Remaining Decisions
 
-- [ ] Confirm default output target chunk size: producer write size when known.
-- [ ] Confirm default maximum chunk size: proposed 64 KiB.
-- [ ] Confirm minimum initial accepted credit per ack-backed stream: proposed 1 MiB.
-- [ ] Confirm helper defaults: proposed `mark` for interactive clients and `raise` for deterministic automation.
-- [ ] Confirm ack timeout and in-flight byte limits per stream.
-- [ ] Confirm whether existing SSH relay framing can carry event subscription batches and acknowledgements without a separate implementation phase.
+- [x] Default output target chunk size: producer write size when known; receiver `max_chunk_size` is advisory.
+- [x] No hard default maximum chunk size for ack-backed streams; granted credit controls write completion.
+- [x] Default non-ack observability retained-byte budget: 4 MiB per stream; excess output is lossy, not truncated.
+- [x] Default initial accepted credit per ack-backed stream: 1 MiB when the helper/client omits an explicit value; no hard minimum.
+- [x] Helper defaults: `mark` for interactive clients and `raise` for deterministic automation.
+- [x] Ack timeout and in-flight cap: no default acknowledgement timeout and no separate in-flight byte cap beyond granted credit.
+- [x] SSH relay: required for this pillar and expected to carry the same event subscription and acknowledgement commands because the project owns both client and daemon sides.
