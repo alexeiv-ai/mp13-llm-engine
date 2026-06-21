@@ -28,6 +28,185 @@ The largest gap is contract ownership. Today the daemon/service owns too much of
 
 The host capability protocol should reuse toolbox concepts, but it should be a sandbox-to-host capability toolbox rather than a normal hosted toolbox worker. It needs toolbox-style discovery, schemas, permissions, scopes, and approval gates, while allowing the callable implementation to live in the hosting client process.
 
+## Programming Model After The Proposed Changes
+
+The target programming model should be simple for sandbox authors and explicit for hosting clients. Sandboxed code calls a small stable harness API. Hosting clients register capabilities, subscribe to events, handle approvals, and optionally manage long-lived instances or state. The daemon/service brokers those relationships, but it is not the owner of client extension APIs.
+
+### Sandbox Author Model
+
+Minimal nodes continue to look like a normal callable:
+
+```python
+def run(payload):
+    customer = host.call("crm.customer.lookup", {"id": payload["customer_id"]})
+    progress(50, "customer loaded")
+    return {"customer": customer}
+```
+
+For JavaScript nodes:
+
+```javascript
+export async function run(payload, api) {
+  const customer = await api.callAsync("crm.customer.lookup", {id: payload.customer_id});
+  api.progress({pct: 50, message: "customer loaded"});
+  return {customer};
+}
+```
+
+The sandbox does not know whether `crm.customer.lookup` is a built-in, a toolbox-backed provider, a GUI-hosted callback, or a remote client-owned capability. It receives only a scoped discovery document and calls by method name. Capability routing, permission checks, approvals, and provider transport remain outside the sandbox.
+
+Sandboxed code can discover the current contract:
+
+```python
+info = sandbox.describe()
+methods = info["host_capabilities"]["methods"]
+events = info["events"]
+```
+
+`sandbox.describe()` separates:
+
+- harness APIs, globals, and execution modes
+- worker-live events versus host-generated events
+- host-callable capabilities currently granted to this request, workflow, or instance
+- available state scopes
+- available action entries
+- roots and artifact policy
+
+`host.describe()` can become a narrower host-capability view. New sandbox code should prefer `sandbox.describe()` when it needs to reason about the whole environment.
+
+### Host Capability Provider Model
+
+Hosting clients provide extension APIs by registering a scoped capability session. The exact client helper API can hide transport details, but conceptually it looks like:
+
+```python
+session = hosting.host_capabilities.register(
+    scope={"workflow_id": workflow_id},
+    methods=[
+        {
+            "name": "crm.customer.lookup",
+            "group_path": ["CRM", "Customer"],
+            "args_schema": {"type": "object"},
+            "result_schema": {"type": "object"},
+            "permissions": ["crm.customer.read"],
+            "approval": {"mode": "none"},
+        }
+    ],
+)
+
+@session.method("crm.customer.lookup")
+async def lookup_customer(args, context):
+    return await crm.get_customer(args["id"])
+```
+
+The hosting library owns the callback binding and talks to the daemon/service. The provider implementation lives in the hosting client process or a client-owned helper process. The sandbox receives neither binding addresses nor provider tokens.
+
+The service broker resolves each `host.call(...)` by:
+
+1. matching the method against active built-in and client-owned provider sessions;
+2. checking request/workflow/instance/consumer scope;
+3. checking permissions and approved scopes;
+4. requesting user approval when required;
+5. invoking the provider callback;
+6. returning a normalized `host_response` to the worker.
+
+Built-ins such as `fs.*`, `http.fetch`, and future `state.*` methods should be represented as reserved built-in provider sessions behind the same broker.
+
+### Approval Model
+
+Approvals are user-facing host decisions, not sandbox decisions. A gated call should look synchronous to sandbox code:
+
+```python
+result = host.call("billing.invoice.approve", {"invoice_id": "inv-1"})
+```
+
+If approval is required, the broker emits an approval request toward the owning hosting client or UI. The provider is invoked only after approval. Denial returns a normal sandbox-visible host-call error, and the decision is recorded in durable audit because live streams may be lossy.
+
+### Event And Stream Model
+
+Sandbox authors emit semantic events through harness helpers:
+
+```python
+progress(25, "loading inputs")
+log.info("loaded customer", customer_id=payload["customer_id"])
+```
+
+The service emits lifecycle and observation events around the request:
+
+- `started`, `heartbeat`, `done`, `canceled`, `error`
+- `stdout`, `stderr`, `log`, `artifact`, `result`
+- `host_call`, `host_response`, `approval`
+
+Hosting clients consume these through helper APIs rather than parsing raw frames:
+
+```python
+async for event in hosting.events.subscribe(request_id):
+    if event.kind == "progress":
+        update_ui(event.payload)
+    elif event.kind == "stream_loss":
+        mark_output_partial(event.lane, event.dropped)
+```
+
+Helpers should expose simple loss behavior: either fail the stream on loss or surface a `stream_loss` event and continue with available data. Large ack-backed streams use accept/ack/close flow control; observability streams may drop according to lane policy.
+
+### State Model
+
+State is explicit host-managed data, not an implicit snapshot of Python or JavaScript memory. Sandboxes use granted host capabilities:
+
+```python
+profile = host.call("state.workflow.get", {"key": "customer_profile"})
+host.call("state.workflow.set", {"key": "customer_profile", "value": profile})
+```
+
+The same shape can support backend-global, workflow-local, instance-local, and request-local partitions. Access is granted by capability scope and policy, not by trusting arbitrary keys from sandbox code. Long-lived workers may keep process-local caches, but restart recovery should rebuild from explicit host-managed state.
+
+### Long-Lived Instance Model
+
+The default remains ephemeral request execution. Long-lived execution becomes explicit:
+
+```python
+instance = hosting.instances.create(runtime="python", scope={"workflow_id": workflow_id})
+await instance.call("run", payload)
+await instance.call("refresh_cache", {"force": True})
+await instance.close()
+```
+
+Requests can route to a live instance only when the client asks for that instance and policy allows it. Compatibility with a warm worker is not enough; the public route is `instance_id` plus matching runtime, package, scope, state policy, and capability grants.
+
+Project mode should become long-lived only after cwd, `sys.path`, environment mutation, import cache, and file cleanup semantics are declared. Until then, project requests stay safer as ephemeral or explicitly isolated instance executions.
+
+### Action/Card Model
+
+Simple nodes only need `run(payload)`. Richer nodes can expose an optional action manifest:
+
+```json
+{
+  "default_action": "run",
+  "actions": [
+    {
+      "name": "approve_invoice",
+      "entrypoint": "approve_invoice",
+      "args_schema": {},
+      "result_schema": {},
+      "permissions": ["invoice.approve"],
+      "ui": {"button": true}
+    }
+  ]
+}
+```
+
+Card designers discover available actions from the manifest and bind UI actions to sandbox entry points. The action invocation still goes through the same request/instance routing, capability, state, approval, and event contracts. This keeps `run(payload)` as the baseline while allowing composable workflow libraries to expose richer entry points.
+
+### Operational Boundaries
+
+This model deliberately keeps responsibilities separated:
+
+- sandbox code owns business logic and calls stable harness APIs
+- hosting clients own extension capability implementations and user-facing approval UX
+- the daemon/service owns brokering, policy enforcement, event observation, lifecycle, and cleanup
+- toolbox concepts provide descriptors, scopes, groups, and approvals, but node host calls do not inherit toolbox bundle staging or repair lifecycle unless a later unification explicitly chooses that
+
+That separation is what lets streaming, host APIs, state, long-lived instances, and card actions evolve without forcing sandbox authors to learn daemon transport details.
+
 ## Current Gaps
 
 ### Streaming
