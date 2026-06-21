@@ -12,6 +12,7 @@ from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntim
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
 from ..sandbox.broker_http import BrokeredHttpClient
+from ..sandbox.host_capabilities import HostCapabilityBroker
 from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
 from ..sandbox.policy import WorkerSandboxPolicy
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot, hosted_log_summary
@@ -653,8 +654,22 @@ class WorkflowHelperMixin:
             )
             return {"status": "ok", **dict(out or {})}
 
+        broker = HostCapabilityBroker(
+            request_id=str(dict(request or {}).get("request_id") or ""),
+            workflow_id=str(dict(request or {}).get("workflow_id") or ""),
+            package_id=str(dict(request or {}).get("package_id") or ""),
+            runtime_kind="workflow_node",
+            policy=dict(registry.policy or {}),
+            roots=dict(registry.roots or {}),
+        )
+        broker.register_builtin_provider(
+            provider_id="builtin.workflow_node_host_api",
+            owner="service",
+            methods=registry.capability_methods(provider_id="builtin.workflow_node_host_api"),
+        )
+
         def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
-            return registry.dispatch(dict(call or {}))
+            return broker.dispatch(dict(call or {}))
 
         return _dispatch
 

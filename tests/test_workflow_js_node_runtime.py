@@ -107,6 +107,28 @@ exports.run = function(input, api) {
     assert [call["method"] for call in calls] == ["host.describe", "fs.read_text", "fs.write_text"]
 
 
+def test_workflow_js_node_exposes_sandbox_describe() -> None:
+    source = """
+exports.run = function(input, api) {
+  const described = sandbox.describe();
+  return {output: {contract: described.contract, methods: described.methods}};
+};
+"""
+    calls = []
+
+    def dispatcher(call: Dict[str, Any]) -> Dict[str, Any]:
+        calls.append(dict(call))
+        if call["method"] == "sandbox.describe":
+            return {"contract": "hosting.sandbox.discovery.v1", "methods": ["host.describe", "sandbox.describe"]}
+        raise AssertionError(call["method"])
+
+    out = WorkflowJsNodeRuntimeRegistry().execute(_request(source), host_dispatcher=dispatcher)
+
+    assert out["ok"] is True
+    assert out["output"] == {"contract": "hosting.sandbox.discovery.v1", "methods": ["host.describe", "sandbox.describe"]}
+    assert [call["method"] for call in calls] == ["sandbox.describe"]
+
+
 def test_workflow_js_node_resolves_promise_return() -> None:
     source = "exports.run = function() { return Promise.resolve({output: true}); };"
     out = WorkflowJsNodeRuntimeRegistry().execute(_request(source))

@@ -404,6 +404,10 @@ globalThis.api = {
     sha256: function (text) { return __sha256(String(text || "")); }
   }
 };
+globalThis.sandbox = {
+  describe: function () { return api.call("sandbox.describe", {}); },
+  describeAsync: function () { return api.callAsync("sandbox.describe", {}); }
+};
 """.strip()
     runner = r"""
 (function () {

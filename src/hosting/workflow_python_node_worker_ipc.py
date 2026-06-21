@@ -210,6 +210,9 @@ class HostApi:
     def describe(self) -> Dict[str, Any]:
         return self.call("host.describe", {})
 
+    def sandbox_describe(self) -> Dict[str, Any]:
+        return self.call("sandbox.describe", {})
+
     def fs_read_text(self, root_id: str, relative_path: str = "", encoding: str = "utf-8") -> Dict[str, Any]:
         return self.call("fs.read_text", {"root_id": root_id, "relative_path": relative_path, "encoding": encoding})
 
@@ -250,6 +253,14 @@ class HostApi:
         )
 
 
+class SandboxApi:
+    def __init__(self, host: HostApi) -> None:
+        self._host = host
+
+    def describe(self) -> Dict[str, Any]:
+        return self._host.sandbox_describe()
+
+
 def _send(conn: Any, row: Dict[str, Any]) -> None:
     conn.send(dict(row or {}))
 
@@ -284,12 +295,14 @@ def _execute(conn: Any, req: Dict[str, Any]) -> int:
 
     stdout_io = io.StringIO()
     stderr_io = io.StringIO()
+    host_api = HostApi(conn=conn, request_id=request_id)
     globals_row = {
         "__builtins__": builtins_row,
         "__name__": "workflow_python_node_module",
         "progress": progress,
         "emit_progress": progress,
-        "host": HostApi(conn=conn, request_id=request_id),
+        "host": host_api,
+        "sandbox": SandboxApi(host_api),
         "artifact_inputs": dict(artifact_inputs or {}),
         "artifact_outputs": dict(artifact_outputs or {}),
         "payload": payload,

@@ -6,6 +6,16 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Completed In Current Slice
 
+### Host Capability Slice 1: Descriptor And Built-In Broker
+
+- [x] Added shared host capability descriptor, provider reference, approval, session, and broker primitives in `sandbox/host_capabilities.py`.
+- [x] Added descriptor validation for method names, namespaces, group paths, schema size, provider kind, and visibility.
+- [x] Adapted `HostApiRegistry` methods into shared descriptors with group metadata and sandbox-safe provider refs.
+- [x] Added `sandbox.describe` as a host-callable discovery method.
+- [x] Added Python `sandbox.describe()` and JavaScript `sandbox.describe()` harness APIs.
+- [x] Wrapped request-local built-ins behind `HostCapabilityBroker`.
+- [x] Routed Python and JavaScript workflow node host calls through the broker while preserving existing built-in behavior.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -32,7 +42,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ## Still Pending
 
-- [x] No pending work remains for the completed Sandbox Event Stream Protocol cleanup slice.
+- [ ] Continue Host Capability Protocol with client-owned capability sessions, provider callback RPC, permissions/scopes, approval routing, event observations, and durable audit.
 
 ## Verification
 

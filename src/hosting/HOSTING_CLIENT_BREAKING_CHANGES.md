@@ -77,3 +77,56 @@ Use `batch.loss` or the helper `stream_loss` normalized event to detect loss.
 - `workflow-*-stream-open`, `workflow-*-stream-send`, and `workflow-*-stream-close` remain public workflow commands.
 - Low-level proxy/generic-worker stream commands such as `proxy-stream-recv` are not changed in this slice.
 - Built-in sandbox `host.call(...)` behavior is not changed in this slice.
+
+## Host Capability Discovery
+
+Date: 2026-06-21
+
+Scope: first Host Capability Protocol implementation slice.
+
+### New Discovery API
+
+Python workflow nodes can now call:
+
+```python
+described = sandbox.describe()
+```
+
+JavaScript workflow nodes can now call:
+
+```javascript
+const described = sandbox.describe();
+```
+
+The returned discovery document uses:
+
+```json
+{
+  "contract": "hosting.sandbox.discovery.v1",
+  "harness": {},
+  "events": {},
+  "host_capabilities": {
+    "methods": [],
+    "groups": [],
+    "providers": [],
+    "transport": {}
+  },
+  "state": {},
+  "actions": {},
+  "policy": {},
+  "roots": {}
+}
+```
+
+### `host.describe()` / `api.describe()` Additions
+
+`host.describe()` and JavaScript `api.describe()` now return the same discovery-oriented shape while preserving top-level `methods`, `method_descriptions`, `policy`, `roots`, and `transport` for current callers.
+
+Important changes for clients:
+
+- `methods` now includes `sandbox.describe`.
+- `method_descriptions` include `group_path` and sandbox-safe `provider` metadata.
+- `host_capabilities.methods` contains shared capability descriptors for built-ins such as `fs.*` and `http.fetch`.
+- Provider discovery intentionally omits callback binding addresses and provider session tokens.
+
+Clients that only check for method presence should continue using `methods`. Clients that need schemas, scopes, groups, providers, or future client-owned capabilities should switch to `host_capabilities.methods`.

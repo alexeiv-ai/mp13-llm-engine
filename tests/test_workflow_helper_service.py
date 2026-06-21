@@ -865,6 +865,56 @@ exports.run = function(input, api) {
     assert read["artifacts"][0]["size_bytes"] == len("SEED TEXT")
 
 
+def test_execute_workflow_js_node_async_host_call_uses_broker(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    write_source = """
+exports.run = function(input, api) {
+  api.fs.writeText("seed", "", "async seed");
+  return {output: true};
+};
+"""
+    read_source = """
+exports.run = async function(input, api) {
+  const text = await api.fs.readTextAsync("seed", "");
+  return {output: {text: text}};
+};
+"""
+
+    written = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-async-artifact-write",
+            "module_source": write_source,
+            "module_sha256": hashlib.sha256(write_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
+        },
+    )
+    read = svc.execute_workflow_js(
+        profile="node",
+        request={
+            "request_id": "req-js-async-host-call",
+            "module_source": read_source,
+            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "payload": {},
+            "artifact_inputs": [{"name": "seed", "ref": written["artifacts"][0]["ref"]}],
+        },
+    )
+
+    assert written["status"] == "ok"
+    assert read["status"] == "ok"
+    assert read["output"] == {"text": "async seed"}
+
+
 def test_execute_workflow_js_node_artifact_fs_list_stat_and_mkdir(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -2389,12 +2439,44 @@ def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tm
     )
 
     assert described["status"] == "ok"
-    assert described["output"]["methods"] == ["host.describe"]
+    assert described["output"]["methods"] == ["host.describe", "sandbox.describe"]
     assert described["output"]["policy"]["artifact_fs"] is False
     assert described["output"]["policy"]["namespaces"]["fs"] is False
     assert rejected["status"] == "error"
     assert rejected["error"]["code"] == "workflow_sandbox_runtime_error"
     assert "unsupported_host_method:fs.read_text" in rejected["error"]["detail"]["message"]
+
+
+def test_execute_workflow_python_node_exposes_sandbox_describe(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    described = sandbox.describe()\n"
+        "    return {'output': {'contract': described['contract'], 'entrypoints': described['harness']['host_api_entrypoints'], 'methods': described['methods'], 'capabilities': described['host_capabilities']['methods']}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-sandbox-describe",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"]["contract"] == "hosting.sandbox.discovery.v1"
+    assert "sandbox.describe" in out["output"]["entrypoints"]
+    assert "sandbox.describe" in out["output"]["methods"]
+    assert all("binding" not in dict(row.get("provider") or {}) for row in out["output"]["capabilities"])
 
 
 def test_execute_workflow_python_node_host_api_http_fetch_uses_broker_policy(tmp_path: Path, monkeypatch) -> None:

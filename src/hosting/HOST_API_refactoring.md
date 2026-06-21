@@ -367,15 +367,15 @@ Error:
 
 ## Implementation Checklist
 
-- [ ] 1. Add shared host capability descriptor models.
-- [ ] 2. Add descriptor validation for names, namespaces, schemas, group paths, provider metadata, and visibility.
-- [ ] 3. Adapt service-owned built-ins (`fs.*`, `http.fetch`) to emit shared descriptors.
-- [ ] 4. Add hierarchical group metadata to descriptors and discovery output.
-- [ ] 5. Add `sandbox.describe` discovery assembled by the service.
-- [ ] 6. Convert `host.describe` / `api.describe` to the new host-capability view.
-- [ ] 7. Add capability broker with `describe(...)` and `dispatch_async(...)`.
-- [ ] 8. Wrap existing `HostApiRegistry` as a built-in provider behind the broker.
-- [ ] 9. Route Python and JavaScript node host calls through the broker.
+- [x] 1. Add shared host capability descriptor models.
+- [x] 2. Add descriptor validation for names, namespaces, schemas, group paths, provider metadata, and visibility.
+- [x] 3. Adapt service-owned built-ins (`fs.*`, `http.fetch`) to emit shared descriptors.
+- [x] 4. Add hierarchical group metadata to descriptors and discovery output.
+- [x] 5. Add `sandbox.describe` discovery assembled by the service.
+- [x] 6. Convert `host.describe` / `api.describe` to the new host-capability view.
+- [x] 7. Add capability broker with `describe(...)` and `dispatch_async(...)`.
+- [x] 8. Wrap existing `HostApiRegistry` as a built-in provider behind the broker.
+- [x] 9. Route Python and JavaScript node host calls through the broker.
 - [ ] 10. Add client-owned capability session registration/list/close daemon APIs.
 - [ ] 11. Add provider callback RPC envelopes and response validation.
 - [ ] 12. Add provider timeout, disconnect, and request-cancel handling.
@@ -387,13 +387,13 @@ Error:
 
 ## Test Checklist
 
-- [ ] Shared descriptor validation rejects invalid method names, namespaces, group paths, provider kinds, and oversized schemas.
-- [ ] Built-in `fs.*` descriptors normalize to shared capability descriptors.
-- [ ] Built-in `http.fetch` descriptor preserves policy and permission metadata.
-- [ ] `sandbox.describe` separates harness, events, capabilities, roots, policy, state, and actions.
-- [ ] Provider bindings and tokens are absent from sandbox-facing discovery.
-- [ ] Python `host.call(...)` dispatches a built-in through the broker wrapper.
-- [ ] JavaScript `api.callAsync(...)` dispatches a built-in through the broker wrapper.
+- [x] Shared descriptor validation rejects invalid method names, namespaces, group paths, provider kinds, and oversized schemas.
+- [x] Built-in `fs.*` descriptors normalize to shared capability descriptors.
+- [x] Built-in `http.fetch` descriptor preserves policy and permission metadata.
+- [x] `sandbox.describe` separates harness, events, capabilities, roots, policy, state, and actions.
+- [x] Provider bindings and tokens are absent from sandbox-facing discovery.
+- [x] Python `host.call(...)` dispatches a built-in through the broker wrapper.
+- [x] JavaScript `api.callAsync(...)` dispatches a built-in through the broker wrapper.
 - [ ] Client-owned provider session can register one method and receive a sandbox call.
 - [ ] Sandbox cannot call a method registered by an unrelated client/session.
 - [ ] Duplicate method registration follows deterministic precedence rules.
@@ -428,4 +428,3 @@ Error:
   - cache key includes method, actor, scope, and provider session
 - [ ] Confirm whether hierarchical groups should be added to native toolbox first or shared descriptors first.
 - [ ] Confirm whether HostedToolbox brokered IO unification is a later pillar or should be part of this host API pillar after broker dispatch is stable.
-

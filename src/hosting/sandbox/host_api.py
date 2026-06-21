@@ -6,6 +6,13 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from .host_capabilities import (
+    HostCapabilityApproval,
+    HostCapabilityDescriptor,
+    HostCapabilityMethod,
+    HostCapabilityProviderRef,
+    default_group_path,
+)
 
 HostApiHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 AsyncHostApiHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -45,6 +52,32 @@ class HostApiMethod:
             "permissions": list(self.permissions or []),
             "async": self.async_handler is not None,
         }
+
+    def to_capability_descriptor(self, *, provider_id: str = "builtin.host_api") -> HostCapabilityDescriptor:
+        namespace = self.namespace or self.name.split(".", 1)[0]
+        permissions = list(self.permissions or [])
+        scope_requirements = [
+            {"scope": permission.rsplit(".", 1)[0], "access": permission.rsplit(".", 1)[-1]}
+            for permission in permissions
+            if "." in permission
+        ]
+        return HostCapabilityDescriptor(
+            name=self.name,
+            namespace=namespace,
+            group_path=default_group_path(self.name),
+            description=self.description,
+            args_schema=dict(self.args_schema or {}),
+            result_schema=dict(self.result_schema or {}),
+            permissions=permissions,
+            scope_requirements=scope_requirements,
+            approval=HostCapabilityApproval(mode="none", ttl_seconds=0),
+            provider=HostCapabilityProviderRef(
+                provider_id=provider_id,
+                kind="builtin",
+                owner="service",
+                visibility="request",
+            ),
+        )
 
 
 class HostApiRegistry:
@@ -99,28 +132,65 @@ class HostApiRegistry:
         )
 
     def method_names(self) -> list[str]:
-        return sorted({"host.describe", *self._methods.keys()})
+        return sorted({"host.describe", "sandbox.describe", *self._methods.keys()})
 
     def describe(self) -> Dict[str, Any]:
-        describe_args, describe_result = host_describe_schema()
+        capability_descriptors = [self._host_describe_method().to_capability_descriptor()]
+        capability_descriptors.append(self._sandbox_describe_method().to_capability_descriptor())
+        capability_descriptors.extend(self._methods[name].to_capability_descriptor() for name in sorted(self._methods.keys()))
+        capability_methods = [descriptor.to_dict() for descriptor in capability_descriptors]
+        host_capabilities = {
+            "methods": capability_methods,
+            "groups": self._capability_groups(capability_descriptors),
+            "providers": [
+                {
+                    "provider_id": "builtin.host_api",
+                    "kind": "builtin",
+                    "owner": "service",
+                    "visibility": "request",
+                    "method_count": len(capability_descriptors),
+                }
+            ],
+            "transport": {
+                "framed": True,
+                "host_call_id": True,
+                "async_capable": True,
+                "out_of_order_responses": True,
+            },
+        }
+        async_method_names = {name for name, method in self._methods.items() if method.async_handler is not None}
         method_descriptions = [
-            HostApiMethod(
-                name="host.describe",
-                namespace="host",
-                description="Describe host API methods available to this sandbox request.",
-                args_schema=describe_args,
-                result_schema=describe_result,
-                permissions=[],
-                handler=lambda _args: self.describe(),
-            ).to_description()
+            {
+                "name": descriptor["name"],
+                "namespace": descriptor["namespace"],
+                "description": descriptor.get("description", ""),
+                "args_schema": dict(descriptor.get("args_schema") or {}),
+                "result_schema": dict(descriptor.get("result_schema") or {}),
+                "permissions": list(descriptor.get("permissions") or []),
+                "async": descriptor["name"] in async_method_names,
+                "group_path": list(descriptor.get("group_path") or []),
+                "provider": dict(descriptor.get("provider") or {}),
+            }
+            for descriptor in capability_methods
         ]
-        method_descriptions.extend(self._methods[name].to_description() for name in sorted(self._methods.keys()))
         return {
             "status": "ok",
-            "contract": self.contract,
+            "contract": "hosting.sandbox.discovery.v1",
             "request_id": self.request_id,
             "methods": self.method_names(),
             "method_descriptions": method_descriptions,
+            "host_capabilities": host_capabilities,
+            "harness": {
+                "host_api_entrypoints": ["host.call", "host.describe", "sandbox.describe"],
+            },
+            "events": {
+                "worker_live": ["progress"],
+                "host_generated": ["started", "heartbeat", "stdout", "stderr", "log", "artifact", "result", "error", "canceled", "done"],
+                "observations": ["host_call", "host_response"],
+                "reserved": ["approval", "state_notice", "action_notice"],
+            },
+            "state": {"available": False, "scopes": []},
+            "actions": {"available": False, "entries": []},
             "roots": dict(self.roots or {}),
             "policy": dict(self.policy or {}),
             "transport": {
@@ -133,9 +203,65 @@ class HostApiRegistry:
             },
         }
 
+    def _host_describe_method(self) -> HostApiMethod:
+        describe_args, describe_result = host_describe_schema()
+        return HostApiMethod(
+            name="host.describe",
+            namespace="host",
+            description="Describe host API methods available to this sandbox request.",
+            args_schema=describe_args,
+            result_schema=describe_result,
+            permissions=[],
+            handler=lambda _args: self.describe(),
+        )
+
+    def _sandbox_describe_method(self) -> HostApiMethod:
+        describe_args, describe_result = host_describe_schema()
+        return HostApiMethod(
+            name="sandbox.describe",
+            namespace="sandbox",
+            description="Describe the sandbox harness, events, roots, policy, state, actions, and host capabilities.",
+            args_schema=describe_args,
+            result_schema=describe_result,
+            permissions=[],
+            handler=lambda _args: self.describe(),
+        )
+
+    @staticmethod
+    def _capability_groups(descriptors: list[HostCapabilityDescriptor]) -> list[Dict[str, Any]]:
+        groups: Dict[str, Dict[str, Any]] = {}
+        for descriptor in descriptors:
+            path = list(descriptor.group_path or [])
+            key = "/".join(path)
+            groups.setdefault(key, {"path": path, "methods": []})
+            groups[key]["methods"].append(descriptor.name)
+        return [groups[key] for key in sorted(groups.keys())]
+
+    def capability_methods(self, *, provider_id: str = "builtin.host_api") -> list[HostCapabilityMethod]:
+        methods = [
+            HostCapabilityMethod(
+                descriptor=self._host_describe_method().to_capability_descriptor(provider_id=provider_id),
+                handler=lambda _args: self.describe(),
+            ),
+            HostCapabilityMethod(
+                descriptor=self._sandbox_describe_method().to_capability_descriptor(provider_id=provider_id),
+                handler=lambda _args: self.describe(),
+            ),
+        ]
+        for name in sorted(self._methods.keys()):
+            method = self._methods[name]
+            methods.append(
+                HostCapabilityMethod(
+                    descriptor=method.to_capability_descriptor(provider_id=provider_id),
+                    handler=method.handler,
+                    async_handler=method.async_handler,
+                )
+            )
+        return methods
+
     async def dispatch_async(self, call: Dict[str, Any]) -> Dict[str, Any]:
         method_name = _clean(dict(call or {}).get("method"))
-        if method_name == "host.describe":
+        if method_name in {"host.describe", "sandbox.describe"}:
             return self.describe()
         method = self._methods.get(method_name)
         if method is None:
@@ -157,7 +283,7 @@ class HostApiRegistry:
             return asyncio.run(self.dispatch_async(call))
         method_name = _clean(dict(call or {}).get("method"))
         method = self._methods.get(method_name)
-        if method_name == "host.describe":
+        if method_name in {"host.describe", "sandbox.describe"}:
             return self.describe()
         if method is not None and method.async_handler is None and method.handler is not None:
             return dict(method.handler(dict(dict(call or {}).get("arguments") or {})) or {})
