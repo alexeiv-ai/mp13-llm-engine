@@ -2721,6 +2721,105 @@ def test_execute_workflow_python_node_exposes_sandbox_describe(tmp_path: Path) -
     assert all("binding" not in dict(row.get("provider") or {}) for row in out["output"]["capabilities"])
 
 
+def test_execute_workflow_python_node_state_api_persists_workflow_state(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    write_source = (
+        "def run(payload):\n"
+        "    described = sandbox.describe()\n"
+        "    set_result = host.call('state.workflow.set', {'key': 'customer.profile', 'value': {'name': 'Ada', 'tier': 2}})\n"
+        "    got = host.call('state.workflow.get', {'key': 'customer.profile'})\n"
+        "    listed = host.call('state.workflow.list', {'prefix': 'customer.'})\n"
+        "    return {'output': {'state': described['state'], 'methods': described['methods'], 'set': set_result, 'got': got, 'listed': listed}}\n"
+    )
+    read_source = (
+        "def run(payload):\n"
+        "    got = host.call('state.workflow.get', {'key': 'customer.profile'})\n"
+        "    return {'output': got}\n"
+    )
+    sandbox_policy = {"sandbox": {"host_api": {"state": True}}}
+
+    written = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-state-write",
+            "module_source": write_source,
+            "module_sha256": hashlib.sha256(write_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf-state",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+    read = svc.execute_workflow_python(
+        profile="node",
+        sandbox_policy=sandbox_policy,
+        request={
+            "request_id": "req-node-state-read",
+            "module_source": read_source,
+            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf-state",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert written["status"] == "ok"
+    assert written["output"]["state"]["available"] is True
+    assert written["output"]["state"]["scopes"] == ["workflow"]
+    assert "state.workflow.get" in written["output"]["methods"]
+    assert written["output"]["set"]["version"] == 1
+    assert written["output"]["got"]["exists"] is True
+    assert written["output"]["got"]["value"] == {"name": "Ada", "tier": 2}
+    assert written["output"]["listed"]["keys"] == ["customer.profile"]
+    assert read["status"] == "ok"
+    assert read["output"]["exists"] is True
+    assert read["output"]["value"] == {"name": "Ada", "tier": 2}
+
+
+def test_execute_workflow_python_node_state_api_is_disabled_by_default(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    described = sandbox.describe()\n"
+        "    try:\n"
+        "        host.call('state.workflow.get', {'key': 'customer.profile'})\n"
+        "        error = ''\n"
+        "    except Exception as exc:\n"
+        "        error = str(exc)\n"
+        "    return {'output': {'state': described['state'], 'methods': described['methods'], 'error': error}}\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-state-disabled",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf-state-disabled",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"]["state"]["available"] is False
+    assert out["output"]["state"]["scopes"] == []
+    assert "state.workflow.get" not in out["output"]["methods"]
+    assert "unsupported_host_method:state.workflow.get" in out["output"]["error"]
+
+
 def test_execute_workflow_python_node_host_api_http_fetch_uses_broker_policy(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

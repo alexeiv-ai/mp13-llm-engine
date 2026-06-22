@@ -15,9 +15,13 @@ from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
 from ..sandbox.broker_http import BrokeredHttpClient
 from ..sandbox.host_capabilities import (
     HostCapabilityBroker,
+    HostCapabilityDescriptor,
+    HostCapabilityMethod,
     HostCapabilityProviderCall,
     HostCapabilityProviderUnavailable,
+    HostCapabilityProviderRef,
     HostCapabilitySession,
+    default_group_path,
 )
 from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
 from ..sandbox.policy import WorkerSandboxPolicy
@@ -577,6 +581,34 @@ class WorkflowHelperMixin:
             and bool(worker_policy.brokered_io.http)
             and str(worker_policy.network.mode or "").strip().lower() == "brokered_only"
         )
+        workflow_id = str(dict(request or {}).get("workflow_id") or "")
+        instance_id = str(dict(request or {}).get("instance_id") or "")
+        request_id = str(dict(request or {}).get("request_id") or "")
+        state_policy = host_api_policy.get("state")
+        state_namespace_enabled = bool(namespace_policy.get("state", False))
+
+        def _state_scope_enabled(scope: str) -> bool:
+            if not bool(host_api_policy.get("enabled", True)):
+                return False
+            normalized = str(scope or "").strip().lower()
+            if isinstance(state_policy, dict):
+                if normalized in state_policy:
+                    return bool(state_policy.get(normalized))
+                if normalized == "backend":
+                    return False
+                return bool(state_policy.get("enabled", state_namespace_enabled))
+            if state_policy is not None:
+                return bool(state_policy) and normalized != "backend"
+            return state_namespace_enabled and normalized != "backend"
+
+        state_scopes: list[str] = []
+        if _state_scope_enabled("backend"):
+            state_scopes.append("backend")
+        if workflow_id and _state_scope_enabled("workflow"):
+            state_scopes.append("workflow")
+        if instance_id and _state_scope_enabled("instance"):
+            state_scopes.append("instance")
+        state_available = bool(state_scopes)
         service_fallback_enabled = bool(
             host_api_policy.get(
                 "service_owned_fallback_enabled",
@@ -595,10 +627,12 @@ class WorkflowHelperMixin:
                 "namespaces": {
                     "fs": artifact_fs_enabled,
                     "http": http_enabled,
+                    "state": state_available,
                     "subprocess": False,
                     "custom_functions": False,
                 },
                 "http": http_enabled,
+                "state": {"available": state_available, "scopes": list(state_scopes)},
                 "subprocess": False,
                 "custom_functions": False,
                 "service_owned_fallback": service_fallback_enabled,
@@ -859,17 +893,189 @@ class WorkflowHelperMixin:
             )
             return {"status": "ok", **dict(out or {})}
 
+        def _state_notice(action: str, result: Dict[str, Any]) -> None:
+            if event_emitter is None:
+                return
+            try:
+                event_emitter(
+                    "state_notice",
+                    {
+                        "action": action,
+                        "scope": result.get("scope"),
+                        "key": result.get("key"),
+                        "version": result.get("version"),
+                        "request_id": request_id or None,
+                        "workflow_id": workflow_id or None,
+                        "instance_id": instance_id or None,
+                    },
+                )
+            except Exception:
+                pass
+
+        def _state_call(scope: str, action: str, args: Dict[str, Any]) -> Dict[str, Any]:
+            normalized_scope = str(scope or "").strip().lower()
+            if normalized_scope not in state_scopes:
+                raise PermissionError(f"state_scope_unavailable:{normalized_scope}")
+            row = dict(args or {})
+            if action == "get":
+                return self.sandbox_state_get(
+                    scope=normalized_scope,
+                    key=str(row.get("key") or ""),
+                    workflow_id=workflow_id,
+                    instance_id=instance_id,
+                    request_id=request_id,
+                )
+            if action == "set":
+                result = self.sandbox_state_set(
+                    scope=normalized_scope,
+                    key=str(row.get("key") or ""),
+                    value=row.get("value"),
+                    workflow_id=workflow_id,
+                    instance_id=instance_id,
+                    request_id=request_id,
+                    expected_version=row.get("expected_version") if "expected_version" in row else None,
+                )
+                _state_notice("set", result)
+                return result
+            if action == "list":
+                return self.sandbox_state_list(
+                    scope=normalized_scope,
+                    prefix=str(row.get("prefix") or ""),
+                    workflow_id=workflow_id,
+                    instance_id=instance_id,
+                    request_id=request_id,
+                )
+            if action == "delete":
+                result = self.sandbox_state_delete(
+                    scope=normalized_scope,
+                    key=str(row.get("key") or ""),
+                    workflow_id=workflow_id,
+                    instance_id=instance_id,
+                    request_id=request_id,
+                    expected_version=row.get("expected_version") if "expected_version" in row else None,
+                )
+                _state_notice("delete", result)
+                return result
+            raise RuntimeError(f"unsupported_state_action:{action}")
+
+        def _state_args_schema(action: str) -> Dict[str, Any]:
+            if action == "set":
+                return {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                        "value": {},
+                        "expected_version": {"type": "integer"},
+                    },
+                    "required": ["key", "value"],
+                    "additionalProperties": False,
+                }
+            if action == "list":
+                return {
+                    "type": "object",
+                    "properties": {"prefix": {"type": "string", "default": ""}},
+                    "additionalProperties": False,
+                }
+            return {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "expected_version": {"type": "integer"},
+                },
+                "required": ["key"],
+                "additionalProperties": False,
+            }
+
+        def _state_result_schema(action: str) -> Dict[str, Any]:
+            properties: Dict[str, Any] = {
+                "status": {"type": "string"},
+                "scope": {"type": "string"},
+            }
+            if action == "list":
+                properties.update(
+                    {
+                        "prefix": {"type": "string"},
+                        "keys": {"type": "array", "items": {"type": "string"}},
+                        "entries": {"type": "array", "items": {"type": "object"}},
+                    }
+                )
+            elif action == "get":
+                properties.update(
+                    {
+                        "key": {"type": "string"},
+                        "exists": {"type": "boolean"},
+                        "value": {},
+                        "version": {"type": "integer"},
+                        "updated_at": {"type": ["number", "null"]},
+                    }
+                )
+            else:
+                properties.update(
+                    {
+                        "key": {"type": "string"},
+                        "version": {"type": "integer"},
+                        "updated_at": {"type": "number"},
+                    }
+                )
+                if action == "delete":
+                    properties["existed"] = {"type": "boolean"}
+            return {"type": "object", "properties": properties}
+
+        def _state_capability_methods() -> list[HostCapabilityMethod]:
+            methods: list[HostCapabilityMethod] = []
+            provider_id = "builtin.workflow_node_state"
+            for scope in state_scopes:
+                for action in ("get", "set", "list", "delete"):
+                    access = "read" if action in {"get", "list"} else "write"
+                    method_name = f"state.{scope}.{action}"
+                    descriptor = HostCapabilityDescriptor(
+                        name=method_name,
+                        namespace="state",
+                        group_path=default_group_path(method_name),
+                        description=f"{action.title()} {scope} sandbox state.",
+                        args_schema=_state_args_schema(action),
+                        result_schema=_state_result_schema(action),
+                        permissions=[f"state.{scope}.{access}"],
+                        scope_requirements=[{"scope": f"state.{scope}", "access": access}],
+                        provider=HostCapabilityProviderRef(
+                            provider_id=provider_id,
+                            kind="builtin",
+                            owner="service",
+                            visibility="request",
+                        ),
+                    )
+                    methods.append(
+                        HostCapabilityMethod(
+                            descriptor=descriptor,
+                            handler=lambda args, _scope=scope, _action=action: _state_call(_scope, _action, args),
+                        )
+                    )
+            return methods
+
         broker = HostCapabilityBroker(
-            request_id=str(dict(request or {}).get("request_id") or ""),
-            workflow_id=str(dict(request or {}).get("workflow_id") or ""),
+            request_id=request_id,
+            workflow_id=workflow_id,
             package_id=str(dict(request or {}).get("package_id") or ""),
+            instance_id=instance_id,
             runtime_kind="workflow_node",
             policy=dict(registry.policy or {}),
             roots=dict(registry.roots or {}),
             event_emitter=event_emitter,
             audit_emitter=audit_emitter or self._append_host_capability_audit_event,
             provider_invoker=self._host_capability_provider_invoker,
+            state_info={
+                "available": state_available,
+                "scopes": list(state_scopes),
+                "provider_id": "builtin.workflow_node_state" if state_available else None,
+            },
         )
+        state_methods = _state_capability_methods()
+        if state_methods:
+            broker.register_builtin_provider(
+                provider_id="builtin.workflow_node_state",
+                owner="service",
+                methods=state_methods,
+            )
         capability_sessions = self._host_capability_sessions_for_broker(host_capability_sessions)
         for session in capability_sessions:
             broker.register_session(session)

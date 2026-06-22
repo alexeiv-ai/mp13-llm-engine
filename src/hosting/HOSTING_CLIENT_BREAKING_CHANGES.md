@@ -43,3 +43,48 @@ This slice adds reusable Host Capability + Toolbox callable-surface helpers and 
 Safe correlation metadata is preserved by helper APIs for:
 
 `workflow_id`, `instance_id`, `node_id`, `request_id`, `cursor_id`, `context_id`, `branch_id`, `session_tree_id`, `actor`, `provider_id`, `method`, `approval_id`, `host_call_id`, and `provider_call_id`.
+
+## Host-Managed State Capabilities
+
+Workflow Python node requests can now opt into host-managed state methods:
+
+- `state.workflow.get`, `state.workflow.set`, `state.workflow.list`, `state.workflow.delete`
+- `state.instance.*` when the request has an `instance_id`
+- `state.backend.*` only when explicitly enabled with `state.backend=true`
+
+State is disabled by default. Enable workflow/instance state with:
+
+```json
+{
+  "sandbox": {
+    "host_api": {
+      "state": true
+    }
+  }
+}
+```
+
+Enable backend-global state only with an explicit scoped policy:
+
+```json
+{
+  "sandbox": {
+    "host_api": {
+      "state": {
+        "workflow": true,
+        "instance": true,
+        "backend": true
+      }
+    }
+  }
+}
+```
+
+Sandbox code should call these through `host.call(...)`:
+
+```python
+host.call("state.workflow.set", {"key": "customer.profile", "value": {"tier": 2}})
+profile = host.call("state.workflow.get", {"key": "customer.profile"})
+```
+
+Writes are versioned. Pass `expected_version` when the client wants optimistic conflict detection; mismatches raise `state_version_conflict`.

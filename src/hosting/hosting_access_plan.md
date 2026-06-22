@@ -258,11 +258,11 @@ Direction: introduce explicit sandbox instance IDs, routing policy, and state sn
 
 ### Sandbox State
 
-Current node responses support `state_patch`, but there is no durable, scoped state store managed by the host for sandbox instances, backend-global partitions, or workflow-local partitions.
+Current node responses support `state_patch`. Workflow Python node requests now also have an explicit, opt-in host-managed state provider with versioned JSON values and `state.<scope>.(get|set|list|delete)` Host Capability methods.
 
-Gap: long-lived and restarted instances need state recovery, and workflows need scoped read/write state without relying on arbitrary files.
+Gap: long-lived and restarted instances still need snapshot/restore hooks, and state cleanup policy for explicit long-lived instances is not yet defined.
 
-Direction: define host-managed state partitions with explicit scope, permissions, versioning, and conflict semantics.
+Direction: build instance snapshot/restore and routable instance lifecycle on top of the explicit state capability model. Do not snapshot arbitrary Python memory.
 
 ### Workflow/Card Actions
 
@@ -869,10 +869,13 @@ Goal: add routable, recoverable node instances.
 
 Work:
 
-- Add explicit instance create/route/close APIs.
-- Add state scopes and state host capability methods.
-- Add snapshot/restore hooks for instance-local state.
-- Make project mode long-lived only after cwd/sys.path/env/import-cache policy is explicit.
+- [ ] Add explicit instance create/route/close APIs.
+- [x] Add state scopes and state host capability methods.
+  - [x] Persist host-managed sandbox state in runtime state.
+  - [x] Expose `state.workflow.*`, `state.instance.*`, and explicit `state.backend.*` methods when policy grants those scopes.
+  - [x] Advertise available state scopes through `sandbox.describe()`.
+- [ ] Add snapshot/restore hooks for instance-local state.
+- [ ] Make project mode long-lived only after cwd/sys.path/env/import-cache policy is explicit.
 
 ### Phase 6: Action Manifest And Card Integration
 
@@ -880,9 +883,9 @@ Goal: support card buttons and workflow composition.
 
 Work:
 
-- Add optional action manifest.
-- Add card-facing action discovery.
-- Add action invocation routing.
+- [ ] Add optional action manifest.
+- [ ] Add card-facing action discovery.
+- [ ] Add action invocation routing.
 - Keep `run(payload)` as default action.
 
 ## Migration Notes

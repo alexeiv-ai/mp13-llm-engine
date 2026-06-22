@@ -233,6 +233,7 @@ class StateMixin:
             "resource_claims": {},
             "resource_tokens": {},
             "claim_owner_keepalive": {},
+            "sandbox_state": {"backend": {}, "workflow": {}, "instance": {}, "request": {}},
             "claim_audit_events": [],
             "host_capability_audit_events": [],
             "ownership_change_notices": {},
@@ -335,6 +336,7 @@ class StateMixin:
                 "resource_claims": {},
                 "resource_tokens": {},
                 "claim_owner_keepalive": {},
+                "sandbox_state": {"backend": {}, "workflow": {}, "instance": {}, "request": {}},
                 "ownership_change_notices": {},
             },
         )
@@ -374,6 +376,7 @@ class StateMixin:
             "resource_claims": dict(runtime_payload.get("resource_claims") or {}),
             "resource_tokens": dict(runtime_payload.get("resource_tokens") or {}),
             "claim_owner_keepalive": dict(runtime_payload.get("claim_owner_keepalive") or {}),
+            "sandbox_state": dict(runtime_payload.get("sandbox_state") or {}),
             "ownership_change_notices": dict(runtime_payload.get("ownership_change_notices") or {}),
             "claim_audit_events": list(claim_audit_payload.get("events") or []),
             "host_capability_audit_events": list(host_capability_audit_payload.get("events") or []),
@@ -412,6 +415,7 @@ class StateMixin:
         payload.setdefault("resource_claims", {})
         payload.setdefault("resource_tokens", {})
         payload.setdefault("claim_owner_keepalive", {})
+        payload.setdefault("sandbox_state", {"backend": {}, "workflow": {}, "instance": {}, "request": {}})
         payload.setdefault("claim_audit_events", [])
         payload.setdefault("host_capability_audit_events", [])
         payload.setdefault("ownership_change_notices", {})
@@ -509,6 +513,7 @@ class StateMixin:
                 "resource_claims": dict(out.get("resource_claims") or {}),
                 "resource_tokens": dict(out.get("resource_tokens") or {}),
                 "claim_owner_keepalive": dict(out.get("claim_owner_keepalive") or {}),
+                "sandbox_state": dict(out.get("sandbox_state") or {}),
                 "ownership_change_notices": dict(out.get("ownership_change_notices") or {}),
             },
         )
@@ -549,6 +554,228 @@ class StateMixin:
     def _run_locked_toolbox_call(self, toolbox_id: str, callback: Any, /, *args: Any, **kwargs: Any) -> Any:
         with self._locked_toolbox(toolbox_id):
             return callback(*args, **kwargs)
+
+    @staticmethod
+    def _sandbox_state_json_value(value: Any) -> Any:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+
+    @staticmethod
+    def _sandbox_state_key(value: Any) -> str:
+        key = str(value or "").strip()
+        if not key:
+            raise ValueError("state_key_required")
+        if len(key) > 512:
+            raise ValueError("state_key_too_long")
+        return key
+
+    def _sandbox_state_partition_id(
+        self,
+        *,
+        scope: str,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+    ) -> str:
+        normalized = str(scope or "").strip().lower()
+        if normalized == "backend":
+            return "global"
+        if normalized == "workflow":
+            partition_id = str(workflow_id or "").strip()
+            if not partition_id:
+                raise ValueError("workflow_id_required")
+            return partition_id
+        if normalized == "instance":
+            partition_id = str(instance_id or "").strip()
+            if not partition_id:
+                raise ValueError("instance_id_required")
+            return partition_id
+        if normalized == "request":
+            partition_id = str(request_id or "").strip()
+            if not partition_id:
+                raise ValueError("request_id_required")
+            return partition_id
+        raise ValueError(f"unsupported_state_scope:{scope}")
+
+    def _sandbox_state_partition(
+        self,
+        control: Dict[str, Any],
+        *,
+        scope: str,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+    ) -> Dict[str, Any]:
+        normalized = str(scope or "").strip().lower()
+        partition_id = self._sandbox_state_partition_id(
+            scope=normalized,
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+        )
+        root = dict(control.get("sandbox_state") or {})
+        for known_scope in ("backend", "workflow", "instance", "request"):
+            root.setdefault(known_scope, {})
+        scope_rows = dict(root.get(normalized) or {})
+        partition = dict(scope_rows.get(partition_id) or {})
+        partition.setdefault("items", {})
+        if normalized in {"workflow", "instance", "request"} and workflow_id:
+            partition.setdefault("workflow_id", str(workflow_id))
+        if normalized in {"instance", "request"} and instance_id:
+            partition.setdefault("instance_id", str(instance_id))
+        if normalized == "request" and request_id:
+            partition.setdefault("request_id", str(request_id))
+        scope_rows[partition_id] = partition
+        root[normalized] = scope_rows
+        control["sandbox_state"] = root
+        return partition
+
+    def sandbox_state_get(
+        self,
+        *,
+        scope: str,
+        key: str,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+    ) -> Dict[str, Any]:
+        state_key = self._sandbox_state_key(key)
+        control = self._read_control()
+        partition = self._sandbox_state_partition(
+            control,
+            scope=scope,
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+        )
+        item = dict(dict(partition.get("items") or {}).get(state_key) or {})
+        exists = bool(item)
+        return {
+            "status": "ok",
+            "scope": str(scope or "").strip().lower(),
+            "key": state_key,
+            "exists": exists,
+            "value": self._sandbox_state_json_value(item.get("value")) if exists else None,
+            "version": int(item.get("version") or 0) if exists else 0,
+            "updated_at": item.get("updated_at") if exists else None,
+        }
+
+    def sandbox_state_set(
+        self,
+        *,
+        scope: str,
+        key: str,
+        value: Any,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+        expected_version: Any = None,
+    ) -> Dict[str, Any]:
+        state_key = self._sandbox_state_key(key)
+        control = self._read_control()
+        partition = self._sandbox_state_partition(
+            control,
+            scope=scope,
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+        )
+        items = dict(partition.get("items") or {})
+        existing = dict(items.get(state_key) or {})
+        current_version = int(existing.get("version") or 0)
+        if expected_version is not None and int(expected_version) != current_version:
+            raise ValueError("state_version_conflict")
+        updated_at = time.time()
+        next_version = current_version + 1
+        items[state_key] = {
+            "value": self._sandbox_state_json_value(value),
+            "version": next_version,
+            "updated_at": updated_at,
+        }
+        partition["items"] = items
+        partition["updated_at"] = updated_at
+        self._write_control(control)
+        return {
+            "status": "ok",
+            "scope": str(scope or "").strip().lower(),
+            "key": state_key,
+            "version": next_version,
+            "updated_at": updated_at,
+        }
+
+    def sandbox_state_list(
+        self,
+        *,
+        scope: str,
+        prefix: str = "",
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+    ) -> Dict[str, Any]:
+        control = self._read_control()
+        partition = self._sandbox_state_partition(
+            control,
+            scope=scope,
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+        )
+        normalized_prefix = str(prefix or "")
+        items = dict(partition.get("items") or {})
+        keys = sorted(key for key in items.keys() if not normalized_prefix or str(key).startswith(normalized_prefix))
+        return {
+            "status": "ok",
+            "scope": str(scope or "").strip().lower(),
+            "prefix": normalized_prefix,
+            "keys": keys,
+            "entries": [
+                {
+                    "key": key,
+                    "version": int(dict(items.get(key) or {}).get("version") or 0),
+                    "updated_at": dict(items.get(key) or {}).get("updated_at"),
+                }
+                for key in keys
+            ],
+        }
+
+    def sandbox_state_delete(
+        self,
+        *,
+        scope: str,
+        key: str,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+        expected_version: Any = None,
+    ) -> Dict[str, Any]:
+        state_key = self._sandbox_state_key(key)
+        control = self._read_control()
+        partition = self._sandbox_state_partition(
+            control,
+            scope=scope,
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+        )
+        items = dict(partition.get("items") or {})
+        existing = dict(items.get(state_key) or {})
+        existed = bool(existing)
+        current_version = int(existing.get("version") or 0)
+        if expected_version is not None and int(expected_version) != current_version:
+            raise ValueError("state_version_conflict")
+        if state_key in items:
+            del items[state_key]
+        updated_at = time.time()
+        partition["items"] = items
+        partition["updated_at"] = updated_at
+        self._write_control(control)
+        return {
+            "status": "ok",
+            "scope": str(scope or "").strip().lower(),
+            "key": state_key,
+            "existed": existed,
+            "version": current_version,
+            "updated_at": updated_at,
+        }
 
     @contextmanager
     def _locked_toolboxes(self, toolbox_ids: List[str]):

@@ -374,6 +374,7 @@ class HostCapabilityBroker:
         approval_requester: Optional[ApprovalRequester] = None,
         event_emitter: Optional[EventEmitter] = None,
         audit_emitter: Optional[AuditEmitter] = None,
+        state_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.request_id = _clean(request_id)
         self.workflow_id = _clean(workflow_id)
@@ -393,6 +394,7 @@ class HostCapabilityBroker:
         self.approval_requester = approval_requester
         self.event_emitter = event_emitter
         self.audit_emitter = audit_emitter
+        self.state_info = dict(state_info or {})
         self._sessions: Dict[str, HostCapabilitySession] = {}
         self._approval_grants: list[Dict[str, Any]] = []
 
@@ -843,7 +845,7 @@ class HostCapabilityBroker:
                 "reserved": ["approval", "state_notice", "action_notice"],
             },
             "host_capabilities": host_capabilities,
-            "state": {"available": False, "scopes": []},
+            "state": dict(self.state_info or {"available": False, "scopes": []}),
             "actions": {"available": False, "entries": []},
             "policy": dict(self.policy or {}),
             "roots": dict(self.roots or {}),

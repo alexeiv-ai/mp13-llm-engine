@@ -128,6 +128,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added grant TTL support from decision `ttl_seconds` or descriptor approval TTL.
 - [x] Emitted approval/audit records for reused scoped grants.
 
+### State And Long-Lived Instances Slice 14: Host-Managed State Capabilities
+
+- [x] Added durable `sandbox_state` storage to hosting runtime state.
+- [x] Added versioned JSON state helpers for backend, workflow, instance, and request partitions.
+- [x] Exposed opt-in workflow node Host Capability methods for `state.<scope>.get`, `state.<scope>.set`, `state.<scope>.list`, and `state.<scope>.delete`.
+- [x] Advertised available state scopes through `sandbox.describe()["state"]`.
+- [x] Kept state capabilities separate from the deprecated service-owned `fs.*` / `http.fetch` fallback path.
+- [x] Added workflow-node tests for default-disabled behavior and workflow state persistence across requests.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -160,7 +169,11 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers.
 - [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
 - [x] Implement scoped `add_to_scope` approval reuse for Host Capability calls.
+- [x] Implement explicit host-managed state capability methods.
 - [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
+- [ ] Add explicit instance create/route/close APIs.
+- [ ] Add snapshot/restore hooks for instance-local state.
+- [ ] Decide and implement long-lived project-mode cwd/sys.path/env/import-cache policy.
 
 ## Verification
 
