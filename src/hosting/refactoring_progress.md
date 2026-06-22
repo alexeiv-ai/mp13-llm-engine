@@ -186,6 +186,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added a workflow-helper test for the deferred JS project-mode instance response.
 - [x] Updated the main plan, Host API plan, and JS worker docs to record the decision and future runtime prerequisites.
 
+### Action Manifest Slice 20: Service-Level Discovery And Routing
+
+- [x] Added `hosting.sandbox.action_manifest.v1` normalization for optional `action_manifest` / `actions` request fields.
+- [x] Added card-facing Python and JavaScript action discovery helpers with advertised/hidden filtering.
+- [x] Added Python and JavaScript action execution helpers and normal `action_name` request routing.
+- [x] Routed actions through existing worker fields: `export_name`, `operation`, snippet mode, and project callable.
+- [x] Added workflow-helper tests for Python discovery/routing and JavaScript routing.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -225,7 +233,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
 - [x] Decide and implement Python long-lived project-mode cwd/sys.path/env/import-cache policy.
 - [x] Decide JS project-mode long-lived semantics.
+- [x] Implement service-level action manifest discovery and invocation routing.
 - [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
+- [ ] Expose action describe/execute over daemon/channel/CLI if dependent clients need remote transport access.
 - [ ] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests after dependent clients complete migration.
 
 ## Verification
@@ -238,6 +248,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m py_compile src/hosting/sandbox/host_capabilities.py src/hosting/service/workflow_helpers.py`
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_node_instance or workflow_js_node_project_instance"`
 - [x] `python -m py_compile src/hosting/sandbox/workflow_js_node_runtime.py`
+- [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_python_node_action_manifest or workflow_js_node_action_manifest"`
+- [x] `python -m py_compile src/hosting/service/workflow_helpers.py`
 - [x] `pytest tests/test_host_capabilities.py -q`
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
 - [x] `pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`

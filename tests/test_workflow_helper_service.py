@@ -1171,6 +1171,85 @@ def test_workflow_js_node_project_instance_explains_deferred_semantics(tmp_path:
     assert "fresh QuickJS context" in out["detail"]["message"]
 
 
+def test_workflow_python_node_action_manifest_discovers_and_routes_exports(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    return {'output': {'action': 'run', 'value': payload['value']}}\n\n"
+        "def approve(payload):\n"
+        "    return {'output': {'action': 'approve', 'value': payload['value']}}\n\n"
+        "def internal(payload):\n"
+        "    return {'output': {'action': 'internal'}}\n"
+    )
+    request = {
+        "request_id": "req-py-action",
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "export_name": "run",
+        "payload": {"value": 7},
+        "action_manifest": {
+            "default_action": "run",
+            "actions": [
+                {"name": "run", "title": "Run", "entrypoint": {"kind": "export", "export_name": "run"}},
+                {"name": "approve", "title": "Approve", "entrypoint": {"kind": "export", "export_name": "approve"}},
+                {"name": "internal", "hidden_allowed": True, "entrypoint": {"kind": "export", "export_name": "internal"}},
+            ],
+        },
+    }
+
+    visible = svc.workflow_python_action_describe(request=request)
+    hidden = svc.workflow_python_action_describe(request=request, include_hidden=True)
+    out = svc.execute_workflow_python_action(profile="node", action_name="approve", request=request)
+
+    assert [row["name"] for row in visible["actions"]] == ["run", "approve"]
+    assert [row["name"] for row in hidden["actions"]] == ["run", "approve", "internal"]
+    assert out["status"] == "ok"
+    assert out["output"] == {"action": "approve", "value": 7}
+    assert out["audit"]["action"]["name"] == "approve"
+    assert out["audit"]["action"]["entrypoint"]["export_name"] == "approve"
+
+
+def test_workflow_js_node_action_manifest_routes_exports(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "exports.run = function(input) { return { output: { action: 'run', value: input.value } }; };\n"
+        "exports.preview = function(input) { return { output: { action: 'preview', value: input.value } }; };\n"
+    )
+    request = {
+        "request_id": "req-js-action",
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "payload": {"value": 9},
+        "action_manifest": {
+            "actions": [
+                {"name": "run", "entrypoint": {"kind": "export", "export_name": "run"}},
+                {"name": "preview", "entrypoint": {"kind": "export", "export_name": "preview"}},
+            ]
+        },
+    }
+
+    described = svc.workflow_js_action_describe(request=request)
+    out = svc.execute_workflow_js_action(action_name="preview", request=request)
+
+    assert [row["name"] for row in described["actions"]] == ["run", "preview"]
+    assert out["status"] == "ok"
+    assert out["output"] == {"action": "preview", "value": 9}
+    assert out["audit"]["action"]["name"] == "preview"
+    assert out["audit"]["action"]["entrypoint"]["export_name"] == "preview"
+
+
 def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

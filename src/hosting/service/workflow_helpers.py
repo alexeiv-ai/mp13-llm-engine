@@ -36,6 +36,8 @@ from ..sandbox.workflow_python_contract import (
     workflow_python_node_not_implemented_response,
 )
 
+WORKFLOW_ACTION_MANIFEST_CONTRACT = "hosting.sandbox.action_manifest.v1"
+
 
 class WorkflowHelperMixin:
     def _workflow_python_runtime_manager(self) -> HostedPythonRuntimeManager:
@@ -401,6 +403,7 @@ class WorkflowHelperMixin:
                 "package_source_digest": str(normalized.get("package_source_digest") or "").strip() or None,
                 "module_sha256": str(normalized.get("module_sha256") or "").strip() or None,
                 "provenance": dict(normalized.get("provenance") or {}),
+                "action": dict(dict(request or {}).get("_workflow_action_context") or {}) or None,
                 "runtime": {
                     "python_executable": str(dict(normalized.get("python") or {}).get("python_executable") or sys.executable),
                     "runtime_kind": "workflow_python",
@@ -453,6 +456,199 @@ class WorkflowHelperMixin:
         req["project"] = project
         req["artifact_inputs"] = artifacts
         return req
+
+    @staticmethod
+    def _workflow_action_raw_manifest(request: Dict[str, Any]) -> Dict[str, Any]:
+        req = dict(request or {})
+        raw = req.get("action_manifest")
+        if raw is None:
+            raw = req.get("actions")
+        if isinstance(raw, dict):
+            return dict(raw)
+        if isinstance(raw, list):
+            return {"actions": list(raw)}
+        return {}
+
+    @staticmethod
+    def _workflow_action_entrypoint_from_request(request: Dict[str, Any], *, runtime: str) -> Dict[str, Any]:
+        req = dict(request or {})
+        mode = str(req.get("execution_mode") or dict(req.get(runtime) or {}).get("execution_mode") or "").strip().lower()
+        project = dict(req.get("project") or {})
+        if mode == "project" or project:
+            return {
+                "kind": "project",
+                "module": str(project.get("entrypoint") or project.get("module") or "").strip(),
+                "callable": str(project.get("callable") or project.get("function") or req.get("export_name") or req.get("operation") or "run").strip() or "run",
+            }
+        if mode == "snippet":
+            return {"kind": "snippet"}
+        export_name = str(req.get("export_name") or req.get("operation") or "run").strip() or "run"
+        return {"kind": "export", "export_name": export_name}
+
+    @staticmethod
+    def _workflow_action_rows(raw: Dict[str, Any]) -> list[Dict[str, Any]]:
+        actions = raw.get("actions")
+        if isinstance(actions, dict):
+            return [{**dict(value or {}), "name": str(key)} for key, value in actions.items() if isinstance(value, dict)]
+        return [dict(row or {}) for row in list(actions or []) if isinstance(row, dict)]
+
+    @classmethod
+    def _workflow_normalize_action_manifest(cls, request: Dict[str, Any], *, runtime: str) -> Dict[str, Any]:
+        req = dict(request or {})
+        raw = cls._workflow_action_raw_manifest(req)
+        rows = cls._workflow_action_rows(raw)
+        default_action = str(raw.get("default_action") or raw.get("default") or req.get("default_action") or "run").strip() or "run"
+        if not rows:
+            rows = [{"name": default_action, "title": "Run", "entrypoint": cls._workflow_action_entrypoint_from_request(req, runtime=runtime)}]
+        actions: list[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            name = str(row.get("name") or row.get("id") or row.get("action") or "").strip()
+            if not name:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            entrypoint = dict(row.get("entrypoint") or {})
+            if not entrypoint:
+                if row.get("project") and isinstance(row.get("project"), dict):
+                    project = dict(row.get("project") or {})
+                    entrypoint = {
+                        "kind": "project",
+                        "module": str(project.get("entrypoint") or project.get("module") or "").strip(),
+                        "callable": str(project.get("callable") or project.get("function") or row.get("callable") or "run").strip() or "run",
+                    }
+                elif row.get("operation"):
+                    entrypoint = {"kind": "export", "export_name": str(row.get("operation") or "").strip(), "operation": str(row.get("operation") or "").strip()}
+                elif row.get("export_name") or row.get("callable"):
+                    entrypoint = {"kind": "export", "export_name": str(row.get("export_name") or row.get("callable") or "").strip()}
+                else:
+                    entrypoint = {"kind": "export", "export_name": name}
+            action = {
+                "name": name,
+                "title": str(row.get("title") or row.get("label") or name).strip() or name,
+                "description": str(row.get("description") or "").strip(),
+                "allowed": bool(row.get("allowed", True)),
+                "advertised": bool(row.get("advertised", True)),
+                "hidden_allowed": bool(row.get("hidden_allowed", False)),
+                "disabled": bool(row.get("disabled", False)),
+                "gated": bool(row.get("gated", False)),
+                "entrypoint": entrypoint,
+                "input_schema": dict(row.get("input_schema") or row.get("args_schema") or row.get("parameters") or {}),
+                "result_schema": dict(row.get("result_schema") or row.get("returns_schema") or {}),
+                "approval": dict(row.get("approval") or row.get("approval_policy") or {}),
+                "permissions": list(row.get("permissions") or []),
+                "metadata": dict(row.get("metadata") or {}),
+            }
+            actions.append(action)
+        if not any(row["name"] == default_action for row in actions):
+            default_action = actions[0]["name"] if actions else "run"
+        return {
+            "status": "ok",
+            "contract": WORKFLOW_ACTION_MANIFEST_CONTRACT,
+            "runtime": str(runtime or "").strip(),
+            "default_action": default_action,
+            "actions": actions,
+        }
+
+    @classmethod
+    def _workflow_action_manifest_card_view(cls, request: Dict[str, Any], *, runtime: str, include_hidden: bool = False) -> Dict[str, Any]:
+        manifest = cls._workflow_normalize_action_manifest(request, runtime=runtime)
+        actions = []
+        for action in list(manifest.get("actions") or []):
+            if not bool(action.get("advertised", True)):
+                continue
+            if bool(action.get("hidden_allowed", False)) and not bool(include_hidden):
+                continue
+            actions.append(dict(action))
+        return {**manifest, "actions": actions, "count": len(actions), "card_facing": True}
+
+    @classmethod
+    def _workflow_selected_action_name(cls, request: Dict[str, Any]) -> str:
+        req = dict(request or {})
+        selected = req.get("action_name")
+        if selected is None:
+            selected = req.get("action")
+        if isinstance(selected, dict):
+            selected = selected.get("name") or selected.get("id")
+        return str(selected or "").strip()
+
+    @classmethod
+    def _workflow_request_with_action(cls, request: Dict[str, Any], *, runtime: str) -> Dict[str, Any]:
+        req = dict(request or {})
+        name = cls._workflow_selected_action_name(req)
+        if not name:
+            return req
+        manifest = cls._workflow_normalize_action_manifest(req, runtime=runtime)
+        action = next((dict(row or {}) for row in list(manifest.get("actions") or []) if str(row.get("name") or "") == name), None)
+        if action is None:
+            return {
+                **req,
+                "_workflow_action_error": {
+                    "reason": "workflow_action_not_found",
+                    "detail": {"action_name": name, "available_actions": [str(row.get("name") or "") for row in list(manifest.get("actions") or [])]},
+                },
+            }
+        if not bool(action.get("allowed", True)) or bool(action.get("disabled", False)):
+            return {
+                **req,
+                "_workflow_action_error": {
+                    "reason": "workflow_action_not_available",
+                    "detail": {"action_name": name, "disabled": bool(action.get("disabled", False)), "allowed": bool(action.get("allowed", True))},
+                },
+            }
+        entrypoint = dict(action.get("entrypoint") or {})
+        routed = dict(req)
+        routed["_workflow_action_context"] = {
+            "name": name,
+            "manifest_contract": WORKFLOW_ACTION_MANIFEST_CONTRACT,
+            "entrypoint": entrypoint,
+        }
+        kind = str(entrypoint.get("kind") or entrypoint.get("type") or "").strip().lower()
+        if kind == "snippet":
+            routed["execution_mode"] = "snippet"
+        elif kind == "project":
+            project = dict(routed.get("project") or {})
+            module_name = str(entrypoint.get("module") or entrypoint.get("entrypoint") or "").strip()
+            callable_name = str(entrypoint.get("callable") or entrypoint.get("function") or entrypoint.get("export_name") or "run").strip() or "run"
+            if module_name:
+                project["entrypoint"] = module_name
+            project["callable"] = callable_name
+            routed["project"] = project
+            routed["execution_mode"] = "project"
+            routed["export_name"] = callable_name
+        else:
+            export_name = str(entrypoint.get("export_name") or entrypoint.get("operation") or entrypoint.get("callable") or name).strip() or name
+            routed["export_name"] = export_name
+            if entrypoint.get("operation"):
+                routed["operation"] = str(entrypoint.get("operation") or "").strip()
+        return routed
+
+    def workflow_python_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
+        return self._workflow_action_manifest_card_view(dict(request or {}), runtime="python", include_hidden=include_hidden)
+
+    def workflow_js_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
+        return self._workflow_action_manifest_card_view(dict(request or {}), runtime="javascript", include_hidden=include_hidden)
+
+    def execute_workflow_python_action(
+        self,
+        *,
+        action_name: str,
+        request: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        req = {**dict(request or {}), "action_name": str(action_name or "").strip()}
+        return self.execute_workflow_python(request=req, **kwargs)
+
+    def execute_workflow_js_action(
+        self,
+        *,
+        action_name: str,
+        request: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        req = {**dict(request or {}), "action_name": str(action_name or "").strip()}
+        return self.execute_workflow_js(request=req, **kwargs)
 
     def _workflow_python_node_dependency_environment_check(
         self,
@@ -1459,6 +1655,7 @@ class WorkflowHelperMixin:
                 "package_source_digest": str(req.get("package_source_digest") or "").strip() or None,
                 "module_sha256": str(req.get("module_sha256") or "").strip() or None,
                 "provenance": dict(req.get("provenance") or {}),
+                "action": dict(req.get("_workflow_action_context") or {}) or None,
                 "runtime": {
                     **dict(result.get("runtime") or {}),
                     "runtime_kind": "workflow_js",
@@ -1623,10 +1820,23 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
-    ) -> Dict[str, Any]:
+        ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         req = dict(request or {})
         runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
+        req = self._workflow_request_with_action(req, runtime="javascript")
+        action_error = dict(req.pop("_workflow_action_error", {}) or {})
+        if action_error:
+            return self._workflow_js_node_response_from_execution(
+                execution={
+                    "ok": False,
+                    "reason": str(action_error.get("reason") or "workflow_action_invalid"),
+                    "detail": dict(action_error.get("detail") or {}),
+                },
+                request=req,
+                environment_key=str(environment_key or ""),
+                engine_id=str(engine_id or ""),
+            )
         js = {**dict(javascript or {}), **dict(req.get("javascript") or {})}
         ensured = self.ensure_workflow_js(
             profile=prof,
@@ -1743,7 +1953,7 @@ class WorkflowHelperMixin:
         )
         return self._workflow_js_node_response_from_execution(
             execution=result,
-            request={**dict(request or {}), "request_id": lifecycle.request_id, "javascript": js},
+            request={**req, "request_id": lifecycle.request_id, "javascript": js},
             environment_key=str(ensured.get("environment_key") or ""),
             engine_id=str(ensured["engine_id"]),
             metrics={
@@ -2207,10 +2417,31 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
-    ) -> Dict[str, Any]:
+        ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
         runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
+        req = self._workflow_request_with_action(req, runtime="python")
+        action_error = dict(req.pop("_workflow_action_error", {}) or {})
+        if action_error:
+            if prof == "node":
+                return self._workflow_python_node_response_from_execution(
+                    execution={
+                        "ok": False,
+                        "reason": str(action_error.get("reason") or "workflow_action_invalid"),
+                        "detail": dict(action_error.get("detail") or {}),
+                    },
+                    request=req,
+                    environment_key=str(environment_key or ""),
+                    engine_id=str(engine_id or ""),
+                )
+            return {
+                "status": "error",
+                "ok": False,
+                "profile": prof,
+                "reason": str(action_error.get("reason") or "workflow_action_invalid"),
+                "detail": dict(action_error.get("detail") or {}),
+            }
         if prof == "node":
             req = self._workflow_python_with_project_artifact_input(req)
         if prof == "node" and str(environment_name or "") == "workflow-python-helper":
@@ -2316,7 +2547,7 @@ class WorkflowHelperMixin:
                         reason="workflow_python_artifact_error",
                     )
                     response = self._workflow_python_node_artifact_error(
-                        request={**dict(request or {}), "request_id": lifecycle.request_id, "python": py},
+                        request={**req, "request_id": lifecycle.request_id, "python": py},
                         environment_key=effective_key,
                         engine_id=eid,
                         error=exc,
@@ -2401,7 +2632,7 @@ class WorkflowHelperMixin:
             )
             return self._workflow_python_node_response_from_execution(
                 execution=result,
-                request={**dict(request or {}), "request_id": lifecycle.request_id, "python": py},
+                request={**req, "request_id": lifecycle.request_id, "python": py},
                 environment_key=effective_key,
                 engine_id=eid,
                 metrics={

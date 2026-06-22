@@ -896,10 +896,16 @@ Goal: support card buttons and workflow composition.
 
 Work:
 
-- [ ] Add optional action manifest.
-- [ ] Add card-facing action discovery.
-- [ ] Add action invocation routing.
-- Keep `run(payload)` as default action.
+- [x] Add optional action manifest.
+  - [x] Normalize `action_manifest` / `actions` into `hosting.sandbox.action_manifest.v1`.
+  - [x] Preserve allowed, advertised, hidden, disabled, gated, schema, approval, permission, metadata, and entrypoint fields.
+  - [x] Keep `run(payload)` as the default action when no manifest is supplied.
+- [x] Add card-facing action discovery.
+  - [x] Add Python and JavaScript service helpers that return advertised actions and can include hidden actions when requested.
+- [x] Add action invocation routing.
+  - [x] Route selected actions through existing `export_name`, `operation`, snippet, and project callable request fields before worker execution.
+  - [x] Add explicit Python and JavaScript action execution helpers on top of normal execute.
+  - [ ] Expose action describe/execute over daemon/channel/CLI if dependent clients need remote transport access.
 
 ## Migration Notes
 

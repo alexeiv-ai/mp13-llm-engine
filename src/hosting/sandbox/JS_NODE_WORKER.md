@@ -84,6 +84,8 @@ Optional fields:
 8. `execution_mode`
 9. `code_revision`
 10. `export_name`
+11. `action_manifest` / `actions`
+12. `action_name`
 
 The host verifies `sha256(module_source) == module_sha256` before execution.
 
@@ -129,6 +131,23 @@ The JS worker does not support Python node `project` or uv-project execution
 modes. Multi-file JS authoring is handled before execution by
 `build_workflow_js_module_bundle(...)`, which still emits one `module_source`
 submitted as normal `script` mode.
+
+## Action Manifest
+
+Requests may include an optional `action_manifest` or `actions` field using the
+`hosting.sandbox.action_manifest.v1` shape. Each action has a stable `name`,
+display metadata, visibility flags, schemas, approval/permission metadata, and
+an `entrypoint`. When no manifest is supplied, the host exposes one default
+`run` action that routes to the request's existing `export_name` or to
+`exports.run`.
+
+Card-facing discovery uses `workflow_js_action_describe(...)`, which returns
+advertised actions and can include `hidden_allowed` actions when requested.
+Execution can select an action by passing `action_name` on the normal workflow
+JavaScript request or by calling `execute_workflow_js_action(...)`. The host
+routes the selected action into the existing worker contract by setting
+`export_name` or `execution_mode="snippet"` before the worker receives the
+request.
 
 ## JavaScript Execution API
 

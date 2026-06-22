@@ -79,6 +79,8 @@ Optional fields:
 7. `artifact_outputs`
 8. `execution_mode`
 9. `project`
+10. `action_manifest` / `actions`
+11. `action_name`
 
 The host verifies `sha256(module_source) == module_sha256` before execution. In default module mode, the requested function is found by `export_name` or `operation`, and is called with `payload`.
 
@@ -120,6 +122,23 @@ Project request:
 ```
 
 For `project.ref`, the host stages files into the request workspace as an artifact input named by `project.root_input` or `project` by default. Project-local imports are allowed only when the imported module resolves under the staged project root. Global imports still require `python.import_allowlist`.
+
+## Action Manifest
+
+Requests may include an optional `action_manifest` or `actions` field using the
+`hosting.sandbox.action_manifest.v1` shape. Each action has a stable `name`,
+display metadata, visibility flags, schemas, approval/permission metadata, and
+an `entrypoint`. When no manifest is supplied, the host exposes one default
+`run` action that routes to the request's existing `export_name`, `operation`,
+or project callable.
+
+Card-facing discovery uses `workflow_python_action_describe(...)`, which returns
+advertised actions and can include `hidden_allowed` actions when requested.
+Execution can select an action by passing `action_name` on the normal workflow
+Python request or by calling `execute_workflow_python_action(...)`. The host
+routes the selected action into the existing worker contract by setting
+`export_name` / `operation`, `execution_mode="snippet"`, or
+`project.callable` before the worker receives the request.
 
 Host-side callers can import request builders from `hosting.sandbox.workflow_python_contract` instead of hand-authoring low-level request fields:
 

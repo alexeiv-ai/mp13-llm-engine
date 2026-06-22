@@ -127,6 +127,7 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [x] JavaScript worker runtime metadata now reports the host worker pid for routed live instances.
 - [x] Python project-mode pinned instances are allowed only with an explicit isolation policy that resets cwd, `sys.path`, env, and project import modules between calls.
 - [x] JavaScript project-mode pinned instances remain unsupported until the JS runtime can preserve a QuickJS context or module graph under explicit cleanup and snapshot/restore semantics.
+- [x] Service-level Python and JavaScript action manifests, card-facing discovery helpers, and action execution routing were added on top of existing worker entrypoint fields.
 
 ## Test Maintenance
 
@@ -140,7 +141,7 @@ These items were enabled by the Host Capability model but belong to later plan p
 ## Deferred Cross-Pillar Work
 
 - [ ] Rework HostedToolbox brokered IO on top of Host Capability dispatch if the later toolbox lifecycle pillar chooses that simplification.
-- [ ] Add card/action discovery and invocation on top of the same descriptor/callable-surface primitives.
+- [ ] Expose card/action discovery and invocation over daemon/channel/CLI if dependent clients need remote transport access.
 - [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
 - [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context or module graph cache semantics are available.
 - [ ] Decide whether native toolbox metadata should directly adopt Host Capability group/namespace descriptors or continue using adapters.
