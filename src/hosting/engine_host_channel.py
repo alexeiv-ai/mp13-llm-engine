@@ -1596,6 +1596,50 @@ class EngineHostControlChannel:
         res = self._invoke("workflow-python-verify-install-receipt", {"environment": dict(environment or {})})
         return dict(res or {})
 
+    def sandbox_state_snapshot(
+        self,
+        *,
+        scope: str,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+        prefix: str = "",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-state-snapshot",
+            {
+                "scope": str(scope or "").strip(),
+                "workflow_id": str(workflow_id or "").strip() or None,
+                "instance_id": str(instance_id or "").strip() or None,
+                "request_id": str(request_id or "").strip() or None,
+                "prefix": str(prefix or ""),
+            },
+        )
+        return dict(res or {})
+
+    def sandbox_state_restore(
+        self,
+        *,
+        snapshot: Dict[str, Any],
+        scope: str = "",
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+        mode: str = "merge",
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "sandbox-state-restore",
+            {
+                "snapshot": dict(snapshot or {}),
+                "scope": str(scope or "").strip() or None,
+                "workflow_id": str(workflow_id or "").strip() or None,
+                "instance_id": str(instance_id or "").strip() or None,
+                "request_id": str(request_id or "").strip() or None,
+                "mode": str(mode or "merge").strip() or "merge",
+            },
+        )
+        return dict(res or {})
+
     def ensure_workflow_python(
         self,
         *,

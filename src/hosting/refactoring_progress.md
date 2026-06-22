@@ -155,6 +155,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added JS worker PID runtime metadata so routed calls can be observed and tested.
 - [x] Added tests proving sequential JS instance calls route to the same worker process.
 
+### State And Long-Lived Instances Slice 17: Explicit State Snapshots
+
+- [x] Added `sandbox_state_snapshot(...)` for scoped host-managed state partitions.
+- [x] Added `sandbox_state_restore(...)` with `merge` and `replace` modes.
+- [x] Added channel, daemon, auth, policy, and CLI command dispatch for `sandbox-state-snapshot` and `sandbox-state-restore`.
+- [x] Kept snapshot/restore limited to explicit host-managed state, not arbitrary process memory.
+- [x] Added tests for instance partition snapshot/restore and daemon forwarding.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -190,8 +198,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement explicit host-managed state capability methods.
 - [x] Implement explicit Python node instance create/execute/list/close APIs.
 - [x] Implement explicit JS node instance create/execute/list/close APIs.
+- [x] Add snapshot/restore hooks for instance-local host-managed state.
 - [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
-- [ ] Add snapshot/restore hooks for instance-local state.
 - [ ] Decide and implement long-lived project-mode cwd/sys.path/env/import-cache policy.
 
 ## Verification

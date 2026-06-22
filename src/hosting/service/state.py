@@ -777,6 +777,105 @@ class StateMixin:
             "updated_at": updated_at,
         }
 
+    def sandbox_state_snapshot(
+        self,
+        *,
+        scope: str,
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+        prefix: str = "",
+    ) -> Dict[str, Any]:
+        normalized = str(scope or "").strip().lower()
+        partition_id = self._sandbox_state_partition_id(
+            scope=normalized,
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+        )
+        control = self._read_control()
+        root = dict(control.get("sandbox_state") or {})
+        scope_rows = dict(root.get(normalized) or {})
+        partition = dict(scope_rows.get(partition_id) or {})
+        normalized_prefix = str(prefix or "")
+        items = {
+            str(key): self._sandbox_state_json_value(value)
+            for key, value in dict(partition.get("items") or {}).items()
+            if not normalized_prefix or str(key).startswith(normalized_prefix)
+        }
+        return {
+            "status": "ok",
+            "contract": "hosting.sandbox.state_snapshot.v1",
+            "scope": normalized,
+            "partition_id": partition_id,
+            "workflow_id": str(workflow_id or "").strip() or partition.get("workflow_id"),
+            "instance_id": str(instance_id or "").strip() or partition.get("instance_id"),
+            "request_id": str(request_id or "").strip() or partition.get("request_id"),
+            "prefix": normalized_prefix,
+            "items": items,
+            "count": len(items),
+            "created_at": time.time(),
+        }
+
+    def sandbox_state_restore(
+        self,
+        *,
+        snapshot: Dict[str, Any],
+        scope: str = "",
+        workflow_id: str = "",
+        instance_id: str = "",
+        request_id: str = "",
+        mode: str = "merge",
+    ) -> Dict[str, Any]:
+        row = dict(snapshot or {})
+        normalized = str(scope or row.get("scope") or "").strip().lower()
+        restore_mode = str(mode or "merge").strip().lower()
+        if restore_mode not in {"merge", "replace"}:
+            raise ValueError(f"unsupported_state_restore_mode:{restore_mode}")
+        target_workflow_id = str(workflow_id or row.get("workflow_id") or "").strip()
+        target_instance_id = str(instance_id or row.get("instance_id") or "").strip()
+        target_request_id = str(request_id or row.get("request_id") or "").strip()
+        control = self._read_control()
+        partition = self._sandbox_state_partition(
+            control,
+            scope=normalized,
+            workflow_id=target_workflow_id,
+            instance_id=target_instance_id,
+            request_id=target_request_id,
+        )
+        raw_items = dict(row.get("items") or {})
+        restored_items: Dict[str, Dict[str, Any]] = {}
+        now = time.time()
+        for raw_key, raw_item in raw_items.items():
+            state_key = self._sandbox_state_key(raw_key)
+            item = dict(raw_item or {}) if isinstance(raw_item, dict) else {"value": raw_item}
+            restored_items[state_key] = {
+                "value": self._sandbox_state_json_value(item.get("value")),
+                "version": max(1, int(item.get("version") or 1)),
+                "updated_at": float(item.get("updated_at") or now),
+            }
+        if restore_mode == "replace":
+            partition["items"] = restored_items
+        else:
+            merged = dict(partition.get("items") or {})
+            merged.update(restored_items)
+            partition["items"] = merged
+        partition["updated_at"] = now
+        self._write_control(control)
+        return {
+            "status": "ok",
+            "scope": normalized,
+            "partition_id": self._sandbox_state_partition_id(
+                scope=normalized,
+                workflow_id=target_workflow_id,
+                instance_id=target_instance_id,
+                request_id=target_request_id,
+            ),
+            "mode": restore_mode,
+            "restored_count": len(restored_items),
+            "updated_at": now,
+        }
+
     @contextmanager
     def _locked_toolboxes(self, toolbox_ids: List[str]):
         normalized_ids = sorted(

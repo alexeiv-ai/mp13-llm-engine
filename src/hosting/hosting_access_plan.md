@@ -252,7 +252,7 @@ Direction: define a "host capability toolbox" model that reuses toolbox metadata
 
 Current Python node workers can be reused sequentially for compatible module/snippet requests. Python and JavaScript node module/snippet requests now also support explicit pinned instances with create/execute/list/close APIs. Project mode remains one-shot because it mutates process-global state such as cwd, `sys.path`, environment variables, and import caches.
 
-Gap: clients cannot preserve mutated runtime state through restart.
+Gap: clients cannot preserve arbitrary process memory through restart. Explicit host-managed state now has snapshot/restore helpers for recovery workflows.
 
 Direction: introduce explicit sandbox instance IDs, routing policy, and state snapshot/restore hooks.
 
@@ -877,7 +877,10 @@ Work:
   - [x] Persist host-managed sandbox state in runtime state.
   - [x] Expose `state.workflow.*`, `state.instance.*`, and explicit `state.backend.*` methods when policy grants those scopes.
   - [x] Advertise available state scopes through `sandbox.describe()`.
-- [ ] Add snapshot/restore hooks for instance-local state.
+- [x] Add snapshot/restore hooks for instance-local state.
+  - [x] Add `sandbox-state-snapshot` for scoped host-managed state partitions.
+  - [x] Add `sandbox-state-restore` with `merge` and `replace` modes.
+  - [x] Keep snapshots limited to explicit host-managed state, not arbitrary Python/JS process memory.
 - [ ] Make project mode long-lived only after cwd/sys.path/env/import-cache policy is explicit.
 
 ### Phase 6: Action Manifest And Card Integration

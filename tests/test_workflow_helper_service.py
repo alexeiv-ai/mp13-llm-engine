@@ -281,6 +281,14 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
             self.calls.append(("execute", dict(kwargs)))
             return {"status": "ok", "ok": True}
 
+        def sandbox_state_snapshot(self, **kwargs):
+            self.calls.append(("state_snapshot", dict(kwargs)))
+            return {"status": "ok", "contract": "hosting.sandbox.state_snapshot.v1"}
+
+        def sandbox_state_restore(self, **kwargs):
+            self.calls.append(("state_restore", dict(kwargs)))
+            return {"status": "ok", "restored_count": 1}
+
         def workflow_python_instance_create(self, **kwargs):
             self.calls.append(("instance_create", dict(kwargs)))
             return {"status": "ok", "instance_id": kwargs.get("instance_id") or "inst-1"}
@@ -332,6 +340,8 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert daemon._call_service("workflow-python-environment-spec", {"profile": "helper"})["environment_key"] == "env-key"
     assert daemon._call_service("workflow-python-ensure", {"engine_id": "wf-py"})["engine_id"] == "wf-py"
     assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+    assert daemon._call_service("sandbox-state-snapshot", {"scope": "instance", "instance_id": "inst-1"})["contract"] == "hosting.sandbox.state_snapshot.v1"
+    assert daemon._call_service("sandbox-state-restore", {"snapshot": {"scope": "instance", "items": {}}, "instance_id": "inst-1"})["restored_count"] == 1
     assert daemon._call_service("workflow-python-instance-create", {"instance_id": "inst-1", "request": {"request_id": "req-create"}})["instance_id"] == "inst-1"
     assert daemon._call_service("workflow-python-instance-execute", {"instance_id": "inst-1", "request": {"request_id": "req-inst"}})["ok"] is True
     assert daemon._call_service("workflow-python-instance-list", {})["instances"] == []
@@ -348,6 +358,8 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
         "spec",
         "ensure",
         "execute",
+        "state_snapshot",
+        "state_restore",
         "instance_create",
         "instance_execute",
         "instance_list",
@@ -2969,6 +2981,64 @@ def test_execute_workflow_python_node_state_api_is_disabled_by_default(tmp_path:
     assert out["output"]["state"]["scopes"] == []
     assert "state.workflow.get" not in out["output"]["methods"]
     assert "unsupported_host_method:state.workflow.get" in out["output"]["error"]
+
+
+def test_sandbox_state_snapshot_and_restore_instance_partition(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    svc.sandbox_state_set(
+        scope="instance",
+        workflow_id="wf-state",
+        instance_id="inst-a",
+        key="cache.profile",
+        value={"name": "Ada"},
+    )
+    svc.sandbox_state_set(
+        scope="instance",
+        workflow_id="wf-state",
+        instance_id="inst-a",
+        key="scratch",
+        value={"ignored": True},
+    )
+
+    snapshot = svc.sandbox_state_snapshot(
+        scope="instance",
+        workflow_id="wf-state",
+        instance_id="inst-a",
+        prefix="cache.",
+    )
+    restored = svc.sandbox_state_restore(
+        snapshot=snapshot,
+        workflow_id="wf-state",
+        instance_id="inst-b",
+        mode="replace",
+    )
+    got = svc.sandbox_state_get(
+        scope="instance",
+        workflow_id="wf-state",
+        instance_id="inst-b",
+        key="cache.profile",
+    )
+    missing = svc.sandbox_state_get(
+        scope="instance",
+        workflow_id="wf-state",
+        instance_id="inst-b",
+        key="scratch",
+    )
+
+    assert snapshot["contract"] == "hosting.sandbox.state_snapshot.v1"
+    assert snapshot["scope"] == "instance"
+    assert snapshot["partition_id"] == "inst-a"
+    assert snapshot["count"] == 1
+    assert list(snapshot["items"]) == ["cache.profile"]
+    assert restored["status"] == "ok"
+    assert restored["partition_id"] == "inst-b"
+    assert restored["restored_count"] == 1
+    assert got["exists"] is True
+    assert got["value"] == {"name": "Ada"}
+    assert missing["exists"] is False
 
 
 def test_execute_workflow_python_node_host_api_http_fetch_uses_broker_policy(tmp_path: Path, monkeypatch) -> None:

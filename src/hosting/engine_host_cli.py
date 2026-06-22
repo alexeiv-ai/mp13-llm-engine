@@ -783,6 +783,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-python-verify-environment",
         "workflow-python-install-environment",
         "workflow-python-verify-install-receipt",
+        "sandbox-state-snapshot",
+        "sandbox-state-restore",
         "workflow-python-ensure",
         "workflow-python-execute",
         "workflow-python-instance-create",
@@ -1323,6 +1325,29 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "workflow-python-verify-install-receipt":
             _print_ok(svc.workflow_python_verify_install_receipt(environment=dict(payload.get("environment") or {})))
+            return 0
+        if cmd == "sandbox-state-snapshot":
+            _print_ok(
+                svc.sandbox_state_snapshot(
+                    scope=str(payload.get("scope") or ""),
+                    workflow_id=str(payload.get("workflow_id") or ""),
+                    instance_id=str(payload.get("instance_id") or ""),
+                    request_id=str(payload.get("request_id") or ""),
+                    prefix=str(payload.get("prefix") or ""),
+                )
+            )
+            return 0
+        if cmd == "sandbox-state-restore":
+            _print_ok(
+                svc.sandbox_state_restore(
+                    snapshot=dict(payload.get("snapshot") or {}),
+                    scope=str(payload.get("scope") or ""),
+                    workflow_id=str(payload.get("workflow_id") or ""),
+                    instance_id=str(payload.get("instance_id") or ""),
+                    request_id=str(payload.get("request_id") or ""),
+                    mode=str(payload.get("mode") or "merge"),
+                )
+            )
             return 0
         if cmd == "workflow-python-ensure":
             _print_ok(

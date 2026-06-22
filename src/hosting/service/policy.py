@@ -76,6 +76,8 @@ class PolicyMixin:
             "workflow-python-verify-environment",
             "workflow-python-install-environment",
             "workflow-python-verify-install-receipt",
+            "sandbox-state-snapshot",
+            "sandbox-state-restore",
             "workflow-python-ensure",
             "workflow-python-execute",
             "workflow-python-instance-create",

@@ -2449,6 +2449,23 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-python-verify-install-receipt":
             return svc.workflow_python_verify_install_receipt(environment=dict(payload.get("environment") or {}))
+        if cmd == "sandbox-state-snapshot":
+            return svc.sandbox_state_snapshot(
+                scope=str(payload.get("scope") or ""),
+                workflow_id=str(payload.get("workflow_id") or ""),
+                instance_id=str(payload.get("instance_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                prefix=str(payload.get("prefix") or ""),
+            )
+        if cmd == "sandbox-state-restore":
+            return svc.sandbox_state_restore(
+                snapshot=dict(payload.get("snapshot") or {}),
+                scope=str(payload.get("scope") or ""),
+                workflow_id=str(payload.get("workflow_id") or ""),
+                instance_id=str(payload.get("instance_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                mode=str(payload.get("mode") or "merge"),
+            )
         if cmd == "workflow-python-ensure":
             return svc.ensure_workflow_python(
                 profile=str(payload.get("profile") or "helper"),

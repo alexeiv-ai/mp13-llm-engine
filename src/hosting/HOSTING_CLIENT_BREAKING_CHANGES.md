@@ -133,3 +133,19 @@ Current limits:
 - JS project mode is rejected for pinned instances until cwd, env, module/cache, and cleanup policy is explicit.
 - The worker process is pinned, but each JS request still creates a fresh QuickJS context. Use host-managed state for data that must persist between calls.
 - Pinned instance restart recovery is not implemented yet.
+
+## Host-Managed State Snapshots
+
+Clients can now snapshot and restore explicit host-managed state partitions:
+
+- `sandbox_state_snapshot(scope=..., workflow_id=..., instance_id=..., request_id=..., prefix=...)`
+- `sandbox_state_restore(snapshot=..., scope=..., workflow_id=..., instance_id=..., request_id=..., mode="merge"|"replace")`
+
+Use this for restart recovery of `state.instance.*` data:
+
+```python
+snapshot = channel.sandbox_state_snapshot(scope="instance", workflow_id="wf-1", instance_id="inst-1")
+channel.sandbox_state_restore(snapshot=snapshot, workflow_id="wf-1", instance_id="inst-2", mode="replace")
+```
+
+Snapshots contain only explicit host-managed state. They do not serialize Python globals, QuickJS contexts, import caches, cwd, environment mutations, or arbitrary worker memory.
