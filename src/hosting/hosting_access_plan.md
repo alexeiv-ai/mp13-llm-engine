@@ -102,14 +102,14 @@ The hosting library owns the callback binding and talks to the daemon/service. T
 
 The service broker resolves each `host.call(...)` by:
 
-1. matching the method against active built-in and client-owned provider sessions;
+1. matching the method against active provider sessions;
 2. checking request/workflow/instance/consumer scope;
 3. checking permissions and approved scopes;
 4. requesting user approval when required;
 5. invoking the provider callback;
 6. returning a normalized `host_response` to the worker.
 
-Built-ins such as `fs.*`, `http.fetch`, and future `state.*` methods should be represented as reserved built-in provider sessions behind the same broker.
+Known methods such as `fs.*`, `http.fetch`, and future state methods should be represented as explicit provider sessions behind the same broker. The hosting service should provide descriptor helpers and broker primitives, not implicit method ownership.
 
 ### Approval Model
 
@@ -219,7 +219,7 @@ Direction: formalize event kinds as a first-class protocol. Worker harnesses sho
 
 ### Host API Ownership
 
-Current Python node `host.call(...)` routes to an in-process dispatcher built by the hosting service. Built-ins like `fs.*` and `http.fetch` are service-owned. There is no public mechanism for a dependent client process to register custom host calls for a node request.
+Current Python node `host.call(...)` routes through the hosting service broker. The service owns the dispatch machinery, but `fs.*`, `http.fetch`, custom methods, toolbox-backed methods, and state methods are provider-session owned capabilities. Dependent client processes register capabilities through Host Capability sessions and callback bindings.
 
 Gap: dependent clients cannot naturally provide host API methods from their own process. Cross-process callbacks would require an RPC relay similar to the toolbox callback binding.
 
@@ -346,8 +346,8 @@ Effort: High.
 Current state:
 
 - Python node host API calls are handled by the daemon/service process.
-- Built-ins are currently service-owned in code, but the target model removes daemon-owned built-in special status.
-- Dependent clients can register provider sessions, but known broker-supported methods still need to move to hosting client library registration.
+- Known methods such as `fs.*` and `http.fetch` are no longer service-owned workflow-node capabilities; clients register them explicitly when they want those names available.
+- Dependent clients can register provider sessions, and the hosting client library exposes helpers for known broker-supported method descriptors.
 - Toolbox callback relay already proves callback-to-client RPC is possible.
 
 Needed changes:
@@ -482,7 +482,7 @@ Effort: High.
 Current state:
 
 - Toolbox already supports visible/hidden/gated states and callback processors for approval-like flows.
-- Node host API has basic policy gates for built-in namespaces.
+- Node host API has basic policy gates for Host Capability namespaces.
 
 Needed changes:
 
@@ -510,8 +510,8 @@ Effort: Medium.
 
 Current state:
 
-- Node filesystem and HTTP helpers are currently exposed as daemon/service built-ins.
-- Target Host API model moves those known helper methods into default hosting-client registration.
+- Node filesystem and HTTP helpers are convenience wrappers over Host Capability calls; the implementation must come from registered provider sessions.
+- The hosting client library exposes known-method registration helpers for filesystem and HTTP descriptors.
 - Toolbox brokered IO has separate callback/broker code paths.
 
 Needed changes:
@@ -755,7 +755,7 @@ Responsible for:
 - call methods from sandbox to host
 - correlate responses
 - enforce scopes and approvals
-- route calls to service built-ins or client-owned callback endpoints
+- route calls to provider-session callback endpoints
 
 This should be toolbox-inspired and direction-neutral.
 
@@ -791,8 +791,8 @@ Goal: clarify what is current behavior versus target behavior.
 Work:
 
 - Update worker docs to distinguish worker-live events from service-generated stream records.
-- Mark current `HostApiRegistry` as service-owned built-in dispatcher.
-- Document that custom client-owned host APIs are not yet public.
+- Document `HostApiRegistry` as the broker-facing describe/dispatch root, not as owner of known filesystem/HTTP methods.
+- Document that custom client-owned host APIs are public through Host Capability sessions.
 
 ### Phase 1: Event Protocol Cleanup
 
@@ -833,7 +833,8 @@ Work:
 - [x] Add Host Capability descriptor-to-callable-schema helpers for sandbox/model-facing discovery.
 - [x] Keep descriptor helpers for `fs.*` and `http.fetch` so clients can register those methods explicitly.
 - [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
-- [x] Keep service-owned `fs.*` / `http.fetch` only as an explicit opt-in diagnostic fallback with audit/log markers.
+- [x] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback registration, dispatch, audit/log markers, and fallback-only tests.
+- [x] Treat legacy fallback policy keys such as `sandbox.host_api.service_owned_fallback_enabled` as ignored workflow-node dispatch settings.
 
 ### Phase 3: Client-Owned Host Capabilities
 
@@ -910,7 +911,7 @@ Work:
 ## Migration Notes
 
 - Existing `workflow_python(profile=node)` and `workflow_js(profile=node)` should remain as compatibility facades while contracts are generalized.
-- `fs.*` and `http.fetch` are no longer implicit normal workflow-node capabilities. Clients should register those methods through explicit Host Capability sessions. The remaining service-owned fallback is diagnostic-only and must be explicitly enabled.
+- `fs.*` and `http.fetch` are no longer implicit workflow-node capabilities. Clients must register those methods through explicit Host Capability sessions before sandbox code calls `api.fs.*`, `host.fs_*`, or `http.fetch`.
 - Event helpers should continue to expose `started`, `progress`, `stdout`, `stderr`, `log`, `artifact`, `result`, `error`, `canceled`, and `done` as normalized event kinds.
 - Legacy workflow stream receive command shapes have been removed from public workflow command paths; workflow clients should use `workflow-*-event-subscribe`.
 - Client-owned host APIs are opt-in through provider sessions and callable-surface helpers.
@@ -924,16 +925,8 @@ The implementation phases above are complete except for the explicitly deferred 
 
 - [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
   - Current state: the hosting library exposes known-method registration helpers, generic provider-session helpers, toolbox-as-provider registration, approval bridge helpers, callback relay helpers, and filtered audit reads.
-  - Required client work: register `fs.*`, `http.fetch`, and any custom host APIs explicitly instead of relying on service-owned fallback.
-  - Breakage timing: no new change is required at this exact point, but the later fallback-removal cleanup will be breaking for any client that has not migrated.
-
-### Diagnostic Fallback Removal
-
-- [ ] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback after dependent clients complete migration.
-  - Current state: fallback is off by default for normal workflow node dispatch and requires `sandbox.host_api.service_owned_fallback_enabled=true`.
-  - Remaining code: fallback provider registration/dispatch, diagnostic audit/log marker tests, and convenience-wrapper tests that explicitly opt into fallback.
-  - Removal condition: dependent clients confirm explicit Host Capability registration for known methods.
-  - Breaking-change handling: record the removal in `HOSTING_CLIENT_BREAKING_CHANGES.md` before implementation and remove fallback-only tests in the same slice.
+  - Required client work: register `fs.*`, `http.fetch`, and any custom host APIs explicitly. Legacy service-owned fallback policy keys are ignored.
+  - Breakage timing: active now. `HOSTING_CLIENT_BREAKING_CHANGES.md` contains the client instructions for this slice.
 
 ### Toolbox Brokered IO Unification
 
@@ -978,7 +971,7 @@ The implementation phases above are complete except for the explicitly deferred 
 
 Do not start deferred runtime/toolbox cleanup until there is a concrete owning feature or client migration signal. The next high-leverage work is either:
 
-1. coordinate dependent-client adoption of explicit Host Capability registration, then remove the diagnostic `fs.*` / `http.fetch` fallback; or
+1. support dependent-client adoption of explicit Host Capability registration using the breaking-change instructions from this slice; or
 2. start the toolbox lifecycle pillar and decide whether toolbox brokered IO and native metadata should converge on Host Capability descriptors.
 
 JS project-mode persistence and deeper instance recovery should stay behind explicit runtime/state design work because they affect cleanup, snapshot, and mutation semantics.

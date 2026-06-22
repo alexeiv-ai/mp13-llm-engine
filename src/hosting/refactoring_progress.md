@@ -106,19 +106,19 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added safe correlation metadata propagation helpers.
 - [x] Added `EngineHostControlChannel.host_capability_session_upsert(...)`, filtered list/close helpers, and `host_capability_session_register_toolbox(...)`.
 - [x] Added public filtered Host Capability audit reads through `host_capability_audit_list(...)`.
-- [x] Made service-owned `fs.*` / `http.fetch` fallback opt-in by `sandbox.host_api.service_owned_fallback_enabled=true`.
-- [x] Added audit/log diagnostics for service-owned fallback use.
+- [x] Added the now-removed temporary opt-in diagnostic fallback for service-owned `fs.*` / `http.fetch`.
+- [x] Added the now-removed temporary audit/log diagnostics for service-owned fallback use.
 - [x] Updated `HOST_API_refactoring.md`, `hosting_access_plan.md`, and `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
-### Host Capability Slice 12: Toolbox Session Execution And Fallback Removal
+### Host Capability Slice 12: Toolbox Session Execution And Fallback Preparation
 
 - [x] Threaded daemon-owned Host Capability sessions into workflow Python/JS execute and stream-open paths.
 - [x] Registered visible provider sessions with the node Host Capability broker for request/workflow/instance/consumer scoped discovery and dispatch.
 - [x] Added toolbox-session provider invocation through the existing `toolbox_execute(...)` harness.
 - [x] Normalized toolbox `tool_call.result` JSON into sandbox-facing `host.call(...)` results.
 - [x] Added private `toolbox_harness` binding support for `toolbox_session` providers.
-- [x] Changed service-owned `fs.*` / `http.fetch` fallback from implicit default to explicit opt-in diagnostics.
-- [x] Kept fallback audit/log marker coverage for explicitly enabled fallback calls.
+- [x] Changed service-owned `fs.*` / `http.fetch` fallback from implicit default to temporary explicit opt-in diagnostics.
+- [x] Kept temporary fallback audit/log marker coverage for explicitly enabled fallback calls until final removal.
 
 ### Host Capability Slice 13: Scoped Approval Grants
 
@@ -142,7 +142,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added versioned JSON state helpers for backend, workflow, instance, and request partitions.
 - [x] Exposed opt-in workflow node Host Capability methods for `state.<scope>.get`, `state.<scope>.set`, `state.<scope>.list`, and `state.<scope>.delete`.
 - [x] Advertised available state scopes through `sandbox.describe()["state"]`.
-- [x] Kept state capabilities separate from the deprecated service-owned `fs.*` / `http.fetch` fallback path.
+- [x] Kept state capabilities separate from the deprecated service-owned `fs.*` / `http.fetch` fallback path before that fallback was removed.
 - [x] Added workflow-node tests for default-disabled behavior and workflow state persistence across requests.
 
 ### State And Long-Lived Instances Slice 15: Python Node Pinned Instances
@@ -231,6 +231,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Audited terminal output handling and removed duplicate JS terminal stdout emission when console output was already streamed live.
 - [x] Marked completed cleanup items in `hosting_access_plan.md`.
 
+### Host Capability Slice: Diagnostic Fallback Removal
+
+- [x] Removed diagnostic service-owned `fs.*` / `http.fetch` registration and dispatch from workflow node Host Capability setup.
+- [x] Removed fallback audit/log marker behavior and fallback-only workflow/helper tests.
+- [x] Legacy policy keys such as `sandbox.host_api.service_owned_fallback_enabled` are ignored by workflow node Host Capability dispatch.
+- [x] Updated client breaking-change instructions so dependent clients register explicit Host Capability sessions for `fs.*`, `http.fetch`, and custom methods.
+- [x] Updated Host API and main hosting plans to mark fallback removal complete.
+
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
@@ -249,7 +257,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement service-level action manifest discovery and invocation routing.
 - [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
 - [x] Expose action describe/execute over daemon/channel/CLI.
-- [ ] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests after dependent clients complete migration.
+- [x] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests.
 
 ## Verification
 
@@ -280,3 +288,6 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m pytest tests/test_host_capabilities.py tests/test_hosting_daemon_acl.py -q -k "host_capability"`
 - [x] `python -m pytest tests/test_callable_surface.py tests/test_host_capabilities.py tests/test_engine_host_channel.py tests/test_workflow_helper_service.py tests/test_hosting_daemon_acl.py -q -k "callable_surface or host_capability or service_owned_fallback or daemon_dispatches_workflow or host_api"`
 - [x] `python -m pytest tests/test_host_capabilities.py -q`
+- [x] `python -m py_compile src/hosting/service/workflow_helpers.py src/hosting/sandbox/host_api.py`
+- [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "service_owned_fallback_policy_is_ignored or toolbox_host_capability_session or client_host_capability_callback_session or workflow_js_stream_emits_terminal_events_and_artifacts or sandbox_describe or host_api"`
+- [x] `python -m pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`

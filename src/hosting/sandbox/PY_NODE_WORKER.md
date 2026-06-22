@@ -198,15 +198,15 @@ The current host API contract is `hosting.workflow_python.node.host_api.v1`.
 4. `policy`: enabled host API namespaces for this request
 5. `transport`: control-channel capabilities
 
-Discoverable methods:
+Base discoverable methods:
 
 1. `host.describe`
-2. `fs.list`
-3. `fs.read_text`
-4. `fs.write_text`
-5. `fs.mkdir`
-6. `fs.stat`
-7. `http.fetch` when sandbox policy enables brokered HTTP
+
+Known methods such as `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`,
+`fs.stat`, and `http.fetch` appear only when a hosting client/provider session
+registers and advertises them for the request. Sandbox policy can further
+disable namespaces, but policy no longer causes the hosting service to register
+service-owned `fs.*` or `http.fetch` methods by itself.
 
 Convenience methods on `host` call those dispatcher methods:
 
@@ -221,7 +221,8 @@ Convenience methods on `host` call those dispatcher methods:
 
 Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. Worker host calls correlate responses by `host_call_id`, so concurrent blocking calls can receive out-of-order host responses safely.
 
-The current dispatcher maps `fs.*` calls to declared artifact roots:
+When a client registers the known artifact filesystem methods, the expected
+provider behavior maps `fs.*` calls to declared artifact roots:
 
 1. readable roots: declared artifact inputs and declared artifact outputs
 2. writable roots: declared artifact outputs only
@@ -229,7 +230,8 @@ The current dispatcher maps `fs.*` calls to declared artifact roots:
 4. output roots may be exact files or directories depending on the output declaration
 5. relative paths cannot escape the selected root
 
-The artifact filesystem namespace is enabled by default for compatibility. A node sandbox policy can disable it with either shape:
+A node sandbox policy can disable the artifact filesystem namespace with either
+shape:
 
 ```json
 {
@@ -255,9 +257,14 @@ or:
 }
 ```
 
-When disabled, `host.describe()` remains available, reports `policy.artifact_fs=false`, and omits the `fs.*` methods. Calling a disabled method returns an unsupported-host-method error through the normal host response path.
+When disabled, `host.describe()` remains available, reports
+`policy.artifact_fs=false`, and omits the `fs.*` methods even if a provider
+session registered them. Calling a disabled or unregistered method returns an
+unsupported-host-method error through the normal host response path.
 
-The HTTP namespace is disabled unless the same sandbox broker policy used by generic workers allows brokered HTTP:
+The HTTP namespace is disabled unless the same sandbox broker policy used by
+generic workers allows brokered HTTP and a client/provider session registers
+`http.fetch`:
 
 ```json
 {
@@ -277,11 +284,17 @@ The HTTP namespace is disabled unless the same sandbox broker policy used by gen
 }
 ```
 
-When enabled, `host.describe()` includes `http.fetch`. Node code can call either `host.call("http.fetch", {...})` or `host.http_fetch(...)`. The host broker validates the URL scheme, host allowlist, URL prefix allowlist, request method, request headers, response size limit, and timeout. Response bodies are returned as `body_b64`.
+When enabled and registered, `host.describe()` includes `http.fetch`. Node code
+can call either `host.call("http.fetch", {...})` or `host.http_fetch(...)`. The
+provider must enforce the URL scheme, host allowlist, URL prefix allowlist,
+request method, request headers, response size limit, and timeout. Response
+bodies are returned as `body_b64`.
 
 Single-file inline inputs resolve to the file itself. Directory-like inputs and outputs are created by masked/recursive declarations, inline zip inputs, or output declarations with `path_mask` / `mask`.
 
-The current node host dispatcher does not enable arbitrary subprocess or unrestricted filesystem access. Additional host services should be added only through the same policy-gated dispatcher shape used by toolbox cooperative brokered APIs.
+The current node host dispatcher does not enable arbitrary subprocess or
+unrestricted filesystem access. Additional host services should be added only
+through policy-gated Host Capability provider sessions.
 
 ## Artifact Contract
 

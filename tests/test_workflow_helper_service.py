@@ -4,7 +4,6 @@ from pathlib import Path
 import base64
 import hashlib
 import io
-import shutil
 import sys
 import threading
 import time
@@ -139,7 +138,7 @@ def test_host_capability_audit_list_filters_rows(tmp_path: Path) -> None:
     assert rows["events"][0]["provider_id"] == "client-crm"
 
 
-def test_workflow_node_service_owned_fallback_emits_audit_marker(tmp_path: Path) -> None:
+def test_workflow_node_service_owned_fallback_policy_is_ignored(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
@@ -149,40 +148,19 @@ def test_workflow_node_service_owned_fallback_emits_audit_marker(tmp_path: Path)
     (root / "report.txt").write_text("hello", encoding="utf-8")
     events: list[tuple[str, dict]] = []
     dispatch = svc._workflow_python_node_host_dispatcher(
-        request={"request_id": "req-fallback", "workflow_id": "wf-fallback", "package_id": "pkg"},
+        request={"request_id": "req-no-fallback", "workflow_id": "wf-no-fallback", "package_id": "pkg"},
         artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
         sandbox_policy={"sandbox": {"host_api": {"enabled": True, "service_owned_fallback_enabled": True}}},
         event_emitter=lambda kind, payload: events.append((kind, payload)),
     )
 
-    out = dispatch({"method": "fs.list", "arguments": {"root_id": "report"}})
-    audit = svc.host_capability_audit_list(request_id="req-fallback", method="fs.list")
-
-    assert out["status"] == "ok"
-    assert [entry["name"] for entry in out["entries"]] == ["report.txt"]
-    assert audit["count"] == 1
-    assert audit["events"][0]["event_type"] == "host_capability_service_fallback_used"
-    assert audit["events"][0]["provider_id"] == "builtin.workflow_node_host_api"
-    assert any(kind == "log" and payload["message"] == "service-owned host capability fallback used" for kind, payload in events)
-
-
-def test_workflow_node_service_owned_fallback_can_be_disabled(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    dispatch = svc._workflow_python_node_host_dispatcher(
-        request={"request_id": "req-no-fallback", "workflow_id": "wf-no-fallback", "package_id": "pkg"},
-        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
-        sandbox_policy={"sandbox": {"host_api": {"enabled": True, "service_owned_fallback_enabled": False}}},
-    )
-
     described = dispatch({"method": "sandbox.describe", "arguments": {}})
+    audit = svc.host_capability_audit_list(request_id="req-no-fallback", method="fs.list")
 
-    assert described["policy"]["service_owned_fallback"] is False
+    assert "service_owned_fallback" not in described["policy"]
     assert "fs.list" not in described["methods"]
+    assert audit["count"] == 0
+    assert events == []
     with pytest.raises(RuntimeError, match="unsupported_host_method:fs.list"):
         dispatch({"method": "fs.list", "arguments": {"root_id": "report"}})
 
@@ -224,7 +202,7 @@ def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monk
     dispatch = svc._workflow_python_node_host_dispatcher(
         request={"request_id": "req-toolbox", "workflow_id": "wf-toolbox", "package_id": "pkg"},
         artifact_context=None,
-        sandbox_policy={"sandbox": {"host_api": {"enabled": True, "service_owned_fallback_enabled": True}}},
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
         host_capability_sessions=[session],
     )
 
@@ -1297,297 +1275,6 @@ def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> 
     assert "package_source_digest" in out["error"]["message"]
 
 
-def test_execute_workflow_js_node_reads_and_writes_declared_artifacts(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
-    write_source = """
-exports.run = function(input, api) {
-  api.fs.writeText("seed", "", "seed text");
-  return {output: {written: true}};
-};
-"""
-    read_source = """
-exports.run = function(input, api) {
-  const text = api.fs.readText("seed", "");
-  api.fs.writeText("report", "", text.toUpperCase());
-  return {output: {text: text}};
-};
-"""
-
-    written = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-artifact-write",
-            "module_source": write_source,
-            "module_sha256": hashlib.sha256(write_source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
-        },
-    )
-    read = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-artifact-read",
-            "module_source": read_source,
-            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_inputs": [{"name": "seed", "ref": written["artifacts"][0]["ref"]}],
-            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
-        },
-    )
-
-    assert written["status"] == "ok"
-    assert written["artifacts"][0]["ref"].startswith("@artifacts/")
-    assert read["status"] == "ok"
-    assert read["output"] == {"text": "seed text"}
-    assert read["artifact_store"]["status"] == "ok"
-    assert read["artifacts"][0]["filename"] == "report.txt"
-    assert read["artifacts"][0]["size_bytes"] == len("SEED TEXT")
-
-
-def test_execute_workflow_js_node_async_host_call_uses_broker(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
-    write_source = """
-exports.run = function(input, api) {
-  api.fs.writeText("seed", "", "async seed");
-  return {output: true};
-};
-"""
-    read_source = """
-exports.run = async function(input, api) {
-  const text = await api.fs.readTextAsync("seed", "");
-  return {output: {text: text}};
-};
-"""
-
-    written = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-async-artifact-write",
-            "module_source": write_source,
-            "module_sha256": hashlib.sha256(write_source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
-        },
-    )
-    read = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-async-host-call",
-            "module_source": read_source,
-            "module_sha256": hashlib.sha256(read_source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_inputs": [{"name": "seed", "ref": written["artifacts"][0]["ref"]}],
-        },
-    )
-
-    assert written["status"] == "ok"
-    assert read["status"] == "ok"
-    assert read["output"] == {"text": "async seed"}
-
-
-def test_execute_workflow_js_node_artifact_fs_list_stat_and_mkdir(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
-    source = """
-exports.run = function(input, api) {
-  api.fs.mkdir("report", "nested");
-  api.fs.writeText("report", "nested/a.txt", "alpha");
-  const listing = api.fs.list("report", "nested");
-  const stat = api.fs.stat("report", "nested/a.txt");
-  return {output: {names: listing.entries.map(x => x.name), type: stat.type, size: stat.size}};
-};
-"""
-
-    out = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-artifact-fs",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_outputs": [{"name": "report", "path_mask": "*.txt", "recursive": True, "media_type": "text/plain"}],
-        },
-    )
-
-    assert out["status"] == "ok"
-    assert out["output"] == {"names": ["a.txt"], "type": "file", "size": len("alpha")}
-
-
-def test_execute_workflow_js_node_enforces_artifact_root_permissions(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
-    write_seed = """
-exports.run = function(input, api) {
-  api.fs.writeText("seed", "", "seed text");
-  return {output: true};
-};
-"""
-    write_input = """
-exports.run = function(input, api) {
-  api.fs.writeText("seed", "changed.txt", "should fail");
-  return {output: true};
-};
-"""
-    escape_output = """
-exports.run = function(input, api) {
-  api.fs.writeText("report", "../escape.txt", "should fail");
-  return {output: true};
-};
-"""
-    seed = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-root-seed",
-            "module_source": write_seed,
-            "module_sha256": hashlib.sha256(write_seed.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_outputs": [{"name": "seed", "filename": "seed.txt", "media_type": "text/plain"}],
-        },
-    )
-    input_write = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-root-readonly",
-            "module_source": write_input,
-            "module_sha256": hashlib.sha256(write_input.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_inputs": [{"name": "seed", "ref": seed["artifacts"][0]["ref"]}],
-        },
-    )
-    escaped = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy=fallback_policy,
-        request={
-            "request_id": "req-js-root-escape",
-            "module_source": escape_output,
-            "module_sha256": hashlib.sha256(escape_output.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
-        },
-    )
-
-    assert seed["status"] == "ok"
-    assert input_write["status"] == "error"
-    assert input_write["error"]["code"] == "host_call_failed"
-    assert "artifact_root_unavailable:seed" in input_write["error"]["message"]
-    assert escaped["status"] == "error"
-    assert escaped["error"]["code"] == "host_call_failed"
-    assert "artifact_path_escape" in escaped["error"]["message"]
-
-
-def test_execute_workflow_js_node_brokered_http_allowed_and_denied(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    source = """
-exports.run = function(input, api) {
-  const response = api.http.fetch("https://example.test/data", {method: "POST", body_b64: "ZGF0YQ=="});
-  return {output: {status_code: response.status_code, body_b64: response.body_b64}};
-};
-"""
-    calls = []
-
-    def fake_fetch(self, **kwargs):
-        calls.append(dict(kwargs))
-        return {
-            "url": kwargs["url"],
-            "status_code": 201,
-            "headers": {"content-type": "text/plain"},
-            "body_b64": "b2s=",
-            "body_size": 2,
-            "truncated": False,
-        }
-
-    monkeypatch.setattr("hosting.service.workflow_helpers.BrokeredHttpClient.fetch", fake_fetch)
-
-    allowed = svc.execute_workflow_js(
-        profile="node",
-        sandbox_policy={
-            "sandbox": {
-                "enabled": True,
-                "host_api": {"service_owned_fallback_enabled": True},
-                "network": {"mode": "brokered_only"},
-                "brokered_io": {"http": True},
-            }
-        },
-        request={
-            "request_id": "req-js-http-allowed",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-        },
-    )
-    denied = svc.execute_workflow_js(
-        profile="node",
-        request={
-            "request_id": "req-js-http-denied",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "payload": {},
-        },
-    )
-
-    assert allowed["status"] == "ok"
-    assert allowed["output"] == {"status_code": 201, "body_b64": "b2s="}
-    assert calls[0]["url"] == "https://example.test/data"
-    assert calls[0]["method"] == "POST"
-    assert denied["status"] == "error"
-    assert denied["error"]["code"] == "host_call_failed"
-    assert "unsupported_host_method:http.fetch" in denied["error"]["message"]
-
-
 def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1671,14 +1358,12 @@ def test_workflow_js_stream_emits_terminal_events_and_artifacts(tmp_path: Path) 
 exports.run = function(input, api) {
   console.log("stream start");
   api.progress({step: "write"});
-  api.fs.writeText("report", "", "stream artifact");
-  return {output: {done: true}};
+  return {output: {done: true}, artifacts: [{name: "report", text: "stream artifact", media_type: "text/plain"}]};
 };
 """
 
     opened = svc.workflow_js_stream_open(
         profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-js-stream-ok",
             "module_source": source,
@@ -1688,7 +1373,7 @@ exports.run = function(input, api) {
             "package_source_digest": "digest",
             "payload": {},
             "limits": {"stream_max_events": 32},
-            "artifact_outputs": [{"name": "report", "filename": "stream.txt", "media_type": "text/plain"}],
+            "artifact_outputs": [{"name": "report", "kind": "inline", "filename": "stream.txt", "media_type": "text/plain"}],
         },
     )
     normalized_events: list[dict] = []
@@ -1711,21 +1396,13 @@ exports.run = function(input, api) {
     assert opened["status"] == "ok"
     assert "started" in event_types
     assert "stdout" in event_types
-    assert "host_call" in event_types
     assert "progress" in event_types
     assert "artifact" in event_types
     assert "result" in event_types
     assert event_types[-1] == "done"
     assert status["request"]["status"] == "ok"
     assert status["request"]["stream_event_count"] >= len(normalized_events)
-    assert any(row.get("filename") == "stream.txt" for row in normalized_events if row["kind"] == "artifact")
-    host_calls = [row for row in normalized_events if row.get("kind") == "host_call" and row.get("call_id")]
-    host_responses = [row for row in normalized_events if row.get("kind") == "host_response" and row.get("call_id")]
-    assert host_calls
-    assert any(
-        row.get("method") == "fs.write_text" and row.get("status") == "ok" and row.get("call_id") == host_calls[0].get("call_id")
-        for row in host_responses
-    )
+    assert any(row.get("name") == "report" for row in normalized_events if row["kind"] == "artifact")
 
 
 def test_workflow_js_stream_retention_reports_dropped_events(tmp_path: Path) -> None:
@@ -1998,7 +1675,6 @@ def test_execute_workflow_python_node_rejects_dependency_execution_without_verif
 
     out = svc.execute_workflow_python(
         profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-unverified-env",
             "module_source": source,
@@ -2027,7 +1703,6 @@ def test_execute_workflow_python_node_rejects_uv_execution_without_verified_envi
 
     out = svc.execute_workflow_python(
         profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-unverified-uv-env",
             "module_source": source,
@@ -2123,7 +1798,6 @@ def test_execute_workflow_python_node_uses_selected_verified_dependency_runtime(
 
     out = svc.execute_workflow_python(
         profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-verified-env",
             "module_source": source,
@@ -2178,7 +1852,6 @@ def test_execute_workflow_python_node_uses_selected_verified_uv_runtime(tmp_path
 
     out = svc.execute_workflow_python(
         profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-verified-uv-env",
             "module_source": source,
@@ -2896,61 +2569,6 @@ def test_execute_workflow_python_node_reads_inline_input_artifact(tmp_path: Path
     assert out["output"] == {"text": "inline seed"}
 
 
-def test_execute_workflow_python_node_host_api_reads_and_writes_artifact_roots(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    source = (
-        "def run(payload):\n"
-        "    described = host.describe()\n"
-        "    seed = host.fs_read_text('seed')['text']\n"
-        "    host.fs_mkdir('report', 'nested')\n"
-        "    written = host.fs_write_text('report', 'nested/report.txt', seed.upper())\n"
-        "    stat = host.fs_stat('report', 'nested/report.txt')\n"
-        "    schemas = {row['name']: row['args_schema'] for row in described['method_descriptions']}\n"
-        "    return {'output': {'methods': described['methods'], 'schemas': schemas, 'transport': described['transport'], 'seed': seed, 'bytes': written['bytes'], 'size': stat['size']}}\n"
-    )
-
-    out = svc.execute_workflow_python(
-        profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
-        request={
-            "request_id": "req-node-host-api-artifacts",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-            "artifact_inputs": [
-                {
-                    "name": "seed",
-                    "kind": "inline",
-                    "filename": "seed.txt",
-                    "text": "host api seed",
-                    "media_type": "text/plain",
-                }
-            ],
-            "artifact_outputs": [{"name": "report", "path_mask": "*.txt", "media_type": "text/plain", "recursive": True}],
-        },
-    )
-
-    assert out["status"] == "ok"
-    assert "host.describe" in out["output"]["methods"]
-    assert "fs.write_text" in out["output"]["schemas"]
-    assert out["output"]["schemas"]["fs.write_text"]["properties"]["root_id"]["type"] == "string"
-    assert out["output"]["schemas"]["fs.write_text"]["properties"]["text"]["type"] == "string"
-    assert out["output"]["transport"]["async_capable"] is True
-    assert out["output"]["transport"]["host_call_id"] is True
-    assert out["output"]["transport"]["out_of_order_responses"] is True
-    assert out["output"]["seed"] == "host api seed"
-    assert out["output"]["bytes"] == len("HOST API SEED")
-    assert out["output"]["size"] == len("HOST API SEED")
-    assert out["artifacts"][0]["ref"]
-
-
 def test_workflow_python_node_host_api_matches_out_of_order_responses() -> None:
     registry = WorkflowPythonNodeRuntimeRegistry()
     completed: list[str] = []
@@ -3031,46 +2649,6 @@ def test_workflow_python_node_preserves_structured_host_api_error_reason() -> No
     assert captured["host_call_id"] == "host-call-1"
     assert captured["error"]["reason"] == "host_call_timeout"
     assert captured["error"]["provider_call_id"] == "call-1"
-
-
-def test_execute_workflow_python_node_host_api_rejects_input_writes(tmp_path: Path) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    source = (
-        "def run(payload):\n"
-        "    host.fs_write_text('seed', 'seed.txt', 'mutated')\n"
-        "    return {'output': {'ok': True}}\n"
-    )
-
-    out = svc.execute_workflow_python(
-        profile="node",
-        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
-        request={
-            "request_id": "req-node-host-api-reject-input-write",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-            "artifact_inputs": [
-                {
-                    "name": "seed",
-                    "kind": "inline",
-                    "filename": "seed.txt",
-                    "text": "immutable",
-                    "media_type": "text/plain",
-                }
-            ],
-        },
-    )
-
-    assert out["status"] == "error"
-    assert out["error"]["code"] == "workflow_sandbox_runtime_error"
-    assert "artifact_root_unavailable:seed" in out["error"]["detail"]["message"]
 
 
 def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tmp_path: Path) -> None:
@@ -3325,75 +2903,6 @@ def test_sandbox_state_snapshot_and_restore_instance_partition(tmp_path: Path) -
     assert got["exists"] is True
     assert got["value"] == {"name": "Ada"}
     assert missing["exists"] is False
-
-
-def test_execute_workflow_python_node_host_api_http_fetch_uses_broker_policy(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
-    source = (
-        "def run(payload):\n"
-        "    described = host.describe()\n"
-        "    fetched = host.http_fetch('https://example.com/api/node', method='POST', headers={'Content-Type': 'application/json'}, body_b64='e30=', timeout_seconds=5.0)\n"
-        "    return {'output': {'methods': described['methods'], 'policy': described['policy'], 'status_code': fetched['status_code'], 'body_b64': fetched['body_b64']}}\n"
-    )
-    sandbox_policy = {
-        "sandbox": {
-            "enabled": True,
-            "host_api": {"service_owned_fallback_enabled": True},
-            "network": {
-                "mode": "brokered_only",
-                "allow_hosts": ["example.com"],
-                "allow_url_prefixes": ["https://example.com/api/"],
-            },
-            "brokered_io": {"filesystem": False, "http": True, "subprocess": False},
-        }
-    }
-
-    class _Resp:
-        status = 201
-        headers = {"Content-Type": "application/json"}
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self, _size: int = -1) -> bytes:
-            return b'{"node":true}'
-
-    def _fake_urlopen(req, timeout=0.0):
-        assert req.full_url == "https://example.com/api/node"
-        assert req.get_method() == "POST"
-        assert timeout == 5.0
-        assert req.headers["Content-type"] == "application/json"
-        return _Resp()
-
-    monkeypatch.setattr("hosting.sandbox.broker_http.urllib.request.urlopen", _fake_urlopen)
-
-    out = svc.execute_workflow_python(
-        profile="node",
-        sandbox_policy=sandbox_policy,
-        request={
-            "request_id": "req-node-host-api-http-fetch",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-        },
-    )
-
-    assert out["status"] == "ok"
-    assert "http.fetch" in out["output"]["methods"]
-    assert out["output"]["policy"]["http"] is True
-    assert out["output"]["policy"]["namespaces"]["http"] is True
-    assert out["output"]["status_code"] == 201
-    assert base64.b64decode(out["output"]["body_b64"]) == b'{"node":true}'
 
 
 def test_execute_workflow_python_node_host_api_http_fetch_requires_broker_policy(tmp_path: Path) -> None:

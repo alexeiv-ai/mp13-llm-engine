@@ -12,7 +12,6 @@ from typing import Any, Callable, Dict, Optional
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
-from ..sandbox.broker_http import BrokeredHttpClient
 from ..sandbox.host_capabilities import (
     HostCapabilityBroker,
     HostCapabilityDescriptor,
@@ -23,7 +22,7 @@ from ..sandbox.host_capabilities import (
     HostCapabilitySession,
     default_group_path,
 )
-from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
+from ..sandbox.host_api import HostApiRegistry
 from ..sandbox.policy import WorkerSandboxPolicy
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot, hosted_log_summary
 from ..sandbox.runtime_pool import HostedProcessPoolRegistry
@@ -772,33 +771,6 @@ class WorkflowHelperMixin:
             return {"status": "skipped", "reason": "artifact_context_missing"}
         return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).cleanup_run(dict(context or {}))
 
-    @staticmethod
-    def _workflow_python_node_host_root(
-        artifact_context: Optional[Dict[str, Any]],
-        *,
-        root_id: str,
-        write: bool = False,
-    ) -> Path:
-        child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
-        inputs = dict(child.get("inputs") or {})
-        outputs = dict(child.get("outputs") or {})
-        rid = str(root_id or "").strip()
-        if not rid:
-            raise PermissionError("root_id_required")
-        source = outputs if write else {**outputs, **inputs}
-        raw = str(source.get(rid) or "").strip()
-        if not raw:
-            raise PermissionError(f"artifact_root_unavailable:{rid}")
-        return Path(raw).expanduser().resolve()
-
-    @staticmethod
-    def _workflow_python_node_host_path(root: Path, relative_path: Any = None) -> Path:
-        rel = str(relative_path or "").replace("\\", "/").strip("/")
-        target = (root / rel).expanduser().resolve() if rel else root
-        if target != root and root not in target.parents:
-            raise PermissionError("artifact_path_escape")
-        return target
-
     def _workflow_python_node_host_dispatcher(
         self,
         *,
@@ -862,12 +834,6 @@ class WorkflowHelperMixin:
         if instance_id and _state_scope_enabled("instance"):
             state_scopes.append("instance")
         state_available = bool(state_scopes)
-        service_fallback_enabled = bool(
-            host_api_policy.get(
-                "service_owned_fallback_enabled",
-                host_api_policy.get("service_fallback_enabled", host_api_policy.get("service_owned_fallback", False)),
-            )
-        )
         registry = HostApiRegistry(
             contract="hosting.workflow_python.node.host_api.v1",
             request_id=str(dict(request or {}).get("request_id") or ""),
@@ -888,263 +854,8 @@ class WorkflowHelperMixin:
                 "state": {"available": state_available, "scopes": list(state_scopes)},
                 "subprocess": False,
                 "custom_functions": False,
-                "service_owned_fallback": service_fallback_enabled,
             },
         )
-
-        def _mark_service_fallback_used(method_name: str) -> None:
-            event = {
-                "event_type": "host_capability_service_fallback_used",
-                "result": "used",
-                "reason": "service_owned_fallback",
-                "method": method_name,
-                "context": {
-                    "request_id": str(dict(request or {}).get("request_id") or "") or None,
-                    "workflow_id": str(dict(request or {}).get("workflow_id") or "") or None,
-                    "package_id": str(dict(request or {}).get("package_id") or "") or None,
-                    "instance_id": str(dict(request or {}).get("instance_id") or "") or None,
-                },
-                "provider": {"provider_id": "builtin.workflow_node_host_api", "kind": "builtin", "owner": "service"},
-            }
-            try:
-                (audit_emitter or self._append_host_capability_audit_event)(event)
-            except Exception:
-                pass
-            if event_emitter is not None:
-                try:
-                    event_emitter(
-                        "log",
-                        {
-                            "level": "warning",
-                            "message": "service-owned host capability fallback used",
-                            "method": method_name,
-                            "request_id": event["context"]["request_id"],
-                            "workflow_id": event["context"]["workflow_id"],
-                            "provider_id": "builtin.workflow_node_host_api",
-                        },
-                    )
-                except Exception:
-                    pass
-
-        def _service_fallback_call(method_name: str, handler: Callable[[Dict[str, Any]], Dict[str, Any]], args: Dict[str, Any]) -> Dict[str, Any]:
-            _mark_service_fallback_used(method_name)
-            return handler(args)
-
-        def _root_and_target(args: Dict[str, Any], *, write: bool = False) -> tuple[str, Path, Path, Any]:
-            root_id = str(args.get("root_id") or "").strip()
-            relative_path = args.get("relative_path")
-            root = self._workflow_python_node_host_root(artifact_context, root_id=root_id, write=write)
-            target = self._workflow_python_node_host_path(root, relative_path)
-            return root_id, root, target, relative_path
-
-        if artifact_fs_enabled and service_fallback_enabled:
-            registry.register(
-                "fs.list",
-                namespace="fs",
-                description="List direct children under a declared artifact input or output root.",
-                args_schema=fs_root_args_schema(),
-                result_schema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string"},
-                        "root_id": {"type": "string"},
-                        "relative_path": {"type": "string"},
-                        "entries": {"type": "array", "items": {"type": "object"}},
-                    },
-                },
-                permissions=["artifact.read"],
-                handler=lambda args: _service_fallback_call("fs.list", _fs_list, args),
-            )
-
-            registry.register(
-                "fs.read_text",
-                namespace="fs",
-                description="Read UTF text from a declared artifact input or output root.",
-                args_schema=fs_root_args_schema(text=True),
-                result_schema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string"},
-                        "root_id": {"type": "string"},
-                        "relative_path": {"type": "string"},
-                        "text": {"type": "string"},
-                        "encoding": {"type": "string"},
-                    },
-                },
-                permissions=["artifact.read"],
-                handler=lambda args: _service_fallback_call("fs.read_text", _fs_read_text, args),
-            )
-
-            registry.register(
-                "fs.write_text",
-                namespace="fs",
-                description="Write UTF text under a declared artifact output root.",
-                args_schema=fs_write_text_args_schema(),
-                result_schema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string"},
-                        "root_id": {"type": "string"},
-                        "relative_path": {"type": "string"},
-                        "bytes": {"type": "integer"},
-                        "encoding": {"type": "string"},
-                    },
-                },
-                permissions=["artifact.write"],
-                handler=lambda args: _service_fallback_call("fs.write_text", _fs_write_text, args),
-            )
-
-            registry.register(
-                "fs.mkdir",
-                namespace="fs",
-                description="Create a directory under a declared artifact output root.",
-                args_schema=fs_root_args_schema(mkdir=True),
-                result_schema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string"},
-                        "root_id": {"type": "string"},
-                        "relative_path": {"type": "string"},
-                    },
-                },
-                permissions=["artifact.write"],
-                handler=lambda args: _service_fallback_call("fs.mkdir", _fs_mkdir, args),
-            )
-
-            registry.register(
-                "fs.stat",
-                namespace="fs",
-                description="Return metadata for a path under a declared artifact input or output root.",
-                args_schema=fs_root_args_schema(),
-                result_schema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string"},
-                        "root_id": {"type": "string"},
-                        "relative_path": {"type": "string"},
-                        "exists": {"type": "boolean"},
-                        "type": {"type": "string"},
-                        "size": {"type": ["integer", "null"]},
-                        "mtime": {"type": "number"},
-                    },
-                },
-                permissions=["artifact.read"],
-                handler=lambda args: _service_fallback_call("fs.stat", _fs_stat, args),
-            )
-
-        if http_enabled and service_fallback_enabled:
-            registry.register(
-                "http.fetch",
-                namespace="http",
-                description="Fetch an HTTP(S) URL through the host broker using this request's sandbox network policy.",
-                args_schema={
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string"},
-                        "method": {"type": "string", "default": "GET"},
-                        "headers": {"type": "object", "additionalProperties": {"type": "string"}},
-                        "body_b64": {"type": "string", "default": ""},
-                        "timeout_seconds": {"type": "number", "default": 30.0},
-                        "max_response_bytes": {"type": "integer", "default": 1048576},
-                    },
-                    "required": ["url"],
-                    "additionalProperties": False,
-                },
-                result_schema={
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string"},
-                        "url": {"type": "string"},
-                        "status_code": {"type": "integer"},
-                        "headers": {"type": "object"},
-                        "body_b64": {"type": "string"},
-                        "body_size": {"type": "integer"},
-                        "truncated": {"type": "boolean"},
-                    },
-                },
-                permissions=["http.fetch"],
-                handler=lambda args: _service_fallback_call("http.fetch", _http_fetch, args),
-            )
-
-        def _fs_list(args: Dict[str, Any]) -> Dict[str, Any]:
-            root_id, _root, target, relative_path = _root_and_target(args)
-            if not target.exists():
-                raise FileNotFoundError(str(target))
-            if not target.is_dir():
-                raise NotADirectoryError(str(target))
-            return {
-                "status": "ok",
-                "root_id": root_id,
-                "relative_path": str(relative_path or ""),
-                "entries": [
-                    {
-                        "name": child_path.name,
-                        "type": "dir" if child_path.is_dir() else "file",
-                        "size": child_path.stat().st_size if child_path.is_file() else None,
-                    }
-                    for child_path in sorted(target.iterdir(), key=lambda item: item.name)
-                ],
-            }
-
-        def _fs_read_text(args: Dict[str, Any]) -> Dict[str, Any]:
-            root_id, _root, target, relative_path = _root_and_target(args)
-            encoding = str(args.get("encoding") or "utf-8")
-            return {
-                "status": "ok",
-                "root_id": root_id,
-                "relative_path": str(relative_path or ""),
-                "text": target.read_text(encoding=encoding),
-                "encoding": encoding,
-            }
-
-        def _fs_write_text(args: Dict[str, Any]) -> Dict[str, Any]:
-            root_id, _root, target, relative_path = _root_and_target(args, write=True)
-            encoding = str(args.get("encoding") or "utf-8")
-            text = str(args.get("text") or "")
-            if bool(args.get("create_parents", True)):
-                target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding=encoding)
-            return {
-                "status": "ok",
-                "root_id": root_id,
-                "relative_path": str(relative_path or ""),
-                "bytes": len(text.encode(encoding, errors="replace")),
-                "encoding": encoding,
-            }
-
-        def _fs_mkdir(args: Dict[str, Any]) -> Dict[str, Any]:
-            root_id, _root, target, relative_path = _root_and_target(args, write=True)
-            target.mkdir(parents=bool(args.get("parents", True)), exist_ok=bool(args.get("exist_ok", True)))
-            return {"status": "ok", "root_id": root_id, "relative_path": str(relative_path or "")}
-
-        def _fs_stat(args: Dict[str, Any]) -> Dict[str, Any]:
-            root_id, _root, target, relative_path = _root_and_target(args)
-            stat = target.stat()
-            return {
-                "status": "ok",
-                "root_id": root_id,
-                "relative_path": str(relative_path or ""),
-                "exists": True,
-                "type": "dir" if target.is_dir() else "file",
-                "size": stat.st_size if target.is_file() else None,
-                "mtime": stat.st_mtime,
-            }
-
-        def _http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
-            headers = {
-                str(key): str(value)
-                for key, value in dict(args.get("headers") or {}).items()
-                if str(key or "").strip()
-            }
-            out = BrokeredHttpClient(worker_policy).fetch(
-                url=str(args.get("url") or ""),
-                method=str(args.get("method") or "GET"),
-                headers=headers,
-                body_b64=str(args.get("body_b64") or ""),
-                timeout_seconds=float(args.get("timeout_seconds") or 30.0),
-                max_response_bytes=int(args.get("max_response_bytes") or 1024 * 1024),
-            )
-            return {"status": "ok", **dict(out or {})}
 
         def _state_notice(action: str, result: Dict[str, Any]) -> None:
             if event_emitter is None:
@@ -1332,12 +1043,6 @@ class WorkflowHelperMixin:
         capability_sessions = self._host_capability_sessions_for_broker(host_capability_sessions)
         for session in capability_sessions:
             broker.register_session(session)
-        if service_fallback_enabled and not capability_sessions:
-            broker.register_builtin_provider(
-                provider_id="builtin.workflow_node_host_api",
-                owner="service",
-                methods=registry.capability_methods(provider_id="builtin.workflow_node_host_api"),
-            )
 
         def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
             return broker.dispatch(dict(call or {}))

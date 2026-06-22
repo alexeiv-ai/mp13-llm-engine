@@ -203,18 +203,18 @@ The planned host API contract is `hosting.workflow_js.node.host_api.v1`.
 5. `transport`
 6. `runtime`
 
-Initial discoverable methods:
+Base discoverable methods:
 
 1. `host.describe`
-2. `fs.list`
-3. `fs.read_text`
-4. `fs.write_text`
-5. `fs.mkdir`
-6. `fs.stat`
-7. `http.fetch` when sandbox policy enables brokered HTTP
-8. `codec.base64_encode`
-9. `codec.base64_decode`
-10. `crypto.sha256`
+2. `codec.base64_encode`
+3. `codec.base64_decode`
+4. `crypto.sha256`
+
+Known methods such as `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`,
+`fs.stat`, and `http.fetch` appear only when a hosting client/provider session
+registers and advertises them for the request. Sandbox policy can further
+disable namespaces, but policy no longer causes the hosting service to register
+service-owned `fs.*` or `http.fetch` methods by itself.
 
 Convenience methods on `api` may wrap dispatcher methods:
 
@@ -251,7 +251,8 @@ The implementation difference is child-local: the QuickJS harness can keep
 multiple JS promises pending and resolve or reject them when the matching
 `host_response` arrives.
 
-The dispatcher maps `fs.*` calls to declared artifact roots:
+When a client registers the known artifact filesystem methods, the expected
+provider behavior maps `fs.*` calls to declared artifact roots:
 
 1. readable roots: declared artifact inputs and declared artifact outputs
 2. writable roots: declared artifact outputs only
@@ -260,9 +261,10 @@ The dispatcher maps `fs.*` calls to declared artifact roots:
    declaration
 5. relative paths cannot escape the selected root
 
-The HTTP namespace is disabled unless sandbox policy enables brokered HTTP.
-When enabled, the host validates URL scheme, host allowlist, URL prefix
-allowlist, method, headers, timeout, and response size.
+The HTTP namespace is disabled unless sandbox policy enables brokered HTTP and
+a client/provider session registers `http.fetch`. When enabled and registered,
+the provider validates URL scheme, host allowlist, URL prefix allowlist, method,
+headers, timeout, and response size.
 
 ## Async Semantics
 

@@ -14,9 +14,9 @@ This document tracks the Host Capability Protocol pillar after the dependent-cli
 - [x] Provider sessions can be scoped by request, workflow, instance, consumer, owner, provider, visibility, and method.
 - [x] Duplicate fully-qualified method registration fails by default unless `allow_override=true` is explicit.
 - [x] Namespace hierarchy is the canonical capability hierarchy; group paths remain presentation metadata.
-- [x] Service-owned `fs.*` and `http.fetch` are no longer implicit workflow-node capabilities.
-- [x] Service-owned `fs.*` and `http.fetch` remain available only as an explicit diagnostic fallback when `sandbox.host_api.service_owned_fallback_enabled=true`.
-- [x] Diagnostic service fallback emits `host_capability_service_fallback_used` audit rows and log markers.
+- [x] Service-owned `fs.*` and `http.fetch` are no longer workflow-node capabilities.
+- [x] Diagnostic service-owned `fs.*` / `http.fetch` fallback registration, dispatch, audit markers, and fallback-only tests have been removed.
+- [x] Legacy fallback policy keys such as `sandbox.host_api.service_owned_fallback_enabled` are ignored by workflow node Host Capability dispatch.
 - [x] Worker-side `api.fs` and `api.http` convenience wrappers are preserved only as callers of advertised Host Capability methods. They do not prove that those methods exist.
 
 ## Current Programming Model
@@ -31,7 +31,7 @@ result = host.call("crm.customer.lookup", {"customer_id": "123"})
 const result = await api.callAsync("crm.customer.lookup", {customer_id: "123"});
 ```
 
-The sandbox sees method names, schemas, policy hints, and approved scoped capabilities. It does not know whether a method is implemented by a hosting client callback, a hosted toolbox session, a diagnostic service fallback, state storage, or a future action provider.
+The sandbox sees method names, schemas, policy hints, and approved scoped capabilities. It does not know whether a method is implemented by a hosting client callback, a hosted toolbox session, state storage, or a future action provider.
 
 Hosting clients use the control channel and callable-surface helpers to register providers:
 
@@ -101,8 +101,7 @@ Clients should use high-level helpers and avoid raw provider session tokens or c
 - [x] Descriptor helpers for known broker-supported `fs.*` and `http.fetch` methods remain available.
 - [x] Clients can explicitly register those known methods through Host Capability sessions.
 - [x] Clients can omit known methods or provide custom implementations.
-- [x] Service-owned fallback is disableable and off by default for normal workflow node dispatch.
-- [x] When fallback is explicitly enabled, it is treated as a diagnostic compatibility path, not the ownership model.
+- [x] Diagnostic service-owned fallback has been removed; known methods exist only when a client/provider session registers them.
 
 ## Related Follow-Up Work Already Implemented
 
@@ -135,8 +134,8 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [x] Host Capability descriptor, broker, approval, provider callback, duplicate registration, scope matching, and audit helper tests are present.
 - [x] Callable-surface adapter tests cover toolbox descriptor conversion, callable schema filtering, callback normalization, and approval request/decision shaping.
 - [x] Daemon/control channel tests cover registration, duplicate override behavior, SSH auth binding preservation, disconnect cleanup, helper forwarding, filtered lifecycle helpers, audit reads, and toolbox provider registration.
-- [x] Workflow helper tests cover diagnostic service fallback audit markers and fallback-disable behavior.
-- [x] JavaScript convenience-wrapper tests must opt into diagnostic service fallback explicitly when they exercise service-owned `api.fs` or `api.http` behavior.
+- [x] Workflow helper tests cover that legacy diagnostic fallback policy keys are ignored and unsupported known methods fail through normal Host Capability errors.
+- [x] Convenience-wrapper tests no longer rely on service-owned `api.fs` or `api.http` behavior.
 - [x] No test should assert that `fs.*` or `http.fetch` is implicitly registered for normal workflow node dispatch.
 
 ## Deferred Cross-Pillar Work
@@ -176,11 +175,3 @@ These items are intentionally outside the completed Host Capability pillar. They
   - Expected benefit of a decision: clearer ownership for hierarchy, permissions, visibility, gating, and callable schemas across toolbox and sandbox-facing discovery.
   - Main risk: adopting descriptors natively before toolbox lifecycle work could force another metadata migration later.
   - Trigger to decide: when the native toolbox hierarchy/groups feature is started.
-
-- [ ] After dependent clients have migrated, remove the diagnostic service-owned `fs.*` / `http.fetch` fallback path and the tests that exist only to cover it.
-  - Owning pillar: legacy cleanup after Host Capability adoption.
-  - Current state: implicit service-owned fallback is removed from normal workflow node dispatch. The remaining fallback requires explicit `sandbox.host_api.service_owned_fallback_enabled=true` and emits diagnostic audit/log markers.
-  - Cleanup candidate: delete fallback registration/dispatch code, remove fallback-only diagnostics, and remove tests that assert explicit diagnostic fallback behavior.
-  - Expected benefit: Host API ownership becomes strictly client/provider-session based, with no service-owned compatibility path.
-  - Main risk: dependent clients that still rely on fallback will lose `api.fs` / `api.http` behavior unless they explicitly register known methods first.
-  - Trigger to start: after dependent clients confirm explicit callable-session registration is adopted and `HOSTING_CLIENT_BREAKING_CHANGES.md` records the removal window.
