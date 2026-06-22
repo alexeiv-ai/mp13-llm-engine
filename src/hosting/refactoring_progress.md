@@ -201,6 +201,12 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added auth and policy command-set entries for action describe/execute.
 - [x] Added daemon dispatch, channel wrapper, and role authorization tests for action commands.
 
+### Planning Slice 22: Deferred Work Elaboration
+
+- [x] Expanded Host API deferred cross-pillar work with owning pillars, current state, candidate rework, benefits, risks, and implementation triggers.
+- [x] Replaced stale main-plan open questions with current remaining deferred items and resolved architecture decisions.
+- [x] Reviewed `HOSTING_CLIENT_BREAKING_CHANGES.md`; no new client-facing breaking changes are pending from this documentation slice.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -261,6 +267,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_engine_host_channel.py -q -k "workflow_python or workflow_js"`
 - [x] `pytest tests/test_hosting_auth_roles.py -q -k "diagnostic_user or worker_user"`
 - [x] `python -m py_compile src/hosting/engine_host_channel.py src/hosting/engine_host_cli.py src/hosting/daemon/local_ipc.py src/hosting/service/auth.py src/hosting/service/policy.py`
+- [x] Documentation-only review for Host API deferred work, main-plan open items, and client breaking-change status.
 - [x] `pytest tests/test_host_capabilities.py -q`
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
 - [x] `pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`

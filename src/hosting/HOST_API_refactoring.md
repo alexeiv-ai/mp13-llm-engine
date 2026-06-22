@@ -141,8 +141,46 @@ These items were enabled by the Host Capability model but belong to later plan p
 
 ## Deferred Cross-Pillar Work
 
+These items are intentionally outside the completed Host Capability pillar. They should be picked up only when their owning pillar starts, because each one changes a broader runtime or toolbox lifecycle boundary.
+
 - [ ] Rework HostedToolbox brokered IO on top of Host Capability dispatch if the later toolbox lifecycle pillar chooses that simplification.
+  - Owning pillar: toolbox lifecycle and brokered IO simplification.
+  - Current state: hosted toolbox sessions can already register as Host Capability providers and execute through the existing toolbox harness.
+  - Rework candidate: replace toolbox-specific brokered IO paths with the same Host Capability provider call envelope, approval/audit hooks, event observations, and callback relay used by sandbox `host.call(...)`.
+  - Expected benefit: one dispatch path for sandbox host APIs, hosted toolbox providers, approval decisions, and audit rows.
+  - Main risk: toolbox execution has existing lifecycle/accounting semantics; unifying too early could regress hosted toolbox behavior or complicate provider cancellation.
+  - Trigger to start: after the toolbox lifecycle pillar decides that duplicate brokered IO maintenance cost is higher than migration risk.
+
 - [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
+  - Owning pillar: stateful/recoverable sandbox instances.
+  - Current state: host-managed backend/workflow/instance/request JSON state can be snapshotted and restored. Arbitrary Python/JS process memory is intentionally not captured.
+  - Rework candidate: define instance recovery policy objects covering restart behavior, state partitions, mutation checkpoints, durable artifact references, and failure recovery after worker shutdown.
+  - Expected benefit: long-lived routed instances can survive planned shutdowns or worker replacement without pretending raw process memory is durable.
+  - Main risk: exposing too much process state would create unstable recovery semantics. Recovery should stay explicit and host-managed unless a runtime-specific checkpoint contract is added.
+  - Trigger to start: when dependent workflows need routable instances to survive host restarts or planned worker recycling.
+
 - [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context or module graph cache semantics are available.
+  - Owning pillar: JavaScript runtime evolution.
+  - Current state: `workflow_js_instance_*` pins a host worker process, but each request creates a fresh QuickJS context from `module_source`. Project-mode instance creation returns `workflow_js_instance_project_mode_unsupported` with deferred detail.
+  - Rework candidate: add a persistent QuickJS context or module graph cache, then define explicit cwd/env/import-cache cleanup rules and snapshot/restore boundaries for mutable JS state.
+  - Expected benefit: JS project-style authoring can become truly warm and routable instead of only using a pinned transport process.
+  - Main risk: persistent JS contexts can leak globals, async jobs, host handles, or imported module state across actions unless cleanup policy is explicit.
+  - Trigger to start: after JS runtime design accepts persistent context/module-cache ownership and defines the state cleanup contract.
+
 - [ ] Decide whether native toolbox metadata should directly adopt Host Capability group/namespace descriptors or continue using adapters.
+  - Owning pillar: native toolbox metadata and discovery.
+  - Current state: callable-surface adapters convert toolbox descriptions and `ToolsView` rows into Host Capability descriptors without forcing toolbox internals to store descriptors natively.
+  - Decision options:
+    - Keep adapters: lower migration risk, but toolbox and Host Capability metadata remain separate source models.
+    - Adopt descriptors natively: fewer conversion layers, stronger namespace/group consistency, but broader toolbox metadata churn.
+  - Expected benefit of a decision: clearer ownership for hierarchy, permissions, visibility, gating, and callable schemas across toolbox and sandbox-facing discovery.
+  - Main risk: adopting descriptors natively before toolbox lifecycle work could force another metadata migration later.
+  - Trigger to decide: when the native toolbox hierarchy/groups feature is started.
+
 - [ ] After dependent clients have migrated, remove the diagnostic service-owned `fs.*` / `http.fetch` fallback path and the tests that exist only to cover it.
+  - Owning pillar: legacy cleanup after Host Capability adoption.
+  - Current state: implicit service-owned fallback is removed from normal workflow node dispatch. The remaining fallback requires explicit `sandbox.host_api.service_owned_fallback_enabled=true` and emits diagnostic audit/log markers.
+  - Cleanup candidate: delete fallback registration/dispatch code, remove fallback-only diagnostics, and remove tests that assert explicit diagnostic fallback behavior.
+  - Expected benefit: Host API ownership becomes strictly client/provider-session based, with no service-owned compatibility path.
+  - Main risk: dependent clients that still rely on fallback will lose `api.fs` / `api.http` behavior unless they explicitly register known methods first.
+  - Trigger to start: after dependent clients confirm explicit callable-session registration is adopted and `HOSTING_CLIENT_BREAKING_CHANGES.md` records the removal window.

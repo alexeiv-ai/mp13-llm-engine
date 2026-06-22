@@ -910,28 +910,75 @@ Work:
 ## Migration Notes
 
 - Existing `workflow_python(profile=node)` and `workflow_js(profile=node)` should remain as compatibility facades while contracts are generalized.
-- Existing `host.call("fs.*")` and `host.call("http.fetch")` should remain available as built-in capability methods.
+- `fs.*` and `http.fetch` are no longer implicit normal workflow-node capabilities. Clients should register those methods through explicit Host Capability sessions. The remaining service-owned fallback is diagnostic-only and must be explicitly enabled.
 - Event helpers should continue to expose `started`, `progress`, `stdout`, `stderr`, `log`, `artifact`, `result`, `error`, `canceled`, and `done` as normalized event kinds.
-- Legacy stream receive command shapes are temporary cleanup targets, not long-term compatibility surfaces.
-- Client-owned host APIs should be opt-in; built-ins should not require a client callback endpoint.
+- Legacy workflow stream receive command shapes have been removed from public workflow command paths; workflow clients should use `workflow-*-event-subscribe`.
+- Client-owned host APIs are opt-in through provider sessions and callable-surface helpers.
+- Action manifests are additive. Existing `run(payload)` requests remain valid and become the default action when no manifest is supplied.
 
-## Open Questions
+## Remaining Open And Deferred Items
 
-1. Should daemon relay client-owned host capability calls, or should the worker/service connect directly to the client callback endpoint?
-2. Should approvals be stored in hosting state, client state, or both?
-3. Should state partitions be JSON-only initially, or should file/blob state be first-class from the start?
-4. Should action manifests be produced by static metadata, by executing sandbox discovery code, or both?
-5. Should long-lived project instances preserve import caches intentionally, or reset imports between action calls?
-6. How much of toolbox persisted lifecycle state should be shared with host capability toolbox state?
-7. What are the trust boundaries when host capability providers are remote clients over SSH/HTTP relay?
+The implementation phases above are complete except for the explicitly deferred items below. These are not blockers for the current Host Capability, streaming, state, instance, or action-manifest APIs.
 
-## Recommendation
+### Client Adoption
 
-Proceed, but only after establishing the event and host capability contracts. The highest-leverage path is:
+- [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
+  - Current state: the hosting library exposes known-method registration helpers, generic provider-session helpers, toolbox-as-provider registration, approval bridge helpers, callback relay helpers, and filtered audit reads.
+  - Required client work: register `fs.*`, `http.fetch`, and any custom host APIs explicitly instead of relying on service-owned fallback.
+  - Breakage timing: no new change is required at this exact point, but the later fallback-removal cleanup will be breaking for any client that has not migrated.
 
-1. cleanly specify streaming event origins and live versus terminal events;
-2. extract a shared toolbox-like capability descriptor model;
-3. add client-owned host capability sessions using a toolbox-style callback relay;
-4. then build stateful long-lived instances and card action manifests on top.
+### Diagnostic Fallback Removal
 
-Avoid making project mode long-lived or adding card action discovery before host capabilities and state scopes are explicit. Those features need stable capability, event, and state boundaries to avoid another round of contract churn.
+- [ ] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback after dependent clients complete migration.
+  - Current state: fallback is off by default for normal workflow node dispatch and requires `sandbox.host_api.service_owned_fallback_enabled=true`.
+  - Remaining code: fallback provider registration/dispatch, diagnostic audit/log marker tests, and convenience-wrapper tests that explicitly opt into fallback.
+  - Removal condition: dependent clients confirm explicit Host Capability registration for known methods.
+  - Breaking-change handling: record the removal in `HOSTING_CLIENT_BREAKING_CHANGES.md` before implementation and remove fallback-only tests in the same slice.
+
+### Toolbox Brokered IO Unification
+
+- [ ] Rework HostedToolbox brokered IO on top of Host Capability dispatch if the later toolbox lifecycle pillar chooses that simplification.
+  - Current state: hosted toolbox sessions can already act as Host Capability providers, but toolbox-specific brokered IO paths still exist.
+  - Decision needed: whether the lifecycle pillar wants one shared provider-call envelope and audit/approval path for toolbox and sandbox host APIs.
+  - Likely direction: defer until toolbox lifecycle work starts; do not churn stable toolbox execution code only for architectural neatness.
+
+### Long-Lived Recovery Beyond Host-Managed State
+
+- [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
+  - Current state: JSON state partitions are host-managed and recoverable through `sandbox-state-snapshot` / `sandbox-state-restore`.
+  - Boundary: arbitrary Python/JS process memory, open handles, async jobs, and imported module internals are not recoverable state.
+  - Decision needed: whether future recovery is limited to explicit host-managed partitions or adds runtime-specific checkpoint contracts.
+
+### JavaScript Project Instances
+
+- [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
+  - Current state: JS pinned instances reuse the host worker process only; each call creates a fresh QuickJS context. Project-mode JS instance creation is rejected with structured deferred detail.
+  - Decision needed: persistent QuickJS context versus persistent module graph cache, plus cleanup policy for globals, async jobs, imports, env, and host handles.
+  - Recommended constraint: do not enable JS project-mode routing until cleanup and snapshot boundaries are explicit.
+
+### Native Toolbox Metadata
+
+- [ ] Decide whether native toolbox metadata should directly adopt Host Capability group/namespace descriptors or continue using adapters.
+  - Current state: adapters convert toolbox/`ToolsView` metadata into Host Capability descriptors.
+  - Decision needed: keep adapters as the compatibility boundary or make Host Capability descriptors native toolbox metadata.
+  - Recommended timing: decide during the native toolbox hierarchy/groups feature, not in the completed Host API pillar.
+
+## Resolved Architecture Decisions
+
+- Streaming/event contracts were implemented first, and workflow event consumption now uses `workflow-*-event-subscribe`.
+- Host Capability provider sessions are client-owned; workers do not receive provider bindings or callback credentials.
+- Provider callback relay is optimized for local IPC; SSH relay remains a corner case unless a touched transport already supports it.
+- Approval reuse is explicit scoped-grant behavior, not an implicit broker cache.
+- State recovery is currently explicit host-managed JSON state only.
+- Python project-mode pinned instances require a reset policy for cwd, `sys.path`, env, and project imports.
+- JS project-mode pinned instances remain unsupported until persistent JS runtime semantics are defined.
+- Action manifests are static request metadata for now; sandbox-executed dynamic discovery is deferred unless a future workflow composition feature needs it.
+
+## Current Recommendation
+
+Do not start deferred runtime/toolbox cleanup until there is a concrete owning feature or client migration signal. The next high-leverage work is either:
+
+1. coordinate dependent-client adoption of explicit Host Capability registration, then remove the diagnostic `fs.*` / `http.fetch` fallback; or
+2. start the toolbox lifecycle pillar and decide whether toolbox brokered IO and native metadata should converge on Host Capability descriptors.
+
+JS project-mode persistence and deeper instance recovery should stay behind explicit runtime/state design work because they affect cleanup, snapshot, and mutation semantics.
