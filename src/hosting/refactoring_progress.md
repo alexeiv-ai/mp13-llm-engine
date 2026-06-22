@@ -251,7 +251,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement explicit Python node instance create/execute/list/close APIs.
 - [x] Implement explicit JS node instance create/execute/list/close APIs.
 - [x] Add snapshot/restore hooks for instance-local host-managed state.
-- [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
+- [x] Dependent clients adopted explicit callable-session registration, callback relay bindings, and callable-surface helpers for the fallback-removal slice.
 - [x] Decide and implement Python long-lived project-mode cwd/sys.path/env/import-cache policy.
 - [x] Decide JS project-mode long-lived semantics.
 - [x] Implement service-level action manifest discovery and invocation routing.

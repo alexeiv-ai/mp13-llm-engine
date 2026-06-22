@@ -923,10 +923,10 @@ The implementation phases above are complete except for the explicitly deferred 
 
 ### Client Adoption
 
-- [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
+- [x] Dependent clients adopted explicit callable-session registration, callback relay bindings, and callable-surface helpers for the fallback-removal slice.
   - Current state: the hosting library exposes known-method registration helpers, generic provider-session helpers, toolbox-as-provider registration, approval bridge helpers, callback relay helpers, and filtered audit reads.
-  - Required client work: register `fs.*`, `http.fetch`, and any custom host APIs explicitly. Legacy service-owned fallback policy keys are ignored.
-  - Breakage timing: active now. `HOSTING_CLIENT_BREAKING_CHANGES.md` contains the client instructions for this slice.
+  - Completed client work: `fs.*`, `http.fetch`, and custom host APIs are registered explicitly. Legacy service-owned fallback policy keys are ignored.
+  - Breaking-change status: consumed by the dependent client and reset for future slices.
 
 ### Toolbox Brokered IO Unification
 
@@ -969,9 +969,9 @@ The implementation phases above are complete except for the explicitly deferred 
 
 ## Current Recommendation
 
-Do not start deferred runtime/toolbox cleanup until there is a concrete owning feature or client migration signal. The next high-leverage work is either:
+Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The next high-leverage work is:
 
-1. support dependent-client adoption of explicit Host Capability registration using the breaking-change instructions from this slice; or
-2. start the toolbox lifecycle pillar and decide whether toolbox brokered IO and native metadata should converge on Host Capability descriptors.
+1. start the toolbox lifecycle pillar and decide whether toolbox brokered IO should converge on Host Capability dispatch; then
+2. decide native toolbox metadata versus Host Capability descriptor adapters when the native toolbox hierarchy/groups work starts.
 
 JS project-mode persistence and deeper instance recovery should stay behind explicit runtime/state design work because they affect cleanup, snapshot, and mutation semantics.
