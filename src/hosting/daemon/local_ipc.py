@@ -2344,6 +2344,40 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
+        if cmd == "workflow-js-instance-create":
+            return svc.workflow_js_instance_create(
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                instance_id=str(payload.get("instance_id") or "").strip() or None,
+                replace=bool(payload.get("replace", False)),
+            )
+        if cmd == "workflow-js-instance-execute":
+            return svc.workflow_js_instance_execute(
+                instance_id=str(payload.get("instance_id") or ""),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
+            )
+        if cmd == "workflow-js-instance-close":
+            return svc.workflow_js_instance_close(
+                instance_id=str(payload.get("instance_id") or ""),
+                reason=str(payload.get("reason") or "client_requested"),
+            )
+        if cmd == "workflow-js-instance-list":
+            return svc.workflow_js_instance_list()
         if cmd == "workflow-js-set-capacity":
             return svc.set_workflow_js_capacity(
                 profile=str(payload.get("profile") or "node"),

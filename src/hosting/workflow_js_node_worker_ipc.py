@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import threading
 import time
 import traceback
@@ -195,6 +196,7 @@ def _runtime_metadata(*, memory_limit: Optional[Dict[str, Any]] = None) -> Dict[
             "quickjs_binding": "quickjs",
             "quickjs_binding_version": str(getattr(quickjs, "__version__", "") or "unknown"),
             "quickjs_available": True,
+            "host_worker_pid": os.getpid(),
             "memory_limit": dict(memory_limit or {"requested_mb": None, "enforced": False, "reason": "not_requested"}),
         }
     except Exception as exc:
@@ -202,6 +204,7 @@ def _runtime_metadata(*, memory_limit: Optional[Dict[str, Any]] = None) -> Dict[
             "quickjs_binding": "quickjs",
             "quickjs_binding_version": None,
             "quickjs_available": False,
+            "host_worker_pid": os.getpid(),
             "quickjs_error": str(exc),
             "memory_limit": dict(memory_limit or {"requested_mb": None, "enforced": False, "reason": "runtime_unavailable"}),
         }

@@ -466,6 +466,11 @@ class WorkflowJsNodeRuntime:
 
 
 class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self._instance_lock = threading.Lock()
+        self._instances: Dict[str, Dict[str, Any]] = {}
+
     @staticmethod
     def _runtime_key(request: Dict[str, Any], executable: str) -> str:
         js = dict(request.get("javascript") or {})
@@ -475,6 +480,111 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         runtime_hash = _clean(js.get("runtime_hash")) or "quickjs-default"
         return "|".join([_clean(executable), environment_key, runtime_hash, code_revision, package_revision])
 
+    @staticmethod
+    def _validate_module_identity(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        module_source = str(request.get("module_source") or "")
+        expected_sha = _clean(request.get("module_sha256")).lower()
+        if not expected_sha or _sha256_text(module_source).lower() != expected_sha:
+            return {"ok": False, "reason": "workflow_sandbox_invalid_module_identity", "detail": {}}
+        return None
+
+    @staticmethod
+    def _child_request(request: Dict[str, Any]) -> Dict[str, Any]:
+        req = dict(request or {})
+        limits = dict(req.get("limits") or {})
+        output_limit_bytes = max(1, min(int(limits.get("output_limit_bytes") or 65536), 10 * 1024 * 1024))
+        return {
+            **req,
+            "request_id": _clean(req.get("request_id")),
+            "export_name": _clean(req.get("export_name")) or "run",
+            "output_limit_bytes": output_limit_bytes,
+        }
+
+    @staticmethod
+    def _instance_reusable(request: Dict[str, Any]) -> bool:
+        return _clean(request.get("execution_mode") or "module").lower() != "project"
+
+    def create_instance(
+        self,
+        request: Dict[str, Any],
+        *,
+        instance_id: str = "",
+        python_executable: Optional[str] = None,
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        child_req = self._child_request(request)
+        validation_error = self._validate_module_identity(child_req)
+        if validation_error is not None:
+            return {"status": "error", **validation_error}
+        if not self._instance_reusable(child_req):
+            return {"status": "error", "ok": False, "reason": "workflow_js_instance_project_mode_unsupported"}
+        executable = _clean(python_executable) or _python_executable_from_request(child_req)
+        runtime_key = self._runtime_key(child_req, executable)
+        iid = _clean(instance_id) or f"jsinst_{secrets.token_urlsafe(18)}"
+        existing: Optional[Dict[str, Any]]
+        with self._instance_lock:
+            existing = self._instances.get(iid)
+            if existing is not None and not bool(replace):
+                return {"status": "error", "ok": False, "reason": "workflow_js_instance_exists", "instance_id": iid}
+        if existing is not None:
+            self.close_instance(iid, reason="replace")
+        runtime = WorkflowJsNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+        now = time.time()
+        row = {
+            "instance_id": iid,
+            "runtime_key": runtime_key,
+            "environment_key": str(child_req.get("environment_key") or ""),
+            "python_executable": executable,
+            "pid": int(runtime.proc.pid or 0) or None,
+            "created_at": now,
+            "last_used_at": now,
+            "active_request_id": None,
+            "closed": False,
+            "runtime": runtime,
+        }
+        with self._instance_lock:
+            self._instances[iid] = row
+        return {"status": "ok", "ok": True, **{key: value for key, value in row.items() if key != "runtime"}}
+
+    def close_instance(self, instance_id: str, *, reason: str = "client_requested") -> Dict[str, Any]:
+        iid = _clean(instance_id)
+        if not iid:
+            return {"status": "error", "reason": "instance_id_required", "closed": False}
+        with self._instance_lock:
+            row = self._instances.pop(iid, None)
+        if row is None:
+            return {"status": "not_found", "instance_id": iid, "closed": False}
+        runtime = row.get("runtime")
+        if runtime is not None:
+            try:
+                runtime.shutdown()
+            except Exception:
+                try:
+                    runtime.ensure_stopped()
+                except Exception:
+                    pass
+        return {
+            "status": "ok",
+            "instance_id": iid,
+            "closed": True,
+            "reason": _clean(reason) or "client_requested",
+            "runtime_key": row.get("runtime_key"),
+            "pid": row.get("pid"),
+        }
+
+    def list_instances(self) -> Dict[str, Any]:
+        with self._instance_lock:
+            rows = [dict(row or {}) for row in self._instances.values()]
+        out: list[Dict[str, Any]] = []
+        for row in rows:
+            runtime = row.pop("runtime", None)
+            row["alive"] = bool(runtime is not None and runtime.alive())
+            if runtime is not None:
+                row["pid"] = int(runtime.proc.pid or 0) or None
+            out.append(row)
+        out.sort(key=lambda item: str(item.get("instance_id") or ""))
+        return {"status": "ok", "instances": out, "count": len(out)}
+
     def execute(
         self,
         request: Dict[str, Any],
@@ -482,47 +592,70 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         python_executable: Optional[str] = None,
         on_event: Optional[NodeEventCallback] = None,
         host_dispatcher: Optional[Any] = None,
+        instance_id: str = "",
     ) -> Dict[str, Any]:
         req = dict(request or {})
         request_id = _clean(req.get("request_id"))
-        module_source = str(req.get("module_source") or "")
-        expected_sha = _clean(req.get("module_sha256")).lower()
-        if not expected_sha or _sha256_text(module_source).lower() != expected_sha:
-            return {"ok": False, "reason": "workflow_sandbox_invalid_module_identity", "detail": {}}
+        validation_error = self._validate_module_identity(req)
+        if validation_error is not None:
+            return validation_error
         limits = dict(req.get("limits") or {})
         timeout_ms = max(1, min(int(limits.get("timeout_ms") or 5000), 300000))
-        output_limit_bytes = max(1, min(int(limits.get("output_limit_bytes") or 65536), 10 * 1024 * 1024))
-        child_req = {
-            **req,
-            "request_id": request_id,
-            "export_name": _clean(req.get("export_name")) or "run",
-            "output_limit_bytes": output_limit_bytes,
-        }
+        child_req = {**self._child_request(req), "request_id": request_id}
         executable = _clean(python_executable) or _python_executable_from_request(req)
         runtime_key = self._runtime_key(child_req, executable)
         runtime: Optional[WorkflowJsNodeRuntime] = None
-        last_start_error: Optional[Exception] = None
-        for attempt in range(2):
-            try:
-                runtime = WorkflowJsNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
-                break
-            except Exception as exc:
-                last_start_error = exc
-                if attempt == 0 and "connect_timeout" in str(exc):
-                    continue
-                break
-        if runtime is None:
-            return {
-                "ok": False,
-                "reason": "workflow_sandbox_host_unavailable",
-                "detail": {
-                    "message": str(last_start_error or "workflow_js_node_worker_start_failed"),
-                    "error_type": type(last_start_error).__name__ if last_start_error is not None else "RuntimeError",
-                },
-            }
+        pinned_instance_id = _clean(instance_id)
+        if pinned_instance_id:
+            with self._instance_lock:
+                instance_row = self._instances.get(pinned_instance_id)
+                if instance_row is None:
+                    return {"ok": False, "reason": "workflow_js_instance_not_found", "detail": {"instance_id": pinned_instance_id}}
+                if _clean(instance_row.get("runtime_key")) != runtime_key:
+                    return {
+                        "ok": False,
+                        "reason": "workflow_js_instance_incompatible_request",
+                        "detail": {
+                            "instance_id": pinned_instance_id,
+                            "runtime_key": runtime_key,
+                            "expected_runtime_key": instance_row.get("runtime_key"),
+                        },
+                    }
+                if _clean(instance_row.get("active_request_id")):
+                    return {"ok": False, "reason": "workflow_js_instance_busy", "detail": {"instance_id": pinned_instance_id}}
+                runtime = instance_row.get("runtime")
+                if runtime is None or not runtime.alive():
+                    return {"ok": False, "reason": "workflow_js_instance_not_alive", "detail": {"instance_id": pinned_instance_id}}
+                instance_row["active_request_id"] = request_id
+                instance_row["last_used_at"] = time.time()
+        else:
+            last_start_error: Optional[Exception] = None
+            for attempt in range(2):
+                try:
+                    runtime = WorkflowJsNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+                    break
+                except Exception as exc:
+                    last_start_error = exc
+                    if attempt == 0 and "connect_timeout" in str(exc):
+                        continue
+                    break
+            if runtime is None:
+                return {
+                    "ok": False,
+                    "reason": "workflow_sandbox_host_unavailable",
+                    "detail": {
+                        "message": str(last_start_error or "workflow_js_node_worker_start_failed"),
+                        "error_type": type(last_start_error).__name__ if last_start_error is not None else "RuntimeError",
+                    },
+                }
         try:
             runtime.send_request(child_req)
         except Exception:
+            if pinned_instance_id:
+                with self._instance_lock:
+                    row = self._instances.get(pinned_instance_id)
+                    if row is not None:
+                        row["active_request_id"] = None
             runtime.ensure_stopped()
             raise
         self.register_active(request_id, runtime)
@@ -530,7 +663,23 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             return runtime.wait(timeout_ms=timeout_ms, on_event=on_event, host_dispatcher=host_dispatcher)
         finally:
             self.unregister_active(request_id)
-            runtime.ensure_stopped()
+            if pinned_instance_id:
+                with self._instance_lock:
+                    row = self._instances.get(pinned_instance_id)
+                    if row is not None:
+                        row["active_request_id"] = None
+                        row["last_used_at"] = time.time()
+            else:
+                runtime.ensure_stopped()
+
+    def resources(self) -> Dict[str, Any]:
+        out = super().resources()
+        out["instances"] = self.list_instances()
+        return out
+
+    def shutdown(self) -> None:
+        for row in list(self.list_instances().get("instances") or []):
+            self.close_instance(str(dict(row or {}).get("instance_id") or ""), reason="registry_shutdown")
 
 
 __all__ = ["WorkflowJsNodeRuntimeRegistry"]

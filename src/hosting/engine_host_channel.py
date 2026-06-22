@@ -1944,6 +1944,79 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_js_instance_create(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        instance_id: Optional[str] = None,
+        replace: bool = False,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-instance-create",
+            {
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
+                "instance_id": str(instance_id or "").strip() or None,
+                "replace": bool(replace),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_js_instance_execute(
+        self,
+        *,
+        instance_id: str,
+        request: Optional[Dict[str, Any]] = None,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-instance-execute",
+            {
+                "instance_id": str(instance_id or "").strip(),
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_js_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-instance-close",
+            {"instance_id": str(instance_id or "").strip(), "reason": str(reason or "client_requested")},
+        )
+        return dict(res or {})
+
+    def workflow_js_instance_list(self) -> Dict[str, Any]:
+        res = self._invoke("workflow-js-instance-list", {})
+        return dict(res or {})
+
     def set_workflow_js_capacity(
         self,
         *,

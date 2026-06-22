@@ -146,6 +146,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Rejected project-mode Python node instances until cwd/sys.path/env/import-cache semantics are declared.
 - [x] Added tests proving sequential instance calls route to the same worker process and preserve process-local mutation.
 
+### State And Long-Lived Instances Slice 16: JS Node Pinned Instances
+
+- [x] Added pinned JS node runtime instances in `WorkflowJsNodeRuntimeRegistry`.
+- [x] Added service APIs for JS node instance create, execute, list, and close.
+- [x] Added channel, daemon, auth, policy, and CLI command dispatch for `workflow-js-instance-*`.
+- [x] Kept ordinary `workflow-js-execute` behavior unchanged; pinned routing is used through the explicit instance execute API.
+- [x] Added JS worker PID runtime metadata so routed calls can be observed and tested.
+- [x] Added tests proving sequential JS instance calls route to the same worker process.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -180,8 +189,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement scoped `add_to_scope` approval reuse for Host Capability calls.
 - [x] Implement explicit host-managed state capability methods.
 - [x] Implement explicit Python node instance create/execute/list/close APIs.
+- [x] Implement explicit JS node instance create/execute/list/close APIs.
 - [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
-- [ ] Add JS node instance create/execute/list/close APIs or explicitly defer JS node routing.
 - [ ] Add snapshot/restore hooks for instance-local state.
 - [ ] Decide and implement long-lived project-mode cwd/sys.path/env/import-cache policy.
 

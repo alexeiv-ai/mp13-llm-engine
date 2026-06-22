@@ -765,6 +765,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-js-environment-spec",
         "workflow-js-ensure",
         "workflow-js-execute",
+        "workflow-js-instance-create",
+        "workflow-js-instance-execute",
+        "workflow-js-instance-close",
+        "workflow-js-instance-list",
         "workflow-js-resources",
         "workflow-js-set-capacity",
         "workflow-js-cancel-request",
@@ -1175,6 +1179,49 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 )
             )
+            return 0
+        if cmd == "workflow-js-instance-create":
+            _print_ok(
+                svc.workflow_js_instance_create(
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request=dict(payload.get("request") or {}),
+                    node=dict(payload.get("node") or {}),
+                    javascript=dict(payload.get("javascript") or {}),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    instance_id=str(payload.get("instance_id") or "").strip() or None,
+                    replace=bool(payload.get("replace", False)),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-instance-execute":
+            _print_ok(
+                svc.workflow_js_instance_execute(
+                    instance_id=str(payload.get("instance_id") or ""),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request=dict(payload.get("request") or {}),
+                    node=dict(payload.get("node") or {}),
+                    javascript=dict(payload.get("javascript") or {}),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
+        if cmd == "workflow-js-instance-close":
+            _print_ok(
+                svc.workflow_js_instance_close(
+                    instance_id=str(payload.get("instance_id") or ""),
+                    reason=str(payload.get("reason") or "client_requested"),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-instance-list":
+            _print_ok(svc.workflow_js_instance_list())
             return 0
         if cmd == "workflow-js-set-capacity":
             _print_ok(

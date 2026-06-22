@@ -109,5 +109,27 @@ channel.workflow_python_instance_close(instance_id="inst-1")
 Current limits:
 
 - Python project mode is rejected for pinned instances until cwd, `sys.path`, env, and import-cache policy is explicit.
-- JS node pinned instances are not exposed yet.
 - Pinned instance restart recovery is not implemented yet; use explicit host-managed state for data that must survive close/restart.
+
+## JavaScript Node Pinned Instances
+
+Clients can now create and route requests through explicit JavaScript node module/snippet instances:
+
+- `workflow_js_instance_create(...)`
+- `workflow_js_instance_execute(...)`
+- `workflow_js_instance_list()`
+- `workflow_js_instance_close(...)`
+
+Use this when the client wants later calls to hit the same live QuickJS worker process:
+
+```python
+created = channel.workflow_js_instance_create(instance_id="js-inst-1", request=template_request)
+out = channel.workflow_js_instance_execute(instance_id="js-inst-1", request=run_request)
+channel.workflow_js_instance_close(instance_id="js-inst-1")
+```
+
+Current limits:
+
+- JS project mode is rejected for pinned instances until cwd, env, module/cache, and cleanup policy is explicit.
+- The worker process is pinned, but each JS request still creates a fresh QuickJS context. Use host-managed state for data that must persist between calls.
+- Pinned instance restart recovery is not implemented yet.

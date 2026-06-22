@@ -1569,6 +1569,7 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         req = dict(request or {})
+        runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
         js = {**dict(javascript or {}), **dict(req.get("javascript") or {})}
         ensured = self.ensure_workflow_js(
             profile=prof,
@@ -1656,6 +1657,7 @@ class WorkflowHelperMixin:
                         event_emitter=_record_js_broker_event,
                         host_capability_sessions=host_capability_sessions,
                     ),
+                    instance_id=runtime_instance_id,
                 )
                 if artifact_context is not None and bool(result.get("ok", False)):
                     try:
@@ -1692,6 +1694,105 @@ class WorkflowHelperMixin:
                 "request": dict(finished.get("request") or lifecycle.to_dict()),
             },
         )
+
+    def workflow_js_instance_create(
+        self,
+        *,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        instance_id: Optional[str] = None,
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_js_profile(profile)
+        req = dict(request or {})
+        js = {**dict(javascript or {}), **dict(req.get("javascript") or {})}
+        required = ["module_source", "module_sha256", "package_id", "workflow_id", "package_source_digest"]
+        missing = [name for name in required if not str(req.get(name) or "").strip()]
+        if missing:
+            return {
+                "status": "error",
+                "ok": False,
+                "profile": prof,
+                "reason": "workflow_js_node_invalid_request",
+                "detail": {"message": f"missing required fields: {', '.join(missing)}"},
+            }
+        ensured = self.ensure_workflow_js(
+            profile=prof,
+            environment_name=environment_name,
+            environment_key=environment_key,
+            node=dict(node or req.get("node") or {}),
+            javascript=js,
+            capacity=1,
+            sandbox_policy=sandbox_policy,
+            engine_id=engine_id,
+        )
+        if str(ensured.get("status") or "") != "ok":
+            return ensured
+        created = self._workflow_js_node_runtime_registry().create_instance(
+            {
+                **req,
+                "environment_key": str(ensured.get("environment_key") or ""),
+                "javascript": js,
+            },
+            python_executable=str(js.get("python_executable") or "").strip() or None,
+            instance_id=str(instance_id or "").strip(),
+            replace=replace,
+        )
+        if str(created.get("status") or "") == "ok":
+            created.update(
+                {
+                    "profile": prof,
+                    "engine_id": str(ensured.get("engine_id") or ""),
+                    "environment_key": str(ensured.get("environment_key") or ""),
+                }
+            )
+        return dict(created or {})
+
+    def workflow_js_instance_execute(
+        self,
+        *,
+        instance_id: str,
+        request: Optional[Dict[str, Any]] = None,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+    ) -> Dict[str, Any]:
+        iid = str(instance_id or "").strip()
+        if not iid:
+            return {"status": "error", "ok": False, "reason": "instance_id_required"}
+        req = dict(request or {})
+        req.setdefault("instance_id", iid)
+        req["_runtime_instance_id"] = iid
+        return self.execute_workflow_js(
+            profile=profile,
+            environment_name=environment_name,
+            environment_key=environment_key,
+            engine_id=engine_id,
+            request=req,
+            node=node,
+            javascript=javascript,
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            host_capability_sessions=host_capability_sessions,
+        )
+
+    def workflow_js_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
+        return dict(self._workflow_js_node_runtime_registry().close_instance(instance_id, reason=reason))
+
+    def workflow_js_instance_list(self) -> Dict[str, Any]:
+        return dict(self._workflow_js_node_runtime_registry().list_instances())
 
     def workflow_js_stream_open(
         self,

@@ -62,6 +62,10 @@ _WORKFLOW_JS_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-ensure",
     "workflow-js-execute",
+    "workflow-js-instance-create",
+    "workflow-js-instance-execute",
+    "workflow-js-instance-close",
+    "workflow-js-instance-list",
     "workflow-js-resources",
     "workflow-js-set-capacity",
     "workflow-js-cancel-request",
@@ -74,6 +78,7 @@ _WORKFLOW_JS_COMMANDS = {
 
 _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-environment-spec",
+    "workflow-js-instance-list",
     "workflow-js-resources",
     "workflow-js-request-status",
     "workflow-js-event-subscribe",

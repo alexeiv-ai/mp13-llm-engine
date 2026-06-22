@@ -420,6 +420,22 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
             self.calls.append(("execute", dict(kwargs)))
             return {"status": "ok", "ok": True}
 
+        def workflow_js_instance_create(self, **kwargs):
+            self.calls.append(("instance_create", dict(kwargs)))
+            return {"status": "ok", "instance_id": kwargs.get("instance_id") or "js-inst-1"}
+
+        def workflow_js_instance_execute(self, **kwargs):
+            self.calls.append(("instance_execute", dict(kwargs)))
+            return {"status": "ok", "ok": True, "instance_id": kwargs["instance_id"]}
+
+        def workflow_js_instance_close(self, **kwargs):
+            self.calls.append(("instance_close", dict(kwargs)))
+            return {"status": "ok", "closed": True, "instance_id": kwargs["instance_id"]}
+
+        def workflow_js_instance_list(self):
+            self.calls.append(("instance_list", {}))
+            return {"status": "ok", "instances": []}
+
         def workflow_js_resources(self, **kwargs):
             self.calls.append(("resources", dict(kwargs)))
             return {"status": "ok"}
@@ -459,6 +475,10 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     assert daemon._call_service("workflow-js-environment-spec", {"profile": "node", "javascript": {"host_api": {"enabled": True}}})["environment_key"] == "env-js"
     assert daemon._call_service("workflow-js-ensure", {"engine_id": "wf-js"})["engine_id"] == "wf-js"
     assert daemon._call_service("workflow-js-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+    assert daemon._call_service("workflow-js-instance-create", {"instance_id": "js-inst-1", "request": {"request_id": "req-create"}})["instance_id"] == "js-inst-1"
+    assert daemon._call_service("workflow-js-instance-execute", {"instance_id": "js-inst-1", "request": {"request_id": "req-inst"}})["ok"] is True
+    assert daemon._call_service("workflow-js-instance-list", {})["instances"] == []
+    assert daemon._call_service("workflow-js-instance-close", {"instance_id": "js-inst-1"})["closed"] is True
     assert daemon._call_service("workflow-js-resources", {"engine_id": "wf-js"})["status"] == "ok"
     assert daemon._call_service("workflow-js-set-capacity", {"engine_id": "wf-js", "capacity": 5})["capacity"] == 5
     assert daemon._call_service("workflow-js-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
@@ -472,6 +492,10 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
         "spec",
         "ensure",
         "execute",
+        "instance_create",
+        "instance_execute",
+        "instance_list",
+        "instance_close",
         "resources",
         "set_capacity",
         "cancel",
@@ -1018,6 +1042,54 @@ def test_execute_workflow_js_facade_uses_quickjs_node_runtime(tmp_path: Path) ->
     assert out["metrics"]["request"]["status"] == "ok"
     assert out["metrics"]["workflow_pool"]["metrics"]["active_calls"] == 0
     assert out["metrics"]["workflow_pool"]["metrics"]["recent_requests"][0]["request_id"] == "workflow-js-sync"
+
+
+def test_workflow_js_node_instance_routes_sequential_calls_to_pinned_worker(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "exports.run = function(input) { return { output: { value: input.value } }; };"
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "export_name": "run",
+        "limits": {"timeout_ms": 1000},
+    }
+
+    created = svc.workflow_js_instance_create(
+        instance_id="js-inst-pinned",
+        request={**base_request, "request_id": "req-js-instance-create", "payload": {"value": "create"}},
+    )
+    first = svc.workflow_js_instance_execute(
+        instance_id="js-inst-pinned",
+        request={**base_request, "request_id": "req-js-instance-a", "payload": {"value": "a"}},
+    )
+    second = svc.workflow_js_instance_execute(
+        instance_id="js-inst-pinned",
+        request={**base_request, "request_id": "req-js-instance-b", "payload": {"value": "b"}},
+    )
+    listed = svc.workflow_js_instance_list()
+    closed = svc.workflow_js_instance_close(instance_id="js-inst-pinned")
+    after_close = svc.workflow_js_instance_execute(
+        instance_id="js-inst-pinned",
+        request={**base_request, "request_id": "req-js-instance-after-close", "payload": {"value": "closed"}},
+    )
+
+    assert created["status"] == "ok"
+    assert created["instance_id"] == "js-inst-pinned"
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"] == {"value": "a"}
+    assert second["output"] == {"value": "b"}
+    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert [row["instance_id"] for row in listed["instances"]] == ["js-inst-pinned"]
+    assert closed["closed"] is True
+    assert after_close["reason"] == "workflow_js_instance_not_found"
 
 
 def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> None:
