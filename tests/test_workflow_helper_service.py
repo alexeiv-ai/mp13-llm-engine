@@ -2438,6 +2438,53 @@ def test_execute_workflow_python_node_collects_declared_output_artifact(tmp_path
     assert out["artifacts"][0]["ref"].startswith("@artifacts/")
 
 
+def test_execute_workflow_python_node_failure_exposes_artifact_recovery(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    f = open(artifact_outputs['report'], 'w')\n"
+        "    f.write('draft before crash')\n"
+        "    f.close()\n"
+        "    raise RuntimeError('boom')\n"
+    )
+
+    out = svc.execute_workflow_python(
+        profile="node",
+        request={
+            "request_id": "req-node-output-failed",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "payload": {},
+            "artifact_outputs": [{"name": "report", "filename": "report.txt", "media_type": "text/plain"}],
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["artifact_recovery"]["status"] == "ok"
+    assert out["artifact_recovery"]["count"] == 1
+    assert out["artifact_recovery"]["candidates"][0]["name"] == "report"
+
+    claimed = svc.workflow_artifact_recovery_claim(
+        request_id="req-node-output-failed",
+        names=["report"],
+        target_id="fresh-instance",
+    )
+
+    assert claimed["status"] == "ok"
+    assert claimed["claimed_count"] == 1
+    assert claimed["claimed_artifacts"][0]["ref"] == "@artifacts/fresh-instance/report/report.txt"
+    cleanup = svc.workflow_artifact_recovery_cleanup(request_id="req-node-output-failed")
+    assert cleanup["status"] == "ok"
+    assert cleanup["deleted"] is True
+
+
 def test_execute_workflow_python_node_reads_declared_input_artifact_ref(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

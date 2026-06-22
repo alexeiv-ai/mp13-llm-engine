@@ -2485,6 +2485,25 @@ class EngineHostDaemon:
                 request_id=str(payload.get("request_id") or ""),
                 mode=str(payload.get("mode") or "merge"),
             )
+        if cmd == "workflow-artifact-recovery-inspect":
+            return svc.workflow_artifact_recovery_inspect(
+                request_id=str(payload.get("request_id") or ""),
+                names=list(payload.get("names") or []),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
+        if cmd == "workflow-artifact-recovery-claim":
+            return svc.workflow_artifact_recovery_claim(
+                request_id=str(payload.get("request_id") or ""),
+                names=list(payload.get("names") or []),
+                target_id=str(payload.get("target_id") or ""),
+                patch_absolute_paths=bool(payload.get("patch_absolute_paths", False)),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
+        if cmd == "workflow-artifact-recovery-cleanup":
+            return svc.workflow_artifact_recovery_cleanup(
+                request_id=str(payload.get("request_id") or ""),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+            )
         if cmd == "workflow-python-ensure":
             return svc.ensure_workflow_python(
                 profile=str(payload.get("profile") or "helper"),

@@ -787,6 +787,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-python-verify-install-receipt",
         "sandbox-state-snapshot",
         "sandbox-state-restore",
+        "workflow-artifact-recovery-inspect",
+        "workflow-artifact-recovery-claim",
+        "workflow-artifact-recovery-cleanup",
         "workflow-python-ensure",
         "workflow-python-execute",
         "workflow-python-action-describe",
@@ -1374,6 +1377,34 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     instance_id=str(payload.get("instance_id") or ""),
                     request_id=str(payload.get("request_id") or ""),
                     mode=str(payload.get("mode") or "merge"),
+                )
+            )
+            return 0
+        if cmd == "workflow-artifact-recovery-inspect":
+            _print_ok(
+                svc.workflow_artifact_recovery_inspect(
+                    request_id=str(payload.get("request_id") or ""),
+                    names=list(payload.get("names") or []),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
+        if cmd == "workflow-artifact-recovery-claim":
+            _print_ok(
+                svc.workflow_artifact_recovery_claim(
+                    request_id=str(payload.get("request_id") or ""),
+                    names=list(payload.get("names") or []),
+                    target_id=str(payload.get("target_id") or ""),
+                    patch_absolute_paths=bool(payload.get("patch_absolute_paths", False)),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
+        if cmd == "workflow-artifact-recovery-cleanup":
+            _print_ok(
+                svc.workflow_artifact_recovery_cleanup(
+                    request_id=str(payload.get("request_id") or ""),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 )
             )
             return 0

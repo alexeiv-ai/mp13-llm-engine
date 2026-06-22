@@ -1386,6 +1386,57 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     ]
 
 
+def test_workflow_artifact_recovery_channel_facade_forwards_expected_payloads() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.workflow_artifact_recovery_inspect(
+        request_id="req-1",
+        names=["report"],
+        sandbox_policy={"artifact_roots": {"project": "O:/workspace"}},
+    )
+    ch.workflow_artifact_recovery_claim(
+        request_id="req-1",
+        names=["report"],
+        target_id="fresh-instance",
+        patch_absolute_paths=True,
+    )
+    ch.workflow_artifact_recovery_cleanup(request_id="req-1")
+
+    assert fake.calls == [
+        (
+            "workflow-artifact-recovery-inspect",
+            {
+                "request_id": "req-1",
+                "names": ["report"],
+                "sandbox_policy": {"artifact_roots": {"project": "O:/workspace"}},
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-artifact-recovery-claim",
+            {
+                "request_id": "req-1",
+                "names": ["report"],
+                "target_id": "fresh-instance",
+                "patch_absolute_paths": True,
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-artifact-recovery-cleanup",
+            {
+                "request_id": "req-1",
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+    ]
+
+
 def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})

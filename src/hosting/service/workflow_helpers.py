@@ -360,6 +360,7 @@ class WorkflowHelperMixin:
         )
         status = "ok" if ok else ("canceled" if reason == "workflow_sandbox_canceled" else "error")
         artifact_rows = list(result.get("artifacts") or []) if isinstance(result.get("artifacts"), list) else []
+        artifact_recovery = dict(result.get("artifact_recovery") or {}) if isinstance(result.get("artifact_recovery"), dict) else None
         artifact_store = (
             {
                 "status": "ok",
@@ -393,6 +394,7 @@ class WorkflowHelperMixin:
             "state_patch": dict(result.get("state_patch") or {}) or None,
             "artifacts": artifact_rows,
             "artifact_store": artifact_store,
+            "artifact_recovery": artifact_recovery,
             "progress": dict(result.get("progress") or {}) or None,
             "logs": logs,
             "metrics": dict(metrics or {}),
@@ -770,6 +772,60 @@ class WorkflowHelperMixin:
         if context is None:
             return {"status": "skipped", "reason": "artifact_context_missing"}
         return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).cleanup_run(dict(context or {}))
+
+    def workflow_artifact_recovery_inspect(
+        self,
+        *,
+        request_id: str,
+        names: Optional[list[str]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).recovery_candidates(
+            request_id=str(request_id or ""),
+            names=list(names or []),
+        )
+
+    def workflow_artifact_recovery_claim(
+        self,
+        *,
+        request_id: str,
+        names: Optional[list[str]] = None,
+        target_id: str = "",
+        patch_absolute_paths: bool = False,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy).claim_recovery_artifacts(
+            request_id=str(request_id or ""),
+            names=list(names or []),
+            target_id=str(target_id or ""),
+            patch_absolute_paths=bool(patch_absolute_paths),
+        )
+
+    def workflow_artifact_recovery_cleanup(
+        self,
+        *,
+        request_id: str,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        manager = self._workflow_python_artifact_manager(sandbox_policy=sandbox_policy)
+        return manager.cleanup_run({"run_root": str(manager.run_root_for_request(str(request_id or "")))})
+
+    def _workflow_artifact_recovery_notice(
+        self,
+        *,
+        request_id: str,
+        artifact_context: Optional[Dict[str, Any]],
+        reason: str = "",
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if artifact_context is None:
+            return None
+        notice = self.workflow_artifact_recovery_inspect(
+            request_id=str(request_id or ""),
+            sandbox_policy=sandbox_policy,
+        )
+        notice["reason"] = str(reason or "") or None
+        return notice
 
     def _workflow_python_node_host_dispatcher(
         self,
@@ -1318,6 +1374,7 @@ class WorkflowHelperMixin:
         )
         status = "ok" if ok else ("canceled" if reason == "workflow_sandbox_canceled" else "error")
         artifact_rows = list(result.get("artifacts") or []) if isinstance(result.get("artifacts"), list) else []
+        artifact_recovery = dict(result.get("artifact_recovery") or {}) if isinstance(result.get("artifact_recovery"), dict) else None
         artifact_store = (
             {
                 "status": "ok",
@@ -1351,6 +1408,7 @@ class WorkflowHelperMixin:
             "state_patch": dict(result.get("state_patch") or {}) or None,
             "artifacts": artifact_rows,
             "artifact_store": artifact_store,
+            "artifact_recovery": artifact_recovery,
             "progress": dict(result.get("progress") or {}) or None,
             "logs": logs,
             "metrics": dict(metrics or {}),
@@ -1643,8 +1701,15 @@ class WorkflowHelperMixin:
                         result = {"ok": False, "reason": "workflow_js_artifact_error", "detail": {"message": str(exc)}, "artifacts": []}
                 elif artifact_context is None:
                     result["artifacts"] = []
-                if artifact_context is not None:
+                if artifact_context is not None and bool(result.get("ok", False)):
                     self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
+                elif artifact_context is not None:
+                    result["artifact_recovery"] = self._workflow_artifact_recovery_notice(
+                        request_id=lifecycle.request_id,
+                        artifact_context=artifact_context,
+                        reason=str(result.get("reason") or ""),
+                        sandbox_policy=sandbox_policy,
+                    )
         status = "ok" if bool(result.get("ok", False)) else "error"
         reason = str(result.get("reason") or "") or None
         if reason == "workflow_sandbox_timeout":
@@ -1931,8 +1996,15 @@ class WorkflowHelperMixin:
                 }
         else:
             result["artifacts"] = []
-        if artifact_context is not None:
+        if artifact_context is not None and bool(result.get("ok", False)):
             self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
+        elif artifact_context is not None:
+            result["artifact_recovery"] = self._workflow_artifact_recovery_notice(
+                request_id=str(request.get("request_id") or ""),
+                artifact_context=artifact_context,
+                reason=str(result.get("reason") or ""),
+                sandbox_policy=sandbox_policy,
+            )
 
         status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))
         response = self._workflow_js_node_response_from_execution(
@@ -2312,8 +2384,15 @@ class WorkflowHelperMixin:
                     }
             else:
                 result["artifacts"] = []
-            if artifact_context is not None:
+            if artifact_context is not None and bool(result.get("ok", False)):
                 self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
+            elif artifact_context is not None:
+                result["artifact_recovery"] = self._workflow_artifact_recovery_notice(
+                    request_id=lifecycle.request_id,
+                    artifact_context=artifact_context,
+                    reason=str(result.get("reason") or ""),
+                    sandbox_policy=sandbox_policy,
+                )
             status = "ok" if bool(result.get("ok", False)) else "error"
             reason = str(result.get("reason") or "") or None
             if reason == "workflow_sandbox_timeout":
@@ -2941,8 +3020,15 @@ class WorkflowHelperMixin:
                 }
         else:
             result["artifacts"] = []
-        if artifact_context is not None:
+        if artifact_context is not None and bool(result.get("ok", False)):
             self._workflow_python_cleanup_node_artifacts(artifact_context, sandbox_policy=sandbox_policy)
+        elif artifact_context is not None:
+            result["artifact_recovery"] = self._workflow_artifact_recovery_notice(
+                request_id=str(request.get("request_id") or ""),
+                artifact_context=artifact_context,
+                reason=str(result.get("reason") or ""),
+                sandbox_policy=sandbox_policy,
+            )
         status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))
         response = self._workflow_python_node_response_from_execution(
             execution=result,

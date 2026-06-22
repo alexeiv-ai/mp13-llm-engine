@@ -93,6 +93,16 @@ _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-event-subscribe",
 }
 
+_WORKFLOW_ARTIFACT_COMMANDS = {
+    "workflow-artifact-recovery-inspect",
+    "workflow-artifact-recovery-claim",
+    "workflow-artifact-recovery-cleanup",
+}
+
+_WORKFLOW_ARTIFACT_OBSERVE_COMMANDS = {
+    "workflow-artifact-recovery-inspect",
+}
+
 _HOST_CAPABILITY_SESSION_COMMANDS = {
     "host-capability-session-register",
     "host-capability-session-list",
@@ -298,6 +308,7 @@ class AuthMixin:
             "spawn",
             *_WORKFLOW_JS_COMMANDS,
             *_WORKFLOW_PYTHON_COMMANDS,
+            *_WORKFLOW_ARTIFACT_COMMANDS,
             "get-registration",
             "shutdown",
             "ensure-running",
@@ -399,6 +410,7 @@ class AuthMixin:
                 "spawn",
                 *_WORKFLOW_JS_COMMANDS,
                 *_WORKFLOW_PYTHON_COMMANDS,
+                *_WORKFLOW_ARTIFACT_COMMANDS,
                 "get-registration",
                 "shutdown",
                 "ensure-running",
@@ -467,6 +479,7 @@ class AuthMixin:
                 "discover-running",
                 *_WORKFLOW_JS_COMMANDS,
                 *_WORKFLOW_PYTHON_COMMANDS,
+                *_WORKFLOW_ARTIFACT_COMMANDS,
                 "get-registration",
                 "shutdown",
                 "ensure-running",
@@ -573,6 +586,7 @@ class AuthMixin:
                 "inspect-capabilities",
                 *_WORKFLOW_JS_OBSERVE_COMMANDS,
                 *_WORKFLOW_PYTHON_OBSERVE_COMMANDS,
+                *_WORKFLOW_ARTIFACT_OBSERVE_COMMANDS,
                 "logs-tail",
                 "logs-follow",
                 "sandbox-fs-list",

@@ -125,7 +125,8 @@ These items were enabled by the Host Capability model but belong to later plan p
   - `state.instance.set`
   - `state.instance.list`
   - `state.instance.delete`
-- [x] Sandbox state snapshot/restore commands were added for recoverable long-lived instance state.
+- [x] Sandbox state snapshot/restore commands were added for explicit host-managed state partitions.
+- [x] Workflow artifact recovery inspect/claim/cleanup commands were added for crashed-request artifact handoff.
 - [x] Python node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript worker runtime metadata now reports the host worker pid for routed live instances.
@@ -155,13 +156,13 @@ These items are intentionally outside the completed Host Capability pillar. They
   - Approval rule: reusable grants default to same provider/session scope. Cross-toolbox reuse requires explicit scope identity such as toolbox definition digest, owner/workspace, method/schema/policy digests, and compatible constraints.
   - Bridge rule: brokered IO permissions come from an explicit bridge policy intersected with toolbox policy and Host Capability caller policy.
 
-- [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
+- [x] Constrain long-lived recovery to explicit host-managed state plus crashed-request artifact handoff.
   - Owning pillar: stateful/recoverable sandbox instances.
   - Current state: host-managed backend/workflow/instance/request JSON state can be snapshotted and restored. Arbitrary Python/JS process memory is intentionally not captured.
-  - Rework candidate: define instance recovery policy objects covering restart behavior, state partitions, mutation checkpoints, durable artifact references, and failure recovery after worker shutdown.
-  - Expected benefit: long-lived routed instances can survive planned shutdowns or worker replacement without pretending raw process memory is durable.
-  - Main risk: exposing too much process state would create unstable recovery semantics. Recovery should stay explicit and host-managed unless a runtime-specific checkpoint contract is added.
-  - Trigger to start: when dependent workflows need routable instances to survive host restarts or planned worker recycling.
+  - Decision: do not recover heaps, open handles, imported module internals, or replay mutations. Recovery beyond explicit JSON state is limited to repurposing declared output artifact refs from a failed request into a fresh instance/request folder.
+  - Implemented behavior: failed workflow requests with declared artifact outputs retain their run folder and return an `artifact_recovery` notice. Clients can inspect candidates, claim selected outputs into `@artifacts/<target_id>/...`, optionally patch absolute text paths, and then call cleanup.
+  - Ownership rule: clients decide whether partial artifacts are usable. Hosting only provides hint labels such as `declared_output`, `crash_recovery_candidate`, and `partial_possible`.
+  - Cleanup rule: disk garbage collection remains deferred. Recovery notices include a crash/shutdown timestamp and cleanup is explicit.
 
 - [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context or module graph cache semantics are available.
   - Owning pillar: JavaScript runtime evolution.

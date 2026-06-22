@@ -250,6 +250,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Expanded approval/correlation helper fields with session, toolbox, branch, session-tree, and provider-kind context.
 - [x] Added client integration instructions for multiple toolbox instances, conflict handling, approval scope, bridge policy, and correlation metadata.
 
+### State And Long-Lived Instances Slice 23: Artifact Recovery Handoff
+
+- [x] Constrained recovery semantics to explicit host-managed state plus artifact handoff; no heap recovery or mutation replay.
+- [x] Added `HostedArtifactManager.recovery_candidates(...)` and `claim_recovery_artifacts(...)`.
+- [x] Deferred failed-request artifact cleanup and exposed `artifact_recovery` notices in Python and JavaScript workflow responses.
+- [x] Added service, daemon, control-channel, CLI, auth, and policy command plumbing for `workflow-artifact-recovery-*`.
+- [x] Added client integration notes for inspect/claim/cleanup and partial artifact responsibility.
+
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
@@ -306,3 +314,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m pytest tests/test_callable_surface.py -q`
 - [x] `python -m pytest tests/test_engine_host_channel.py -q -k "host_capability_register_known_methods_helper_forwards_descriptors or host_capability_register_toolbox"`
 - [x] `python -m pytest tests/test_host_capabilities.py -q`
+- [x] `python -m py_compile src/hosting/sandbox/artifacts.py src/hosting/service/workflow_helpers.py src/hosting/engine_host_channel.py src/hosting/daemon/local_ipc.py src/hosting/engine_host_cli.py src/hosting/service/auth.py src/hosting/service/policy.py`
+- [x] `python -m pytest tests/test_hosting_artifact_helpers.py tests/test_engine_host_channel.py -q -k "artifact_recovery"`
+- [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "artifact_recovery"`
+- [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "artifact and (workflow_js or workflow_python_node_collects_declared_output_artifact or failure_exposes_artifact_recovery)"`
+- [x] `python -m pytest tests/test_hosting_auth_roles.py -q -k "worker_user or diagnostic_user"`

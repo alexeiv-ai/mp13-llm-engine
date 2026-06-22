@@ -137,3 +137,37 @@ def test_artifact_inline_zip_templates_expand_and_export(tmp_path: Path) -> None
     assert artifacts[0]["media_type"] == "application/zip"
     with zipfile.ZipFile(io.BytesIO(base64.b64decode(artifacts[0]["base64"])), "r") as zf:
         assert zf.namelist() == ["pkg/c.py"]
+
+
+def test_artifact_recovery_inspect_claim_and_cleanup(tmp_path: Path) -> None:
+    manager = HostedArtifactManager(artifact_root=tmp_path / "artifacts")
+    context = manager.prepare(
+        request={"artifact_outputs": [artifact_file_output(name="report", filename="report.txt")]},
+        request_id="req-crashed",
+    )
+    output_path = Path(context["child_context"]["outputs"]["report"])
+    output_path.write_text(f"old={context['run_root']}", encoding="utf-8")
+
+    inspected = manager.recovery_candidates(request_id="req-crashed")
+    assert inspected["status"] == "ok"
+    assert inspected["count"] == 1
+    assert inspected["candidates"][0]["name"] == "report"
+    assert "partial_possible" in inspected["candidates"][0]["labels"]
+
+    claimed = manager.claim_recovery_artifacts(
+        request_id="req-crashed",
+        names=["report"],
+        target_id="fresh-instance",
+        patch_absolute_paths=True,
+    )
+
+    assert claimed["status"] == "ok"
+    assert claimed["claimed_count"] == 1
+    artifact = claimed["claimed_artifacts"][0]
+    assert artifact["ref"] == "@artifacts/fresh-instance/report/report.txt"
+    claimed_path = manager.path_from_ref(artifact["ref"])
+    assert claimed_path is not None
+    assert str(context["run_root"]) not in claimed_path.read_text(encoding="utf-8")
+    assert claimed["old_path_to_new_ref"][str(output_path.resolve())] == artifact["ref"]
+    cleanup = manager.cleanup_run(context)
+    assert cleanup["deleted"] is True

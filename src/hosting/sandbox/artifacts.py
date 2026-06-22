@@ -672,6 +672,135 @@ class HostedArtifactManager:
         shutil.rmtree(resolved)
         return {"status": "ok", "deleted": True, "path": str(resolved)}
 
+    def run_root_for_request(self, request_id: str) -> Path:
+        return (self.artifact_root / "runs" / artifact_safe_name(request_id, fallback="request")).resolve()
+
+    def recovery_candidates(self, *, request_id: str, names: Optional[list[str]] = None) -> Dict[str, Any]:
+        rid = artifact_safe_name(request_id, fallback="")
+        if not rid:
+            return {"status": "error", "reason": "request_id_required", "candidates": [], "count": 0}
+        run_root = self.run_root_for_request(rid)
+        try:
+            run_root.relative_to((self.artifact_root / "runs").resolve())
+        except ValueError:
+            return {"status": "error", "reason": "run_root_outside_artifact_root", "candidates": [], "count": 0}
+        output_root = run_root / "outputs"
+        wanted = {artifact_safe_name(item, fallback="") for item in list(names or []) if artifact_safe_name(item, fallback="")}
+        candidates: list[Dict[str, Any]] = []
+        if output_root.exists():
+            for root in sorted(output_root.iterdir(), key=lambda item: item.name):
+                if wanted and root.name not in wanted:
+                    continue
+                files = sorted(path for path in (root.rglob("*") if root.is_dir() else [root]) if path.is_file())
+                if not files:
+                    continue
+                candidates.append(
+                    {
+                        "name": root.name,
+                        "candidate_id": root.name,
+                        "path": str(root.resolve()),
+                        "file_count": len(files),
+                        "size_bytes": sum(int(path.stat().st_size) for path in files),
+                        "labels": ["declared_output", "crash_recovery_candidate", "partial_possible"],
+                        "files": [
+                            {
+                                "relative_path": str(path.relative_to(root if root.is_dir() else root.parent)).replace("\\", "/"),
+                                "size_bytes": int(path.stat().st_size),
+                            }
+                            for path in files
+                        ],
+                    }
+                )
+        return {
+            "status": "ok",
+            "contract": "hosting.sandbox.artifact_recovery.v1",
+            "request_id": rid,
+            "run_root": str(run_root),
+            "crash_or_shutdown_at": time.time(),
+            "cleanup_deferred": run_root.exists(),
+            "candidates": candidates,
+            "count": len(candidates),
+        }
+
+    def claim_recovery_artifacts(
+        self,
+        *,
+        request_id: str,
+        names: Optional[list[str]] = None,
+        target_id: str = "",
+        patch_absolute_paths: bool = False,
+    ) -> Dict[str, Any]:
+        inspected = self.recovery_candidates(request_id=request_id, names=names)
+        if str(inspected.get("status") or "") != "ok":
+            return inspected
+        rid = artifact_safe_name(request_id, fallback="request")
+        target = artifact_safe_name(target_id or f"recovered-{rid}-{int(time.time() * 1000)}", fallback="recovered")
+        run_root = self.run_root_for_request(rid)
+        claim_root = (self.roots["artifacts"] / target).resolve()
+        claim_root.mkdir(parents=True, exist_ok=True)
+        claimed: list[Dict[str, Any]] = []
+        old_to_new_paths: Dict[str, str] = {}
+        old_to_new_refs: Dict[str, str] = {}
+        for candidate in list(inspected.get("candidates") or []):
+            row = dict(candidate or {})
+            name = artifact_safe_name(row.get("name"), fallback="artifact")
+            source_root = Path(str(row.get("path") or "")).expanduser().resolve()
+            try:
+                source_root.relative_to(run_root)
+            except ValueError:
+                continue
+            files = sorted(path for path in (source_root.rglob("*") if source_root.is_dir() else [source_root]) if path.is_file())
+            for source in files:
+                rel = source.relative_to(source_root if source_root.is_dir() else source_root.parent)
+                dest = (claim_root / name / rel).resolve()
+                try:
+                    dest.relative_to(claim_root)
+                except ValueError:
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, dest)
+                if patch_absolute_paths:
+                    self._patch_text_path(dest, old=str(run_root), new=str(claim_root))
+                ref_rel = dest.relative_to(self.roots["artifacts"]).as_posix()
+                new_ref = f"@artifacts/{ref_rel}"
+                old_to_new_paths[str(source)] = str(dest)
+                old_to_new_refs[str(source)] = new_ref
+                claimed.append(
+                    {
+                        "name": name,
+                        "kind": "ref",
+                        "ref": new_ref,
+                        "filename": dest.name,
+                        "relative_path": str((Path(name) / rel).as_posix()),
+                        "size_bytes": int(dest.stat().st_size),
+                        "ownership": "host",
+                        "labels": list(row.get("labels") or []),
+                    }
+                )
+        return {
+            "status": "ok",
+            "contract": "hosting.sandbox.artifact_recovery_claim.v1",
+            "request_id": rid,
+            "target_id": target,
+            "claimed_artifacts": claimed,
+            "claimed_count": len(claimed),
+            "old_path_to_new_path": old_to_new_paths,
+            "old_path_to_new_ref": old_to_new_refs,
+        }
+
+    @staticmethod
+    def _patch_text_path(path: Path, *, old: str, new: str) -> None:
+        if path.suffix.lower() not in {".json", ".txt", ".md", ".csv", ".yaml", ".yml", ".toml"}:
+            return
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                return
+            text = path.read_text(encoding="utf-8")
+            if old in text:
+                path.write_text(text.replace(old, new), encoding="utf-8")
+        except Exception:
+            return
+
 
 __all__ = [
     "HostedArtifactManager",

@@ -944,10 +944,13 @@ The implementation phases above are complete except for the explicitly deferred 
 
 ### Long-Lived Recovery Beyond Host-Managed State
 
-- [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
+- [x] Constrain long-lived recovery to explicit host-managed state plus crashed-request artifact handoff.
   - Current state: JSON state partitions are host-managed and recoverable through `sandbox-state-snapshot` / `sandbox-state-restore`.
   - Boundary: arbitrary Python/JS process memory, open handles, async jobs, and imported module internals are not recoverable state.
-  - Decision needed: whether future recovery is limited to explicit host-managed partitions or adds runtime-specific checkpoint contracts.
+  - Decision: no heap recovery and no mutation replay. Hosting does not infer semantic validity of mutated state.
+  - Implemented artifact handoff: failed workflow requests with declared output artifacts keep their run folder and expose an `artifact_recovery` notice. Clients can call `workflow-artifact-recovery-inspect`, `workflow-artifact-recovery-claim`, and `workflow-artifact-recovery-cleanup`.
+  - Client responsibility: partial artifact validity is client-owned. Hosting provides hint labels only.
+  - Cleanup boundary: disk garbage collection is deferred to a later task; explicit cleanup remains available by request id.
 
 ### JavaScript Project Instances
 
@@ -969,7 +972,7 @@ The implementation phases above are complete except for the explicitly deferred 
 - Host Capability provider sessions are client-owned; workers do not receive provider bindings or callback credentials.
 - Provider callback relay is optimized for local IPC; SSH relay remains a corner case unless a touched transport already supports it.
 - Approval reuse is explicit scoped-grant behavior, not an implicit broker cache.
-- State recovery is currently explicit host-managed JSON state only.
+- State recovery is explicit host-managed JSON state plus client-directed artifact handoff from failed request folders.
 - Python project-mode pinned instances require a reset policy for cwd, `sys.path`, env, and project imports.
 - JS project-mode pinned instances remain unsupported until persistent JS runtime semantics are defined.
 - Action manifests are static request metadata for now; sandbox-executed dynamic discovery is deferred unless a future workflow composition feature needs it.
@@ -980,4 +983,4 @@ Do not start deferred runtime cleanup until there is a concrete owning feature o
 
 The next high-leverage work is to let the client integrate the callable-surface bridge helpers, adapter-based toolbox callable export, and conflict/approval policy rules.
 
-JS project-mode persistence and deeper instance recovery should stay behind explicit runtime/state design work because they affect cleanup, snapshot, and mutation semantics.
+JS project-mode persistence should stay behind explicit runtime design work because it affects cleanup, snapshot, and mutation semantics. Broader instance recovery remains intentionally out of scope unless a future runtime adds a specific checkpoint contract.

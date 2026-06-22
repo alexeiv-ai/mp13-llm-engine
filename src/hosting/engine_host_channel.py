@@ -1640,6 +1640,59 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_artifact_recovery_inspect(
+        self,
+        *,
+        request_id: str,
+        names: Optional[list[str]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-artifact-recovery-inspect",
+            {
+                "request_id": str(request_id or "").strip(),
+                "names": list(names or []),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_artifact_recovery_claim(
+        self,
+        *,
+        request_id: str,
+        names: Optional[list[str]] = None,
+        target_id: str = "",
+        patch_absolute_paths: bool = False,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-artifact-recovery-claim",
+            {
+                "request_id": str(request_id or "").strip(),
+                "names": list(names or []),
+                "target_id": str(target_id or "").strip(),
+                "patch_absolute_paths": bool(patch_absolute_paths),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_artifact_recovery_cleanup(
+        self,
+        *,
+        request_id: str,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-artifact-recovery-cleanup",
+            {
+                "request_id": str(request_id or "").strip(),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
     def ensure_workflow_python(
         self,
         *,
