@@ -366,6 +366,44 @@ Error:
 - [ ] Low-level clients may use raw daemon commands, but normal clients should not handle provider binding tokens or callback envelopes manually.
 - [ ] Since dependent clients already adopted current breaking changes, no legacy host API compatibility layer is required for this pillar.
 
+## Dependent Client Feature Request: Callable Surface Primitives
+
+Goal: expose reusable parent-owned primitives so dependent clients can model sandbox-exported Host API methods and hosted toolbox methods through one callable-surface abstraction.
+
+### Scope Decision
+
+- [x] Parent owns generic contracts, descriptor conversion, transport/session lifecycle helpers, callback envelope helpers, approval/audit hooks, and safe correlation propagation.
+- [x] Parent does not own workflow graph progression, approval cards/UI state, workspace-scoped durable approval decisions, or session-tree branch semantics.
+- [x] Do not remove service-owned `fs.*` / `http.fetch` immediately. Keep them as a migration fallback that can be disabled by policy and emits a diagnostic/audit marker when used.
+- [x] Preserve worker-side `api.fs` / `api.http` convenience wrappers as callers of advertised Host Capability methods; wrappers must not imply the methods exist.
+
+### Implementation Checklist For This Extension
+
+- [x] Add callable-surface descriptor adapters:
+  - toolbox/tool definitions plus `ToolsView` -> `HostCapabilityDescriptor[]`
+  - `HostCapabilityDescriptor[]` -> sandbox/model-facing callable schemas
+  - preserve allowed, advertised, hidden allowed, disabled, gated, constraints, schemas, permissions, approval metadata, and provider identity in descriptor metadata
+- [x] Add optional descriptor `metadata` so adapters can carry toolbox/view details without changing the core required descriptor fields.
+- [x] Add provider callback helper wrappers for `hosting.sandbox.host_capability_call.v1`:
+  - validate `provider_call_id`
+  - normalize success/error/timeout/cancel responses
+  - surface structured provider errors
+- [x] Add approval bridge helpers for `hosting.sandbox.host_capability_approval.v1`:
+  - sanitize arguments to argument keys
+  - include method, provider, approval policy, workflow/request/instance context, and safe correlation ids
+  - normalize decisions to `deny`, `allow_once`, or `add_to_scope`
+- [x] Add safe correlation metadata extraction for workflow, instance, node, request, cursor, context, branch/session-tree, actor, provider, method, approval, host-call, and provider-call ids.
+- [x] Add idempotent Host Capability lifecycle helpers:
+  - `host_capability_session_upsert(...)`
+  - filtered list helpers by workflow, instance, request, consumer, provider, owner, visibility, and method
+  - filtered close helpers using sanitized public session rows
+- [x] Add filtered Host Capability audit reads through `host_capability_audit_list(...)`.
+- [x] Add toolbox-as-provider registration helper that converts `toolbox_describe(...)` output plus optional `ToolsView` into a `toolbox_session` provider session.
+- [x] Make service-owned `fs.*` / `http.fetch` fallback explicitly disableable with `sandbox.host_api.service_owned_fallback_enabled=false`.
+- [x] Emit `host_capability_service_fallback_used` audit rows and log diagnostics when the service-owned fallback provider handles a call.
+- [ ] Complete provider callback runtime transport for toolbox-backed provider sessions so `toolbox_session` registration can execute through the existing toolbox execution harness instead of only registering descriptors.
+- [ ] Once dependent clients have migrated to callable-session owned registration, remove implicit service-owned fallback from workflow node dispatch.
+
 ## Implementation Checklist
 
 - [x] 1. Add shared host capability descriptor models.
@@ -448,4 +486,5 @@ Error:
 - [x] Make namespace hierarchy the canonical capability hierarchy and derive presentation groups from namespace where possible.
 - [x] Keep approval reuse explicit through scoped grants rather than an implicit broker cache.
 - [x] Request dependent-client adoption after this follow-up breaking-change slice is implemented, documented, and committed.
-- [ ] After dependent-client adoption, remove the remaining service-owned `fs.*` / `http.fetch` fallback registration from workflow node dispatch.
+- [ ] Complete toolbox-backed provider callback runtime so a hosted toolbox session can be both described and executed through the same Host Capability/callable-surface protocol.
+- [ ] After dependent-client adoption of explicit callable-session registration, remove the remaining service-owned `fs.*` / `http.fetch` fallback registration from workflow node dispatch.

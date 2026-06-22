@@ -96,6 +96,20 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Removed built-in precedence from broker method resolution; explicit override now wins.
 - [x] Documented that dependent clients should adopt known-method registration before the remaining service-owned fallback is removed.
 
+### Host Capability Slice 11: Callable Surface Primitives
+
+- [x] Added `hosting.callable_surface` helpers for converting toolbox/`ToolsView` metadata to `HostCapabilityDescriptor` rows.
+- [x] Added descriptor-to-callable-schema helpers for sandbox/model-facing discovery.
+- [x] Added optional descriptor `metadata` so toolbox allowed/advertised/hidden/disabled/gated/constraint state can be preserved without changing required descriptor fields.
+- [x] Added provider callback wrapper helpers that validate `provider_call_id` and normalize success/error/timeout/cancel envelopes.
+- [x] Added approval bridge helpers that sanitize arguments to argument keys and normalize decisions to `deny`, `allow_once`, or `add_to_scope`.
+- [x] Added safe correlation metadata propagation helpers.
+- [x] Added `EngineHostControlChannel.host_capability_session_upsert(...)`, filtered list/close helpers, and `host_capability_session_register_toolbox(...)`.
+- [x] Added public filtered Host Capability audit reads through `host_capability_audit_list(...)`.
+- [x] Made service-owned `fs.*` / `http.fetch` fallback disableable by `sandbox.host_api.service_owned_fallback_enabled=false`.
+- [x] Added audit/log diagnostics for service-owned fallback use.
+- [x] Updated `HOST_API_refactoring.md`, `hosting_access_plan.md`, and `HOSTING_CLIENT_BREAKING_CHANGES.md`.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -124,7 +138,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
 - [x] Implement the follow-up breaking-change slice that exposes known broker-supported method registration through hosting client helpers.
-- [ ] Dependent clients should now adopt current breaking changes.
+- [x] Implement callable-surface primitives requested by the dependent client team.
+- [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
+- [ ] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers.
 - [ ] After dependent-client adoption, remove the remaining service-owned `fs.*` / `http.fetch` fallback and then reset `HOSTING_CLIENT_BREAKING_CHANGES.md` for future phases.
 
 ## Verification
@@ -142,3 +158,6 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "host_capability_audit_event_persists_in_control_state or workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
 - [x] `python -m py_compile tests/test_hosting_daemon_acl.py`
 - [x] `pytest tests/test_hosting_daemon_acl.py -q -k "host_capability_session"`
+- [x] `python -m pytest tests/test_callable_surface.py tests/test_engine_host_channel.py -q -k "callable_surface or host_capability"`
+- [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "host_capability_audit or service_owned_fallback"`
+- [x] `python -m pytest tests/test_host_capabilities.py tests/test_hosting_daemon_acl.py -q -k "host_capability"`

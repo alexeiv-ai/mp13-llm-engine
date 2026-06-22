@@ -2043,14 +2043,256 @@ class EngineHostControlChannel:
             allow_override=allow_override,
         )
 
+    @staticmethod
+    def _host_capability_session_matches(
+        session: Dict[str, Any],
+        *,
+        workflow_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        consumer_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        owner: Optional[str] = None,
+        visibility: Optional[str] = None,
+        method: Optional[str] = None,
+        methods: Optional[List[str]] = None,
+    ) -> bool:
+        scope = dict(session.get("scope") or {})
+        provider = dict(session.get("provider") or {})
+        if workflow_id is not None and str(scope.get("workflow_id") or "") != str(workflow_id or ""):
+            return False
+        if instance_id is not None and str(scope.get("instance_id") or "") != str(instance_id or ""):
+            return False
+        if request_id is not None and str(scope.get("request_id") or "") != str(request_id or ""):
+            return False
+        if consumer_id is not None and str(scope.get("consumer_id") or "") != str(consumer_id or ""):
+            return False
+        if provider_id is not None and str(session.get("session_id") or "") != str(provider_id or ""):
+            return False
+        if owner is not None and str(session.get("owner") or "") != str(owner or ""):
+            return False
+        if visibility is not None and str(provider.get("visibility") or "") != str(visibility or ""):
+            return False
+        wanted = {str(item or "").strip() for item in list(methods or []) if str(item or "").strip()}
+        if method is not None and str(method or "").strip():
+            wanted.add(str(method or "").strip())
+        if wanted:
+            names = {
+                str(row.get("name") or "").strip()
+                for row in list(session.get("methods") or [])
+                if isinstance(row, dict) and str(row.get("name") or "").strip()
+            }
+            if not wanted.intersection(names):
+                return False
+        return True
+
     def host_capability_session_list(self, *, include_all: bool = False) -> Dict[str, Any]:
         res = self._invoke("host-capability-session-list", {"include_all": bool(include_all)})
         return dict(res or {})
+
+    def host_capability_session_list_filtered(
+        self,
+        *,
+        workflow_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        consumer_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        owner: Optional[str] = None,
+        visibility: Optional[str] = None,
+        method: Optional[str] = None,
+        methods: Optional[List[str]] = None,
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        listing = self.host_capability_session_list(include_all=include_all)
+        sessions = [
+            dict(session or {})
+            for session in list(listing.get("sessions") or [])
+            if isinstance(session, dict)
+            and self._host_capability_session_matches(
+                session,
+                workflow_id=workflow_id,
+                instance_id=instance_id,
+                request_id=request_id,
+                consumer_id=consumer_id,
+                provider_id=provider_id,
+                owner=owner,
+                visibility=visibility,
+                method=method,
+                methods=methods,
+            )
+        ]
+        return {"status": "ok", "sessions": sessions, "count": len(sessions)}
 
     def host_capability_session_close(self, *, session_id: str, force: bool = False) -> Dict[str, Any]:
         res = self._invoke(
             "host-capability-session-close",
             {"session_id": str(session_id or "").strip(), "force": bool(force)},
+        )
+        return dict(res or {})
+
+    def host_capability_session_close_filtered(
+        self,
+        *,
+        workflow_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        consumer_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        owner: Optional[str] = None,
+        visibility: Optional[str] = None,
+        method: Optional[str] = None,
+        methods: Optional[List[str]] = None,
+        include_all: bool = False,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        listing = self.host_capability_session_list_filtered(
+            workflow_id=workflow_id,
+            instance_id=instance_id,
+            request_id=request_id,
+            consumer_id=consumer_id,
+            provider_id=provider_id,
+            owner=owner,
+            visibility=visibility,
+            method=method,
+            methods=methods,
+            include_all=include_all,
+        )
+        closed: List[Dict[str, Any]] = []
+        for session in list(listing.get("sessions") or []):
+            sid = str(dict(session or {}).get("session_id") or "").strip()
+            if not sid:
+                continue
+            closed.append(self.host_capability_session_close(session_id=sid, force=force))
+        return {"status": "ok", "closed": closed, "count": len(closed)}
+
+    def host_capability_session_upsert(
+        self,
+        *,
+        methods: List[Dict[str, Any]],
+        scope: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        provider_kind: str = "client_session",
+        visibility: str = "workflow",
+        binding: Optional[Dict[str, Any]] = None,
+        close_on_client_disconnect: bool = True,
+        expires_at_ms: Optional[int] = None,
+        allow_override: bool = False,
+        replace_workflow_id: Optional[str] = None,
+        replace_instance_id: Optional[str] = None,
+        replace_request_id: Optional[str] = None,
+        replace_consumer_id: Optional[str] = None,
+        replace_provider_id: Optional[str] = None,
+        replace_owner: Optional[str] = None,
+        replace_method: Optional[str] = None,
+        replace_methods: Optional[List[str]] = None,
+        include_all: bool = False,
+        force_close: bool = False,
+    ) -> Dict[str, Any]:
+        replacement_methods = list(replace_methods or [])
+        if replace_method:
+            replacement_methods.append(str(replace_method))
+        if not replacement_methods:
+            replacement_methods = [
+                str(row.get("name") or "").strip()
+                for row in list(methods or [])
+                if isinstance(row, dict) and str(row.get("name") or "").strip()
+            ]
+        close_result = self.host_capability_session_close_filtered(
+            workflow_id=replace_workflow_id if replace_workflow_id is not None else dict(scope or {}).get("workflow_id"),
+            instance_id=replace_instance_id if replace_instance_id is not None else dict(scope or {}).get("instance_id"),
+            request_id=replace_request_id if replace_request_id is not None else dict(scope or {}).get("request_id"),
+            consumer_id=replace_consumer_id if replace_consumer_id is not None else dict(scope or {}).get("consumer_id"),
+            provider_id=replace_provider_id if replace_provider_id is not None else session_id,
+            owner=replace_owner,
+            visibility=visibility,
+            methods=replacement_methods,
+            include_all=include_all,
+            force=force_close,
+        )
+        register_result = self.host_capability_session_register(
+            methods=methods,
+            scope=scope,
+            session_id=session_id,
+            provider_kind=provider_kind,
+            visibility=visibility,
+            binding=binding,
+            close_on_client_disconnect=close_on_client_disconnect,
+            expires_at_ms=expires_at_ms,
+            allow_override=allow_override,
+        )
+        return {"status": "ok", "closed": close_result, "registered": register_result}
+
+    def host_capability_session_register_toolbox(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tools_view: Optional[Dict[str, Any]] = None,
+        scope: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        visibility: str = "workflow",
+        binding: Optional[Dict[str, Any]] = None,
+        close_on_client_disconnect: bool = True,
+        expires_at_ms: Optional[int] = None,
+        namespace: str = "toolbox",
+        owner: str = "client",
+        allow_override: bool = False,
+        upsert: bool = True,
+    ) -> Dict[str, Any]:
+        from .callable_surface import toolbox_to_host_capability_descriptors
+
+        description = self.toolbox_describe(engine_id=engine_id, toolbox_id=toolbox_id)
+        descriptors = toolbox_to_host_capability_descriptors(
+            description,
+            tools_view=tools_view,
+            provider_id=session_id or toolbox_id or engine_id or "toolbox",
+            owner=owner,
+            visibility=visibility,
+            namespace=namespace,
+        )
+        methods = [descriptor.to_dict() for descriptor in descriptors]
+        register = self.host_capability_session_upsert if upsert else self.host_capability_session_register
+        return register(
+            methods=methods,
+            scope=scope,
+            session_id=session_id,
+            provider_kind="toolbox_session",
+            visibility=visibility,
+            binding=binding,
+            close_on_client_disconnect=close_on_client_disconnect,
+            expires_at_ms=expires_at_ms,
+            allow_override=allow_override,
+        )
+
+    def host_capability_audit_list(
+        self,
+        *,
+        workflow_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        method: Optional[str] = None,
+        approval_id: Optional[str] = None,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "host-capability-audit-list",
+            {
+                "workflow_id": str(workflow_id).strip() if workflow_id is not None else None,
+                "instance_id": str(instance_id).strip() if instance_id is not None else None,
+                "request_id": str(request_id).strip() if request_id is not None else None,
+                "provider_id": str(provider_id).strip() if provider_id is not None else None,
+                "method": str(method).strip() if method is not None else None,
+                "approval_id": str(approval_id).strip() if approval_id is not None else None,
+                "since": float(since) if since is not None else None,
+                "until": float(until) if until is not None else None,
+                "limit": int(limit or 100),
+                "offset": int(offset or 0),
+            },
         )
         return dict(res or {})
 

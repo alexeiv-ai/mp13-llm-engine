@@ -826,10 +826,14 @@ Goal: unify node host API and toolbox capability metadata.
 
 Work:
 
-- Extract shared capability method model.
-- Add hierarchical group metadata.
-- Add capability descriptors to `host.describe`.
-- Register current `fs.*` and `http.fetch` as built-in capability toolbox methods.
+- [x] Extract shared capability method model.
+- [x] Add hierarchical group metadata.
+- [x] Add capability descriptors to `host.describe` / `sandbox.describe`.
+- [x] Add callable-surface adapters between toolbox/`ToolsView` metadata and Host Capability descriptors.
+- [x] Add Host Capability descriptor-to-callable-schema helpers for sandbox/model-facing discovery.
+- [x] Keep descriptor helpers for `fs.*` and `http.fetch` so clients can register those methods explicitly.
+- [x] Keep service-owned `fs.*` / `http.fetch` as a migration fallback, but make it disableable and audited.
+- [ ] Remove implicit service-owned `fs.*` / `http.fetch` fallback after dependent clients finish explicit callable-session registration migration.
 
 ### Phase 3: Client-Owned Host Capabilities
 
@@ -837,11 +841,14 @@ Goal: let dependent client processes provide host APIs.
 
 Work:
 
-- Add host capability session registration.
-- Add callback binding for method execution.
-- Add method-scoped auth and lifecycle.
-- Add service broker path from sandbox `host.call` to client callback.
-- Add tests for client process death, denial, timeout, and concurrent calls.
+- [x] Add host capability session registration.
+- [x] Add filtered session list/close helpers and idempotent upsert registration.
+- [x] Add method-scoped auth and lifecycle.
+- [x] Add service broker path from sandbox `host.call` to client callback.
+- [x] Add provider callback envelope helpers that validate `provider_call_id` and normalize success/error/timeout/cancel responses.
+- [x] Add approval bridge helpers and filtered Host Capability audit reads.
+- [x] Add tests for client provider denial, timeout, unavailable transport, cancellation, duplicate registration, scopes, and audit filtering.
+- [ ] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers, not only register callable descriptors.
 
 ### Phase 4: Permission And Approval Unification
 

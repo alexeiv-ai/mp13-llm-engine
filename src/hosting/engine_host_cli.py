@@ -847,6 +847,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "host-capability-session-register",
         "host-capability-session-list",
         "host-capability-session-close",
+        "host-capability-audit-list",
         "proxy-request",
         "proxy-rpc-call",
         "proxy-rpc-open",
@@ -2039,6 +2040,22 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     actor_key_id=payload.get("actor_key_id"),
                     target_key_id=payload.get("target_key_id"),
                     result=payload.get("result"),
+                    limit=int(payload.get("limit") or 100),
+                    offset=int(payload.get("offset") or 0),
+                )
+            )
+            return 0
+        if cmd == "host-capability-audit-list":
+            _print_ok(
+                svc.host_capability_audit_list(
+                    workflow_id=payload.get("workflow_id"),
+                    instance_id=payload.get("instance_id"),
+                    request_id=payload.get("request_id"),
+                    provider_id=payload.get("provider_id"),
+                    method=payload.get("method"),
+                    approval_id=payload.get("approval_id"),
+                    since=payload.get("since"),
+                    until=payload.get("until"),
                     limit=int(payload.get("limit") or 100),
                     offset=int(payload.get("offset") or 0),
                 )

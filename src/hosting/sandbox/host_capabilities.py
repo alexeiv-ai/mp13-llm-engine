@@ -124,6 +124,7 @@ class HostCapabilityDescriptor:
     scope_requirements: list[Dict[str, Any]] = field(default_factory=list)
     approval: HostCapabilityApproval = field(default_factory=HostCapabilityApproval)
     provider: HostCapabilityProviderRef = field(default_factory=lambda: HostCapabilityProviderRef(provider_id="builtin"))
+    metadata: Dict[str, Any] = field(default_factory=dict)
     contract: str = HOST_CAPABILITY_CONTRACT
 
     def validate(self) -> None:
@@ -144,6 +145,8 @@ class HostCapabilityDescriptor:
             raise ValueError("host_capability_description_too_large")
         if _jsonish_size(self.args_schema) > _MAX_SCHEMA_CHARS or _jsonish_size(self.result_schema) > _MAX_SCHEMA_CHARS:
             raise ValueError("host_capability_schema_too_large")
+        if _jsonish_size(self.metadata) > _MAX_SCHEMA_CHARS:
+            raise ValueError("host_capability_metadata_too_large")
         provider = self.provider.to_dict()
         if provider["kind"] not in _ALLOWED_PROVIDER_KINDS:
             raise ValueError(f"host_capability_invalid_provider_kind:{provider['kind']}")
@@ -154,7 +157,7 @@ class HostCapabilityDescriptor:
 
     def to_dict(self) -> Dict[str, Any]:
         self.validate()
-        return {
+        out = {
             "contract": self.contract,
             "name": _clean(self.name),
             "namespace": _clean(self.namespace),
@@ -167,6 +170,9 @@ class HostCapabilityDescriptor:
             "approval": self.approval.to_dict(),
             "provider": self.provider.to_dict(),
         }
+        if dict(self.metadata or {}):
+            out["metadata"] = dict(self.metadata or {})
+        return out
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "HostCapabilityDescriptor":
@@ -183,6 +189,7 @@ class HostCapabilityDescriptor:
             scope_requirements=[dict(item or {}) for item in list(row.get("scope_requirements") or [])],
             approval=HostCapabilityApproval.from_dict(row.get("approval")),
             provider=HostCapabilityProviderRef.from_dict(row.get("provider")),
+            metadata=dict(row.get("metadata") or {}),
         )
         descriptor.validate()
         return descriptor

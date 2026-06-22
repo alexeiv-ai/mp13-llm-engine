@@ -2170,6 +2170,9 @@ class EngineHostDaemon:
             if cmd == "host-capability-session-close":
                 result = self._close_host_capability_session(payload)
                 return {"seq": seq, "ok": True, "result": result}
+            if cmd == "host-capability-audit-list":
+                result = await asyncio.to_thread(self._call_service, cmd, payload)
+                return {"seq": seq, "ok": True, "result": result}
             if cmd in {"discover-running", "shutdown", "remove-registration"}:
                 registry_before = self._engine_registry_by_id()
             service_call_started = True
@@ -2221,6 +2224,23 @@ class EngineHostDaemon:
                 "error": "auth_failed",
                 "error_code": code,
                 "error_details": {"reason": code},
+            }
+        except ValueError as exc:
+            code = str(exc or "").strip() or "invalid_request"
+            if code.startswith("host_capability_"):
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": code,
+                    "error_code": code,
+                    "error_details": {"reason": code},
+                }
+            return {
+                "seq": seq,
+                "ok": False,
+                "error": "invalid_request",
+                "error_code": "invalid_request",
+                "error_details": {"message": code},
             }
         except Exception as exc:
             if cmd == "unload-model" and service_call_started:
@@ -2933,6 +2953,19 @@ class EngineHostDaemon:
                 actor_key_id=payload.get("actor_key_id"),
                 target_key_id=payload.get("target_key_id"),
                 result=payload.get("result"),
+                limit=int(payload.get("limit") or 100),
+                offset=int(payload.get("offset") or 0),
+            )
+        if cmd == "host-capability-audit-list":
+            return svc.host_capability_audit_list(
+                workflow_id=payload.get("workflow_id"),
+                instance_id=payload.get("instance_id"),
+                request_id=payload.get("request_id"),
+                provider_id=payload.get("provider_id"),
+                method=payload.get("method"),
+                approval_id=payload.get("approval_id"),
+                since=payload.get("since"),
+                until=payload.get("until"),
                 limit=int(payload.get("limit") or 100),
                 offset=int(payload.get("offset") or 0),
             )

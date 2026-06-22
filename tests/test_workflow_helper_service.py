@@ -98,6 +98,88 @@ def test_host_capability_audit_event_persists_in_control_state(tmp_path: Path) -
     assert rows[0]["request_id"] == "req-1"
 
 
+def test_host_capability_audit_list_filters_rows(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    svc._append_host_capability_audit_event(
+        {
+            "event_type": "host_capability_approval",
+            "result": "approved",
+            "approval_id": "approval-1",
+            "method": "crm.customer.lookup",
+            "context": {"request_id": "req-1", "workflow_id": "wf-1", "instance_id": "inst-1"},
+            "provider": {"provider_id": "client-crm"},
+        }
+    )
+    svc._append_host_capability_audit_event(
+        {
+            "event_type": "host_capability_approval",
+            "result": "approved",
+            "approval_id": "approval-2",
+            "method": "erp.customer.lookup",
+            "context": {"request_id": "req-2", "workflow_id": "wf-2"},
+            "provider": {"provider_id": "client-erp"},
+        }
+    )
+
+    rows = svc.host_capability_audit_list(workflow_id="wf-1", instance_id="inst-1", provider_id="client-crm")
+
+    assert rows["count"] == 1
+    assert rows["total"] == 1
+    assert rows["events"][0]["approval_id"] == "approval-1"
+    assert rows["events"][0]["provider_id"] == "client-crm"
+
+
+def test_workflow_node_service_owned_fallback_emits_audit_marker(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.txt").write_text("hello", encoding="utf-8")
+    events: list[tuple[str, dict]] = []
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-fallback", "workflow_id": "wf-fallback", "package_id": "pkg"},
+        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
+        event_emitter=lambda kind, payload: events.append((kind, payload)),
+    )
+
+    out = dispatch({"method": "fs.list", "arguments": {"root_id": "report"}})
+    audit = svc.host_capability_audit_list(request_id="req-fallback", method="fs.list")
+
+    assert out["status"] == "ok"
+    assert [entry["name"] for entry in out["entries"]] == ["report.txt"]
+    assert audit["count"] == 1
+    assert audit["events"][0]["event_type"] == "host_capability_service_fallback_used"
+    assert audit["events"][0]["provider_id"] == "builtin.workflow_node_host_api"
+    assert any(kind == "log" and payload["message"] == "service-owned host capability fallback used" for kind, payload in events)
+
+
+def test_workflow_node_service_owned_fallback_can_be_disabled(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-no-fallback", "workflow_id": "wf-no-fallback", "package_id": "pkg"},
+        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True, "service_owned_fallback_enabled": False}}},
+    )
+
+    described = dispatch({"method": "sandbox.describe", "arguments": {}})
+
+    assert described["policy"]["service_owned_fallback"] is False
+    assert "fs.list" not in described["methods"]
+    with pytest.raises(RuntimeError, match="unsupported_host_method:fs.list"):
+        dispatch({"method": "fs.list", "arguments": {"root_id": "report"}})
+
+
 def test_daemon_spawn_preserves_worker_profile_class() -> None:
     class FakeService:
         def __init__(self) -> None:

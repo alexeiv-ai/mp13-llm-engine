@@ -583,6 +583,125 @@ def test_host_capability_register_known_methods_helper_forwards_descriptors() ->
     assert all("provider" not in row for row in payload["methods"])
 
 
+def test_host_capability_session_filtered_helpers_use_public_session_shapes() -> None:
+    class FakeSessionConn(_FakeConn):
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+            p = dict(payload or {})
+            self.calls.append((cmd, p))
+            if cmd == "host-capability-session-list":
+                return {
+                    "status": "ok",
+                    "sessions": [
+                        {
+                            "session_id": "crm-provider",
+                            "owner": "client-a",
+                            "scope": {"workflow_id": "wf-1", "request_id": "req-1"},
+                            "provider": {"kind": "client_session", "visibility": "workflow"},
+                            "methods": [{"name": "crm.customer.lookup"}],
+                        },
+                        {
+                            "session_id": "erp-provider",
+                            "owner": "client-a",
+                            "scope": {"workflow_id": "wf-2"},
+                            "provider": {"kind": "client_session", "visibility": "workflow"},
+                            "methods": [{"name": "erp.customer.lookup"}],
+                        },
+                    ],
+                }
+            if cmd == "host-capability-session-close":
+                return {"status": "closed", "session_id": p["session_id"], "closed": True}
+            return {}
+
+    fake = FakeSessionConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    listing = ch.host_capability_session_list_filtered(workflow_id="wf-1", method="crm.customer.lookup")
+    closed = ch.host_capability_session_close_filtered(workflow_id="wf-1", method="crm.customer.lookup")
+
+    assert [row["session_id"] for row in listing["sessions"]] == ["crm-provider"]
+    assert closed["count"] == 1
+    assert fake.calls[-1] == ("host-capability-session-close", {"session_id": "crm-provider", "force": False})
+
+
+def test_host_capability_session_upsert_closes_matching_session_before_register() -> None:
+    class FakeUpsertConn(_FakeConn):
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+            p = dict(payload or {})
+            self.calls.append((cmd, p))
+            if cmd == "host-capability-session-list":
+                return {
+                    "status": "ok",
+                    "sessions": [
+                        {
+                            "session_id": "crm-provider",
+                            "owner": "client-a",
+                            "scope": {"workflow_id": "wf-1"},
+                            "provider": {"kind": "client_session", "visibility": "workflow"},
+                            "methods": [{"name": "crm.customer.lookup"}],
+                        }
+                    ],
+                }
+            if cmd == "host-capability-session-close":
+                return {"status": "closed", "session_id": p["session_id"], "closed": True}
+            if cmd == "host-capability-session-register":
+                return {"status": "ok", "session": {"session_id": p["session_id"]}}
+            return {}
+
+    fake = FakeUpsertConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    out = ch.host_capability_session_upsert(
+        session_id="crm-provider",
+        scope={"workflow_id": "wf-1"},
+        methods=[{"name": "crm.customer.lookup", "namespace": "crm", "group_path": ["CRM"]}],
+        binding={"transport": "local_ipc"},
+    )
+
+    assert out["registered"]["session"]["session_id"] == "crm-provider"
+    assert [cmd for cmd, _payload in fake.calls] == [
+        "host-capability-session-list",
+        "host-capability-session-close",
+        "host-capability-session-register",
+    ]
+
+
+def test_host_capability_audit_list_helper_forwards_filters() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    ch.host_capability_audit_list(
+        workflow_id="wf-1",
+        instance_id="inst-1",
+        request_id="req-1",
+        provider_id="provider-1",
+        method="crm.customer.lookup",
+        approval_id="approval-1",
+        since=1.0,
+        until=2.0,
+        limit=50,
+        offset=5,
+    )
+
+    assert fake.calls[0] == (
+        "host-capability-audit-list",
+        {
+            "workflow_id": "wf-1",
+            "instance_id": "inst-1",
+            "request_id": "req-1",
+            "provider_id": "provider-1",
+            "method": "crm.customer.lookup",
+            "approval_id": "approval-1",
+            "since": 1.0,
+            "until": 2.0,
+            "limit": 50,
+            "offset": 5,
+        },
+    )
+
+
 def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})

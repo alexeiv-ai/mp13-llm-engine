@@ -123,6 +123,7 @@ class PolicyMixin:
             "host-capability-session-register",
             "host-capability-session-list",
             "host-capability-session-close",
+            "host-capability-audit-list",
             "host-metrics",
             "op-start",
             "op-status",

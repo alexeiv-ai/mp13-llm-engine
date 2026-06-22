@@ -76,6 +76,8 @@ class WorkflowHelperMixin:
         control = self._read_control()
         rows = list(control.get("host_capability_audit_events") or [])
         row = dict(event or {})
+        context = dict(row.get("context") or {})
+        provider = dict(row.get("provider") or {})
         rows.append(
             {
                 "schema_version": 1,
@@ -89,10 +91,18 @@ class WorkflowHelperMixin:
                 "host_call_id": str(row.get("host_call_id") or "") or None,
                 "provider_call_id": str(row.get("provider_call_id") or "") or None,
                 "method": str(row.get("method") or "") or None,
-                "request_id": str(dict(row.get("context") or {}).get("request_id") or "") or None,
-                "workflow_id": str(dict(row.get("context") or {}).get("workflow_id") or "") or None,
-                "package_id": str(dict(row.get("context") or {}).get("package_id") or "") or None,
-                "provider": dict(row.get("provider") or {}),
+                "request_id": str(context.get("request_id") or row.get("request_id") or "") or None,
+                "workflow_id": str(context.get("workflow_id") or row.get("workflow_id") or "") or None,
+                "instance_id": str(context.get("instance_id") or row.get("instance_id") or "") or None,
+                "node_id": str(context.get("node_id") or row.get("node_id") or "") or None,
+                "cursor_id": str(context.get("cursor_id") or row.get("cursor_id") or "") or None,
+                "context_id": str(context.get("context_id") or row.get("context_id") or "") or None,
+                "branch_id": str(context.get("branch_id") or row.get("branch_id") or "") or None,
+                "session_tree_id": str(context.get("session_tree_id") or row.get("session_tree_id") or "") or None,
+                "actor": str(context.get("actor") or row.get("actor") or "") or None,
+                "package_id": str(context.get("package_id") or "") or None,
+                "provider_id": str(provider.get("provider_id") or row.get("provider_id") or "") or None,
+                "provider": provider,
                 "approval": dict(row.get("approval") or {}),
                 "argument_keys": list(row.get("argument_keys") or []),
                 "decision": dict(row.get("decision") or {}),
@@ -102,6 +112,56 @@ class WorkflowHelperMixin:
             rows = rows[-500:]
         control["host_capability_audit_events"] = rows
         self._write_control(control)
+
+    def host_capability_audit_list(
+        self,
+        *,
+        workflow_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        method: Optional[str] = None,
+        approval_id: Optional[str] = None,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        control = self._read_control()
+        rows = [dict(row or {}) for row in list(control.get("host_capability_audit_events") or []) if isinstance(row, dict)]
+
+        def _matches(row: Dict[str, Any]) -> bool:
+            if workflow_id is not None and str(row.get("workflow_id") or "") != str(workflow_id or ""):
+                return False
+            if instance_id is not None and str(row.get("instance_id") or "") != str(instance_id or ""):
+                return False
+            if request_id is not None and str(row.get("request_id") or "") != str(request_id or ""):
+                return False
+            if provider_id is not None and str(row.get("provider_id") or dict(row.get("provider") or {}).get("provider_id") or "") != str(provider_id or ""):
+                return False
+            if method is not None and str(row.get("method") or "") != str(method or ""):
+                return False
+            if approval_id is not None and str(row.get("approval_id") or "") != str(approval_id or ""):
+                return False
+            ts = float(row.get("timestamp") or 0.0)
+            if since is not None and ts < float(since):
+                return False
+            if until is not None and ts > float(until):
+                return False
+            return True
+
+        filtered = [row for row in rows if _matches(row)]
+        filtered.sort(key=lambda item: float(item.get("timestamp") or 0.0), reverse=True)
+        start = max(0, int(offset or 0))
+        count = max(1, min(int(limit or 100), 1000))
+        return {
+            "status": "ok",
+            "events": filtered[start : start + count],
+            "count": len(filtered[start : start + count]),
+            "total": len(filtered),
+            "limit": count,
+            "offset": start,
+        }
 
     def _workflow_python_node_recycle_changed_environment(
         self,
@@ -451,6 +511,12 @@ class WorkflowHelperMixin:
             and bool(worker_policy.brokered_io.http)
             and str(worker_policy.network.mode or "").strip().lower() == "brokered_only"
         )
+        service_fallback_enabled = bool(
+            host_api_policy.get(
+                "service_owned_fallback_enabled",
+                host_api_policy.get("service_fallback_enabled", host_api_policy.get("service_owned_fallback", True)),
+            )
+        )
         registry = HostApiRegistry(
             contract="hosting.workflow_python.node.host_api.v1",
             request_id=str(dict(request or {}).get("request_id") or ""),
@@ -469,8 +535,47 @@ class WorkflowHelperMixin:
                 "http": http_enabled,
                 "subprocess": False,
                 "custom_functions": False,
+                "service_owned_fallback": service_fallback_enabled,
             },
         )
+
+        def _mark_service_fallback_used(method_name: str) -> None:
+            event = {
+                "event_type": "host_capability_service_fallback_used",
+                "result": "used",
+                "reason": "service_owned_fallback",
+                "method": method_name,
+                "context": {
+                    "request_id": str(dict(request or {}).get("request_id") or "") or None,
+                    "workflow_id": str(dict(request or {}).get("workflow_id") or "") or None,
+                    "package_id": str(dict(request or {}).get("package_id") or "") or None,
+                    "instance_id": str(dict(request or {}).get("instance_id") or "") or None,
+                },
+                "provider": {"provider_id": "builtin.workflow_node_host_api", "kind": "builtin", "owner": "service"},
+            }
+            try:
+                (audit_emitter or self._append_host_capability_audit_event)(event)
+            except Exception:
+                pass
+            if event_emitter is not None:
+                try:
+                    event_emitter(
+                        "log",
+                        {
+                            "level": "warning",
+                            "message": "service-owned host capability fallback used",
+                            "method": method_name,
+                            "request_id": event["context"]["request_id"],
+                            "workflow_id": event["context"]["workflow_id"],
+                            "provider_id": "builtin.workflow_node_host_api",
+                        },
+                    )
+                except Exception:
+                    pass
+
+        def _service_fallback_call(method_name: str, handler: Callable[[Dict[str, Any]], Dict[str, Any]], args: Dict[str, Any]) -> Dict[str, Any]:
+            _mark_service_fallback_used(method_name)
+            return handler(args)
 
         def _root_and_target(args: Dict[str, Any], *, write: bool = False) -> tuple[str, Path, Path, Any]:
             root_id = str(args.get("root_id") or "").strip()
@@ -479,7 +584,7 @@ class WorkflowHelperMixin:
             target = self._workflow_python_node_host_path(root, relative_path)
             return root_id, root, target, relative_path
 
-        if artifact_fs_enabled:
+        if artifact_fs_enabled and service_fallback_enabled:
             registry.register(
                 "fs.list",
                 namespace="fs",
@@ -495,7 +600,7 @@ class WorkflowHelperMixin:
                     },
                 },
                 permissions=["artifact.read"],
-                handler=lambda args: _fs_list(args),
+                handler=lambda args: _service_fallback_call("fs.list", _fs_list, args),
             )
 
             registry.register(
@@ -514,7 +619,7 @@ class WorkflowHelperMixin:
                     },
                 },
                 permissions=["artifact.read"],
-                handler=lambda args: _fs_read_text(args),
+                handler=lambda args: _service_fallback_call("fs.read_text", _fs_read_text, args),
             )
 
             registry.register(
@@ -533,7 +638,7 @@ class WorkflowHelperMixin:
                     },
                 },
                 permissions=["artifact.write"],
-                handler=lambda args: _fs_write_text(args),
+                handler=lambda args: _service_fallback_call("fs.write_text", _fs_write_text, args),
             )
 
             registry.register(
@@ -550,7 +655,7 @@ class WorkflowHelperMixin:
                     },
                 },
                 permissions=["artifact.write"],
-                handler=lambda args: _fs_mkdir(args),
+                handler=lambda args: _service_fallback_call("fs.mkdir", _fs_mkdir, args),
             )
 
             registry.register(
@@ -571,10 +676,10 @@ class WorkflowHelperMixin:
                     },
                 },
                 permissions=["artifact.read"],
-                handler=lambda args: _fs_stat(args),
+                handler=lambda args: _service_fallback_call("fs.stat", _fs_stat, args),
             )
 
-        if http_enabled:
+        if http_enabled and service_fallback_enabled:
             registry.register(
                 "http.fetch",
                 namespace="http",
@@ -605,7 +710,7 @@ class WorkflowHelperMixin:
                     },
                 },
                 permissions=["http.fetch"],
-                handler=lambda args: _http_fetch(args),
+                handler=lambda args: _service_fallback_call("http.fetch", _http_fetch, args),
             )
 
         def _fs_list(args: Dict[str, Any]) -> Dict[str, Any]:

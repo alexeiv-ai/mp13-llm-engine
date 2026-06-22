@@ -114,6 +114,21 @@ from .engine_discovery import (
     is_engine_available,
     is_engine_discoverable,
 )
+from .callable_surface import (
+    HOST_CALLABLE_SCHEMA_CONTRACT,
+    HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT,
+    HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT,
+    SAFE_CORRELATION_FIELDS,
+    bind_host_capability_provider_callback,
+    extract_safe_correlation_metadata,
+    host_capability_approval_decision,
+    host_capability_approval_request,
+    host_capability_descriptors_to_callable_schemas,
+    host_capability_provider_error,
+    host_capability_provider_success,
+    normalize_host_capability_provider_response,
+    toolbox_to_host_capability_descriptors,
+)
 
 __all__ = [
     "EngineHostService",
@@ -196,4 +211,17 @@ __all__ = [
     "HostedToolboxAdmin",
     "is_engine_available",
     "is_engine_discoverable",
+    "HOST_CALLABLE_SCHEMA_CONTRACT",
+    "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",
+    "HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT",
+    "SAFE_CORRELATION_FIELDS",
+    "bind_host_capability_provider_callback",
+    "extract_safe_correlation_metadata",
+    "host_capability_approval_decision",
+    "host_capability_approval_request",
+    "host_capability_descriptors_to_callable_schemas",
+    "host_capability_provider_error",
+    "host_capability_provider_success",
+    "normalize_host_capability_provider_response",
+    "toolbox_to_host_capability_descriptors",
 ]
