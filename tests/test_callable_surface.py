@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from hosting.callable_surface import (
+    HostCapabilityProviderCallbackRelay,
     bind_host_capability_provider_callback,
     extract_safe_correlation_metadata,
     host_capability_approval_decision,
@@ -106,6 +107,34 @@ def test_provider_callback_helper_validates_and_normalizes_responses() -> None:
     assert error["reason"] == "host_capability_provider_error"
     with pytest.raises(HostCapabilityProviderError):
         normalize_host_capability_provider_response(error, provider_call_id="call-2")
+
+
+def test_provider_callback_relay_binds_local_callback_transport() -> None:
+    relay = HostCapabilityProviderCallbackRelay()
+    binding = relay.bind_callback(lambda method, arguments, context: {"method": method, "value": arguments["value"], "request_id": context["request_id"]})
+    try:
+        from hosting.callable_surface import HOST_CAPABILITY_PROVIDER_CALLBACK_NAME
+        from hosting.toolbox_executor_ipc import _invoke_callback_binding
+
+        response = _invoke_callback_binding(
+            binding["callback_binding"],
+            callback_name=HOST_CAPABILITY_PROVIDER_CALLBACK_NAME,
+            payload={
+                "contract": "hosting.sandbox.host_capability_call.v1",
+                "provider_call_id": "call-relay-1",
+                "method": "demo.echo",
+                "arguments": {"value": 11},
+                "context": {"request_id": "req-relay-1"},
+            },
+            context={"request_id": "req-relay-1"},
+        )
+    finally:
+        relay.release(binding)
+
+    assert response["result"] == host_capability_provider_success(
+        "call-relay-1",
+        {"method": "demo.echo", "value": 11, "request_id": "req-relay-1"},
+    )
 
 
 def test_approval_bridge_sanitizes_arguments_and_normalizes_decisions() -> None:

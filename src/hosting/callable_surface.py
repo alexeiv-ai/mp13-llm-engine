@@ -18,6 +18,7 @@ from .sandbox.host_capabilities import (
 HOST_CALLABLE_SCHEMA_CONTRACT = "hosting.sandbox.callable_schema.v1"
 HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT = "hosting.sandbox.host_capability_provider_response.v1"
 HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT = "hosting.sandbox.host_capability_approval_decision.v1"
+HOST_CAPABILITY_PROVIDER_CALLBACK_NAME = "host_capability.call"
 
 SAFE_CORRELATION_FIELDS = (
     "workflow_id",
@@ -302,6 +303,71 @@ def bind_host_capability_provider_callback(callback: Callable[..., Any]) -> Call
     return _invoke
 
 
+class HostCapabilityProviderCallbackRelay:
+    """Local provider callback relay for client-owned Host Capability sessions."""
+
+    def __init__(self) -> None:
+        from .toolbox.callbacks import _HostedToolCallbackRelay
+
+        self._relay = _HostedToolCallbackRelay()
+        self._session_tokens: set[str] = set()
+
+    def bind_callback(
+        self,
+        callback: Callable[..., Any],
+        *,
+        provider_id: str = "",
+        method: str = "",
+        user_context: Any = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        wrapped = bind_host_capability_provider_callback(callback)
+
+        def _processor(*, callback_name: str, payload: Any, context: Any) -> Dict[str, Any]:
+            name = _clean(callback_name)
+            row = dict(payload or {}) if isinstance(payload, dict) else {}
+            if name not in {HOST_CAPABILITY_PROVIDER_CALLBACK_NAME, HOST_CAPABILITY_CALL_CONTRACT}:
+                return host_capability_provider_error(
+                    _clean(row.get("provider_call_id")),
+                    reason="host_capability_callback_unsupported",
+                    message=f"unsupported callback {name}",
+                )
+            return wrapped(row)
+
+        callback_binding = self._relay.bind_session(
+            processor=_processor,
+            toolbox_id=_clean(provider_id) or "host_capability",
+            tool_name=_clean(method) or HOST_CAPABILITY_PROVIDER_CALLBACK_NAME,
+            tool_call_id="",
+            tool_arguments={},
+            callback_signature=dict(callback_signature or {"contract": HOST_CAPABILITY_CALL_CONTRACT}),
+            user_context=user_context,
+        )
+        token = _clean(callback_binding.get("session_token"))
+        if token:
+            self._session_tokens.add(token)
+        return {
+            "transport": "local_ipc",
+            "callback_binding": callback_binding,
+        }
+
+    def release(self, binding: Dict[str, Any]) -> None:
+        row = dict(binding or {})
+        callback_binding = dict(row.get("callback_binding") or row)
+        token = _clean(callback_binding.get("session_token"))
+        self._relay.release_session(token)
+        self._session_tokens.discard(token)
+
+    def __enter__(self) -> "HostCapabilityProviderCallbackRelay":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        for token in list(self._session_tokens):
+            self._relay.release_session(token)
+            self._session_tokens.discard(token)
+        return None
+
+
 def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(payload or {})
     arguments = dict(row.get("arguments") or {})
@@ -351,7 +417,9 @@ def host_capability_approval_decision(
 __all__ = [
     "HOST_CALLABLE_SCHEMA_CONTRACT",
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",
+    "HOST_CAPABILITY_PROVIDER_CALLBACK_NAME",
     "HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT",
+    "HostCapabilityProviderCallbackRelay",
     "SAFE_CORRELATION_FIELDS",
     "bind_host_capability_provider_callback",
     "extract_safe_correlation_metadata",

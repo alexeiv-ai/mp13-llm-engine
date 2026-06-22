@@ -204,8 +204,65 @@ class WorkflowHelperMixin:
             return dict(row.get("result") or {})
         return row
 
+    @staticmethod
+    def _host_capability_client_session_binding(session: HostCapabilitySession) -> Dict[str, Any]:
+        binding = dict(session.binding or {})
+        callback_binding = dict(binding.get("callback_binding") or {}) if isinstance(binding.get("callback_binding"), dict) else {}
+        if callback_binding:
+            return callback_binding
+        if {"address", "session_token"}.issubset(binding.keys()):
+            return binding
+        return {}
+
+    def _host_capability_client_session_provider_response(
+        self,
+        session: HostCapabilitySession,
+        call: HostCapabilityProviderCall,
+    ) -> Dict[str, Any]:
+        binding = dict(session.binding or {})
+        callback = binding.get("callback")
+        if callable(callback):
+            from ..callable_surface import bind_host_capability_provider_callback
+
+            return bind_host_capability_provider_callback(callback)(call.to_dict())
+
+        callback_binding = self._host_capability_client_session_binding(session)
+        if not callback_binding:
+            raise HostCapabilityProviderUnavailable(
+                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "reason": "callback_binding_missing"}
+            )
+        try:
+            from ..callable_surface import HOST_CAPABILITY_PROVIDER_CALLBACK_NAME
+            from ..toolbox_executor_ipc import _invoke_callback_binding
+
+            response = _invoke_callback_binding(
+                callback_binding,
+                callback_name=str(binding.get("callback_name") or HOST_CAPABILITY_PROVIDER_CALLBACK_NAME),
+                payload=call.to_dict(),
+                context=call.context.to_dict(),
+            )
+        except RuntimeError as exc:
+            raise HostCapabilityProviderUnavailable(
+                detail={
+                    "provider_id": session.session_id,
+                    "provider_kind": session.provider_kind,
+                    "reason": str(exc).split(":", 1)[0] or "callback_invoke_failed",
+                }
+            ) from exc
+        result = response.get("result")
+        if isinstance(result, dict) and result.get("provider_call_id"):
+            return dict(result)
+        return {
+            "status": "ok",
+            "provider_call_id": call.provider_call_id,
+            "result": dict(result or {}) if isinstance(result, dict) else {"result": result},
+        }
+
     def _host_capability_provider_invoker(self, session: HostCapabilitySession, call: HostCapabilityProviderCall) -> Dict[str, Any]:
-        if str(session.provider_kind or "").strip() != "toolbox_session":
+        provider_kind = str(session.provider_kind or "").strip()
+        if provider_kind == "client_session":
+            return self._host_capability_client_session_provider_response(session, call)
+        if provider_kind != "toolbox_session":
             raise HostCapabilityProviderUnavailable(
                 detail={"provider_id": session.session_id, "provider_kind": session.provider_kind}
             )

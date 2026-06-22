@@ -43,6 +43,7 @@ Hosting clients use the control channel and callable-surface helpers to register
 - `host_capability_session_close_filtered(...)`
 - `host_capability_session_register_toolbox(...)`
 - `host_capability_audit_list(...)`
+- `HostCapabilityProviderCallbackRelay.bind_callback(...)`
 
 Clients should use high-level helpers and avoid raw provider session tokens or callback envelopes unless they are implementing low-level transport integration.
 
@@ -60,6 +61,8 @@ Clients should use high-level helpers and avoid raw provider session tokens or c
 
 - [x] Added provider callback helpers for `hosting.sandbox.host_capability_call.v1`.
 - [x] `bind_host_capability_provider_callback(...)` validates `provider_call_id`.
+- [x] `HostCapabilityProviderCallbackRelay.bind_callback(...)` creates local callback bindings for `client_session` providers.
+- [x] Workflow node Host Capability dispatch invokes `client_session` providers through local callback bindings.
 - [x] Provider helper responses normalize success, error, timeout, and cancel outcomes.
 - [x] Structured provider errors are surfaced without leaking private binding details to sandbox code.
 - [x] Provider timeout maps to `host_call_timeout`.

@@ -11,6 +11,7 @@ This slice adds reusable Host Capability + Toolbox callable-surface helpers and 
 - Register or replace Host Capability sessions through `EngineHostControlChannel.host_capability_session_upsert(...)` instead of manually closing and registering sessions.
 - Use `host_capability_session_list_filtered(...)` and `host_capability_session_close_filtered(...)` for workflow/instance/request/consumer/provider/owner/method scoped lifecycle operations.
 - Use `bind_host_capability_provider_callback(...)`, `host_capability_provider_success(...)`, and `host_capability_provider_error(...)` to hide raw `hosting.sandbox.host_capability_call.v1` response handling.
+- Use `HostCapabilityProviderCallbackRelay.bind_callback(...)` when registering a local `client_session` provider. Pass the returned binding to `host_capability_session_register(...)` or `host_capability_session_upsert(...)`.
 - Use `host_capability_approval_request(...)` and `host_capability_approval_decision(...)` for approval bridge payloads.
 - Approval decisions now have concrete broker semantics:
   - `deny` rejects the current call.
@@ -18,6 +19,44 @@ This slice adds reusable Host Capability + Toolbox callable-surface helpers and 
   - `add_to_scope` creates a scoped grant reused for later matching calls in the same broker/request context.
 - Use `host_capability_audit_list(...)` for filtered Host Capability audit reads instead of parsing merged control state.
 - Use `host_capability_session_register_toolbox(...)` to register hosted toolbox descriptors as a `toolbox_session` provider. The registered methods now execute through the existing toolbox harness.
+
+## Client-Owned Callback Sessions
+
+For local client-owned providers, create a callback relay and register its binding with the Host Capability session:
+
+```python
+from hosting import HostCapabilityProviderCallbackRelay
+
+relay = HostCapabilityProviderCallbackRelay()
+binding = relay.bind_callback(
+    lambda method, arguments, context: {
+        "customer_id": arguments["customer_id"],
+        "request_id": context.get("request_id"),
+    }
+)
+
+channel.host_capability_session_upsert(
+    session_id="crm-provider",
+    scope={"workflow_id": "wf-1"},
+    visibility="workflow",
+    methods=[
+        {
+            "name": "crm.customer.lookup",
+            "namespace": "crm",
+            "group_path": ["CRM", "Customer"],
+            "args_schema": {"type": "object"},
+            "result_schema": {"type": "object"},
+        }
+    ],
+    binding=binding,
+)
+```
+
+The relay validates `provider_call_id` and returns normalized success/error envelopes. Release the relay binding when the provider session is closed:
+
+```python
+relay.release(binding)
+```
 
 ## Built-In Migration Path
 

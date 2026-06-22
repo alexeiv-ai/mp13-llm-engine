@@ -128,6 +128,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added grant TTL support from decision `ttl_seconds` or descriptor approval TTL.
 - [x] Emitted approval/audit records for reused scoped grants.
 
+### Host Capability Slice 13B: Client Session Callback Runtime
+
+- [x] Added `HostCapabilityProviderCallbackRelay` as a public helper for local `client_session` callback bindings.
+- [x] Wired workflow Host Capability provider dispatch to invoke `client_session` providers through the callback binding.
+- [x] Preserved the normalized `hosting.sandbox.host_capability_call.v1` envelope and `provider_call_id` validation through the public callback helper.
+- [x] Updated client change notes with the callback relay registration pattern.
+- [x] This completes the dependent-client callable-surface feature request pause point.
+
 ### State And Long-Lived Instances Slice 14: Host-Managed State Capabilities
 
 - [x] Added durable `sandbox_state` storage to hosting runtime state.
@@ -199,7 +207,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement explicit Python node instance create/execute/list/close APIs.
 - [x] Implement explicit JS node instance create/execute/list/close APIs.
 - [x] Add snapshot/restore hooks for instance-local host-managed state.
-- [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
+- [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
 - [ ] Decide and implement long-lived project-mode cwd/sys.path/env/import-cache policy.
 
 ## Verification

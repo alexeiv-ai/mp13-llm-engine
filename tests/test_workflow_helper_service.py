@@ -11,6 +11,7 @@ import time
 import zipfile
 
 import pytest
+from hosting.callable_surface import HostCapabilityProviderCallbackRelay
 from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
@@ -236,6 +237,45 @@ def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monk
     assert calls[0]["tool_call"]["name"] == "hello_tool"
     assert calls[0]["tool_call"]["arguments"] == {"name": "Sam"}
     assert calls[0]["tools_view"] == {"allowed_tools": ["hello_tool"]}
+
+
+def test_workflow_node_uses_client_host_capability_callback_session(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    relay = HostCapabilityProviderCallbackRelay()
+    binding = relay.bind_callback(lambda method, arguments, context: {"method": method, "name": arguments["name"], "request_id": context["request_id"]})
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.lookup",
+        namespace="crm",
+        group_path=["CRM", "Customer"],
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+    session = HostCapabilitySession(
+        session_id="client-crm",
+        owner="client-a",
+        provider_kind="client_session",
+        visibility="workflow",
+        scope={"workflow_id": "wf-client"},
+        methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        binding=binding,
+    )
+    try:
+        dispatch = svc._workflow_python_node_host_dispatcher(
+            request={"request_id": "req-client", "workflow_id": "wf-client", "package_id": "pkg"},
+            artifact_context=None,
+            sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
+            host_capability_sessions=[session],
+        )
+
+        described = dispatch({"method": "sandbox.describe", "arguments": {}})
+        out = dispatch({"method": "crm.customer.lookup", "arguments": {"name": "Ada"}})
+    finally:
+        relay.release(binding)
+
+    assert [row["name"] for row in described["host_capabilities"]["methods"]] == ["crm.customer.lookup"]
+    assert out == {"method": "crm.customer.lookup", "name": "Ada", "request_id": "req-client"}
 
 
 def test_daemon_spawn_preserves_worker_profile_class() -> None:
