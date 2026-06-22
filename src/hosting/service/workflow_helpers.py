@@ -2052,6 +2052,7 @@ class WorkflowHelperMixin:
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
+        runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
         if prof == "node":
             req = self._workflow_python_with_project_artifact_input(req)
         if prof == "node" and str(environment_name or "") == "workflow-python-helper":
@@ -2196,6 +2197,7 @@ class WorkflowHelperMixin:
                     host_capability_sessions=host_capability_sessions,
                 ),
                 max_idle=int(pool.resources().get("metrics", {}).get("desired_capacity") or capacity or 1),
+                instance_id=runtime_instance_id,
             )
             if artifact_context is not None and bool(result.get("ok", False)):
                 try:
@@ -2324,6 +2326,123 @@ class WorkflowHelperMixin:
             "result": result,
             "metrics": metrics,
         }
+
+    def workflow_python_instance_create(
+        self,
+        *,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        instance_id: Optional[str] = None,
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        if prof != "node":
+            return {"status": "error", "ok": False, "reason": "workflow_python_instance_requires_node_profile"}
+        req = self._workflow_python_with_project_artifact_input(dict(request or {}))
+        if str(environment_name or "") == "workflow-python-helper":
+            environment_name = "workflow-python-node"
+        py = dict(req.get("python") or {})
+        py.setdefault("environment_name", str(environment_name or "workflow-python-node"))
+        req["python"] = py
+        validation = validate_workflow_python_node_request(req)
+        if str(validation.get("status") or "") != "ok":
+            return {
+                "status": "error",
+                "ok": False,
+                "profile": prof,
+                "reason": "workflow_python_node_invalid_request",
+                "detail": {"missing_request_fields": list(validation.get("missing") or [])},
+            }
+        env = self.workflow_python_environment_spec(
+            profile=prof,
+            environment_name=str(py.get("environment_name") or environment_name or "workflow-python-node"),
+            python=py,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(env.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        if requested_key and requested_key != derived_key:
+            return {
+                "status": "error",
+                "ok": False,
+                "profile": prof,
+                "reason": "environment_key_mismatch",
+                "environment_key": requested_key,
+                "derived_environment_key": derived_key,
+            }
+        effective_key = requested_key or derived_key
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
+        dependency_error = self._workflow_python_node_dependency_environment_check(
+            request=req,
+            python=py,
+            environment=dict(env.get("environment") or {}),
+            environment_key=effective_key,
+            engine_id=eid,
+        )
+        if dependency_error is not None:
+            if str(dependency_error.get("status") or "") != "ok":
+                return dependency_error
+            selected_runtime = dict(dependency_error.get("runtime") or {})
+            if str(selected_runtime.get("python_executable") or "").strip():
+                py["python_executable"] = str(selected_runtime.get("python_executable") or "").strip()
+                req["python"] = py
+        created = self._workflow_python_node_runtime_registry().create_instance(
+            {
+                **req,
+                "environment_key": effective_key,
+                "python": py,
+            },
+            python_executable=str(py.get("python_executable") or "").strip() or None,
+            instance_id=str(instance_id or "").strip(),
+            replace=replace,
+        )
+        if str(created.get("status") or "") == "ok":
+            created.update({"profile": prof, "engine_id": eid, "environment_key": effective_key})
+            self._workflow_python_pool_registry().get_or_create(
+                self._workflow_python_pool_key(effective_key),
+                desired_capacity=1,
+            )
+        return dict(created or {})
+
+    def workflow_python_instance_execute(
+        self,
+        *,
+        instance_id: str,
+        request: Optional[Dict[str, Any]] = None,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+    ) -> Dict[str, Any]:
+        iid = str(instance_id or "").strip()
+        if not iid:
+            return {"status": "error", "ok": False, "reason": "instance_id_required"}
+        req = dict(request or {})
+        req.setdefault("instance_id", iid)
+        req["_runtime_instance_id"] = iid
+        return self.execute_workflow_python(
+            profile=profile,
+            environment_name=environment_name,
+            environment_key=environment_key,
+            engine_id=engine_id,
+            request=req,
+            capacity=capacity,
+            sandbox_policy=sandbox_policy,
+            host_capability_sessions=host_capability_sessions,
+        )
+
+    def workflow_python_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
+        return dict(self._workflow_python_node_runtime_registry().close_instance(instance_id, reason=reason))
+
+    def workflow_python_instance_list(self) -> Dict[str, Any]:
+        return dict(self._workflow_python_node_runtime_registry().list_instances())
 
     def workflow_python_resources(
         self,

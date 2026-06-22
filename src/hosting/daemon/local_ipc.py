@@ -2438,6 +2438,36 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
+        if cmd == "workflow-python-instance-create":
+            return svc.workflow_python_instance_create(
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-node"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                instance_id=str(payload.get("instance_id") or "").strip() or None,
+                replace=bool(payload.get("replace", False)),
+            )
+        if cmd == "workflow-python-instance-execute":
+            return svc.workflow_python_instance_execute(
+                instance_id=str(payload.get("instance_id") or ""),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-node"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
+            )
+        if cmd == "workflow-python-instance-close":
+            return svc.workflow_python_instance_close(
+                instance_id=str(payload.get("instance_id") or ""),
+                reason=str(payload.get("reason") or "client_requested"),
+            )
+        if cmd == "workflow-python-instance-list":
+            return svc.workflow_python_instance_list()
         if cmd == "workflow-python-resources":
             return svc.workflow_python_resources(
                 profile=str(payload.get("profile") or "helper"),

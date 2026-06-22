@@ -250,9 +250,9 @@ Direction: define a "host capability toolbox" model that reuses toolbox metadata
 
 ### Long-Lived Instances
 
-Current Python node workers can be reused sequentially for compatible module/snippet requests. They are not routable public instances, and project mode remains one-shot because it mutates process-global state such as cwd, `sys.path`, environment variables, and import caches.
+Current Python node workers can be reused sequentially for compatible module/snippet requests. Python node module/snippet requests now also support explicit pinned instances with create/execute/list/close APIs. Project mode remains one-shot because it mutates process-global state such as cwd, `sys.path`, environment variables, and import caches.
 
-Gap: clients cannot address a specific live sandbox instance or preserve mutated runtime state through restart.
+Gap: JS node instances are not yet pinned/routable, and clients cannot preserve mutated runtime state through restart.
 
 Direction: introduce explicit sandbox instance IDs, routing policy, and state snapshot/restore hooks.
 
@@ -870,6 +870,9 @@ Goal: add routable, recoverable node instances.
 Work:
 
 - [ ] Add explicit instance create/route/close APIs.
+  - [x] Add Python node instance create/execute/list/close APIs for module/snippet requests.
+  - [x] Reject project-mode Python node instances until cwd/sys.path/env/import-cache policy is explicit.
+  - [ ] Add JS node instance create/execute/list/close APIs or explicitly defer JS node instance routing.
 - [x] Add state scopes and state host capability methods.
   - [x] Persist host-managed sandbox state in runtime state.
   - [x] Expose `state.workflow.*`, `state.instance.*`, and explicit `state.backend.*` methods when policy grants those scopes.

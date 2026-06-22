@@ -281,6 +281,22 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
             self.calls.append(("execute", dict(kwargs)))
             return {"status": "ok", "ok": True}
 
+        def workflow_python_instance_create(self, **kwargs):
+            self.calls.append(("instance_create", dict(kwargs)))
+            return {"status": "ok", "instance_id": kwargs.get("instance_id") or "inst-1"}
+
+        def workflow_python_instance_execute(self, **kwargs):
+            self.calls.append(("instance_execute", dict(kwargs)))
+            return {"status": "ok", "ok": True, "instance_id": kwargs["instance_id"]}
+
+        def workflow_python_instance_close(self, **kwargs):
+            self.calls.append(("instance_close", dict(kwargs)))
+            return {"status": "ok", "closed": True, "instance_id": kwargs["instance_id"]}
+
+        def workflow_python_instance_list(self):
+            self.calls.append(("instance_list", {}))
+            return {"status": "ok", "instances": []}
+
         def workflow_python_resources(self, **kwargs):
             self.calls.append(("resources", dict(kwargs)))
             return {"status": "ok"}
@@ -316,6 +332,10 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert daemon._call_service("workflow-python-environment-spec", {"profile": "helper"})["environment_key"] == "env-key"
     assert daemon._call_service("workflow-python-ensure", {"engine_id": "wf-py"})["engine_id"] == "wf-py"
     assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+    assert daemon._call_service("workflow-python-instance-create", {"instance_id": "inst-1", "request": {"request_id": "req-create"}})["instance_id"] == "inst-1"
+    assert daemon._call_service("workflow-python-instance-execute", {"instance_id": "inst-1", "request": {"request_id": "req-inst"}})["ok"] is True
+    assert daemon._call_service("workflow-python-instance-list", {})["instances"] == []
+    assert daemon._call_service("workflow-python-instance-close", {"instance_id": "inst-1"})["closed"] is True
     assert daemon._call_service("workflow-python-resources", {"engine_id": "wf-py"})["status"] == "ok"
     assert daemon._call_service("workflow-python-set-capacity", {"engine_id": "wf-py", "capacity": 5})["capacity"] == 5
     assert daemon._call_service("workflow-python-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})["request_id"] == "req-1"
@@ -328,6 +348,10 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
         "spec",
         "ensure",
         "execute",
+        "instance_create",
+        "instance_execute",
+        "instance_list",
+        "instance_close",
         "resources",
         "set_capacity",
         "cancel",
@@ -2067,6 +2091,61 @@ def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequenti
     assert resources["workflow_python_idle_process_count"] == 1
     assert resources["workflow_python_active_process_count"] == 0
     svc._workflow_python_node_runtime_registry().shutdown()
+
+
+def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "import os\n\n"
+        "def run(payload):\n"
+        "    key = 'MP13_TEST_PINNED_INSTANCE_COUNTER'\n"
+        "    counter = int(os.environ.get(key, '0')) + 1\n"
+        "    os.environ[key] = str(counter)\n"
+        "    return {'output': {'pid': os.getpid(), 'counter': counter, 'value': payload['value']}}\n"
+    )
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "python": {"import_allowlist": ["os"]},
+        "limits": {"timeout_ms": 2000},
+    }
+
+    created = svc.workflow_python_instance_create(
+        instance_id="inst-pinned",
+        request={**base_request, "request_id": "req-node-instance-create", "payload": {"value": "create"}},
+    )
+    first = svc.workflow_python_instance_execute(
+        instance_id="inst-pinned",
+        request={**base_request, "request_id": "req-node-instance-a", "payload": {"value": "a"}},
+    )
+    second = svc.workflow_python_instance_execute(
+        instance_id="inst-pinned",
+        request={**base_request, "request_id": "req-node-instance-b", "payload": {"value": "b"}},
+    )
+    listed = svc.workflow_python_instance_list()
+    closed = svc.workflow_python_instance_close(instance_id="inst-pinned")
+
+    assert created["status"] == "ok"
+    assert created["instance_id"] == "inst-pinned"
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"]["pid"] == created["pid"]
+    assert second["output"]["pid"] == created["pid"]
+    assert first["output"]["counter"] == 1
+    assert second["output"]["counter"] == 2
+    assert [row["instance_id"] for row in listed["instances"]] == ["inst-pinned"]
+    assert closed["closed"] is True
+    assert svc.workflow_python_instance_execute(
+        instance_id="inst-pinned",
+        request={**base_request, "request_id": "req-node-instance-after-close", "payload": {"value": "closed"}},
+    )["reason"] == "workflow_python_instance_not_found"
 
 
 def test_execute_workflow_python_node_routes_edited_code_to_new_revision_worker(tmp_path: Path) -> None:

@@ -1650,6 +1650,71 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_instance_create(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        instance_id: Optional[str] = None,
+        replace: bool = False,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-instance-create",
+            {
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "instance_id": str(instance_id or "").strip() or None,
+                "replace": bool(replace),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_python_instance_execute(
+        self,
+        *,
+        instance_id: str,
+        request: Optional[Dict[str, Any]] = None,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-instance-execute",
+            {
+                "instance_id": str(instance_id or "").strip(),
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_python_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-instance-close",
+            {"instance_id": str(instance_id or "").strip(), "reason": str(reason or "client_requested")},
+        )
+        return dict(res or {})
+
+    def workflow_python_instance_list(self) -> Dict[str, Any]:
+        res = self._invoke("workflow-python-instance-list", {})
+        return dict(res or {})
+
     def workflow_python_resources(
         self,
         *,

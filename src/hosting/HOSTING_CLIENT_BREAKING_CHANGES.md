@@ -88,3 +88,26 @@ profile = host.call("state.workflow.get", {"key": "customer.profile"})
 ```
 
 Writes are versioned. Pass `expected_version` when the client wants optimistic conflict detection; mismatches raise `state_version_conflict`.
+
+## Python Node Pinned Instances
+
+Clients can now create and route requests through explicit Python node module/snippet instances:
+
+- `workflow_python_instance_create(...)`
+- `workflow_python_instance_execute(...)`
+- `workflow_python_instance_list()`
+- `workflow_python_instance_close(...)`
+
+Use this when process-local mutation is intentional and the client wants later calls to hit the same live worker process:
+
+```python
+created = channel.workflow_python_instance_create(instance_id="inst-1", request=template_request)
+out = channel.workflow_python_instance_execute(instance_id="inst-1", request=run_request)
+channel.workflow_python_instance_close(instance_id="inst-1")
+```
+
+Current limits:
+
+- Python project mode is rejected for pinned instances until cwd, `sys.path`, env, and import-cache policy is explicit.
+- JS node pinned instances are not exposed yet.
+- Pinned instance restart recovery is not implemented yet; use explicit host-managed state for data that must survive close/restart.

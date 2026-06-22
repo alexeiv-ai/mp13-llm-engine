@@ -475,6 +475,8 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         super().__init__()
         self._warm_lock = threading.Lock()
         self._idle: Dict[str, list[WorkflowPythonNodeRuntime]] = {}
+        self._instance_lock = threading.Lock()
+        self._instances: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def _runtime_key(request: Dict[str, Any], executable: str) -> str:
@@ -502,6 +504,107 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
     @staticmethod
     def _warm_reusable(request: Dict[str, Any]) -> bool:
         return _clean(request.get("execution_mode") or "module").lower() != "project"
+
+    @staticmethod
+    def _child_request(request: Dict[str, Any]) -> Dict[str, Any]:
+        req = dict(request or {})
+        limits = dict(req.get("limits") or {})
+        output_limit_bytes = max(1, min(int(limits.get("output_limit_bytes") or 65536), 10 * 1024 * 1024))
+        return {
+            **req,
+            "request_id": _clean(req.get("request_id")),
+            "export_name": _clean(req.get("export_name")) or _clean(req.get("operation")),
+            "import_allowlist": _import_allowlist(req),
+            "output_limit_bytes": output_limit_bytes,
+        }
+
+    @staticmethod
+    def _validate_module_identity(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        module_source = str(request.get("module_source") or "")
+        expected_sha = _clean(request.get("module_sha256")).lower()
+        if not expected_sha or _sha256_text(module_source).lower() != expected_sha:
+            return {"ok": False, "reason": "workflow_sandbox_invalid_module_identity", "detail": {}}
+        return None
+
+    def create_instance(
+        self,
+        request: Dict[str, Any],
+        *,
+        instance_id: str = "",
+        python_executable: Optional[str] = None,
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        child_req = self._child_request(request)
+        validation_error = self._validate_module_identity(child_req)
+        if validation_error is not None:
+            return {"status": "error", **validation_error}
+        if not self._warm_reusable(child_req):
+            return {"status": "error", "ok": False, "reason": "workflow_python_instance_project_mode_unsupported"}
+        executable = _clean(python_executable) or _python_executable_from_request(child_req)
+        runtime_key = self._runtime_key(child_req, executable)
+        iid = _clean(instance_id) or f"pyinst_{secrets.token_urlsafe(18)}"
+        with self._instance_lock:
+            existing = self._instances.get(iid)
+            if existing is not None and not bool(replace):
+                return {"status": "error", "ok": False, "reason": "workflow_python_instance_exists", "instance_id": iid}
+        if existing is not None:
+            self.close_instance(iid, reason="replace")
+        runtime = WorkflowPythonNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
+        now = time.time()
+        row = {
+            "instance_id": iid,
+            "runtime_key": runtime_key,
+            "environment_key": self._runtime_key_environment(runtime_key),
+            "python_executable": executable,
+            "pid": int(runtime.proc.pid or 0) or None,
+            "created_at": now,
+            "last_used_at": now,
+            "active_request_id": None,
+            "closed": False,
+            "runtime": runtime,
+        }
+        with self._instance_lock:
+            self._instances[iid] = row
+        return {"status": "ok", "ok": True, **{key: value for key, value in row.items() if key != "runtime"}}
+
+    def close_instance(self, instance_id: str, *, reason: str = "client_requested") -> Dict[str, Any]:
+        iid = _clean(instance_id)
+        if not iid:
+            return {"status": "error", "reason": "instance_id_required", "closed": False}
+        with self._instance_lock:
+            row = self._instances.pop(iid, None)
+        if row is None:
+            return {"status": "not_found", "instance_id": iid, "closed": False}
+        runtime = row.get("runtime")
+        if runtime is not None:
+            try:
+                runtime.shutdown()
+            except Exception:
+                try:
+                    runtime.ensure_stopped()
+                except Exception:
+                    pass
+        return {
+            "status": "ok",
+            "instance_id": iid,
+            "closed": True,
+            "reason": _clean(reason) or "client_requested",
+            "runtime_key": row.get("runtime_key"),
+            "pid": row.get("pid"),
+        }
+
+    def list_instances(self) -> Dict[str, Any]:
+        with self._instance_lock:
+            rows = [dict(row or {}) for row in self._instances.values()]
+        out: list[Dict[str, Any]] = []
+        for row in rows:
+            runtime = row.pop("runtime", None)
+            row["alive"] = bool(runtime is not None and runtime.alive())
+            if runtime is not None:
+                row["pid"] = int(runtime.proc.pid or 0) or None
+            out.append(row)
+        out.sort(key=lambda item: str(item.get("instance_id") or ""))
+        return {"status": "ok", "instances": out, "count": len(out)}
 
     def _take_idle(self, runtime_key: str) -> Optional[WorkflowPythonNodeRuntime]:
         with self._warm_lock:
@@ -651,27 +754,42 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         on_event: Optional[NodeEventCallback] = None,
         host_dispatcher: Optional[Any] = None,
         max_idle: Optional[int] = None,
+        instance_id: str = "",
     ) -> Dict[str, Any]:
         req = dict(request or {})
         request_id = _clean(req.get("request_id"))
-        module_source = str(req.get("module_source") or "")
-        expected_sha = _clean(req.get("module_sha256")).lower()
-        if not expected_sha or _sha256_text(module_source).lower() != expected_sha:
-            return {"ok": False, "reason": "workflow_sandbox_invalid_module_identity", "detail": {}}
+        validation_error = self._validate_module_identity(req)
+        if validation_error is not None:
+            return validation_error
         limits = dict(req.get("limits") or {})
         timeout_ms = max(1, min(int(limits.get("timeout_ms") or 5000), 300000))
-        output_limit_bytes = max(1, min(int(limits.get("output_limit_bytes") or 65536), 10 * 1024 * 1024))
-        child_req = {
-            **req,
-            "request_id": request_id,
-            "export_name": _clean(req.get("export_name")) or _clean(req.get("operation")),
-            "import_allowlist": _import_allowlist(req),
-            "output_limit_bytes": output_limit_bytes,
-        }
+        child_req = {**self._child_request(req), "request_id": request_id}
         executable = _clean(python_executable) or _python_executable_from_request(req)
         runtime_key = self._runtime_key(child_req, executable)
         reusable = self._warm_reusable(child_req)
-        runtime = self._take_idle(runtime_key) if reusable else None
+        pinned_instance_id = _clean(instance_id)
+        runtime = None
+        instance_row: Optional[Dict[str, Any]] = None
+        if pinned_instance_id:
+            with self._instance_lock:
+                instance_row = self._instances.get(pinned_instance_id)
+                if instance_row is None:
+                    return {"ok": False, "reason": "workflow_python_instance_not_found", "detail": {"instance_id": pinned_instance_id}}
+                if _clean(instance_row.get("runtime_key")) != runtime_key:
+                    return {
+                        "ok": False,
+                        "reason": "workflow_python_instance_incompatible_request",
+                        "detail": {"instance_id": pinned_instance_id, "runtime_key": runtime_key, "expected_runtime_key": instance_row.get("runtime_key")},
+                    }
+                if _clean(instance_row.get("active_request_id")):
+                    return {"ok": False, "reason": "workflow_python_instance_busy", "detail": {"instance_id": pinned_instance_id}}
+                runtime = instance_row.get("runtime")
+                if runtime is None or not runtime.alive():
+                    return {"ok": False, "reason": "workflow_python_instance_not_alive", "detail": {"instance_id": pinned_instance_id}}
+                instance_row["active_request_id"] = request_id
+                instance_row["last_used_at"] = time.time()
+        else:
+            runtime = self._take_idle(runtime_key) if reusable else None
         if runtime is None:
             if reusable and max_idle is not None:
                 self.trim_idle(environment_key=self._runtime_key_environment(runtime_key), max_idle=max(0, int(max_idle or 0) - 1))
@@ -689,6 +807,11 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         try:
             runtime.send_request(child_req)
         except Exception:
+            if pinned_instance_id:
+                with self._instance_lock:
+                    row = self._instances.get(pinned_instance_id)
+                    if row is not None:
+                        row["active_request_id"] = None
             runtime.ensure_stopped()
             raise
         self.register_active(request_id, runtime)
@@ -696,7 +819,14 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             return runtime.wait(timeout_ms=timeout_ms, on_event=on_event, host_dispatcher=host_dispatcher)
         finally:
             self.unregister_active(request_id)
-            self._release_idle(runtime_key, runtime, reusable=reusable)
+            if pinned_instance_id:
+                with self._instance_lock:
+                    row = self._instances.get(pinned_instance_id)
+                    if row is not None:
+                        row["active_request_id"] = None
+                        row["last_used_at"] = time.time()
+            else:
+                self._release_idle(runtime_key, runtime, reusable=reusable)
 
     def resources(self) -> Dict[str, Any]:
         out = super().resources()
@@ -713,10 +843,13 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             ]
         out["idle_count"] = len([row for row in idle if bool(row.get("alive"))])
         out["idle_processes"] = idle
+        out["instances"] = self.list_instances()
         return out
 
     def shutdown(self) -> None:
         self._shutdown_idle()
+        for row in list(self.list_instances().get("instances") or []):
+            self.close_instance(str(dict(row or {}).get("instance_id") or ""), reason="registry_shutdown")
 
     def __del__(self) -> None:
         try:

@@ -137,6 +137,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Kept state capabilities separate from the deprecated service-owned `fs.*` / `http.fetch` fallback path.
 - [x] Added workflow-node tests for default-disabled behavior and workflow state persistence across requests.
 
+### State And Long-Lived Instances Slice 15: Python Node Pinned Instances
+
+- [x] Added pinned Python node runtime instances in `WorkflowPythonNodeRuntimeRegistry`.
+- [x] Added service APIs for Python node instance create, execute, list, and close.
+- [x] Added channel, daemon, auth, and CLI command dispatch for `workflow-python-instance-*`.
+- [x] Kept ordinary `workflow-python-execute` behavior unchanged; pinned routing is used through the explicit instance execute API.
+- [x] Rejected project-mode Python node instances until cwd/sys.path/env/import-cache semantics are declared.
+- [x] Added tests proving sequential instance calls route to the same worker process and preserve process-local mutation.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -170,8 +179,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
 - [x] Implement scoped `add_to_scope` approval reuse for Host Capability calls.
 - [x] Implement explicit host-managed state capability methods.
+- [x] Implement explicit Python node instance create/execute/list/close APIs.
 - [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
-- [ ] Add explicit instance create/route/close APIs.
+- [ ] Add JS node instance create/execute/list/close APIs or explicitly defer JS node routing.
 - [ ] Add snapshot/restore hooks for instance-local state.
 - [ ] Decide and implement long-lived project-mode cwd/sys.path/env/import-cache policy.
 
