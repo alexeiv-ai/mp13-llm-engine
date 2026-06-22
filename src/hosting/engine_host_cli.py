@@ -765,6 +765,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-js-environment-spec",
         "workflow-js-ensure",
         "workflow-js-execute",
+        "workflow-js-action-describe",
+        "workflow-js-action-execute",
         "workflow-js-instance-create",
         "workflow-js-instance-execute",
         "workflow-js-instance-close",
@@ -787,6 +789,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "sandbox-state-restore",
         "workflow-python-ensure",
         "workflow-python-execute",
+        "workflow-python-action-describe",
+        "workflow-python-action-execute",
         "workflow-python-instance-create",
         "workflow-python-instance-execute",
         "workflow-python-instance-close",
@@ -1182,6 +1186,30 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
+        if cmd == "workflow-js-action-describe":
+            _print_ok(
+                svc.workflow_js_action_describe(
+                    request=dict(payload.get("request") or {}),
+                    include_hidden=bool(payload.get("include_hidden", False)),
+                )
+            )
+            return 0
+        if cmd == "workflow-js-action-execute":
+            _print_ok(
+                svc.execute_workflow_js_action(
+                    action_name=str(payload.get("action_name") or ""),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request=dict(payload.get("request") or {}),
+                    node=dict(payload.get("node") or {}),
+                    javascript=dict(payload.get("javascript") or {}),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
         if cmd == "workflow-js-instance-create":
             _print_ok(
                 svc.workflow_js_instance_create(
@@ -1367,6 +1395,28 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "workflow-python-execute":
             _print_ok(
                 svc.execute_workflow_python(
+                    profile=str(payload.get("profile") or "helper"),
+                    environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    request=dict(payload.get("request") or {}),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                )
+            )
+            return 0
+        if cmd == "workflow-python-action-describe":
+            _print_ok(
+                svc.workflow_python_action_describe(
+                    request=dict(payload.get("request") or {}),
+                    include_hidden=bool(payload.get("include_hidden", False)),
+                )
+            )
+            return 0
+        if cmd == "workflow-python-action-execute":
+            _print_ok(
+                svc.execute_workflow_python_action(
+                    action_name=str(payload.get("action_name") or ""),
                     profile=str(payload.get("profile") or "helper"),
                     environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
                     environment_key=str(payload.get("environment_key") or "").strip() or None,

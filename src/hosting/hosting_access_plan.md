@@ -905,7 +905,7 @@ Work:
 - [x] Add action invocation routing.
   - [x] Route selected actions through existing `export_name`, `operation`, snippet, and project callable request fields before worker execution.
   - [x] Add explicit Python and JavaScript action execution helpers on top of normal execute.
-  - [ ] Expose action describe/execute over daemon/channel/CLI if dependent clients need remote transport access.
+  - [x] Expose action describe/execute over daemon/channel/CLI.
 
 ## Migration Notes
 

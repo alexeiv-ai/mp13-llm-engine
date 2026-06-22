@@ -1166,6 +1166,16 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
         request={"request_id": "req-node", "operation": "run"},
         capacity=2,
     )
+    ch.workflow_python_action_describe(request={"action_manifest": {"actions": [{"name": "run"}]}})
+    ch.execute_workflow_python_action(
+        action_name="run",
+        profile="node",
+        environment_name="workflow-python-node",
+        environment_key="env-node",
+        engine_id="wf-node",
+        request={"request_id": "req-action"},
+        capacity=2,
+    )
     ch.workflow_python_resources(profile="helper", environment_key="env-key", engine_id="wf-py")
     ch.set_workflow_python_capacity(profile="helper", environment_key="env-key", engine_id="wf-py", capacity=6)
     ch.cancel_workflow_python_request(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
@@ -1267,6 +1277,28 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
                 "environment_key": "env-node",
                 "engine_id": "wf-node",
                 "request": {"request_id": "req-node", "operation": "run"},
+                "capacity": 2,
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-action-describe",
+            {
+                "request": {"action_manifest": {"actions": [{"name": "run"}]}},
+                "include_hidden": False,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-python-action-execute",
+            {
+                "action_name": "run",
+                "profile": "node",
+                "environment_name": "workflow-python-node",
+                "environment_key": "env-node",
+                "engine_id": "wf-node",
+                "request": {"request_id": "req-action"},
                 "capacity": 2,
                 "sandbox_policy": None,
                 "session_token": "tok-123",
@@ -1388,6 +1420,16 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
             "payload": {},
         },
     )
+    ch.workflow_js_action_describe(request={"action_manifest": {"actions": [{"name": "preview"}]}})
+    ch.execute_workflow_js_action(
+        action_name="preview",
+        profile="node",
+        environment_key="env-js",
+        engine_id="wf-js",
+        request={"request_id": "req-js-action"},
+        javascript={"host_api": {"enabled": True}},
+        capacity=2,
+    )
     ch.set_workflow_js_capacity(profile="node", environment_key="env-js", engine_id="wf-js", capacity=6)
     ch.cancel_workflow_js_request(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
     ch.workflow_js_request_status(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
@@ -1461,6 +1503,30 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
                 "node": {},
                 "javascript": {"host_api": {"enabled": True}},
                 "capacity": 1,
+                "sandbox_policy": None,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-action-describe",
+            {
+                "request": {"action_manifest": {"actions": [{"name": "preview"}]}},
+                "include_hidden": False,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "workflow-js-action-execute",
+            {
+                "action_name": "preview",
+                "profile": "node",
+                "environment_name": "workflow-js-node",
+                "environment_key": "env-js",
+                "engine_id": "wf-js",
+                "request": {"request_id": "req-js-action"},
+                "node": {},
+                "javascript": {"host_api": {"enabled": True}},
+                "capacity": 2,
                 "sandbox_policy": None,
                 "session_token": "tok-123",
             },

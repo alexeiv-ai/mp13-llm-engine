@@ -36,6 +36,8 @@ _WORKFLOW_PYTHON_COMMANDS = {
     "sandbox-state-restore",
     "workflow-python-ensure",
     "workflow-python-execute",
+    "workflow-python-action-describe",
+    "workflow-python-action-execute",
     "workflow-python-instance-create",
     "workflow-python-instance-execute",
     "workflow-python-instance-close",
@@ -55,6 +57,7 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-verify-environment",
     "workflow-python-verify-install-receipt",
     "sandbox-state-snapshot",
+    "workflow-python-action-describe",
     "workflow-python-instance-list",
     "workflow-python-resources",
     "workflow-python-request-status",
@@ -65,6 +68,8 @@ _WORKFLOW_JS_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-ensure",
     "workflow-js-execute",
+    "workflow-js-action-describe",
+    "workflow-js-action-execute",
     "workflow-js-instance-create",
     "workflow-js-instance-execute",
     "workflow-js-instance-close",
@@ -81,6 +86,7 @@ _WORKFLOW_JS_COMMANDS = {
 
 _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-environment-spec",
+    "workflow-js-action-describe",
     "workflow-js-instance-list",
     "workflow-js-resources",
     "workflow-js-request-status",

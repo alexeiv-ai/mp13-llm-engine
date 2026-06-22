@@ -2344,6 +2344,25 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
+        if cmd == "workflow-js-action-describe":
+            return svc.workflow_js_action_describe(
+                request=dict(payload.get("request") or {}),
+                include_hidden=bool(payload.get("include_hidden", False)),
+            )
+        if cmd == "workflow-js-action-execute":
+            return svc.execute_workflow_js_action(
+                action_name=str(payload.get("action_name") or ""),
+                profile=str(payload.get("profile") or "node"),
+                environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                node=dict(payload.get("node") or {}),
+                javascript=dict(payload.get("javascript") or {}),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
+            )
         if cmd == "workflow-js-instance-create":
             return svc.workflow_js_instance_create(
                 profile=str(payload.get("profile") or "node"),
@@ -2480,6 +2499,23 @@ class EngineHostDaemon:
             )
         if cmd == "workflow-python-execute":
             return svc.execute_workflow_python(
+                profile=str(payload.get("profile") or "helper"),
+                environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
+                environment_key=str(payload.get("environment_key") or "").strip() or None,
+                engine_id=str(payload.get("engine_id") or "").strip() or None,
+                request=dict(payload.get("request") or {}),
+                capacity=int(payload.get("capacity") or 1),
+                sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
+            )
+        if cmd == "workflow-python-action-describe":
+            return svc.workflow_python_action_describe(
+                request=dict(payload.get("request") or {}),
+                include_hidden=bool(payload.get("include_hidden", False)),
+            )
+        if cmd == "workflow-python-action-execute":
+            return svc.execute_workflow_python_action(
+                action_name=str(payload.get("action_name") or ""),
                 profile=str(payload.get("profile") or "helper"),
                 environment_name=str(payload.get("environment_name") or "workflow-python-helper"),
                 environment_key=str(payload.get("environment_key") or "").strip() or None,

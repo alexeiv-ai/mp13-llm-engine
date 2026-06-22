@@ -321,6 +321,14 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
             self.calls.append(("execute", dict(kwargs)))
             return {"status": "ok", "ok": True}
 
+        def workflow_python_action_describe(self, **kwargs):
+            self.calls.append(("action_describe", dict(kwargs)))
+            return {"status": "ok", "actions": [{"name": "run"}]}
+
+        def execute_workflow_python_action(self, **kwargs):
+            self.calls.append(("action_execute", dict(kwargs)))
+            return {"status": "ok", "ok": True, "action": kwargs["action_name"]}
+
         def sandbox_state_snapshot(self, **kwargs):
             self.calls.append(("state_snapshot", dict(kwargs)))
             return {"status": "ok", "contract": "hosting.sandbox.state_snapshot.v1"}
@@ -380,6 +388,8 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert daemon._call_service("workflow-python-environment-spec", {"profile": "helper"})["environment_key"] == "env-key"
     assert daemon._call_service("workflow-python-ensure", {"engine_id": "wf-py"})["engine_id"] == "wf-py"
     assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+    assert daemon._call_service("workflow-python-action-describe", {"request": {"action_manifest": {"actions": [{"name": "run"}]}}})["actions"][0]["name"] == "run"
+    assert daemon._call_service("workflow-python-action-execute", {"action_name": "run", "request": {"request_id": "req-action"}})["action"] == "run"
     assert daemon._call_service("sandbox-state-snapshot", {"scope": "instance", "instance_id": "inst-1"})["contract"] == "hosting.sandbox.state_snapshot.v1"
     assert daemon._call_service("sandbox-state-restore", {"snapshot": {"scope": "instance", "items": {}}, "instance_id": "inst-1"})["restored_count"] == 1
     assert daemon._call_service("workflow-python-instance-create", {"instance_id": "inst-1", "request": {"request_id": "req-create"}})["instance_id"] == "inst-1"
@@ -398,6 +408,8 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
         "spec",
         "ensure",
         "execute",
+        "action_describe",
+        "action_execute",
         "state_snapshot",
         "state_restore",
         "instance_create",
@@ -472,6 +484,14 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
             self.calls.append(("execute", dict(kwargs)))
             return {"status": "ok", "ok": True}
 
+        def workflow_js_action_describe(self, **kwargs):
+            self.calls.append(("action_describe", dict(kwargs)))
+            return {"status": "ok", "actions": [{"name": "run"}]}
+
+        def execute_workflow_js_action(self, **kwargs):
+            self.calls.append(("action_execute", dict(kwargs)))
+            return {"status": "ok", "ok": True, "action": kwargs["action_name"]}
+
         def workflow_js_instance_create(self, **kwargs):
             self.calls.append(("instance_create", dict(kwargs)))
             return {"status": "ok", "instance_id": kwargs.get("instance_id") or "js-inst-1"}
@@ -527,6 +547,8 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     assert daemon._call_service("workflow-js-environment-spec", {"profile": "node", "javascript": {"host_api": {"enabled": True}}})["environment_key"] == "env-js"
     assert daemon._call_service("workflow-js-ensure", {"engine_id": "wf-js"})["engine_id"] == "wf-js"
     assert daemon._call_service("workflow-js-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+    assert daemon._call_service("workflow-js-action-describe", {"request": {"action_manifest": {"actions": [{"name": "run"}]}}})["actions"][0]["name"] == "run"
+    assert daemon._call_service("workflow-js-action-execute", {"action_name": "run", "request": {"request_id": "req-action"}})["action"] == "run"
     assert daemon._call_service("workflow-js-instance-create", {"instance_id": "js-inst-1", "request": {"request_id": "req-create"}})["instance_id"] == "js-inst-1"
     assert daemon._call_service("workflow-js-instance-execute", {"instance_id": "js-inst-1", "request": {"request_id": "req-inst"}})["ok"] is True
     assert daemon._call_service("workflow-js-instance-list", {})["instances"] == []
@@ -544,6 +566,8 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
         "spec",
         "ensure",
         "execute",
+        "action_describe",
+        "action_execute",
         "instance_create",
         "instance_execute",
         "instance_list",

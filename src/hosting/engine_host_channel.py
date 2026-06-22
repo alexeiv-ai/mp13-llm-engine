@@ -1694,6 +1694,40 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def workflow_python_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-action-describe",
+            {"request": dict(request or {}), "include_hidden": bool(include_hidden)},
+        )
+        return dict(res or {})
+
+    def execute_workflow_python_action(
+        self,
+        *,
+        action_name: str,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-python-action-execute",
+            {
+                "action_name": str(action_name or "").strip(),
+                "profile": str(profile or "helper").strip() or "helper",
+                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
     def workflow_python_instance_create(
         self,
         *,
@@ -1975,6 +2009,44 @@ class EngineHostControlChannel:
         res = self._invoke(
             "workflow-js-execute",
             {
+                "profile": str(profile or "node").strip() or "node",
+                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+                "environment_key": str(environment_key or "").strip() or None,
+                "engine_id": str(engine_id or "").strip() or None,
+                "request": dict(request or {}),
+                "node": dict(node or {}),
+                "javascript": dict(javascript or {}),
+                "capacity": max(1, min(int(capacity or 1), 256)),
+                "sandbox_policy": dict(sandbox_policy or {}) or None,
+            },
+        )
+        return dict(res or {})
+
+    def workflow_js_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-action-describe",
+            {"request": dict(request or {}), "include_hidden": bool(include_hidden)},
+        )
+        return dict(res or {})
+
+    def execute_workflow_js_action(
+        self,
+        *,
+        action_name: str,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "workflow-js-action-execute",
+            {
+                "action_name": str(action_name or "").strip(),
                 "profile": str(profile or "node").strip() or "node",
                 "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
                 "environment_key": str(environment_key or "").strip() or None,
