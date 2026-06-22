@@ -501,8 +501,29 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         }
 
     @staticmethod
-    def _instance_reusable(request: Dict[str, Any]) -> bool:
-        return _clean(request.get("execution_mode") or "module").lower() != "project"
+    def _execution_mode(request: Dict[str, Any]) -> str:
+        js = dict(request.get("javascript") or {})
+        return _clean(request.get("execution_mode") or js.get("execution_mode") or "module").lower()
+
+    @classmethod
+    def _instance_reusable(cls, request: Dict[str, Any]) -> bool:
+        return cls._execution_mode(request) != "project"
+
+    @staticmethod
+    def _project_instance_unsupported_detail() -> Dict[str, Any]:
+        return {
+            "message": (
+                "JS project-mode pinned instances are deferred because workflow_js_instance_* "
+                "pins the host worker process, while every request still creates a fresh QuickJS context."
+            ),
+            "deferred": True,
+            "pinned_worker_semantics": "host_worker_process_only",
+            "required_runtime_work": [
+                "persistent QuickJS context or module graph cache",
+                "declared cwd/env/import-cache cleanup policy",
+                "snapshot/restore boundary for mutable JS state",
+            ],
+        }
 
     def create_instance(
         self,
@@ -517,7 +538,12 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         if validation_error is not None:
             return {"status": "error", **validation_error}
         if not self._instance_reusable(child_req):
-            return {"status": "error", "ok": False, "reason": "workflow_js_instance_project_mode_unsupported"}
+            return {
+                "status": "error",
+                "ok": False,
+                "reason": "workflow_js_instance_project_mode_unsupported",
+                "detail": self._project_instance_unsupported_detail(),
+            }
         executable = _clean(python_executable) or _python_executable_from_request(child_req)
         runtime_key = self._runtime_key(child_req, executable)
         iid = _clean(instance_id) or f"jsinst_{secrets.token_urlsafe(18)}"

@@ -306,6 +306,22 @@ Runtime import policy:
 4. no npm package resolution
 5. host APIs are available only through injected globals such as `api`
 
+## Long-Lived Instance Semantics
+
+`workflow_js_instance_create`, `workflow_js_instance_execute`,
+`workflow_js_instance_list`, and `workflow_js_instance_close` route compatible
+module/snippet calls to a pinned host worker process. The pinned process is a
+transport and startup optimization only. Each execution still creates a fresh
+QuickJS context from the submitted `module_source`, so module globals, closures,
+and other in-context JS values are not reused between requests.
+
+Project-mode JS instances are therefore intentionally unsupported for now.
+`workflow_js_instance_create` returns
+`workflow_js_instance_project_mode_unsupported` with structured detail when
+`execution_mode` is `project`. Enabling project-mode JS instances requires a
+persistent QuickJS context or module graph cache, explicit cwd/env/import-cache
+cleanup policy, and snapshot/restore boundaries for mutable JS state.
+
 Authoring with imports is supported by host-side helpers that emit the
 single-script worker contract. These helpers are preprocessing tools; their
 output is still ordinary JS source plus `module_sha256`.

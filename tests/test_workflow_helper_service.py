@@ -1144,6 +1144,33 @@ def test_workflow_js_node_instance_routes_sequential_calls_to_pinned_worker(tmp_
     assert after_close["reason"] == "workflow_js_instance_not_found"
 
 
+def test_workflow_js_node_project_instance_explains_deferred_semantics(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = "exports.run = function(input) { return { output: input }; };"
+    out = svc.workflow_js_instance_create(
+        instance_id="js-inst-project",
+        request={
+            "request_id": "req-js-project-instance",
+            "execution_mode": "project",
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg-demo",
+            "workflow_id": "wf-demo",
+            "package_source_digest": "sha256:digest",
+            "payload": {"value": "create"},
+        },
+    )
+
+    assert out["status"] == "error"
+    assert out["reason"] == "workflow_js_instance_project_mode_unsupported"
+    assert out["detail"]["deferred"] is True
+    assert out["detail"]["pinned_worker_semantics"] == "host_worker_process_only"
+    assert "fresh QuickJS context" in out["detail"]["message"]
+
+
 def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

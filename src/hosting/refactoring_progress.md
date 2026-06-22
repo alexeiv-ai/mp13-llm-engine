@@ -179,6 +179,13 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Cleared project modules from `sys.modules` before and after project execution so module globals do not leak across calls.
 - [x] Added tests for required policy and same-process project routing with isolated env/import state.
 
+### State And Long-Lived Instances Slice 19: JS Project Instance Decision
+
+- [x] Kept JS project-mode pinned instances unsupported because the current worker pins only the host worker process and creates a fresh QuickJS context for each request.
+- [x] Added structured deferred detail to `workflow_js_instance_create` while preserving the existing `workflow_js_instance_project_mode_unsupported` reason.
+- [x] Added a workflow-helper test for the deferred JS project-mode instance response.
+- [x] Updated the main plan, Host API plan, and JS worker docs to record the decision and future runtime prerequisites.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -217,7 +224,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Add snapshot/restore hooks for instance-local host-managed state.
 - [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
 - [x] Decide and implement Python long-lived project-mode cwd/sys.path/env/import-cache policy.
-- [ ] Decide JS project-mode long-lived semantics.
+- [x] Decide JS project-mode long-lived semantics.
+- [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
 - [ ] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests after dependent clients complete migration.
 
 ## Verification
@@ -228,6 +236,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest tests/test_hosting_sandbox_process_base.py -q`
 - [x] `$hostingTests = Get-ChildItem -Path tests -Filter 'test_hosting*.py' | ForEach-Object { $_.FullName }; pytest @hostingTests tests/test_engine_host_channel.py tests/test_engine_host_cli_interactive.py tests/test_engine_host_cli_remote_args.py tests/test_workflow_helper_service.py tests/test_engine_worker_ipc_streaming.py -q`
 - [x] `python -m py_compile src/hosting/sandbox/host_capabilities.py src/hosting/service/workflow_helpers.py`
+- [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_node_instance or workflow_js_node_project_instance"`
+- [x] `python -m py_compile src/hosting/sandbox/workflow_js_node_runtime.py`
 - [x] `pytest tests/test_host_capabilities.py -q`
 - [x] `pytest tests/test_workflow_helper_service.py -q -k "workflow_js_stream_emits_terminal_events_and_artifacts or workflow_js_node_async_host_call_uses_broker or sandbox_describe or host_api"`
 - [x] `pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`

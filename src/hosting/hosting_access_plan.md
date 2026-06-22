@@ -885,7 +885,10 @@ Work:
   - [x] Require `python.project_instance_policy` for pinned project instances.
   - [x] Require cwd reset, `sys.path` reset, env reset, and project import-cache clearing.
   - [x] Restore cwd, `sys.path`, env, and project modules after each project request.
-- [ ] Decide JS project-mode long-lived semantics separately because the current JS node worker pins the host worker process but creates a fresh QuickJS context per request.
+- [x] Decide JS project-mode long-lived semantics separately.
+  - [x] Keep JS project-mode pinned instances unsupported in this pillar because the current JS node worker pins only the host worker process and creates a fresh QuickJS context per request.
+  - [x] Return a structured deferred detail from `workflow_js_instance_create` so clients can distinguish unsupported project persistence from ordinary instance routing failures.
+  - [ ] Later JS project-mode support requires a persistent QuickJS context or module graph cache, declared cwd/env/import-cache cleanup semantics, and snapshot/restore boundaries for mutable JS state.
 
 ### Phase 6: Action Manifest And Card Integration
 
