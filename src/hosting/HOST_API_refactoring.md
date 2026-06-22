@@ -55,7 +55,10 @@ Clients should use high-level helpers and avoid raw provider session tokens or c
 - [x] Preserved allowed, advertised, hidden allowed, disabled, gated, constraints, schemas, permissions, approval metadata, provider identity, and toolbox metadata in descriptor conversion.
 - [x] Added descriptor `metadata` support so adapters can carry toolbox/view information without changing the core descriptor contract.
 - [x] Added `extract_safe_correlation_metadata(...)` for safe correlation propagation.
-- [x] Safe correlation metadata includes workflow, instance, node, request, cursor, context, branch, session-tree, actor, provider, method, approval, host-call, and provider-call ids.
+- [x] Safe correlation metadata includes workflow, instance, node, request, cursor, context, branch, session-tree, session, toolbox, actor, provider, method, approval, host-call, and provider-call ids.
+- [x] Added callable-surface identity and digest helpers so merged views can preserve `provider_kind`, `provider_id`, `toolbox_id`, `session_id`, method, schema digest, method digest, and policy digest.
+- [x] Merged callable-schema conversion rejects duplicate advertised method names by default; clients must namespace/alias or explicitly choose first-provider wins behavior.
+- [x] Added explicit bridge-policy helper for intersecting toolbox policy, Host Capability caller policy, and bridge policy.
 
 ## Provider Callback Runtime
 
@@ -142,13 +145,13 @@ These items were enabled by the Host Capability model but belong to later plan p
 
 These items are intentionally outside the completed Host Capability pillar. They should be picked up only when their owning pillar starts, because each one changes a broader runtime or toolbox lifecycle boundary.
 
-- [ ] Rework HostedToolbox brokered IO on top of Host Capability dispatch if the later toolbox lifecycle pillar chooses that simplification.
+- [x] Decide against forcing HostedToolbox brokered IO onto Host Capability dispatch as the default toolbox lifecycle direction.
   - Owning pillar: toolbox lifecycle and brokered IO simplification.
-  - Current state: hosted toolbox sessions can already register as Host Capability providers and execute through the existing toolbox harness.
-  - Rework candidate: replace toolbox-specific brokered IO paths with the same Host Capability provider call envelope, approval/audit hooks, event observations, and callback relay used by sandbox `host.call(...)`.
-  - Expected benefit: one dispatch path for sandbox host APIs, hosted toolbox providers, approval decisions, and audit rows.
-  - Main risk: toolbox execution has existing lifecycle/accounting semantics; unifying too early could regress hosted toolbox behavior or complicate provider cancellation.
-  - Trigger to start: after the toolbox lifecycle pillar decides that duplicate brokered IO maintenance cost is higher than migration risk.
+  - Current state: hosted toolbox sessions can already register as Host Capability providers and execute through the existing toolbox harness. Toolbox brokered IO remains toolbox-native.
+  - Decision: use shared callable-surface descriptors, identity/digest helpers, approval/audit helper contracts, and explicit bridge policies. Keep toolbox lifecycle/execution ownership separate from sandbox Host Capability dispatch unless a later concrete duplication problem justifies deeper runtime unification.
+  - Conflict rule: overlapping method names are allowed across provider sessions but must not silently collapse in a merged advertised surface. Stable identity is `provider_kind + provider_id/toolbox_id + session_id + method`.
+  - Approval rule: reusable grants default to same provider/session scope. Cross-toolbox reuse requires explicit scope identity such as toolbox definition digest, owner/workspace, method/schema/policy digests, and compatible constraints.
+  - Bridge rule: brokered IO permissions come from an explicit bridge policy intersected with toolbox policy and Host Capability caller policy.
 
 - [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
   - Owning pillar: stateful/recoverable sandbox instances.

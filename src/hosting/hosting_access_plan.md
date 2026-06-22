@@ -831,6 +831,9 @@ Work:
 - [x] Add capability descriptors to `host.describe` / `sandbox.describe`.
 - [x] Add callable-surface adapters between toolbox/`ToolsView` metadata and Host Capability descriptors.
 - [x] Add Host Capability descriptor-to-callable-schema helpers for sandbox/model-facing discovery.
+- [x] Add stable callable-surface identity and schema/method/policy digests for approval reuse and merged-view conflict decisions.
+- [x] Make merged callable-schema conversion reject duplicate advertised names by default unless the caller explicitly chooses a conflict policy.
+- [x] Add explicit bridge-policy helper that intersects toolbox policy, Host Capability caller policy, and bridge policy.
 - [x] Keep descriptor helpers for `fs.*` and `http.fetch` so clients can register those methods explicitly.
 - [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
 - [x] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback registration, dispatch, audit/log markers, and fallback-only tests.
@@ -928,12 +931,15 @@ The implementation phases above are complete except for the explicitly deferred 
   - Completed client work: `fs.*`, `http.fetch`, and custom host APIs are registered explicitly. Legacy service-owned fallback policy keys are ignored.
   - Breaking-change status: consumed by the dependent client and reset for future slices.
 
-### Toolbox Brokered IO Unification
+### Callable Surface Bridge And Toolbox Brokered IO
 
-- [ ] Rework HostedToolbox brokered IO on top of Host Capability dispatch if the later toolbox lifecycle pillar chooses that simplification.
+- [x] Decide the toolbox lifecycle pillar should not force HostedToolbox brokered IO onto Host Capability dispatch by default.
   - Current state: hosted toolbox sessions can already act as Host Capability providers, but toolbox-specific brokered IO paths still exist.
-  - Decision needed: whether the lifecycle pillar wants one shared provider-call envelope and audit/approval path for toolbox and sandbox host APIs.
-  - Likely direction: defer until toolbox lifecycle work starts; do not churn stable toolbox execution code only for architectural neatness.
+  - Decision: share callable-surface primitives and approval/audit helper contracts, while keeping HostedToolbox brokered IO toolbox-native unless a specific later maintenance problem requires deeper runtime unification.
+  - Conflict rule: one workflow/session may own multiple hosted toolbox instances with overlapping method names. Duplicate advertised names must use namespaces/aliases or an explicit conflict policy; they must not silently collapse.
+  - Identity rule: stable callable identity is `provider_kind + provider_id/toolbox_id + session_id + method`.
+  - Approval rule: broker grants default to same provider/session scope. Cross-toolbox reuse requires explicit compatible owner/workspace, toolbox definition digest, schema/method/policy digests, method name, provider kind, and constraints.
+  - Bridge rule: brokered IO permissions use an explicit bridge policy intersected with toolbox policy and Host Capability caller policy.
 
 ### Long-Lived Recovery Beyond Host-Managed State
 
@@ -969,9 +975,11 @@ The implementation phases above are complete except for the explicitly deferred 
 
 ## Current Recommendation
 
-Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The next high-leverage work is:
+Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The toolbox brokered IO decision is also closed for now: use shared callable-surface/bridge helpers, not forced runtime unification.
 
-1. start the toolbox lifecycle pillar and decide whether toolbox brokered IO should converge on Host Capability dispatch; then
-2. decide native toolbox metadata versus Host Capability descriptor adapters when the native toolbox hierarchy/groups work starts.
+The next high-leverage work is either:
+
+1. let the client integrate the callable-surface bridge helpers and conflict/approval policy rules; or
+2. start native toolbox hierarchy/groups work and decide whether toolbox metadata should stay adapter-based or adopt Host Capability descriptors natively.
 
 JS project-mode persistence and deeper instance recovery should stay behind explicit runtime/state design work because they affect cleanup, snapshot, and mutation semantics.

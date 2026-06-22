@@ -5,9 +5,12 @@ import pytest
 from hosting.callable_surface import (
     HostCapabilityProviderCallbackRelay,
     bind_host_capability_provider_callback,
+    callable_surface_digests,
+    callable_surface_identity,
     extract_safe_correlation_metadata,
     host_capability_approval_decision,
     host_capability_approval_request,
+    host_capability_bridge_policy,
     host_capability_descriptors_to_callable_schemas,
     host_capability_provider_success,
     normalize_host_capability_provider_response,
@@ -78,6 +81,50 @@ def test_host_capability_descriptors_to_callable_schemas_filters_disabled_and_hi
     assert visible[0]["contract"] == "hosting.sandbox.callable_schema.v1"
     assert "provider" in visible[0]
     assert "approval" in visible[0]
+    assert visible[0]["identity"]["provider_kind"] == "toolbox_session"
+    assert visible[0]["schema_digest"]
+    assert visible[0]["method_digest"]
+
+
+def test_callable_surface_duplicate_names_fail_by_default() -> None:
+    first = toolbox_to_host_capability_descriptors({"toolbox_id": "tb-1", "allowed_tool_names": ["lookup"]}, provider_id="provider-1", namespace="crm")
+    second = toolbox_to_host_capability_descriptors({"toolbox_id": "tb-2", "allowed_tool_names": ["lookup"]}, provider_id="provider-2", namespace="crm")
+
+    with pytest.raises(ValueError, match="callable_surface_duplicate_name:crm.lookup"):
+        host_capability_descriptors_to_callable_schemas([*first, *second])
+
+    kept = host_capability_descriptors_to_callable_schemas([*first, *second], conflict_policy="keep_first")
+    assert [row["identity"]["provider_id"] for row in kept] == ["provider-1"]
+
+
+def test_callable_surface_identity_and_digests_are_stable() -> None:
+    descriptor = toolbox_to_host_capability_descriptors(
+        {
+            "toolbox_id": "tb-1",
+            "tool_metadata": {
+                "lookup": {
+                    "args_schema": {"type": "object", "properties": {"id": {"type": "string"}}},
+                    "result_schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+                }
+            },
+        },
+        provider_id="provider-1",
+        namespace="crm",
+    )[0]
+
+    identity = callable_surface_identity(descriptor, session_id="session-1")
+    digests = callable_surface_digests(descriptor)
+
+    assert identity == {
+        "provider_kind": "toolbox_session",
+        "provider_id": "provider-1",
+        "toolbox_id": "tb-1",
+        "session_id": "session-1",
+        "method": "crm.lookup",
+    }
+    assert len(digests["schema_digest"]) == 64
+    assert len(digests["method_digest"]) == 64
+    assert len(digests["policy_digest"]) == 64
 
 
 def test_provider_callback_helper_validates_and_normalizes_responses() -> None:
@@ -147,7 +194,17 @@ def test_approval_bridge_sanitizes_arguments_and_normalizes_decisions() -> None:
             "arguments": {"customer_id": "c-1", "secret": "not copied"},
             "provider": {"provider_id": "client-crm"},
             "approval": {"mode": "always"},
-            "context": {"workflow_id": "wf-1", "request_id": "req-1", "actor": "client-a"},
+            "identity": {"provider_kind": "client_session", "provider_id": "client-crm", "session_id": "session-1", "method": "crm.customer.delete"},
+            "digests": {"schema_digest": "schema-1", "method_digest": "method-1", "policy_digest": "policy-1"},
+            "context": {
+                "workflow_id": "wf-1",
+                "request_id": "req-1",
+                "actor": "client-a",
+                "session_id": "session-1",
+                "toolbox_id": "tb-1",
+                "branch_id": "branch-1",
+                "session_tree_id": "tree-1",
+            },
         }
     )
 
@@ -155,6 +212,10 @@ def test_approval_bridge_sanitizes_arguments_and_normalizes_decisions() -> None:
     assert request["argument_keys"] == ["customer_id", "secret"]
     assert "arguments" not in request
     assert request["correlation"]["workflow_id"] == "wf-1"
+    assert request["context"]["branch_id"] == "branch-1"
+    assert request["context"]["session_tree_id"] == "tree-1"
+    assert request["identity"]["session_id"] == "session-1"
+    assert request["digests"]["method_digest"] == "method-1"
     assert host_capability_approval_decision("allow_once", approval_id="approval-1")["approved"] is True
     assert host_capability_approval_decision("add_to_scope", scope_constraints={"customer_id": "c-1"})["scope_constraints"] == {"customer_id": "c-1"}
     assert host_capability_approval_decision("unexpected")["decision"] == "deny"
@@ -163,5 +224,19 @@ def test_approval_bridge_sanitizes_arguments_and_normalizes_decisions() -> None:
 def test_extract_safe_correlation_metadata_omits_unapproved_fields() -> None:
     assert extract_safe_correlation_metadata(
         {"workflow_id": "wf-1", "secret": "nope"},
-        {"context": {"request_id": "req-1"}, "provider": {"provider_id": "provider-1"}},
-    ) == {"workflow_id": "wf-1", "request_id": "req-1", "provider_id": "provider-1"}
+        {"context": {"request_id": "req-1", "toolbox_id": "tb-1"}, "provider": {"provider_id": "provider-1"}},
+    ) == {"workflow_id": "wf-1", "request_id": "req-1", "toolbox_id": "tb-1", "provider_id": "provider-1"}
+
+
+def test_host_capability_bridge_policy_intersects_explicit_permissions() -> None:
+    policy = host_capability_bridge_policy(
+        toolbox_policy={"brokered_io": {"filesystem": True, "http": True}},
+        host_capability_policy={"namespaces": {"fs": True, "http": False}},
+        bridge_policy={"namespaces": {"fs": True, "http": True, "state": True}},
+    )
+
+    assert policy["contract"] == "hosting.sandbox.host_capability_bridge_policy.v1"
+    assert policy["mode"] == "explicit_intersection"
+    assert policy["namespaces"]["fs"] is True
+    assert policy["namespaces"]["http"] is False
+    assert policy["namespaces"]["state"] is False

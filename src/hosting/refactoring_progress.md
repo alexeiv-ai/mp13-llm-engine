@@ -239,6 +239,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Updated client breaking-change instructions so dependent clients register explicit Host Capability sessions for `fs.*`, `http.fetch`, and custom methods.
 - [x] Updated Host API and main hosting plans to mark fallback removal complete.
 
+### Host Capability Slice: Callable Surface Bridge Rules
+
+- [x] Decided not to force HostedToolbox brokered IO onto Host Capability dispatch as the default toolbox lifecycle direction.
+- [x] Added callable-surface identity and digest helpers for provider/session/method identity, schema digests, method digests, and policy digests.
+- [x] Made merged callable-schema conversion reject duplicate advertised names by default.
+- [x] Added explicit bridge-policy intersection helper for toolbox policy, Host Capability caller policy, and bridge policy.
+- [x] Expanded approval/correlation helper fields with session, toolbox, branch, session-tree, and provider-kind context.
+- [x] Added client integration instructions for multiple toolbox instances, conflict handling, approval scope, bridge policy, and correlation metadata.
+
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
@@ -291,3 +300,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m py_compile src/hosting/service/workflow_helpers.py src/hosting/sandbox/host_api.py`
 - [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "service_owned_fallback_policy_is_ignored or toolbox_host_capability_session or client_host_capability_callback_session or workflow_js_stream_emits_terminal_events_and_artifacts or sandbox_describe or host_api"`
 - [x] `python -m pytest tests/test_workflow_js_node_runtime.py -q -k "host_dispatcher or sandbox_describe or structured_host_api_error_reason"`
+- [x] `python -m py_compile src/hosting/callable_surface.py`
+- [x] `python -m pytest tests/test_callable_surface.py -q`
+- [x] `python -m pytest tests/test_engine_host_channel.py -q -k "host_capability_register_known_methods_helper_forwards_descriptors or host_capability_register_toolbox"`
+- [x] `python -m pytest tests/test_host_capabilities.py -q`

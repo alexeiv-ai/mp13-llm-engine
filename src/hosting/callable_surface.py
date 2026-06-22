@@ -1,7 +1,9 @@
 """Reusable callable-surface adapters for Host Capability and Toolbox metadata."""
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -19,6 +21,7 @@ HOST_CALLABLE_SCHEMA_CONTRACT = "hosting.sandbox.callable_schema.v1"
 HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT = "hosting.sandbox.host_capability_provider_response.v1"
 HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT = "hosting.sandbox.host_capability_approval_decision.v1"
 HOST_CAPABILITY_PROVIDER_CALLBACK_NAME = "host_capability.call"
+HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT = "hosting.sandbox.host_capability_bridge_policy.v1"
 
 SAFE_CORRELATION_FIELDS = (
     "workflow_id",
@@ -30,7 +33,9 @@ SAFE_CORRELATION_FIELDS = (
     "branch_id",
     "session_tree_id",
     "session_id",
+    "toolbox_id",
     "actor",
+    "provider_kind",
     "provider_id",
     "method",
     "approval_id",
@@ -73,6 +78,14 @@ def _string_set(values: Any) -> set[str]:
 
 def _json_schema(value: Any) -> Dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {"type": "object"}
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _method_segment(value: str) -> str:
@@ -188,9 +201,15 @@ def host_capability_descriptors_to_callable_schemas(
     *,
     include_hidden: bool = False,
     include_disabled: bool = False,
+    conflict_policy: str = "error",
+    session_id: str = "",
 ) -> list[Dict[str, Any]]:
     """Convert host capability descriptors to sandbox/model-facing callable schemas."""
     out: list[Dict[str, Any]] = []
+    seen_names: set[str] = set()
+    policy = _clean(conflict_policy).lower() or "error"
+    if policy not in {"error", "keep_first"}:
+        raise ValueError(f"callable_surface_invalid_conflict_policy:{policy}")
     for item in descriptors:
         descriptor = item if isinstance(item, HostCapabilityDescriptor) else HostCapabilityDescriptor.from_dict(dict(item or {}))
         row = descriptor.to_dict()
@@ -199,6 +218,13 @@ def host_capability_descriptors_to_callable_schemas(
             continue
         if bool(toolbox.get("disabled", False)) and not include_disabled:
             continue
+        if row["name"] in seen_names:
+            if policy == "keep_first":
+                continue
+            raise ValueError(f"callable_surface_duplicate_name:{row['name']}")
+        seen_names.add(row["name"])
+        identity = callable_surface_identity(descriptor, session_id=session_id)
+        digests = callable_surface_digests(descriptor)
         out.append(
             {
                 "contract": HOST_CALLABLE_SCHEMA_CONTRACT,
@@ -211,10 +237,129 @@ def host_capability_descriptors_to_callable_schemas(
                 "scope_requirements": list(row.get("scope_requirements") or []),
                 "approval": dict(row.get("approval") or {}),
                 "provider": dict(row.get("provider") or {}),
+                "identity": identity,
+                "schema_digest": digests["schema_digest"],
+                "method_digest": digests["method_digest"],
+                "policy_digest": digests["policy_digest"],
                 "metadata": dict(row.get("metadata") or {}),
             }
         )
     return out
+
+
+def callable_surface_identity(
+    descriptor: HostCapabilityDescriptor | Dict[str, Any],
+    *,
+    session_id: str = "",
+    provider_id: str = "",
+    toolbox_id: str = "",
+    provider_kind: str = "",
+) -> Dict[str, Any]:
+    """Return the stable identity tuple for one advertised callable method."""
+    row = descriptor.to_dict() if isinstance(descriptor, HostCapabilityDescriptor) else HostCapabilityDescriptor.from_dict(dict(descriptor or {})).to_dict()
+    provider = dict(row.get("provider") or {})
+    toolbox = dict(dict(row.get("metadata") or {}).get("toolbox") or {})
+    sid = _clean(session_id) or _clean(row.get("session_id")) or _clean(toolbox.get("session_id"))
+    pid = _clean(provider_id) or _clean(provider.get("provider_id"))
+    tbid = _clean(toolbox_id) or _clean(toolbox.get("toolbox_id")) or pid
+    return {
+        "provider_kind": _clean(provider_kind) or _clean(provider.get("kind")) or "client_session",
+        "provider_id": pid,
+        "toolbox_id": tbid or None,
+        "session_id": sid or None,
+        "method": _clean(row.get("name")),
+    }
+
+
+def callable_surface_digests(descriptor: HostCapabilityDescriptor | Dict[str, Any]) -> Dict[str, str]:
+    """Return stable schema/method/policy digests for approval and conflict decisions."""
+    row = descriptor.to_dict() if isinstance(descriptor, HostCapabilityDescriptor) else HostCapabilityDescriptor.from_dict(dict(descriptor or {})).to_dict()
+    schema_payload = {
+        "arguments_schema": dict(row.get("args_schema") or {}),
+        "result_schema": dict(row.get("result_schema") or {}),
+    }
+    policy_payload = {
+        "permissions": list(row.get("permissions") or []),
+        "scope_requirements": list(row.get("scope_requirements") or []),
+        "approval": dict(row.get("approval") or {}),
+        "constraints": dict(dict(row.get("metadata") or {}).get("constraints") or {}),
+        "toolbox_constraints": dict(dict(dict(row.get("metadata") or {}).get("toolbox") or {}).get("constraints") or {}),
+    }
+    method_payload = {
+        "name": _clean(row.get("name")),
+        "namespace": _clean(row.get("namespace")),
+        "schema": schema_payload,
+        "policy": policy_payload,
+    }
+    return {
+        "schema_digest": _digest(schema_payload),
+        "method_digest": _digest(method_payload),
+        "policy_digest": _digest(policy_payload),
+    }
+
+
+def host_capability_bridge_policy(
+    *,
+    toolbox_policy: Optional[Dict[str, Any]] = None,
+    host_capability_policy: Optional[Dict[str, Any]] = None,
+    bridge_policy: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build the explicit sandbox-to-provider bridge policy intersection.
+
+    A namespace is effectively allowed only when the explicit bridge policy and
+    both endpoint policies allow it. Missing bridge entries are denied.
+    """
+    toolbox = dict(toolbox_policy or {})
+    host_api = dict(host_capability_policy or {})
+    bridge = dict(bridge_policy or {})
+    namespace_names = sorted(
+        {
+            *_policy_namespace_names(toolbox),
+            *_policy_namespace_names(host_api),
+            *_policy_namespace_names(bridge),
+        }
+    )
+    effective = {
+        name: bool(_policy_namespace_allowed(bridge, name))
+        and bool(_policy_namespace_allowed(toolbox, name))
+        and bool(_policy_namespace_allowed(host_api, name))
+        for name in namespace_names
+    }
+    return {
+        "contract": HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT,
+        "mode": "explicit_intersection",
+        "namespaces": effective,
+        "inputs": {
+            "toolbox": {"namespaces": {name: bool(_policy_namespace_allowed(toolbox, name)) for name in namespace_names}},
+            "host_capability": {"namespaces": {name: bool(_policy_namespace_allowed(host_api, name)) for name in namespace_names}},
+            "bridge": {"namespaces": {name: bool(_policy_namespace_allowed(bridge, name)) for name in namespace_names}},
+        },
+    }
+
+
+def _policy_namespace_names(policy: Dict[str, Any]) -> set[str]:
+    names = {str(key or "").strip() for key in dict(policy.get("namespaces") or {}).keys()}
+    names.update(str(key or "").strip() for key in ("fs", "http", "state", "subprocess") if key in policy)
+    brokered = dict(policy.get("brokered_io") or {})
+    names.update(str(key or "").strip() for key in ("http", "subprocess") if key in brokered)
+    if "filesystem" in brokered:
+        names.add("fs")
+    return {name for name in names if name}
+
+
+def _policy_namespace_allowed(policy: Dict[str, Any], namespace: str) -> bool:
+    ns = _clean(namespace)
+    names = dict(policy.get("namespaces") or {})
+    if ns in names:
+        return bool(names.get(ns))
+    if ns in policy:
+        return bool(policy.get(ns))
+    brokered = dict(policy.get("brokered_io") or {})
+    if ns == "fs" and "filesystem" in brokered:
+        return bool(brokered.get("filesystem"))
+    if ns in brokered:
+        return bool(brokered.get(ns))
+    return False
 
 
 def extract_safe_correlation_metadata(*payloads: Any) -> Dict[str, Any]:
@@ -372,6 +517,12 @@ def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(payload or {})
     arguments = dict(row.get("arguments") or {})
     context = dict(row.get("context") or {})
+    descriptor = row.get("descriptor")
+    identity = dict(row.get("identity") or {})
+    digests = dict(row.get("digests") or {})
+    if descriptor and isinstance(descriptor, (HostCapabilityDescriptor, dict)):
+        identity = {**callable_surface_identity(descriptor, session_id=_clean(row.get("session_id"))), **identity}
+        digests = {**callable_surface_digests(descriptor), **digests}
     return {
         "contract": HOST_CAPABILITY_APPROVAL_CONTRACT,
         "approval_id": _clean(row.get("approval_id")),
@@ -382,9 +533,24 @@ def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
         "approval": dict(row.get("approval") or {}),
         "context": {
             key: context.get(key)
-            for key in ("workflow_id", "instance_id", "request_id", "package_id", "actor", "node_id", "cursor_id", "context_id")
+            for key in (
+                "workflow_id",
+                "instance_id",
+                "request_id",
+                "package_id",
+                "actor",
+                "node_id",
+                "cursor_id",
+                "context_id",
+                "branch_id",
+                "session_tree_id",
+                "session_id",
+                "toolbox_id",
+            )
             if context.get(key) is not None
         },
+        "identity": identity,
+        "digests": digests,
         "argument_keys": sorted(_clean(key) for key in arguments.keys() if _clean(key)),
         "correlation": extract_safe_correlation_metadata(row, context),
     }
@@ -417,14 +583,18 @@ def host_capability_approval_decision(
 __all__ = [
     "HOST_CALLABLE_SCHEMA_CONTRACT",
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",
+    "HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT",
     "HOST_CAPABILITY_PROVIDER_CALLBACK_NAME",
     "HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT",
     "HostCapabilityProviderCallbackRelay",
     "SAFE_CORRELATION_FIELDS",
     "bind_host_capability_provider_callback",
+    "callable_surface_digests",
+    "callable_surface_identity",
     "extract_safe_correlation_metadata",
     "host_capability_approval_decision",
     "host_capability_approval_request",
+    "host_capability_bridge_policy",
     "host_capability_descriptors_to_callable_schemas",
     "host_capability_provider_error",
     "host_capability_provider_success",
