@@ -6,6 +6,19 @@ Date: 2026-06-22
 
 No wire-level breaking change is pending for this slice. The following helper-level integration rules are available for clients that expose multiple hosted toolbox instances, Host Capability providers, or merged sandbox/model callable views.
 
+### Native Toolbox Metadata Boundary
+
+Toolbox metadata remains toolbox-owned. Host Capability descriptors are an adapter/export format, not native toolbox storage.
+
+Use `toolbox_to_callable_schemas(...)` when the client needs a sandbox/model-facing callable list directly from toolbox metadata. It preserves:
+
+- stable namespace-qualified method names;
+- hierarchical `group_path`;
+- visibility and gated/disabled state from `ToolsView`;
+- provider identity;
+- schema, method, and policy digests;
+- toolbox metadata such as original tool name, toolbox id, view id, mode, and constraints.
+
 ### Merged Callable Views
 
 Multiple provider sessions may expose the same bare method name. Do not merge them by name only.
@@ -22,6 +35,8 @@ Use the callable-surface helpers so each advertised method carries:
 - `policy_digest`
 
 `host_capability_descriptors_to_callable_schemas(...)` now rejects duplicate advertised callable names by default with `callable_surface_duplicate_name:<name>`. Resolve conflicts by using provider-specific namespaces/aliases before advertising the merged surface, or pass `conflict_policy="keep_first"` only when the caller explicitly wants first-provider wins behavior.
+
+For concurrent toolbox instances with overlapping tool names, prefer provider-specific namespaces such as `crm_a.lookup` and `crm_b.lookup` while preserving provider/session identity in the callable schema.
 
 ### Host-Side API Providers
 

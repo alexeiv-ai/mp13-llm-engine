@@ -230,6 +230,7 @@ def host_capability_descriptors_to_callable_schemas(
                 "contract": HOST_CALLABLE_SCHEMA_CONTRACT,
                 "name": row["name"],
                 "namespace": row["namespace"],
+                "group_path": list(row.get("group_path") or []),
                 "description": row.get("description", ""),
                 "arguments_schema": dict(row.get("args_schema") or {}),
                 "result_schema": dict(row.get("result_schema") or {}),
@@ -245,6 +246,37 @@ def host_capability_descriptors_to_callable_schemas(
             }
         )
     return out
+
+
+def toolbox_to_callable_schemas(
+    toolbox_description: Dict[str, Any],
+    *,
+    tools_view: Optional[Any] = None,
+    provider_id: str = "",
+    owner: str = "client",
+    visibility: str = "workflow",
+    namespace: str = "toolbox",
+    session_id: str = "",
+    include_hidden: bool = False,
+    include_disabled: bool = False,
+    conflict_policy: str = "error",
+) -> list[Dict[str, Any]]:
+    """Convert toolbox metadata directly to sandbox/model-facing callable schemas."""
+    descriptors = toolbox_to_host_capability_descriptors(
+        toolbox_description,
+        tools_view=tools_view,
+        provider_id=provider_id,
+        owner=owner,
+        visibility=visibility,
+        namespace=namespace,
+    )
+    return host_capability_descriptors_to_callable_schemas(
+        descriptors,
+        include_hidden=include_hidden,
+        include_disabled=include_disabled,
+        conflict_policy=conflict_policy,
+        session_id=session_id,
+    )
 
 
 def callable_surface_identity(
@@ -599,5 +631,6 @@ __all__ = [
     "host_capability_provider_error",
     "host_capability_provider_success",
     "normalize_host_capability_provider_response",
+    "toolbox_to_callable_schemas",
     "toolbox_to_host_capability_descriptors",
 ]

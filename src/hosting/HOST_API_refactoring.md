@@ -57,6 +57,8 @@ Clients should use high-level helpers and avoid raw provider session tokens or c
 - [x] Added `extract_safe_correlation_metadata(...)` for safe correlation propagation.
 - [x] Safe correlation metadata includes workflow, instance, node, request, cursor, context, branch, session-tree, session, toolbox, actor, provider, method, approval, host-call, and provider-call ids.
 - [x] Added callable-surface identity and digest helpers so merged views can preserve `provider_kind`, `provider_id`, `toolbox_id`, `session_id`, method, schema digest, method digest, and policy digest.
+- [x] Added direct `toolbox_to_callable_schemas(...)` adapter export for clients that need model/sandbox-facing callable schemas without making Host Capability descriptors native toolbox storage.
+- [x] Callable schemas include hierarchical `group_path` so native toolbox hierarchy can be exposed through the adapter boundary.
 - [x] Merged callable-schema conversion rejects duplicate advertised method names by default; clients must namespace/alias or explicitly choose first-provider wins behavior.
 - [x] Added explicit bridge-policy helper for intersecting toolbox policy, Host Capability caller policy, and bridge policy.
 
@@ -169,12 +171,8 @@ These items are intentionally outside the completed Host Capability pillar. They
   - Main risk: persistent JS contexts can leak globals, async jobs, host handles, or imported module state across actions unless cleanup policy is explicit.
   - Trigger to start: after JS runtime design accepts persistent context/module-cache ownership and defines the state cleanup contract.
 
-- [ ] Decide whether native toolbox metadata should directly adopt Host Capability group/namespace descriptors or continue using adapters.
+- [x] Decide native toolbox metadata should continue using adapters rather than directly adopting Host Capability descriptors.
   - Owning pillar: native toolbox metadata and discovery.
-  - Current state: callable-surface adapters convert toolbox descriptions and `ToolsView` rows into Host Capability descriptors without forcing toolbox internals to store descriptors natively.
-  - Decision options:
-    - Keep adapters: lower migration risk, but toolbox and Host Capability metadata remain separate source models.
-    - Adopt descriptors natively: fewer conversion layers, stronger namespace/group consistency, but broader toolbox metadata churn.
-  - Expected benefit of a decision: clearer ownership for hierarchy, permissions, visibility, gating, and callable schemas across toolbox and sandbox-facing discovery.
-  - Main risk: adopting descriptors natively before toolbox lifecycle work could force another metadata migration later.
-  - Trigger to decide: when the native toolbox hierarchy/groups feature is started.
+  - Decision: toolbox descriptions and `ToolsView` remain the native toolbox metadata model. Host Capability descriptors and callable schemas are adapter/export formats.
+  - Rationale: toolbox lifecycle, execution, install/config, storage, and policy semantics remain toolbox-specific. Descriptor adoption would create broad churn without improving the immediate client integration path.
+  - Implemented export behavior: `toolbox_to_callable_schemas(...)` emits namespace-qualified names, `group_path`, visibility/gating state, provider/session identity, digests, and toolbox metadata.

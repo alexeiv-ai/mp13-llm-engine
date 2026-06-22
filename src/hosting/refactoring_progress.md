@@ -243,6 +243,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 - [x] Decided not to force HostedToolbox brokered IO onto Host Capability dispatch as the default toolbox lifecycle direction.
 - [x] Added callable-surface identity and digest helpers for provider/session/method identity, schema digests, method digests, and policy digests.
+- [x] Decided native toolbox metadata remains toolbox-owned; Host Capability descriptors and callable schemas are adapter/export formats.
+- [x] Added direct `toolbox_to_callable_schemas(...)` adapter export with namespace-qualified names, `group_path`, visibility/gating state, identity, digests, and toolbox metadata.
 - [x] Made merged callable-schema conversion reject duplicate advertised names by default.
 - [x] Added explicit bridge-policy intersection helper for toolbox policy, Host Capability caller policy, and bridge policy.
 - [x] Expanded approval/correlation helper fields with session, toolbox, branch, session-tree, and provider-kind context.

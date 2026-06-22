@@ -14,6 +14,7 @@ from hosting.callable_surface import (
     host_capability_descriptors_to_callable_schemas,
     host_capability_provider_success,
     normalize_host_capability_provider_response,
+    toolbox_to_callable_schemas,
     toolbox_to_host_capability_descriptors,
 )
 from hosting.sandbox.host_capabilities import HostCapabilityProviderError
@@ -81,6 +82,7 @@ def test_host_capability_descriptors_to_callable_schemas_filters_disabled_and_hi
     assert visible[0]["contract"] == "hosting.sandbox.callable_schema.v1"
     assert "provider" in visible[0]
     assert "approval" in visible[0]
+    assert visible[0]["group_path"] == ["Tools"]
     assert visible[0]["identity"]["provider_kind"] == "toolbox_session"
     assert visible[0]["schema_digest"]
     assert visible[0]["method_digest"]
@@ -125,6 +127,58 @@ def test_callable_surface_identity_and_digests_are_stable() -> None:
     assert len(digests["schema_digest"]) == 64
     assert len(digests["method_digest"]) == 64
     assert len(digests["policy_digest"]) == 64
+
+
+def test_toolbox_to_callable_schemas_exports_adapter_metadata_without_native_migration() -> None:
+    schemas = toolbox_to_callable_schemas(
+        {
+            "toolbox_id": "support-tools",
+            "tool_metadata": {
+                "lookup": {
+                    "description": "Look up a ticket.",
+                    "group_path": ["Support", "Tickets"],
+                    "args_schema": {"type": "object", "properties": {"ticket_id": {"type": "string"}}},
+                }
+            },
+        },
+        tools_view={"advertised_tools": ["lookup"], "allowed_tools": ["lookup"]},
+        provider_id="provider-support",
+        namespace="support",
+        session_id="session-support",
+    )
+
+    assert schemas[0]["name"] == "support.lookup"
+    assert schemas[0]["group_path"] == ["Support", "Tickets"]
+    assert schemas[0]["identity"] == {
+        "provider_kind": "toolbox_session",
+        "provider_id": "provider-support",
+        "toolbox_id": "support-tools",
+        "session_id": "session-support",
+        "method": "support.lookup",
+    }
+    assert schemas[0]["schema_digest"]
+    assert schemas[0]["method_digest"]
+    assert schemas[0]["policy_digest"]
+
+
+def test_toolbox_callable_schemas_allow_overlapping_tools_with_provider_namespaces() -> None:
+    first = toolbox_to_callable_schemas(
+        {"toolbox_id": "crm-a", "advertised_tool_names": ["lookup"]},
+        provider_id="crm-a",
+        namespace="crm_a",
+        session_id="session-a",
+    )
+    second = toolbox_to_callable_schemas(
+        {"toolbox_id": "crm-b", "advertised_tool_names": ["lookup"]},
+        provider_id="crm-b",
+        namespace="crm_b",
+        session_id="session-b",
+    )
+
+    merged = [*first, *second]
+
+    assert [row["name"] for row in merged] == ["crm_a.lookup", "crm_b.lookup"]
+    assert [row["identity"]["session_id"] for row in merged] == ["session-a", "session-b"]
 
 
 def test_provider_callback_helper_validates_and_normalizes_responses() -> None:

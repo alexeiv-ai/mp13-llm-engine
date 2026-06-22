@@ -831,6 +831,7 @@ Work:
 - [x] Add capability descriptors to `host.describe` / `sandbox.describe`.
 - [x] Add callable-surface adapters between toolbox/`ToolsView` metadata and Host Capability descriptors.
 - [x] Add Host Capability descriptor-to-callable-schema helpers for sandbox/model-facing discovery.
+- [x] Add direct toolbox-to-callable-schema adapter export that preserves hierarchy, identity, visibility, approval metadata, constraints, and digests.
 - [x] Add stable callable-surface identity and schema/method/policy digests for approval reuse and merged-view conflict decisions.
 - [x] Make merged callable-schema conversion reject duplicate advertised names by default unless the caller explicitly chooses a conflict policy.
 - [x] Add explicit bridge-policy helper that intersects toolbox policy, Host Capability caller policy, and bridge policy.
@@ -957,10 +958,10 @@ The implementation phases above are complete except for the explicitly deferred 
 
 ### Native Toolbox Metadata
 
-- [ ] Decide whether native toolbox metadata should directly adopt Host Capability group/namespace descriptors or continue using adapters.
+- [x] Decide native toolbox metadata should continue using adapters rather than directly adopting Host Capability descriptors.
   - Current state: adapters convert toolbox/`ToolsView` metadata into Host Capability descriptors.
-  - Decision needed: keep adapters as the compatibility boundary or make Host Capability descriptors native toolbox metadata.
-  - Recommended timing: decide during the native toolbox hierarchy/groups feature, not in the completed Host API pillar.
+  - Decision: toolbox descriptions and `ToolsView` remain native toolbox metadata. Host Capability descriptors and callable schemas are adapter/export formats.
+  - Implemented export behavior: `toolbox_to_callable_schemas(...)` emits namespace-qualified names, `group_path`, visibility/gating state, provider/session identity, schema/method/policy digests, and toolbox metadata.
 
 ## Resolved Architecture Decisions
 
@@ -977,9 +978,6 @@ The implementation phases above are complete except for the explicitly deferred 
 
 Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The toolbox brokered IO decision is also closed for now: use shared callable-surface/bridge helpers, not forced runtime unification.
 
-The next high-leverage work is either:
-
-1. let the client integrate the callable-surface bridge helpers and conflict/approval policy rules; or
-2. start native toolbox hierarchy/groups work and decide whether toolbox metadata should stay adapter-based or adopt Host Capability descriptors natively.
+The next high-leverage work is to let the client integrate the callable-surface bridge helpers, adapter-based toolbox callable export, and conflict/approval policy rules.
 
 JS project-mode persistence and deeper instance recovery should stay behind explicit runtime/state design work because they affect cleanup, snapshot, and mutation semantics.
