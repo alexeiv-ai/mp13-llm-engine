@@ -2286,6 +2286,108 @@ def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(
     )["reason"] == "workflow_python_instance_not_found"
 
 
+def test_workflow_python_node_project_instance_requires_explicit_policy(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src" / "pkg").mkdir(parents=True)
+    (project_root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (project_root / "src" / "pkg" / "runner.py").write_text("def run(payload):\n    return {'output': payload}\n", encoding="utf-8")
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    request = {
+        "request_id": "req-node-project-instance-policy",
+        "execution_mode": "project",
+        "module_source": "",
+        "module_sha256": hashlib.sha256(b"").hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "project-digest",
+        "project": {"ref": "@project/src", "entrypoint": "pkg.runner", "callable": "run"},
+        "payload": {},
+    }
+
+    created = svc.workflow_python_instance_create(
+        instance_id="inst-project-policy",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request=request,
+    )
+
+    assert created["status"] == "error"
+    assert created["reason"] == "workflow_python_instance_project_policy_required"
+
+
+def test_workflow_python_node_project_instance_routes_with_isolated_process_state(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src" / "pkg").mkdir(parents=True)
+    (project_root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (project_root / "src" / "pkg" / "state.py").write_text("COUNTER = 0\n", encoding="utf-8")
+    (project_root / "src" / "pkg" / "runner.py").write_text(
+        "import os\n"
+        "import sys\n"
+        "from pkg import state\n\n"
+        "def run(payload):\n"
+        "    key = 'MP13_TEST_PROJECT_INSTANCE_ENV'\n"
+        "    env_before = os.environ.get(key, '')\n"
+        "    os.environ[key] = str(payload['value'])\n"
+        "    state.COUNTER += 1\n"
+        "    return {'output': {'pid': os.getpid(), 'env_before': env_before, 'counter': state.COUNTER, 'project_on_path': any(p.endswith('/src') or p.endswith('\\\\src') for p in sys.path)}}\n",
+        encoding="utf-8",
+    )
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    project_policy = {
+        "cwd": "reset",
+        "sys_path": "reset",
+        "env": "reset",
+        "import_cache": "clear_project_modules",
+    }
+    base_request = {
+        "execution_mode": "project",
+        "module_source": "",
+        "module_sha256": hashlib.sha256(b"").hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "project-digest",
+        "project": {"ref": "@project/src", "entrypoint": "pkg.runner", "callable": "run"},
+        "python": {"import_allowlist": ["os", "sys"], "project_instance_policy": project_policy},
+        "limits": {"timeout_ms": 2000},
+    }
+    sandbox_policy = {"sandbox": {"artifact_roots": {"project": str(project_root)}}}
+
+    created = svc.workflow_python_instance_create(
+        instance_id="inst-project",
+        sandbox_policy=sandbox_policy,
+        request={**base_request, "request_id": "req-node-project-create", "payload": {"value": "create"}},
+    )
+    first = svc.workflow_python_instance_execute(
+        instance_id="inst-project",
+        sandbox_policy=sandbox_policy,
+        request={**base_request, "request_id": "req-node-project-a", "payload": {"value": "a"}},
+    )
+    second = svc.workflow_python_instance_execute(
+        instance_id="inst-project",
+        sandbox_policy=sandbox_policy,
+        request={**base_request, "request_id": "req-node-project-b", "payload": {"value": "b"}},
+    )
+    closed = svc.workflow_python_instance_close(instance_id="inst-project")
+
+    assert created["status"] == "ok"
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"]["pid"] == created["pid"]
+    assert second["output"]["pid"] == created["pid"]
+    assert first["output"]["env_before"] == ""
+    assert second["output"]["env_before"] == ""
+    assert first["output"]["counter"] == 1
+    assert second["output"]["counter"] == 1
+    assert first["output"]["project_on_path"] is True
+    assert second["output"]["project_on_path"] is True
+    assert closed["closed"] is True
+
+
 def test_execute_workflow_python_node_routes_edited_code_to_new_revision_worker(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",

@@ -171,6 +171,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Kept snapshot/restore limited to explicit host-managed state, not arbitrary process memory.
 - [x] Added tests for instance partition snapshot/restore and daemon forwarding.
 
+### State And Long-Lived Instances Slice 18: Python Project Instance Policy
+
+- [x] Added an explicit Python project instance policy gate for pinned project-mode instances.
+- [x] Required `cwd=reset`, `sys_path=reset`, `env=reset`, and `import_cache=clear_project_modules`.
+- [x] Restored cwd, `sys.path`, and `os.environ` after every project request.
+- [x] Cleared project modules from `sys.modules` before and after project execution so module globals do not leak across calls.
+- [x] Added tests for required policy and same-process project routing with isolated env/import state.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -208,7 +216,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement explicit JS node instance create/execute/list/close APIs.
 - [x] Add snapshot/restore hooks for instance-local host-managed state.
 - [ ] Dependent clients should adopt explicit callable-session registration, callback relay bindings, and callable-surface helpers.
-- [ ] Decide and implement long-lived project-mode cwd/sys.path/env/import-cache policy.
+- [x] Decide and implement Python long-lived project-mode cwd/sys.path/env/import-cache policy.
+- [ ] Decide JS project-mode long-lived semantics.
+- [ ] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests after dependent clients complete migration.
 
 ## Verification
 

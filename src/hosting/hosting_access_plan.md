@@ -881,7 +881,11 @@ Work:
   - [x] Add `sandbox-state-snapshot` for scoped host-managed state partitions.
   - [x] Add `sandbox-state-restore` with `merge` and `replace` modes.
   - [x] Keep snapshots limited to explicit host-managed state, not arbitrary Python/JS process memory.
-- [ ] Make project mode long-lived only after cwd/sys.path/env/import-cache policy is explicit.
+- [x] Make Python project mode long-lived only after cwd/sys.path/env/import-cache policy is explicit.
+  - [x] Require `python.project_instance_policy` for pinned project instances.
+  - [x] Require cwd reset, `sys.path` reset, env reset, and project import-cache clearing.
+  - [x] Restore cwd, `sys.path`, env, and project modules after each project request.
+- [ ] Decide JS project-mode long-lived semantics separately because the current JS node worker pins the host worker process but creates a fresh QuickJS context per request.
 
 ### Phase 6: Action Manifest And Card Integration
 

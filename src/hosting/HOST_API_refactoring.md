@@ -125,6 +125,7 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [x] Python node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript worker runtime metadata now reports the host worker pid for routed live instances.
+- [x] Python project-mode pinned instances are allowed only with an explicit isolation policy that resets cwd, `sys.path`, env, and project import modules between calls.
 
 ## Test Maintenance
 
@@ -140,4 +141,6 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [ ] Rework HostedToolbox brokered IO on top of Host Capability dispatch if the later toolbox lifecycle pillar chooses that simplification.
 - [ ] Add card/action discovery and invocation on top of the same descriptor/callable-surface primitives.
 - [ ] Expand long-lived routable instance state recovery policies beyond the current snapshot/restore primitives.
+- [ ] Decide JS project-mode long-lived semantics separately because the current JS node worker pins the host process but creates a fresh QuickJS context per request.
 - [ ] Decide whether native toolbox metadata should directly adopt Host Capability group/namespace descriptors or continue using adapters.
+- [ ] After dependent clients have migrated, remove the diagnostic service-owned `fs.*` / `http.fetch` fallback path and the tests that exist only to cover it.

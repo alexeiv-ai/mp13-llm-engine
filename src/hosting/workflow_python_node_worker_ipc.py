@@ -41,6 +41,8 @@ SAFE_BUILTINS = {
     "Exception": Exception,
 }
 
+_PROJECT_MODULE_ROOTS: set[str] = set()
+
 
 def _detail_from_error(err: BaseException) -> Dict[str, Any]:
     tb = traceback.format_exception(type(err), err, err.__traceback__, limit=6)
@@ -91,6 +93,22 @@ def _make_importer(allowlist: list[str], project_roots: Optional[list[str]] = No
         return builtins.__import__(name, globals, locals, fromlist, level)
 
     return guarded_import
+
+
+def _module_file(module: Any) -> str:
+    raw = getattr(module, "__file__", None)
+    return os.path.abspath(str(raw or "")) if raw else ""
+
+
+def _clear_project_modules(*roots: str) -> None:
+    normalized_roots = {os.path.abspath(str(root or "")) for root in roots if str(root or "")}
+    normalized_roots.update(_PROJECT_MODULE_ROOTS)
+    if not normalized_roots:
+        return
+    for name, module in list(sys.modules.items()):
+        module_file = _module_file(module)
+        if module_file and any(_under_root(module_file, root) for root in normalized_roots):
+            sys.modules.pop(name, None)
 
 
 def _normalize_result(value: Any) -> Dict[str, Any]:
@@ -341,30 +359,45 @@ def _execute(conn: Any, req: Dict[str, Any]) -> int:
                         },
                     )
                     return 0
-                env = project.get("env") if isinstance(project.get("env"), dict) else {}
-                for key, val in env.items():
-                    if str(key or "").strip():
-                        os.environ[str(key)] = str(val)
-                sys.path.insert(0, project_root)
-                os.chdir(cwd)
-                module_name = str(project.get("entrypoint") or project.get("module") or "").strip()
-                callable_name = str(project.get("callable") or project.get("function") or export_name or "run").strip()
-                module = importlib.import_module(module_name)
-                fn = getattr(module, callable_name, None)
-                if not callable(fn):
-                    _send(
-                        conn,
-                        {
-                            "type": "error",
-                            "request_id": request_id,
-                            "reason": "workflow_sandbox_export_not_found",
-                            "detail": {"export_name": callable_name, "module": module_name},
-                            "stdout": stdout_io.getvalue(),
-                            "stderr": stderr_io.getvalue(),
-                        },
-                    )
-                    return 0
-                value = fn(payload)
+                old_cwd = os.getcwd()
+                old_sys_path = list(sys.path)
+                old_environ = dict(os.environ)
+                try:
+                    _clear_project_modules(project_root)
+                    env = project.get("env") if isinstance(project.get("env"), dict) else {}
+                    for key, val in env.items():
+                        if str(key or "").strip():
+                            os.environ[str(key)] = str(val)
+                    sys.path.insert(0, project_root)
+                    os.chdir(cwd)
+                    module_name = str(project.get("entrypoint") or project.get("module") or "").strip()
+                    callable_name = str(project.get("callable") or project.get("function") or export_name or "run").strip()
+                    module = importlib.import_module(module_name)
+                    fn = getattr(module, callable_name, None)
+                    if not callable(fn):
+                        _send(
+                            conn,
+                            {
+                                "type": "error",
+                                "request_id": request_id,
+                                "reason": "workflow_sandbox_export_not_found",
+                                "detail": {"export_name": callable_name, "module": module_name},
+                                "stdout": stdout_io.getvalue(),
+                                "stderr": stderr_io.getvalue(),
+                            },
+                        )
+                        return 0
+                    value = fn(payload)
+                finally:
+                    _clear_project_modules(project_root)
+                    _PROJECT_MODULE_ROOTS.add(os.path.abspath(project_root))
+                    sys.path[:] = old_sys_path
+                    os.environ.clear()
+                    os.environ.update(old_environ)
+                    try:
+                        os.chdir(old_cwd)
+                    except Exception:
+                        pass
             else:
                 exec(compile(source, "<workflow_python_node>", "exec"), globals_row, globals_row)
                 fn = globals_row.get(export_name)

@@ -479,10 +479,56 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         self._instances: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
+    def _execution_mode(request: Dict[str, Any]) -> str:
+        return _clean(request.get("execution_mode") or "module").lower() or "module"
+
+    @staticmethod
+    def _project_instance_policy(request: Dict[str, Any]) -> Dict[str, Any]:
+        py = dict(request.get("python") or {})
+        project = dict(request.get("project") or {})
+        raw = project.get("instance_policy")
+        if not isinstance(raw, dict):
+            raw = py.get("project_instance_policy")
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
+    @classmethod
+    def _project_instance_policy_error(cls, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if cls._execution_mode(request) != "project":
+            return None
+        policy = cls._project_instance_policy(request)
+        required = {
+            "cwd": "reset",
+            "sys_path": "reset",
+            "env": "reset",
+            "import_cache": "clear_project_modules",
+        }
+        if not policy:
+            return {
+                "ok": False,
+                "reason": "workflow_python_instance_project_policy_required",
+                "detail": {"required": required},
+            }
+        mismatched = {key: {"expected": value, "actual": policy.get(key)} for key, value in required.items() if _clean(policy.get(key)) != value}
+        if mismatched:
+            return {
+                "ok": False,
+                "reason": "workflow_python_instance_project_policy_invalid",
+                "detail": {"required": required, "mismatched": mismatched},
+            }
+        return None
+
+    @classmethod
+    def _project_instance_policy_key(cls, request: Dict[str, Any]) -> str:
+        if cls._execution_mode(request) != "project":
+            return ""
+        policy = cls._project_instance_policy(request)
+        return ",".join(f"{key}={_clean(policy.get(key))}" for key in sorted(policy.keys()))
+
+    @staticmethod
     def _runtime_key(request: Dict[str, Any], executable: str) -> str:
         py = dict(request.get("python") or {})
         environment_key = _clean(request.get("environment_key")) or _clean(py.get("environment_key")) or _clean(py.get("environment_name")) or "workflow-python-node"
-        execution_mode = _clean(request.get("execution_mode") or "module").lower() or "module"
+        execution_mode = WorkflowPythonNodeRuntimeRegistry._execution_mode(request)
         code_revision = _clean(request.get("code_revision")) or _clean(request.get("module_sha256")).lower() or _sha256_text(str(request.get("module_source") or ""))
         package_revision = _clean(request.get("package_source_digest"))
         return "|".join(
@@ -493,6 +539,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 execution_mode,
                 code_revision,
                 package_revision,
+                WorkflowPythonNodeRuntimeRegistry._project_instance_policy_key(request),
             ]
         )
 
@@ -503,7 +550,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
 
     @staticmethod
     def _warm_reusable(request: Dict[str, Any]) -> bool:
-        return _clean(request.get("execution_mode") or "module").lower() != "project"
+        return WorkflowPythonNodeRuntimeRegistry._execution_mode(request) != "project"
 
     @staticmethod
     def _child_request(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -538,8 +585,9 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         validation_error = self._validate_module_identity(child_req)
         if validation_error is not None:
             return {"status": "error", **validation_error}
-        if not self._warm_reusable(child_req):
-            return {"status": "error", "ok": False, "reason": "workflow_python_instance_project_mode_unsupported"}
+        project_policy_error = self._project_instance_policy_error(child_req)
+        if project_policy_error is not None:
+            return {"status": "error", **project_policy_error}
         executable = _clean(python_executable) or _python_executable_from_request(child_req)
         runtime_key = self._runtime_key(child_req, executable)
         iid = _clean(instance_id) or f"pyinst_{secrets.token_urlsafe(18)}"
@@ -761,6 +809,10 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         validation_error = self._validate_module_identity(req)
         if validation_error is not None:
             return validation_error
+        if instance_id:
+            project_policy_error = self._project_instance_policy_error(req)
+            if project_policy_error is not None:
+                return project_policy_error
         limits = dict(req.get("limits") or {})
         timeout_ms = max(1, min(int(limits.get("timeout_ms") or 5000), 300000))
         child_req = {**self._child_request(req), "request_id": request_id}
