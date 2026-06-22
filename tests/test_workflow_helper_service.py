@@ -1132,6 +1132,7 @@ def test_execute_workflow_js_node_reads_and_writes_declared_artifacts(tmp_path: 
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
     write_source = """
 exports.run = function(input, api) {
   api.fs.writeText("seed", "", "seed text");
@@ -1148,6 +1149,7 @@ exports.run = function(input, api) {
 
     written = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-artifact-write",
             "module_source": write_source,
@@ -1161,6 +1163,7 @@ exports.run = function(input, api) {
     )
     read = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-artifact-read",
             "module_source": read_source,
@@ -1188,6 +1191,7 @@ def test_execute_workflow_js_node_async_host_call_uses_broker(tmp_path: Path) ->
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
     write_source = """
 exports.run = function(input, api) {
   api.fs.writeText("seed", "", "async seed");
@@ -1203,6 +1207,7 @@ exports.run = async function(input, api) {
 
     written = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-async-artifact-write",
             "module_source": write_source,
@@ -1216,6 +1221,7 @@ exports.run = async function(input, api) {
     )
     read = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-async-host-call",
             "module_source": read_source,
@@ -1238,6 +1244,7 @@ def test_execute_workflow_js_node_artifact_fs_list_stat_and_mkdir(tmp_path: Path
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
     source = """
 exports.run = function(input, api) {
   api.fs.mkdir("report", "nested");
@@ -1250,6 +1257,7 @@ exports.run = function(input, api) {
 
     out = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-artifact-fs",
             "module_source": source,
@@ -1271,6 +1279,7 @@ def test_execute_workflow_js_node_enforces_artifact_root_permissions(tmp_path: P
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    fallback_policy = {"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}}
     write_seed = """
 exports.run = function(input, api) {
   api.fs.writeText("seed", "", "seed text");
@@ -1291,6 +1300,7 @@ exports.run = function(input, api) {
 """
     seed = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-root-seed",
             "module_source": write_seed,
@@ -1304,6 +1314,7 @@ exports.run = function(input, api) {
     )
     input_write = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-root-readonly",
             "module_source": write_input,
@@ -1317,6 +1328,7 @@ exports.run = function(input, api) {
     )
     escaped = svc.execute_workflow_js(
         profile="node",
+        sandbox_policy=fallback_policy,
         request={
             "request_id": "req-js-root-escape",
             "module_source": escape_output,
@@ -1369,6 +1381,7 @@ exports.run = function(input, api) {
         sandbox_policy={
             "sandbox": {
                 "enabled": True,
+                "host_api": {"service_owned_fallback_enabled": True},
                 "network": {"mode": "brokered_only"},
                 "brokered_io": {"http": True},
             }
@@ -1495,6 +1508,7 @@ exports.run = function(input, api) {
 
     opened = svc.workflow_js_stream_open(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-js-stream-ok",
             "module_source": source,
