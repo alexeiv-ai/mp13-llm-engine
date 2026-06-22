@@ -120,6 +120,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Changed service-owned `fs.*` / `http.fetch` fallback from implicit default to explicit opt-in diagnostics.
 - [x] Kept fallback audit/log marker coverage for explicitly enabled fallback calls.
 
+### Host Capability Slice 13: Scoped Approval Grants
+
+- [x] Added broker-local scoped approval grants for `add_to_scope` decisions.
+- [x] Kept `allow_once` as a one-call approval with no reusable grant.
+- [x] Matched reusable approval grants by method, provider, actor, scope requirements, and optional argument constraints.
+- [x] Added grant TTL support from decision `ttl_seconds` or descriptor approval TTL.
+- [x] Emitted approval/audit records for reused scoped grants.
+
 ### Slice 1: Workflow Event Subscribe Cleanup
 
 - [x] Added `HostedProcessSandboxBase.event_subscribe(...)` as the canonical workflow subscription read API.
@@ -151,6 +159,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Implement callable-surface primitives requested by the dependent client team.
 - [x] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers.
 - [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
+- [x] Implement scoped `add_to_scope` approval reuse for Host Capability calls.
 - [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
 
 ## Verification
@@ -172,3 +181,4 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "host_capability_audit or service_owned_fallback"`
 - [x] `python -m pytest tests/test_host_capabilities.py tests/test_hosting_daemon_acl.py -q -k "host_capability"`
 - [x] `python -m pytest tests/test_callable_surface.py tests/test_host_capabilities.py tests/test_engine_host_channel.py tests/test_workflow_helper_service.py tests/test_hosting_daemon_acl.py -q -k "callable_surface or host_capability or service_owned_fallback or daemon_dispatches_workflow or host_api"`
+- [x] `python -m pytest tests/test_host_capabilities.py -q`

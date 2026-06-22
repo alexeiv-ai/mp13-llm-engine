@@ -604,3 +604,97 @@ def test_host_capability_broker_requires_approval_requester_for_gated_call() -> 
     assert len(audit_records) == 1
     assert audit_records[0]["result"] == "denied"
     assert audit_records[0]["reason"] == "approval_requester_unavailable"
+
+
+def test_host_capability_broker_approval_allow_once_does_not_create_scope_grant() -> None:
+    approval_requests: list[dict] = []
+    provider_calls: list[dict] = []
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.read_sensitive",
+        namespace="crm",
+        group_path=["CRM"],
+        scope_requirements=[{"scope": "crm.customer", "access": "read_sensitive"}],
+        approval=HostCapabilityApproval(mode="always"),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+
+    def approve(request: dict) -> dict:
+        approval_requests.append(dict(request))
+        return {"decision": "allow_once", "approved": True}
+
+    def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        provider_calls.append(call.to_dict())
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"ok": True}}
+
+    broker = HostCapabilityBroker(workflow_id="wf-1", provider_invoker=invoke_provider, approval_requester=approve)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    assert broker.dispatch({"method": descriptor.name, "arguments": {"customer_id": "c-1"}}) == {"ok": True}
+    assert broker.dispatch({"method": descriptor.name, "arguments": {"customer_id": "c-1"}}) == {"ok": True}
+
+    assert len(approval_requests) == 2
+    assert len(provider_calls) == 2
+
+
+def test_host_capability_broker_approval_add_to_scope_reuses_matching_grant() -> None:
+    approval_requests: list[dict] = []
+    provider_calls: list[dict] = []
+    events: list[tuple[str, dict]] = []
+    audit_records: list[dict] = []
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.read_sensitive",
+        namespace="crm",
+        group_path=["CRM"],
+        scope_requirements=[{"scope": "crm.customer", "access": "read_sensitive"}],
+        approval=HostCapabilityApproval(mode="always", ttl_seconds=60),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+
+    def approve(request: dict) -> dict:
+        approval_requests.append(dict(request))
+        return {
+            "decision": "add_to_scope",
+            "approved": True,
+            "scope_constraints": {"customer_id": dict(request.get("arguments") or {}).get("customer_id")},
+        }
+
+    def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        provider_calls.append(call.to_dict())
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"customer_id": call.arguments["customer_id"]}}
+
+    broker = HostCapabilityBroker(
+        workflow_id="wf-1",
+        provider_invoker=invoke_provider,
+        approval_requester=approve,
+        event_emitter=lambda kind, payload: events.append((kind, payload)),
+        audit_emitter=lambda payload: audit_records.append(dict(payload)),
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    assert broker.dispatch({"method": descriptor.name, "arguments": {"customer_id": "c-1"}}) == {"customer_id": "c-1"}
+    assert broker.dispatch({"method": descriptor.name, "arguments": {"customer_id": "c-1"}}) == {"customer_id": "c-1"}
+    assert broker.dispatch({"method": descriptor.name, "arguments": {"customer_id": "c-2"}}) == {"customer_id": "c-2"}
+
+    assert len(approval_requests) == 2
+    assert [call["arguments"]["customer_id"] for call in provider_calls] == ["c-1", "c-1", "c-2"]
+    assert any(kind == "approval" and payload["status"] == "reused" for kind, payload in events)
+    assert [row["result"] for row in audit_records] == ["approved", "reused", "approved"]
+    assert audit_records[0]["decision"]["grant"]["constraints"] == {"customer_id": "c-1"}

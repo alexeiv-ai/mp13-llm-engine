@@ -856,10 +856,12 @@ Goal: reuse toolbox-style gating for host capabilities.
 
 Work:
 
-- Add scope refs and approval policies to capability descriptors.
-- Route approvals to user-facing client process.
-- Record approval decisions with TTL and audit.
-- Preserve sandbox-visible denial errors.
+- [x] Add scope refs and approval policies to capability descriptors.
+- [x] Route approvals to user-facing client process.
+- [x] Record approval decisions with TTL and audit.
+- [x] Preserve sandbox-visible denial errors.
+- [x] Make `allow_once` one-call only.
+- [x] Make `add_to_scope` create a scoped broker grant that can skip later approvals for matching method, provider, actor, scope requirements, and optional argument constraints.
 
 ### Phase 5: State And Long-Lived Instances
 

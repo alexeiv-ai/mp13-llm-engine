@@ -488,3 +488,7 @@ Goal: expose reusable parent-owned primitives so dependent clients can model san
 - [x] Request dependent-client adoption after this follow-up breaking-change slice is implemented, documented, and committed.
 - [x] Complete toolbox-backed provider callback runtime so a hosted toolbox session can be both described and executed through the same Host Capability/callable-surface protocol.
 - [x] Remove implicit `fs.*` / `http.fetch` fallback registration from workflow node dispatch. The fallback remains only as explicit opt-in diagnostics with audit/log markers.
+- [x] Implement concrete approval decision semantics:
+  - `deny` rejects the current call
+  - `allow_once` approves only the current call
+  - `add_to_scope` records a scoped grant with optional argument constraints and TTL for later matching calls

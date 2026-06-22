@@ -12,6 +12,10 @@ This slice adds reusable Host Capability + Toolbox callable-surface helpers and 
 - Use `host_capability_session_list_filtered(...)` and `host_capability_session_close_filtered(...)` for workflow/instance/request/consumer/provider/owner/method scoped lifecycle operations.
 - Use `bind_host_capability_provider_callback(...)`, `host_capability_provider_success(...)`, and `host_capability_provider_error(...)` to hide raw `hosting.sandbox.host_capability_call.v1` response handling.
 - Use `host_capability_approval_request(...)` and `host_capability_approval_decision(...)` for approval bridge payloads.
+- Approval decisions now have concrete broker semantics:
+  - `deny` rejects the current call.
+  - `allow_once` approves only the current call.
+  - `add_to_scope` creates a scoped grant reused for later matching calls in the same broker/request context.
 - Use `host_capability_audit_list(...)` for filtered Host Capability audit reads instead of parsing merged control state.
 - Use `host_capability_session_register_toolbox(...)` to register hosted toolbox descriptors as a `toolbox_session` provider. The registered methods now execute through the existing toolbox harness.
 

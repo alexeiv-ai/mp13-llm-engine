@@ -394,6 +394,7 @@ class HostCapabilityBroker:
         self.event_emitter = event_emitter
         self.audit_emitter = audit_emitter
         self._sessions: Dict[str, HostCapabilitySession] = {}
+        self._approval_grants: list[Dict[str, Any]] = []
 
     def cancel(self, reason: str = "host_call_canceled") -> None:
         self._cancel_requested = True
@@ -498,6 +499,101 @@ class HostCapabilityBroker:
         mode = _clean(method.descriptor.approval.mode).lower()
         return bool(mode and mode != "none")
 
+    @staticmethod
+    def _scope_requirement_keys(method: HostCapabilityMethod) -> list[str]:
+        out: list[str] = []
+        for item in list(method.descriptor.scope_requirements or []):
+            row = dict(item or {})
+            scope = _clean(row.get("scope"))
+            access = _clean(row.get("access"))
+            if scope and access:
+                out.append(f"{scope}:{access}")
+            elif scope:
+                out.append(scope)
+        return sorted(out)
+
+    @staticmethod
+    def _decision_scope_constraints(row: Dict[str, Any]) -> Dict[str, Any]:
+        constraints = row.get("scope_constraints")
+        if constraints is None:
+            constraints = row.get("constraints")
+        if not isinstance(constraints, dict):
+            return {}
+        if isinstance(constraints.get("arguments"), dict):
+            return dict(constraints.get("arguments") or {})
+        return dict(constraints or {})
+
+    @staticmethod
+    def _constraints_match(arguments: Dict[str, Any], constraints: Dict[str, Any]) -> bool:
+        args = dict(arguments or {})
+        for key, expected in dict(constraints or {}).items():
+            if key not in args or args.get(key) != expected:
+                return False
+        return True
+
+    def _approval_grant_matches(
+        self,
+        *,
+        session: HostCapabilitySession,
+        method: HostCapabilityMethod,
+        provider_call: HostCapabilityProviderCall,
+    ) -> Optional[Dict[str, Any]]:
+        now_ms = int(time.time() * 1000)
+        scope_keys = self._scope_requirement_keys(method)
+        for grant in list(self._approval_grants):
+            expires_at_ms = grant.get("expires_at_ms")
+            if expires_at_ms is not None and int(expires_at_ms or 0) <= now_ms:
+                continue
+            if _clean(grant.get("method")) != provider_call.method:
+                continue
+            if _clean(grant.get("provider_id")) != _clean(session.session_id):
+                continue
+            if _clean(grant.get("actor")) != _clean(session.owner):
+                continue
+            if list(grant.get("scope_requirements") or []) != scope_keys:
+                continue
+            if not self._constraints_match(provider_call.arguments, dict(grant.get("constraints") or {})):
+                continue
+            return dict(grant)
+        return None
+
+    def _remember_approval_grant(
+        self,
+        *,
+        approval_id: str,
+        session: HostCapabilitySession,
+        method: HostCapabilityMethod,
+        provider_call: HostCapabilityProviderCall,
+        decision: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        ttl_raw = decision.get("ttl_seconds")
+        ttl_seconds = int(ttl_raw) if ttl_raw is not None else int(method.descriptor.approval.ttl_seconds or 0)
+        now_ms = int(time.time() * 1000)
+        grant = {
+            "approval_id": _clean(approval_id),
+            "method": provider_call.method,
+            "provider_id": session.session_id,
+            "provider_kind": session.provider_kind,
+            "actor": session.owner,
+            "scope_requirements": self._scope_requirement_keys(method),
+            "constraints": self._decision_scope_constraints(decision),
+            "created_at_ms": now_ms,
+            "expires_at_ms": now_ms + ttl_seconds * 1000 if ttl_seconds > 0 else None,
+        }
+        self._approval_grants = [
+            row
+            for row in self._approval_grants
+            if not (
+                _clean(row.get("method")) == grant["method"]
+                and _clean(row.get("provider_id")) == grant["provider_id"]
+                and _clean(row.get("actor")) == grant["actor"]
+                and list(row.get("scope_requirements") or []) == grant["scope_requirements"]
+                and dict(row.get("constraints") or {}) == grant["constraints"]
+            )
+        ]
+        self._approval_grants.append(grant)
+        return grant
+
     async def _request_approval(
         self,
         *,
@@ -527,6 +623,22 @@ class HostCapabilityBroker:
                 "visibility": session.visibility,
             },
         }
+        existing_grant = self._approval_grant_matches(session=session, method=method, provider_call=provider_call)
+        if existing_grant is not None:
+            self._emit_audit({**audit_base, "result": "reused", "reason": None, "decision": {"decision": "add_to_scope", "grant": existing_grant}})
+            self._emit_event(
+                "approval",
+                {
+                    "status": "reused",
+                    "call_id": call_id,
+                    "host_call_id": _clean(host_call_id) or None,
+                    "approval_id": _clean(existing_grant.get("approval_id")) or approval_id,
+                    "provider_call_id": provider_call.provider_call_id,
+                    "method": provider_call.method,
+                    "decision": {"decision": "add_to_scope", "grant": existing_grant},
+                },
+            )
+            return
         if self.approval_requester is None:
             self._emit_audit({**audit_base, "result": "denied", "reason": "approval_requester_unavailable"})
             raise HostCapabilityApprovalDenied(
@@ -558,7 +670,8 @@ class HostCapabilityBroker:
             decision = await decision
         row = dict(decision or {})
         status = _clean(row.get("status")).lower()
-        approved = bool(row.get("approved", status in {"ok", "approved"}))
+        decision_name = _clean(row.get("decision")).lower()
+        approved = bool(row.get("approved", status in {"ok", "approved"} or decision_name in {"allow_once", "add_to_scope"}))
         if not approved or status in {"denied", "rejected", "error"}:
             self._emit_audit(
                 {
@@ -589,6 +702,15 @@ class HostCapabilityBroker:
                     "decision": row,
                 },
             )
+        if decision_name == "add_to_scope":
+            grant = self._remember_approval_grant(
+                approval_id=approval_id,
+                session=session,
+                method=method,
+                provider_call=provider_call,
+                decision=row,
+            )
+            row = {**row, "grant": grant}
         self._emit_audit({**audit_base, "result": "approved", "reason": None, "decision": row})
         self._emit_event(
             "approval",
