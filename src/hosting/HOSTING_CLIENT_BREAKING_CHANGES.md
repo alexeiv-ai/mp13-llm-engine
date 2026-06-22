@@ -2,7 +2,7 @@
 
 Date: 2026-06-21
 
-This slice adds reusable Host Capability + Toolbox callable-surface helpers. It keeps the existing service-owned `fs.*` / `http.fetch` fallback enabled by default for migration, but clients should move to explicit Host Capability sessions.
+This slice adds reusable Host Capability + Toolbox callable-surface helpers and removes implicit service-owned `fs.*` / `http.fetch` registration from workflow node dispatch. Clients must register callable sessions explicitly when sandbox code expects those methods.
 
 ## Client Actions
 
@@ -13,26 +13,26 @@ This slice adds reusable Host Capability + Toolbox callable-surface helpers. It 
 - Use `bind_host_capability_provider_callback(...)`, `host_capability_provider_success(...)`, and `host_capability_provider_error(...)` to hide raw `hosting.sandbox.host_capability_call.v1` response handling.
 - Use `host_capability_approval_request(...)` and `host_capability_approval_decision(...)` for approval bridge payloads.
 - Use `host_capability_audit_list(...)` for filtered Host Capability audit reads instead of parsing merged control state.
-- Use `host_capability_session_register_toolbox(...)` to register hosted toolbox descriptors as a `toolbox_session` provider. Execution through the toolbox harness remains a follow-up item; this helper currently registers the callable surface.
+- Use `host_capability_session_register_toolbox(...)` to register hosted toolbox descriptors as a `toolbox_session` provider. The registered methods now execute through the existing toolbox harness.
 
 ## Built-In Migration Path
 
-- Service-owned `fs.*` / `http.fetch` fallback remains enabled by default during migration.
-- Clients can disable it per request policy with:
+- Service-owned `fs.*` / `http.fetch` fallback is no longer enabled by default.
+- Clients should register known broker-supported methods with `host_capability_session_register_known_methods(...)` or custom client-owned implementations.
+- A diagnostic fallback can be explicitly enabled per request policy with:
 
 ```json
 {
   "sandbox": {
     "host_api": {
-      "service_owned_fallback_enabled": false
+      "service_owned_fallback_enabled": true
     }
   }
 }
 ```
 
 - When the fallback is used, hosting now records `host_capability_service_fallback_used` audit rows and emits a warning log event.
-- Clients should explicitly register known broker-supported methods with `host_capability_session_register_known_methods(...)` or custom client-owned implementations before disabling the fallback.
-- After dependent clients migrate, the implicit service-owned fallback will be removed from workflow node dispatch.
+- Treat the fallback as diagnostics only; do not rely on it for normal workflow execution.
 
 ## Correlation
 

@@ -94,7 +94,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added explicit `allow_override` registration flag.
 - [x] Changed duplicate fully-qualified method registration to fail by default with `host_capability_duplicate_method:<method>`.
 - [x] Removed built-in precedence from broker method resolution; explicit override now wins.
-- [x] Documented that dependent clients should adopt known-method registration before the remaining service-owned fallback is removed.
+- [x] Documented that dependent clients should adopt known-method registration because service-owned fallback is no longer implicit.
 
 ### Host Capability Slice 11: Callable Surface Primitives
 
@@ -106,9 +106,19 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Added safe correlation metadata propagation helpers.
 - [x] Added `EngineHostControlChannel.host_capability_session_upsert(...)`, filtered list/close helpers, and `host_capability_session_register_toolbox(...)`.
 - [x] Added public filtered Host Capability audit reads through `host_capability_audit_list(...)`.
-- [x] Made service-owned `fs.*` / `http.fetch` fallback disableable by `sandbox.host_api.service_owned_fallback_enabled=false`.
+- [x] Made service-owned `fs.*` / `http.fetch` fallback opt-in by `sandbox.host_api.service_owned_fallback_enabled=true`.
 - [x] Added audit/log diagnostics for service-owned fallback use.
 - [x] Updated `HOST_API_refactoring.md`, `hosting_access_plan.md`, and `HOSTING_CLIENT_BREAKING_CHANGES.md`.
+
+### Host Capability Slice 12: Toolbox Session Execution And Fallback Removal
+
+- [x] Threaded daemon-owned Host Capability sessions into workflow Python/JS execute and stream-open paths.
+- [x] Registered visible provider sessions with the node Host Capability broker for request/workflow/instance/consumer scoped discovery and dispatch.
+- [x] Added toolbox-session provider invocation through the existing `toolbox_execute(...)` harness.
+- [x] Normalized toolbox `tool_call.result` JSON into sandbox-facing `host.call(...)` results.
+- [x] Added private `toolbox_harness` binding support for `toolbox_session` providers.
+- [x] Changed service-owned `fs.*` / `http.fetch` fallback from implicit default to explicit opt-in diagnostics.
+- [x] Kept fallback audit/log marker coverage for explicitly enabled fallback calls.
 
 ### Slice 1: Workflow Event Subscribe Cleanup
 
@@ -139,9 +149,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Original Host Capability Protocol implementation checklist is complete.
 - [x] Implement the follow-up breaking-change slice that exposes known broker-supported method registration through hosting client helpers.
 - [x] Implement callable-surface primitives requested by the dependent client team.
+- [x] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers.
+- [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
 - [ ] Dependent clients should adopt explicit callable-session registration and callable-surface helpers.
-- [ ] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers.
-- [ ] After dependent-client adoption, remove the remaining service-owned `fs.*` / `http.fetch` fallback and then reset `HOSTING_CLIENT_BREAKING_CHANGES.md` for future phases.
 
 ## Verification
 
@@ -161,3 +171,4 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m pytest tests/test_callable_surface.py tests/test_engine_host_channel.py -q -k "callable_surface or host_capability"`
 - [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "host_capability_audit or service_owned_fallback"`
 - [x] `python -m pytest tests/test_host_capabilities.py tests/test_hosting_daemon_acl.py -q -k "host_capability"`
+- [x] `python -m pytest tests/test_callable_surface.py tests/test_host_capabilities.py tests/test_engine_host_channel.py tests/test_workflow_helper_service.py tests/test_hosting_daemon_acl.py -q -k "callable_surface or host_capability or service_owned_fallback or daemon_dispatches_workflow or host_api"`

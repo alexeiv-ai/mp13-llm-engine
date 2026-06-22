@@ -2253,13 +2253,19 @@ class EngineHostControlChannel:
         )
         methods = [descriptor.to_dict() for descriptor in descriptors]
         register = self.host_capability_session_upsert if upsert else self.host_capability_session_register
+        binding_payload = dict(binding or {})
+        binding_payload.setdefault("transport", "toolbox_harness")
+        binding_payload.setdefault("engine_id", str(engine_id or "").strip())
+        binding_payload.setdefault("toolbox_id", str(toolbox_id or "").strip())
+        if isinstance(tools_view, dict):
+            binding_payload.setdefault("tools_view", dict(tools_view or {}))
         return register(
             methods=methods,
             scope=scope,
             session_id=session_id,
             provider_kind="toolbox_session",
             visibility=visibility,
-            binding=binding,
+            binding=binding_payload,
             close_on_client_disconnect=close_on_client_disconnect,
             expires_at_ms=expires_at_ms,
             allow_override=allow_override,

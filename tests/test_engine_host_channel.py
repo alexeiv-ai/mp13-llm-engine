@@ -702,6 +702,54 @@ def test_host_capability_audit_list_helper_forwards_filters() -> None:
     )
 
 
+def test_host_capability_register_toolbox_helper_adds_toolbox_binding() -> None:
+    class FakeToolboxConn(_FakeConn):
+        def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+            p = dict(payload or {})
+            self.calls.append((cmd, p))
+            if cmd == "toolbox-describe":
+                return {
+                    "status": "ok",
+                    "toolbox_id": "tb-1",
+                    "all_registered_tool_names": ["hello_tool"],
+                    "allowed_tool_names": ["hello_tool"],
+                    "advertised_tool_names": ["hello_tool"],
+                    "tool_metadata": {"hello_tool": {"description": "Say hello."}},
+                }
+            if cmd == "host-capability-session-list":
+                return {"status": "ok", "sessions": []}
+            if cmd == "host-capability-session-register":
+                return {"status": "ok", "session": {"session_id": p["session_id"]}}
+            return {}
+
+    fake = FakeToolboxConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    ch.host_capability_session_register_toolbox(
+        toolbox_id="tb-1",
+        session_id="tb-session",
+        scope={"workflow_id": "wf-1"},
+        tools_view={"allowed_tools": ["hello_tool"]},
+        namespace="tools",
+    )
+
+    register_payload = fake.calls[-1][1]
+    assert [cmd for cmd, _payload in fake.calls] == [
+        "toolbox-describe",
+        "host-capability-session-list",
+        "host-capability-session-register",
+    ]
+    assert register_payload["provider_kind"] == "toolbox_session"
+    assert register_payload["binding"] == {
+        "transport": "toolbox_harness",
+        "engine_id": "",
+        "toolbox_id": "tb-1",
+        "tools_view": {"allowed_tools": ["hello_tool"]},
+    }
+    assert register_payload["methods"][0]["name"] == "tools.hello_tool"
+
+
 def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})

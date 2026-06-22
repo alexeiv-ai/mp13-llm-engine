@@ -374,7 +374,7 @@ Goal: expose reusable parent-owned primitives so dependent clients can model san
 
 - [x] Parent owns generic contracts, descriptor conversion, transport/session lifecycle helpers, callback envelope helpers, approval/audit hooks, and safe correlation propagation.
 - [x] Parent does not own workflow graph progression, approval cards/UI state, workspace-scoped durable approval decisions, or session-tree branch semantics.
-- [x] Do not remove service-owned `fs.*` / `http.fetch` immediately. Keep them as a migration fallback that can be disabled by policy and emits a diagnostic/audit marker when used.
+- [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from new workflow node dispatch. Keep the service fallback as an explicit opt-in diagnostic path only.
 - [x] Preserve worker-side `api.fs` / `api.http` convenience wrappers as callers of advertised Host Capability methods; wrappers must not imply the methods exist.
 
 ### Implementation Checklist For This Extension
@@ -399,10 +399,10 @@ Goal: expose reusable parent-owned primitives so dependent clients can model san
   - filtered close helpers using sanitized public session rows
 - [x] Add filtered Host Capability audit reads through `host_capability_audit_list(...)`.
 - [x] Add toolbox-as-provider registration helper that converts `toolbox_describe(...)` output plus optional `ToolsView` into a `toolbox_session` provider session.
-- [x] Make service-owned `fs.*` / `http.fetch` fallback explicitly disableable with `sandbox.host_api.service_owned_fallback_enabled=false`.
+- [x] Make service-owned `fs.*` / `http.fetch` fallback explicitly opt-in with `sandbox.host_api.service_owned_fallback_enabled=true`.
 - [x] Emit `host_capability_service_fallback_used` audit rows and log diagnostics when the service-owned fallback provider handles a call.
-- [ ] Complete provider callback runtime transport for toolbox-backed provider sessions so `toolbox_session` registration can execute through the existing toolbox execution harness instead of only registering descriptors.
-- [ ] Once dependent clients have migrated to callable-session owned registration, remove implicit service-owned fallback from workflow node dispatch.
+- [x] Complete provider callback runtime transport for toolbox-backed provider sessions so `toolbox_session` registration executes through the existing toolbox execution harness.
+- [x] Remove implicit service-owned fallback from workflow node dispatch; fallback is no longer registered unless explicitly requested by policy.
 
 ## Implementation Checklist
 
@@ -486,5 +486,5 @@ Goal: expose reusable parent-owned primitives so dependent clients can model san
 - [x] Make namespace hierarchy the canonical capability hierarchy and derive presentation groups from namespace where possible.
 - [x] Keep approval reuse explicit through scoped grants rather than an implicit broker cache.
 - [x] Request dependent-client adoption after this follow-up breaking-change slice is implemented, documented, and committed.
-- [ ] Complete toolbox-backed provider callback runtime so a hosted toolbox session can be both described and executed through the same Host Capability/callable-surface protocol.
-- [ ] After dependent-client adoption of explicit callable-session registration, remove the remaining service-owned `fs.*` / `http.fetch` fallback registration from workflow node dispatch.
+- [x] Complete toolbox-backed provider callback runtime so a hosted toolbox session can be both described and executed through the same Host Capability/callable-surface protocol.
+- [x] Remove implicit `fs.*` / `http.fetch` fallback registration from workflow node dispatch. The fallback remains only as explicit opt-in diagnostics with audit/log markers.

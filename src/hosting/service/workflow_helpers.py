@@ -13,7 +13,12 @@ from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntim
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
 from ..sandbox.broker_http import BrokeredHttpClient
-from ..sandbox.host_capabilities import HostCapabilityBroker
+from ..sandbox.host_capabilities import (
+    HostCapabilityBroker,
+    HostCapabilityProviderCall,
+    HostCapabilityProviderUnavailable,
+    HostCapabilitySession,
+)
 from ..sandbox.host_api import HostApiRegistry, fs_root_args_schema, fs_write_text_args_schema
 from ..sandbox.policy import WorkerSandboxPolicy
 from ..sandbox.runtime_base import HostedPoolKey, HostedRequestLifecycle, HostedWorkerSlot, hosted_log_summary
@@ -161,6 +166,66 @@ class WorkflowHelperMixin:
             "total": len(filtered),
             "limit": count,
             "offset": start,
+        }
+
+    @staticmethod
+    def _host_capability_sessions_for_broker(sessions: Optional[list[HostCapabilitySession]]) -> list[HostCapabilitySession]:
+        return [session for session in list(sessions or []) if isinstance(session, HostCapabilitySession)]
+
+    @staticmethod
+    def _toolbox_tool_name_for_host_capability(session: HostCapabilitySession, call: HostCapabilityProviderCall) -> str:
+        method = dict(session.methods or {}).get(call.method)
+        descriptor = method.descriptor if method is not None else None
+        metadata = dict(getattr(descriptor, "metadata", {}) or {}) if descriptor is not None else {}
+        toolbox = dict(metadata.get("toolbox") or {})
+        return str(toolbox.get("tool_name") or call.method.split(".", 1)[-1] or "").strip()
+
+    @staticmethod
+    def _toolbox_provider_result(payload: Dict[str, Any]) -> Dict[str, Any]:
+        row = dict(payload or {})
+        tool_call = dict(row.get("tool_call") or {})
+        if "result" in tool_call:
+            raw = tool_call.get("result")
+            if isinstance(raw, dict):
+                return dict(raw)
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    return {"result": raw}
+                if isinstance(parsed, dict):
+                    return dict(parsed)
+                return {"result": parsed}
+        if isinstance(row.get("result"), dict):
+            return dict(row.get("result") or {})
+        return row
+
+    def _host_capability_provider_invoker(self, session: HostCapabilitySession, call: HostCapabilityProviderCall) -> Dict[str, Any]:
+        if str(session.provider_kind or "").strip() != "toolbox_session":
+            raise HostCapabilityProviderUnavailable(
+                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind}
+            )
+        binding = dict(session.binding or {})
+        tool_name = self._toolbox_tool_name_for_host_capability(session, call)
+        if not tool_name:
+            raise ValueError("toolbox_host_capability_tool_name_required")
+        timeout_seconds = float(binding.get("timeout_seconds") or binding.get("provider_timeout_seconds") or 30.0)
+        out = self.toolbox_execute(
+            engine_id=str(binding.get("engine_id") or "").strip(),
+            toolbox_id=str(binding.get("toolbox_id") or "").strip(),
+            tool_call={
+                "id": call.provider_call_id,
+                "name": tool_name,
+                "arguments": dict(call.arguments or {}),
+            },
+            timeout_seconds=timeout_seconds,
+            tools_view=dict(binding.get("tools_view") or {}) if isinstance(binding.get("tools_view"), dict) else None,
+            callback_binding=dict(binding.get("callback_binding") or {}) if isinstance(binding.get("callback_binding"), dict) else None,
+        )
+        return {
+            "status": "ok",
+            "provider_call_id": call.provider_call_id,
+            "result": self._toolbox_provider_result(dict(out or {})),
         }
 
     def _workflow_python_node_recycle_changed_environment(
@@ -485,6 +550,7 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         audit_emitter: Optional[Callable[[Dict[str, Any]], None]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ):
         child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
@@ -514,7 +580,7 @@ class WorkflowHelperMixin:
         service_fallback_enabled = bool(
             host_api_policy.get(
                 "service_owned_fallback_enabled",
-                host_api_policy.get("service_fallback_enabled", host_api_policy.get("service_owned_fallback", True)),
+                host_api_policy.get("service_fallback_enabled", host_api_policy.get("service_owned_fallback", False)),
             )
         )
         registry = HostApiRegistry(
@@ -802,12 +868,17 @@ class WorkflowHelperMixin:
             roots=dict(registry.roots or {}),
             event_emitter=event_emitter,
             audit_emitter=audit_emitter or self._append_host_capability_audit_event,
+            provider_invoker=self._host_capability_provider_invoker,
         )
-        broker.register_builtin_provider(
-            provider_id="builtin.workflow_node_host_api",
-            owner="service",
-            methods=registry.capability_methods(provider_id="builtin.workflow_node_host_api"),
-        )
+        capability_sessions = self._host_capability_sessions_for_broker(host_capability_sessions)
+        for session in capability_sessions:
+            broker.register_session(session)
+        if service_fallback_enabled and not capability_sessions:
+            broker.register_builtin_provider(
+                provider_id="builtin.workflow_node_host_api",
+                owner="service",
+                methods=registry.capability_methods(provider_id="builtin.workflow_node_host_api"),
+            )
 
         def _dispatch(call: Dict[str, Any]) -> Dict[str, Any]:
             return broker.dispatch(dict(call or {}))
@@ -1288,6 +1359,7 @@ class WorkflowHelperMixin:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         req = dict(request or {})
@@ -1376,6 +1448,7 @@ class WorkflowHelperMixin:
                         artifact_context=artifact_context,
                         sandbox_policy=sandbox_policy,
                         event_emitter=_record_js_broker_event,
+                        host_capability_sessions=host_capability_sessions,
                     ),
                 )
                 if artifact_context is not None and bool(result.get("ok", False)):
@@ -1426,6 +1499,7 @@ class WorkflowHelperMixin:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         req = dict(request or {})
@@ -1472,6 +1546,7 @@ class WorkflowHelperMixin:
                 "engine_id": str(ensured["engine_id"]),
                 "request": {**req, "request_id": request_id, "javascript": js},
                 "sandbox_policy": sandbox_policy,
+                "host_capability_sessions": host_capability_sessions,
             },
             name=f"workflow-js-node-stream-{request_id}",
             daemon=True,
@@ -1492,6 +1567,7 @@ class WorkflowHelperMixin:
         engine_id: str,
         request: Dict[str, Any],
         sandbox_policy: Optional[Dict[str, Any]],
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ) -> None:
         base = self._workflow_js_stream_base()
         live_stdout_seen = False
@@ -1554,6 +1630,7 @@ class WorkflowHelperMixin:
                 artifact_context=artifact_context,
                 sandbox_policy=sandbox_policy,
                 event_emitter=_emit_js_broker_event,
+                host_capability_sessions=host_capability_sessions,
             ),
         )
         if artifact_context is not None and bool(result.get("ok", False)):
@@ -1765,6 +1842,7 @@ class WorkflowHelperMixin:
         request: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
@@ -1909,6 +1987,7 @@ class WorkflowHelperMixin:
                     artifact_context=artifact_context,
                     sandbox_policy=sandbox_policy,
                     event_emitter=_record_node_broker_event,
+                    host_capability_sessions=host_capability_sessions,
                 ),
                 max_idle=int(pool.resources().get("metrics", {}).get("desired_capacity") or capacity or 1),
             )
@@ -2255,6 +2334,7 @@ class WorkflowHelperMixin:
         python: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
@@ -2344,6 +2424,7 @@ class WorkflowHelperMixin:
                     "sandbox_policy": sandbox_policy,
                     "capacity": capacity,
                     "node_runtime_recycle": node_runtime_recycle,
+                    "host_capability_sessions": host_capability_sessions,
                 },
                 name=f"workflow-python-node-stream-{request_id}",
                 daemon=True,
@@ -2367,6 +2448,7 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]],
         capacity: int,
         node_runtime_recycle: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
     ) -> None:
         base = self._workflow_python_stream_base()
         def _emit_node_event(event_type: str, payload: Dict[str, Any]) -> None:
@@ -2417,6 +2499,7 @@ class WorkflowHelperMixin:
                 artifact_context=artifact_context,
                 sandbox_policy=sandbox_policy,
                 event_emitter=_emit_node_broker_event,
+                host_capability_sessions=host_capability_sessions,
             ),
             max_idle=capacity,
         )

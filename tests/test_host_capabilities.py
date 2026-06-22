@@ -88,7 +88,7 @@ def test_host_capability_broker_dispatches_builtin_and_hides_bindings_from_disco
 
     assert result == {"echo": 7}
     assert described["contract"] == "hosting.sandbox.discovery.v1"
-    assert described["methods"] == ["demo.echo"]
+    assert described["methods"] == ["demo.echo", "host.describe", "sandbox.describe"]
     assert described["host_capabilities"]["methods"][0]["provider"] == {
         "provider_id": "builtin.demo",
         "kind": "builtin",
@@ -294,7 +294,7 @@ def test_host_capability_broker_hides_unrelated_request_session() -> None:
 
     described = broker.describe()
 
-    assert described["methods"] == []
+    assert described["methods"] == ["host.describe", "sandbox.describe"]
     with pytest.raises(RuntimeError, match="unsupported_host_method:crm.customer.lookup"):
         broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
 
@@ -332,7 +332,7 @@ def test_host_capability_broker_matches_request_workflow_instance_and_consumer_s
             )
         )
 
-    assert broker.method_names() == ["crm.consumer.lookup", "crm.instance.lookup", "crm.request.lookup", "crm.workflow.lookup"]
+    assert broker.method_names() == ["crm.consumer.lookup", "crm.instance.lookup", "crm.request.lookup", "crm.workflow.lookup", "host.describe", "sandbox.describe"]
     for _session_id, _visibility, _scope, method_name in rows:
         assert broker.dispatch({"method": method_name, "arguments": {"customer_id": "c-1"}})["session_id"]
 
@@ -457,7 +457,7 @@ def test_host_capability_broker_enforces_namespace_and_permission_gates() -> Non
             )
         )
 
-    assert broker.method_names() == ["crm.customer.lookup"]
+    assert broker.method_names() == ["crm.customer.lookup", "host.describe", "sandbox.describe"]
     assert broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}}) == {}
     with pytest.raises(RuntimeError, match="unsupported_host_method:crm.customer.write"):
         broker.dispatch({"method": "crm.customer.write", "arguments": {}})

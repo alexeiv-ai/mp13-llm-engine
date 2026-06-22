@@ -1226,7 +1226,7 @@ class EngineHostDaemon:
         transport_name = str(binding.get("transport") or "").strip().lower()
         if not transport_name:
             transport_name = "ssh_relay" if str(transport or "").strip() == "tcp" else "daemon_callback"
-        if transport_name not in {"daemon_callback", "local_ipc", "ssh_relay"}:
+        if transport_name not in {"daemon_callback", "local_ipc", "ssh_relay", "toolbox_harness"}:
             raise ValueError(f"host_capability_invalid_binding_transport:{transport_name}")
         out = dict(binding)
         out["transport"] = transport_name
@@ -1347,6 +1347,16 @@ class EngineHostDaemon:
                     self._host_capability_sessions.pop(sid, None)
                     closed += 1
         return closed
+
+    def _host_capability_sessions_snapshot(self) -> List[HostCapabilitySession]:
+        if not hasattr(self, "_host_capability_sessions_lock"):
+            return []
+        now_ms = int(time.time() * 1000)
+        with self._host_capability_sessions_lock:
+            for sid, session in list(self._host_capability_sessions.items()):
+                if session.expires_at_ms is not None and int(session.expires_at_ms or 0) <= now_ms:
+                    self._host_capability_sessions.pop(sid, None)
+            return list(self._host_capability_sessions.values())
 
     def _should_shutdown_on_owner_disconnect(self) -> bool:
         policy = self.svc.get_lifecycle_policy_effective()
@@ -2332,6 +2342,7 @@ class EngineHostDaemon:
                 javascript=dict(payload.get("javascript") or {}),
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
         if cmd == "workflow-js-set-capacity":
             return svc.set_workflow_js_capacity(
@@ -2365,6 +2376,7 @@ class EngineHostDaemon:
                 javascript=dict(payload.get("javascript") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 capacity=int(payload.get("capacity") or 1),
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
         if cmd == "workflow-js-event-subscribe":
             return svc.workflow_js_event_subscribe(
@@ -2424,6 +2436,7 @@ class EngineHostDaemon:
                 request=dict(payload.get("request") or {}),
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
         if cmd == "workflow-python-resources":
             return svc.workflow_python_resources(
@@ -2465,6 +2478,7 @@ class EngineHostDaemon:
                 python=dict(payload.get("python") or {}),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 capacity=int(payload.get("capacity") or 1),
+                host_capability_sessions=self._host_capability_sessions_snapshot(),
             )
         if cmd == "workflow-python-event-subscribe":
             return svc.workflow_python_event_subscribe(

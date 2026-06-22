@@ -832,8 +832,8 @@ Work:
 - [x] Add callable-surface adapters between toolbox/`ToolsView` metadata and Host Capability descriptors.
 - [x] Add Host Capability descriptor-to-callable-schema helpers for sandbox/model-facing discovery.
 - [x] Keep descriptor helpers for `fs.*` and `http.fetch` so clients can register those methods explicitly.
-- [x] Keep service-owned `fs.*` / `http.fetch` as a migration fallback, but make it disableable and audited.
-- [ ] Remove implicit service-owned `fs.*` / `http.fetch` fallback after dependent clients finish explicit callable-session registration migration.
+- [x] Remove implicit service-owned `fs.*` / `http.fetch` fallback from workflow node dispatch.
+- [x] Keep service-owned `fs.*` / `http.fetch` only as an explicit opt-in diagnostic fallback with audit/log markers.
 
 ### Phase 3: Client-Owned Host Capabilities
 
@@ -848,7 +848,7 @@ Work:
 - [x] Add provider callback envelope helpers that validate `provider_call_id` and normalize success/error/timeout/cancel responses.
 - [x] Add approval bridge helpers and filtered Host Capability audit reads.
 - [x] Add tests for client provider denial, timeout, unavailable transport, cancellation, duplicate registration, scopes, and audit filtering.
-- [ ] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers, not only register callable descriptors.
+- [x] Complete toolbox-backed provider callback runtime so hosted toolbox sessions can execute as Host Capability providers, not only register callable descriptors.
 
 ### Phase 4: Permission And Approval Unification
 

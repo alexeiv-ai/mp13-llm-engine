@@ -14,7 +14,13 @@ import pytest
 from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
-from hosting.sandbox.host_capabilities import HostCapabilityTimeout
+from hosting.sandbox.host_capabilities import (
+    HostCapabilityDescriptor,
+    HostCapabilityMethod,
+    HostCapabilityProviderRef,
+    HostCapabilitySession,
+    HostCapabilityTimeout,
+)
 from hosting.sandbox.workflow_python_contract import build_workflow_python_node_snippet_request
 from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntime, WorkflowPythonNodeRuntimeRegistry
 
@@ -144,7 +150,7 @@ def test_workflow_node_service_owned_fallback_emits_audit_marker(tmp_path: Path)
     dispatch = svc._workflow_python_node_host_dispatcher(
         request={"request_id": "req-fallback", "workflow_id": "wf-fallback", "package_id": "pkg"},
         artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
-        sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True, "service_owned_fallback_enabled": True}}},
         event_emitter=lambda kind, payload: events.append((kind, payload)),
     )
 
@@ -178,6 +184,58 @@ def test_workflow_node_service_owned_fallback_can_be_disabled(tmp_path: Path) ->
     assert "fs.list" not in described["methods"]
     with pytest.raises(RuntimeError, match="unsupported_host_method:fs.list"):
         dispatch({"method": "fs.list", "arguments": {"root_id": "report"}})
+
+
+def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monkeypatch) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    calls: list[dict] = []
+
+    def fake_toolbox_execute(**kwargs):
+        calls.append(dict(kwargs))
+        return {
+            "status": "ok",
+            "tool_call": {
+                **dict(kwargs.get("tool_call") or {}),
+                "result": '{"greeting":"hi Sam"}',
+            },
+        }
+
+    monkeypatch.setattr(svc, "toolbox_execute", fake_toolbox_execute)
+    descriptor = HostCapabilityDescriptor(
+        name="tools.hello",
+        namespace="tools",
+        group_path=["Tools"],
+        provider=HostCapabilityProviderRef(provider_id="tb-session", kind="toolbox_session", owner="client-a", visibility="workflow"),
+        metadata={"toolbox": {"tool_name": "hello_tool", "toolbox_id": "tb-1", "allowed": True, "advertised": True}},
+    )
+    session = HostCapabilitySession(
+        session_id="tb-session",
+        owner="client-a",
+        provider_kind="toolbox_session",
+        visibility="workflow",
+        scope={"workflow_id": "wf-toolbox"},
+        methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        binding={"transport": "toolbox_harness", "toolbox_id": "tb-1", "tools_view": {"allowed_tools": ["hello_tool"]}},
+    )
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-toolbox", "workflow_id": "wf-toolbox", "package_id": "pkg"},
+        artifact_context=None,
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True, "service_owned_fallback_enabled": True}}},
+        host_capability_sessions=[session],
+    )
+
+    described = dispatch({"method": "sandbox.describe", "arguments": {}})
+    out = dispatch({"method": "tools.hello", "arguments": {"name": "Sam"}})
+
+    assert [row["name"] for row in described["host_capabilities"]["methods"]] == ["tools.hello"]
+    assert out == {"greeting": "hi Sam"}
+    assert calls[0]["toolbox_id"] == "tb-1"
+    assert calls[0]["tool_call"]["name"] == "hello_tool"
+    assert calls[0]["tool_call"]["arguments"] == {"name": "Sam"}
+    assert calls[0]["tools_view"] == {"allowed_tools": ["hello_tool"]}
 
 
 def test_daemon_spawn_preserves_worker_profile_class() -> None:
@@ -284,6 +342,41 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert fake.calls[-3][1] == {"stream_id": "stream-1", "max_items": 2}
     assert fake.calls[-2][1] == {"stream_id": "stream-1", "message": {"action": "cancel"}}
     assert fake.calls[-1][1] == {"stream_id": "stream-1"}
+
+
+def test_daemon_passes_host_capability_sessions_to_workflow_execute() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute_workflow_python(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return {"status": "ok", "ok": True}
+
+    descriptor = HostCapabilityDescriptor(
+        name="tools.hello",
+        namespace="tools",
+        group_path=["Tools"],
+        provider=HostCapabilityProviderRef(provider_id="tb-session", kind="toolbox_session", owner="client-a", visibility="workflow"),
+    )
+    session = HostCapabilitySession(
+        session_id="tb-session",
+        owner="client-a",
+        provider_kind="toolbox_session",
+        visibility="workflow",
+        scope={"workflow_id": "wf-1"},
+        methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        binding={"transport": "toolbox_harness", "toolbox_id": "tb-1"},
+    )
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+    daemon._host_capability_sessions = {"tb-session": session}
+    daemon._host_capability_sessions_lock = threading.RLock()
+
+    assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
+
+    assert fake.calls[0]["host_capability_sessions"] == [session]
 
 
 def test_daemon_dispatches_workflow_js_facade() -> None:
@@ -1613,6 +1706,7 @@ def test_execute_workflow_python_node_rejects_dependency_execution_without_verif
 
     out = svc.execute_workflow_python(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-unverified-env",
             "module_source": source,
@@ -1641,6 +1735,7 @@ def test_execute_workflow_python_node_rejects_uv_execution_without_verified_envi
 
     out = svc.execute_workflow_python(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-unverified-uv-env",
             "module_source": source,
@@ -1736,6 +1831,7 @@ def test_execute_workflow_python_node_uses_selected_verified_dependency_runtime(
 
     out = svc.execute_workflow_python(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-verified-env",
             "module_source": source,
@@ -1790,6 +1886,7 @@ def test_execute_workflow_python_node_uses_selected_verified_uv_runtime(tmp_path
 
     out = svc.execute_workflow_python(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-verified-uv-env",
             "module_source": source,
@@ -2368,6 +2465,7 @@ def test_execute_workflow_python_node_host_api_reads_and_writes_artifact_roots(t
 
     out = svc.execute_workflow_python(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-host-api-artifacts",
             "module_source": source,
@@ -2499,6 +2597,7 @@ def test_execute_workflow_python_node_host_api_rejects_input_writes(tmp_path: Pa
 
     out = svc.execute_workflow_python(
         profile="node",
+        sandbox_policy={"sandbox": {"host_api": {"service_owned_fallback_enabled": True}}},
         request={
             "request_id": "req-node-host-api-reject-input-write",
             "module_source": source,
@@ -2636,6 +2735,7 @@ def test_execute_workflow_python_node_host_api_http_fetch_uses_broker_policy(tmp
     sandbox_policy = {
         "sandbox": {
             "enabled": True,
+            "host_api": {"service_owned_fallback_enabled": True},
             "network": {
                 "mode": "brokered_only",
                 "allow_hosts": ["example.com"],

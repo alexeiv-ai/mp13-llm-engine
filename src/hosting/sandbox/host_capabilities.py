@@ -642,7 +642,7 @@ class HostCapabilityBroker:
         return [method.descriptor for _session, method in sorted(self._resolved_methods().values(), key=lambda item: item[1].descriptor.name)]
 
     def method_names(self) -> list[str]:
-        return [item.name for item in self.descriptors()]
+        return sorted({"host.describe", "sandbox.describe", *[item.name for item in self.descriptors()]})
 
     def groups(self) -> list[Dict[str, Any]]:
         groups: Dict[str, Dict[str, Any]] = {}
