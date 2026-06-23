@@ -142,7 +142,7 @@ def test_artifact_inline_zip_templates_expand_and_export(tmp_path: Path) -> None
 def test_artifact_recovery_inspect_claim_and_cleanup(tmp_path: Path) -> None:
     manager = HostedArtifactManager(artifact_root=tmp_path / "artifacts")
     context = manager.prepare(
-        request={"artifact_outputs": [artifact_file_output(name="report", filename="report.txt")]},
+        request={"instance_id": "inst-crashed", "artifact_outputs": [artifact_file_output(name="report", filename="report.txt")]},
         request_id="req-crashed",
     )
     output_path = Path(context["child_context"]["outputs"]["report"])
@@ -150,6 +150,7 @@ def test_artifact_recovery_inspect_claim_and_cleanup(tmp_path: Path) -> None:
 
     inspected = manager.recovery_candidates(request_id="req-crashed")
     assert inspected["status"] == "ok"
+    assert inspected["instance_id"] == "inst-crashed"
     assert inspected["count"] == 1
     assert inspected["candidates"][0]["name"] == "report"
     assert "partial_possible" in inspected["candidates"][0]["labels"]
@@ -171,3 +172,19 @@ def test_artifact_recovery_inspect_claim_and_cleanup(tmp_path: Path) -> None:
     assert claimed["old_path_to_new_ref"][str(output_path.resolve())] == artifact["ref"]
     cleanup = manager.cleanup_run(context)
     assert cleanup["deleted"] is True
+
+
+def test_artifact_recovery_claim_defaults_to_instance_namespace(tmp_path: Path) -> None:
+    manager = HostedArtifactManager(artifact_root=tmp_path / "artifacts")
+    context = manager.prepare(
+        request={"instance_id": "py-inst-1", "artifact_outputs": [artifact_file_output(name="report", filename="report.txt")]},
+        request_id="req-instance-recovery",
+    )
+    Path(context["child_context"]["outputs"]["report"]).write_text("draft", encoding="utf-8")
+
+    claimed = manager.claim_recovery_artifacts(request_id="req-instance-recovery", names=["report"])
+
+    assert claimed["status"] == "ok"
+    assert claimed["instance_id"] == "py-inst-1"
+    assert claimed["target_id"] == "instances/py-inst-1"
+    assert claimed["claimed_artifacts"][0]["ref"] == "@artifacts/instances/py-inst-1/report/report.txt"

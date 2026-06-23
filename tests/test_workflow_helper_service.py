@@ -1146,6 +1146,60 @@ def test_workflow_js_node_instance_routes_sequential_calls_to_pinned_worker(tmp_
     assert after_close["reason"] == "workflow_js_instance_not_found"
 
 
+def test_workflow_js_node_instance_reuses_worker_process_after_code_edit(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    first_source = "exports.run = function(input) { return { output: { version: 1, value: input.value } }; };"
+    second_source = "exports.run = function(input) { return { output: { version: 2, value: input.value } }; };"
+
+    def request(source: str, request_id: str, value: str) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg-demo",
+            "workflow_id": "wf-demo",
+            "package_source_digest": "sha256:digest",
+            "export_name": "run",
+            "payload": {"value": value},
+            "limits": {"timeout_ms": 1000},
+        }
+
+    created = svc.workflow_js_instance_create(
+        instance_id="js-inst-edit",
+        request=request(first_source, "req-js-edit-create", "create"),
+    )
+    first = svc.workflow_js_instance_execute(
+        instance_id="js-inst-edit",
+        request=request(first_source, "req-js-edit-first", "a"),
+    )
+    replaced = svc.workflow_js_instance_create(
+        instance_id="js-inst-edit",
+        replace=True,
+        request=request(second_source, "req-js-edit-replace", "replace"),
+    )
+    second = svc.workflow_js_instance_execute(
+        instance_id="js-inst-edit",
+        request=request(second_source, "req-js-edit-second", "b"),
+    )
+    listed = svc.workflow_js_instance_list()
+    closed = svc.workflow_js_instance_close(instance_id="js-inst-edit")
+
+    assert created["status"] == "ok"
+    assert replaced["status"] == "ok"
+    assert replaced["reused_worker_process"] is True
+    assert replaced["pid"] == created["pid"]
+    assert first["output"] == {"version": 1, "value": "a"}
+    assert second["output"] == {"version": 2, "value": "b"}
+    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert listed["instances"][0]["runtime_key"] == created["runtime_key"]
+    assert listed["instances"][0]["code_key"] != created["code_key"]
+    assert closed["closed"] is True
+
+
 def test_workflow_js_node_project_instance_explains_deferred_semantics(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -2455,6 +2509,7 @@ def test_execute_workflow_python_node_failure_exposes_artifact_recovery(tmp_path
         profile="node",
         request={
             "request_id": "req-node-output-failed",
+            "instance_id": "py-inst-recover",
             "module_source": source,
             "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
             "package_id": "pkg",
@@ -2468,18 +2523,19 @@ def test_execute_workflow_python_node_failure_exposes_artifact_recovery(tmp_path
 
     assert out["status"] == "error"
     assert out["artifact_recovery"]["status"] == "ok"
+    assert out["artifact_recovery"]["instance_id"] == "py-inst-recover"
     assert out["artifact_recovery"]["count"] == 1
     assert out["artifact_recovery"]["candidates"][0]["name"] == "report"
 
     claimed = svc.workflow_artifact_recovery_claim(
         request_id="req-node-output-failed",
         names=["report"],
-        target_id="fresh-instance",
     )
 
     assert claimed["status"] == "ok"
+    assert claimed["instance_id"] == "py-inst-recover"
     assert claimed["claimed_count"] == 1
-    assert claimed["claimed_artifacts"][0]["ref"] == "@artifacts/fresh-instance/report/report.txt"
+    assert claimed["claimed_artifacts"][0]["ref"] == "@artifacts/instances/py-inst-recover/report/report.txt"
     cleanup = svc.workflow_artifact_recovery_cleanup(request_id="req-node-output-failed")
     assert cleanup["status"] == "ok"
     assert cleanup["deleted"] is True

@@ -1663,6 +1663,7 @@ class EngineHostControlChannel:
         request_id: str,
         names: Optional[list[str]] = None,
         target_id: str = "",
+        instance_id: str = "",
         patch_absolute_paths: bool = False,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -1672,6 +1673,7 @@ class EngineHostControlChannel:
                 "request_id": str(request_id or "").strip(),
                 "names": list(names or []),
                 "target_id": str(target_id or "").strip(),
+                "instance_id": str(instance_id or "").strip(),
                 "patch_absolute_paths": bool(patch_absolute_paths),
                 "sandbox_policy": dict(sandbox_policy or {}) or None,
             },

@@ -336,6 +336,14 @@ transport and startup optimization only. Each execution still creates a fresh
 QuickJS context from the submitted `module_source`, so module globals, closures,
 and other in-context JS values are not reused between requests.
 
+Pinned module/snippet instances separate worker-process compatibility from code
+identity. `runtime_key` identifies the reusable worker process, while `code_key`
+identifies the currently submitted code/package revision. Edited code with a new
+`module_sha256` or `code_revision` can run on the same pinned worker process
+when the instance is idle and the worker-process `runtime_key` is unchanged.
+`workflow_js_instance_create(..., replace=True, ...)` updates `code_key` without
+restarting that worker in this compatible case.
+
 Project-mode JS instances are therefore intentionally unsupported for now.
 `workflow_js_instance_create` returns
 `workflow_js_instance_project_mode_unsupported` with structured detail when

@@ -1395,6 +1395,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     request_id=str(payload.get("request_id") or ""),
                     names=list(payload.get("names") or []),
                     target_id=str(payload.get("target_id") or ""),
+                    instance_id=str(payload.get("instance_id") or ""),
                     patch_absolute_paths=bool(payload.get("patch_absolute_paths", False)),
                     sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 )

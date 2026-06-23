@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import shutil
 import time
 import zipfile
@@ -15,6 +16,16 @@ def artifact_safe_name(value: Any, *, fallback: str) -> str:
     raw = str(value or "").strip() or fallback
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw)
     return safe.strip("._") or fallback
+
+
+def artifact_safe_relpath(value: Any, *, fallback: str) -> str:
+    raw = str(value or "").strip().replace("\\", "/").strip("/")
+    if not raw:
+        raw = fallback
+    parts = [artifact_safe_name(part, fallback="") for part in raw.split("/") if artifact_safe_name(part, fallback="")]
+    if not parts:
+        parts = [artifact_safe_name(fallback, fallback="artifact")]
+    return "/".join(parts)
 
 
 def artifact_ref_parts(ref: str) -> Optional[tuple[str, str]]:
@@ -383,6 +394,7 @@ class HostedArtifactManager:
         output_root = run_root / "outputs"
         input_root.mkdir(parents=True, exist_ok=True)
         output_root.mkdir(parents=True, exist_ok=True)
+        self._write_recovery_manifest(run_root, request=request, request_id=request_id)
         for index, spec in enumerate(list(request.get("artifact_inputs") or [])):
             row = dict(spec or {})
             name = artifact_safe_name(row.get("name"), fallback=f"input_{index}")
@@ -488,6 +500,32 @@ class HostedArtifactManager:
             "outputs": outputs,
             "child_context": {"inputs": child_inputs, "outputs": child_outputs},
         }
+
+    @staticmethod
+    def _write_recovery_manifest(run_root: Path, *, request: Dict[str, Any], request_id: str) -> None:
+        row = dict(request or {})
+        manifest = {
+            "contract": "hosting.sandbox.artifact_recovery_manifest.v1",
+            "request_id": artifact_safe_name(request_id, fallback="request"),
+            "instance_id": str(row.get("instance_id") or "").strip() or None,
+            "workflow_id": str(row.get("workflow_id") or "").strip() or None,
+            "package_id": str(row.get("package_id") or "").strip() or None,
+            "node_id": str(row.get("node_id") or "").strip() or None,
+            "created_at": time.time(),
+        }
+        try:
+            (run_root / "recovery_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            return
+
+    @staticmethod
+    def _read_recovery_manifest(run_root: Path) -> Dict[str, Any]:
+        path = run_root / "recovery_manifest.json"
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+            return dict(row or {}) if isinstance(row, dict) else {}
+        except Exception:
+            return {}
 
     def _output_spec(
         self,
@@ -685,6 +723,7 @@ class HostedArtifactManager:
         except ValueError:
             return {"status": "error", "reason": "run_root_outside_artifact_root", "candidates": [], "count": 0}
         output_root = run_root / "outputs"
+        manifest = self._read_recovery_manifest(run_root)
         wanted = {artifact_safe_name(item, fallback="") for item in list(names or []) if artifact_safe_name(item, fallback="")}
         candidates: list[Dict[str, Any]] = []
         if output_root.exists():
@@ -715,6 +754,10 @@ class HostedArtifactManager:
             "status": "ok",
             "contract": "hosting.sandbox.artifact_recovery.v1",
             "request_id": rid,
+            "instance_id": str(manifest.get("instance_id") or "").strip() or None,
+            "workflow_id": str(manifest.get("workflow_id") or "").strip() or None,
+            "package_id": str(manifest.get("package_id") or "").strip() or None,
+            "node_id": str(manifest.get("node_id") or "").strip() or None,
             "run_root": str(run_root),
             "crash_or_shutdown_at": time.time(),
             "cleanup_deferred": run_root.exists(),
@@ -728,15 +771,17 @@ class HostedArtifactManager:
         request_id: str,
         names: Optional[list[str]] = None,
         target_id: str = "",
+        instance_id: str = "",
         patch_absolute_paths: bool = False,
     ) -> Dict[str, Any]:
         inspected = self.recovery_candidates(request_id=request_id, names=names)
         if str(inspected.get("status") or "") != "ok":
             return inspected
         rid = artifact_safe_name(request_id, fallback="request")
-        target = artifact_safe_name(target_id or f"recovered-{rid}-{int(time.time() * 1000)}", fallback="recovered")
+        iid = artifact_safe_name(instance_id or inspected.get("instance_id"), fallback="")
+        target = artifact_safe_relpath(target_id or (f"instances/{iid}" if iid else f"recovered/{rid}/{int(time.time() * 1000)}"), fallback="recovered")
         run_root = self.run_root_for_request(rid)
-        claim_root = (self.roots["artifacts"] / target).resolve()
+        claim_root = (self.roots["artifacts"] / Path(target)).resolve()
         claim_root.mkdir(parents=True, exist_ok=True)
         claimed: list[Dict[str, Any]] = []
         old_to_new_paths: Dict[str, str] = {}
@@ -781,6 +826,7 @@ class HostedArtifactManager:
             "status": "ok",
             "contract": "hosting.sandbox.artifact_recovery_claim.v1",
             "request_id": rid,
+            "instance_id": iid or None,
             "target_id": target,
             "claimed_artifacts": claimed,
             "claimed_count": len(claimed),
@@ -817,5 +863,6 @@ __all__ = [
     "artifact_ref_parts",
     "artifact_ref_input",
     "artifact_safe_name",
+    "artifact_safe_relpath",
     "inline_artifact_bytes",
 ]

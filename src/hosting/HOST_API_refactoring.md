@@ -130,6 +130,7 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [x] Python node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript worker runtime metadata now reports the host worker pid for routed live instances.
+- [x] JavaScript module/snippet pinned instances can reuse the same worker process across code edits; `runtime_key` is worker compatibility and `code_key` is submitted code identity.
 - [x] Python project-mode pinned instances are allowed only with an explicit isolation policy that resets cwd, `sys.path`, env, and project import modules between calls.
 - [x] JavaScript project-mode pinned instances remain unsupported until the JS runtime can preserve a QuickJS context or module graph under explicit cleanup and snapshot/restore semantics.
 - [x] Service-level Python and JavaScript action manifests, card-facing discovery helpers, and action execution routing were added on top of existing worker entrypoint fields.
@@ -160,7 +161,8 @@ These items are intentionally outside the completed Host Capability pillar. They
   - Owning pillar: stateful/recoverable sandbox instances.
   - Current state: host-managed backend/workflow/instance/request JSON state can be snapshotted and restored. Arbitrary Python/JS process memory is intentionally not captured.
   - Decision: do not recover heaps, open handles, imported module internals, or replay mutations. Recovery beyond explicit JSON state is limited to repurposing declared output artifact refs from a failed request into a fresh instance/request folder.
-  - Implemented behavior: failed workflow requests with declared artifact outputs retain their run folder and return an `artifact_recovery` notice. Clients can inspect candidates, claim selected outputs into `@artifacts/<target_id>/...`, optionally patch absolute text paths, and then call cleanup.
+  - Implemented behavior: failed workflow requests with declared artifact outputs retain their run folder and return an `artifact_recovery` notice. Clients can inspect candidates, claim selected outputs into `@artifacts/instances/<instance_id>/...` or `@artifacts/<target_id>/...`, optionally patch absolute text paths, and then call cleanup.
+  - Edit+continue behavior: clients keep the same `instance_id`. Python replacement restarts the process under that identity. JS module/snippet edits can keep the same worker process when worker compatibility is unchanged.
   - Ownership rule: clients decide whether partial artifacts are usable. Hosting only provides hint labels such as `declared_output`, `crash_recovery_candidate`, and `partial_possible`.
   - Cleanup rule: disk garbage collection remains deferred. Recovery notices include a crash/shutdown timestamp and cleanup is explicit.
 

@@ -949,13 +949,15 @@ The implementation phases above are complete except for the explicitly deferred 
   - Boundary: arbitrary Python/JS process memory, open handles, async jobs, and imported module internals are not recoverable state.
   - Decision: no heap recovery and no mutation replay. Hosting does not infer semantic validity of mutated state.
   - Implemented artifact handoff: failed workflow requests with declared output artifacts keep their run folder and expose an `artifact_recovery` notice. Clients can call `workflow-artifact-recovery-inspect`, `workflow-artifact-recovery-claim`, and `workflow-artifact-recovery-cleanup`.
+  - Edit+continue rule: `instance_id` is the stable logical worker identity. Python replacement starts a fresh process under the same `instance_id`; JS module/snippet edits can reuse the same compatible worker process while updating `code_key`.
+  - Artifact namespace rule: recovery claim defaults to `@artifacts/instances/<instance_id>/...` when the failed request or claim supplies an instance id.
   - Client responsibility: partial artifact validity is client-owned. Hosting provides hint labels only.
   - Cleanup boundary: disk garbage collection is deferred to a later task; explicit cleanup remains available by request id.
 
 ### JavaScript Project Instances
 
 - [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
-  - Current state: JS pinned instances reuse the host worker process only; each call creates a fresh QuickJS context. Project-mode JS instance creation is rejected with structured deferred detail.
+  - Current state: JS pinned module/snippet instances reuse the host worker process across compatible code edits; each call creates a fresh QuickJS context. Project-mode JS instance creation is rejected with structured deferred detail.
   - Decision needed: persistent QuickJS context versus persistent module graph cache, plus cleanup policy for globals, async jobs, imports, env, and host handles.
   - Recommended constraint: do not enable JS project-mode routing until cleanup and snapshot boundaries are explicit.
 

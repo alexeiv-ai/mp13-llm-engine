@@ -791,6 +791,7 @@ class WorkflowHelperMixin:
         request_id: str,
         names: Optional[list[str]] = None,
         target_id: str = "",
+        instance_id: str = "",
         patch_absolute_paths: bool = False,
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -798,6 +799,7 @@ class WorkflowHelperMixin:
             request_id=str(request_id or ""),
             names=list(names or []),
             target_id=str(target_id or ""),
+            instance_id=str(instance_id or ""),
             patch_absolute_paths=bool(patch_absolute_paths),
         )
 
@@ -816,6 +818,7 @@ class WorkflowHelperMixin:
         request_id: str,
         artifact_context: Optional[Dict[str, Any]],
         reason: str = "",
+        instance_id: str = "",
         sandbox_policy: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         if artifact_context is None:
@@ -824,6 +827,8 @@ class WorkflowHelperMixin:
             request_id=str(request_id or ""),
             sandbox_policy=sandbox_policy,
         )
+        if instance_id and not notice.get("instance_id"):
+            notice["instance_id"] = str(instance_id or "").strip() or None
         notice["reason"] = str(reason or "") or None
         return notice
 
@@ -1708,6 +1713,7 @@ class WorkflowHelperMixin:
                         request_id=lifecycle.request_id,
                         artifact_context=artifact_context,
                         reason=str(result.get("reason") or ""),
+                        instance_id=str(req.get("instance_id") or runtime_instance_id or ""),
                         sandbox_policy=sandbox_policy,
                     )
         status = "ok" if bool(result.get("ok", False)) else "error"
@@ -2003,6 +2009,7 @@ class WorkflowHelperMixin:
                 request_id=str(request.get("request_id") or ""),
                 artifact_context=artifact_context,
                 reason=str(result.get("reason") or ""),
+                instance_id=str(request.get("instance_id") or ""),
                 sandbox_policy=sandbox_policy,
             )
 
@@ -2391,6 +2398,7 @@ class WorkflowHelperMixin:
                     request_id=lifecycle.request_id,
                     artifact_context=artifact_context,
                     reason=str(result.get("reason") or ""),
+                    instance_id=str(req.get("instance_id") or runtime_instance_id or ""),
                     sandbox_policy=sandbox_policy,
                 )
             status = "ok" if bool(result.get("ok", False)) else "error"
@@ -3027,6 +3035,7 @@ class WorkflowHelperMixin:
                 request_id=str(request.get("request_id") or ""),
                 artifact_context=artifact_context,
                 reason=str(result.get("reason") or ""),
+                instance_id=str(request.get("instance_id") or ""),
                 sandbox_policy=sandbox_policy,
             )
         status_snapshot = base.request_status(environment_key=environment_key, request_id=str(request.get("request_id") or ""))

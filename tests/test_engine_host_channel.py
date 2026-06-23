@@ -1400,7 +1400,7 @@ def test_workflow_artifact_recovery_channel_facade_forwards_expected_payloads() 
     ch.workflow_artifact_recovery_claim(
         request_id="req-1",
         names=["report"],
-        target_id="fresh-instance",
+        instance_id="fresh-instance",
         patch_absolute_paths=True,
     )
     ch.workflow_artifact_recovery_cleanup(request_id="req-1")
@@ -1420,7 +1420,8 @@ def test_workflow_artifact_recovery_channel_facade_forwards_expected_payloads() 
             {
                 "request_id": "req-1",
                 "names": ["report"],
-                "target_id": "fresh-instance",
+                "target_id": "",
+                "instance_id": "fresh-instance",
                 "patch_absolute_paths": True,
                 "sandbox_policy": None,
                 "session_token": "tok-123",

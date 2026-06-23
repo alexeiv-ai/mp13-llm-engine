@@ -475,10 +475,14 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
     def _runtime_key(request: Dict[str, Any], executable: str) -> str:
         js = dict(request.get("javascript") or {})
         environment_key = _clean(request.get("environment_key")) or _clean(js.get("environment_key")) or _clean(js.get("environment_name")) or "workflow-js-node"
+        runtime_hash = _clean(js.get("runtime_hash")) or "quickjs-default"
+        return "|".join([_clean(executable), environment_key, runtime_hash])
+
+    @staticmethod
+    def _code_key(request: Dict[str, Any]) -> str:
         code_revision = _clean(request.get("code_revision")) or _clean(request.get("module_sha256")).lower() or _sha256_text(str(request.get("module_source") or ""))
         package_revision = _clean(request.get("package_source_digest"))
-        runtime_hash = _clean(js.get("runtime_hash")) or "quickjs-default"
-        return "|".join([_clean(executable), environment_key, runtime_hash, code_revision, package_revision])
+        return "|".join([code_revision, package_revision])
 
     @staticmethod
     def _validate_module_identity(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -546,12 +550,29 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             }
         executable = _clean(python_executable) or _python_executable_from_request(child_req)
         runtime_key = self._runtime_key(child_req, executable)
+        code_key = self._code_key(child_req)
         iid = _clean(instance_id) or f"jsinst_{secrets.token_urlsafe(18)}"
         existing: Optional[Dict[str, Any]]
         with self._instance_lock:
             existing = self._instances.get(iid)
             if existing is not None and not bool(replace):
                 return {"status": "error", "ok": False, "reason": "workflow_js_instance_exists", "instance_id": iid}
+            if existing is not None and _clean(existing.get("runtime_key")) == runtime_key:
+                if _clean(existing.get("active_request_id")):
+                    return {"status": "error", "ok": False, "reason": "workflow_js_instance_busy", "instance_id": iid}
+                runtime = existing.get("runtime")
+                if runtime is None or not runtime.alive():
+                    return {"status": "error", "ok": False, "reason": "workflow_js_instance_not_alive", "instance_id": iid}
+                existing["code_key"] = code_key
+                existing["last_used_at"] = time.time()
+                existing["closed"] = False
+                return {
+                    "status": "ok",
+                    "ok": True,
+                    "replaced": True,
+                    "reused_worker_process": True,
+                    **{key: value for key, value in existing.items() if key != "runtime"},
+                }
         if existing is not None:
             self.close_instance(iid, reason="replace")
         runtime = WorkflowJsNodeRuntime.start(runtime_key=runtime_key, python_executable=executable)
@@ -559,6 +580,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         row = {
             "instance_id": iid,
             "runtime_key": runtime_key,
+            "code_key": code_key,
             "environment_key": str(child_req.get("environment_key") or ""),
             "python_executable": executable,
             "pid": int(runtime.proc.pid or 0) or None,
@@ -630,6 +652,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         child_req = {**self._child_request(req), "request_id": request_id}
         executable = _clean(python_executable) or _python_executable_from_request(req)
         runtime_key = self._runtime_key(child_req, executable)
+        code_key = self._code_key(child_req)
         runtime: Optional[WorkflowJsNodeRuntime] = None
         pinned_instance_id = _clean(instance_id)
         if pinned_instance_id:
@@ -645,6 +668,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                             "instance_id": pinned_instance_id,
                             "runtime_key": runtime_key,
                             "expected_runtime_key": instance_row.get("runtime_key"),
+                            "compatibility": "worker_process",
                         },
                     }
                 if _clean(instance_row.get("active_request_id")):
@@ -653,6 +677,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 if runtime is None or not runtime.alive():
                     return {"ok": False, "reason": "workflow_js_instance_not_alive", "detail": {"instance_id": pinned_instance_id}}
                 instance_row["active_request_id"] = request_id
+                instance_row["code_key"] = code_key
                 instance_row["last_used_at"] = time.time()
         else:
             last_start_error: Optional[Exception] = None
