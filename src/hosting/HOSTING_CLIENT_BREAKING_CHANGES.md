@@ -70,6 +70,8 @@ Use the typed control-channel helpers:
 
 When `target_id` is omitted, claim defaults to `@artifacts/instances/<instance_id>/...` if an instance id is supplied or present in the recovery manifest. Otherwise it falls back to `@artifacts/recovered/<request_id>/<timestamp>/...`.
 
+Recommended client behavior is to keep using stable artifact refs returned under the instance namespace. The `old_path_to_new_path` and `old_path_to_new_ref` mappings in the raw claim result are low-level diagnostics and migration aids for clients that must patch their own side metadata. They are not the primary edit+continue model.
+
 The raw daemon/CLI commands are:
 
 - `workflow-artifact-recovery-inspect`
