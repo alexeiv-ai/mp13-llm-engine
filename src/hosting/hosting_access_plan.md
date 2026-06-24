@@ -948,6 +948,11 @@ The implementation phases above are complete except for the explicitly deferred 
   - Identity rule: stable callable identity is `provider_kind + provider_id/toolbox_id + session_id + method`.
   - Approval rule: broker grants default to same provider/session scope. Cross-toolbox reuse requires explicit compatible owner/workspace, toolbox definition digest, schema/method/policy digests, method name, provider kind, and constraints.
   - Bridge rule: brokered IO permissions use an explicit bridge policy intersected with toolbox policy and Host Capability caller policy.
+  - Deeper unification option: if maintenance cost later justifies it, HostedToolbox brokered IO could be implemented as a Host Capability provider adapter internally. In that model, toolbox brokered calls would enter the same provider-session dispatcher, approval bridge, callback envelope, audit writer, and callable-surface descriptor path used by sandbox `host.call`.
+  - What that could remove: duplicated callback envelope normalization, duplicate audit/correlation plumbing, separate approval relay wiring, and parallel callable descriptor conversion paths.
+  - What must stay toolbox-owned: toolbox install/config lifecycle, toolbox storage, toolbox execution harness semantics, toolbox-native policy, `ToolsView` metadata, and toolbox-specific approval context. Host Capability should remain an adapter/transport layer, not become the owner of toolbox lifecycle.
+  - Hard constraints before attempting it: preserve per-toolbox session identity, allow overlapping method names across toolbox instances, keep explicit bridge-policy intersection, preserve same-provider/session approval grant defaults, and avoid changing client-visible toolbox behavior.
+  - Trigger to revisit: only start this if the codebase shows concrete duplication or inconsistent behavior that shared metadata helpers cannot solve. Do not do it as a speculative architecture cleanup.
 
 ### Long-Lived Recovery Beyond Host-Managed State
 
@@ -985,12 +990,14 @@ The implementation phases above are complete except for the explicitly deferred 
 - State recovery is explicit host-managed JSON state plus client-directed artifact handoff from failed request folders.
 - Python project-mode pinned instances require a reset policy for cwd, `sys.path`, env, and project imports.
 - JS project-mode pinned instances reuse the worker process only when reset-per-request project policy is explicit; persistent JS project heaps remain unsupported.
-- Action manifests are static request metadata for now; sandbox-executed dynamic discovery is deferred unless a future workflow composition feature needs it.
+- Action manifests can be static request metadata or opt-in sandbox-executed dynamic discovery through `workflow_python_action_describe(dynamic=True, ...)` and `workflow_js_action_describe(dynamic=True, ...)`.
 
 ## Current Recommendation
 
-Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The toolbox brokered IO simplification is also closed for now: use shared callable-surface/bridge helpers and metadata, not forced runtime unification.
+Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is closed. Callable-surface bridge helpers, adapter-based toolbox callable export, conflict handling, approval bridge helpers, and toolbox brokered IO metadata are implemented.
 
-The next high-leverage work is to let the client integrate the callable-surface bridge helpers, adapter-based toolbox callable export, and conflict/approval policy rules.
+The active client-facing work is dynamic action discovery adoption. Keep the current client adoption notes in `HOSTING_CLIENT_BREAKING_CHANGES.md` until the dependent client confirms that slice is consumed, then reset the file for future changes.
+
+The toolbox brokered IO simplification is closed for now: use shared callable-surface/bridge helpers and metadata, not forced runtime unification. Deeper HostedToolbox brokered IO unification should stay deferred unless a concrete maintenance issue appears, such as duplicated approval relay behavior, inconsistent audit rows, or divergent callback error semantics between toolbox brokered IO and Host Capability provider calls.
 
 Persistent JS project heap state should stay behind explicit runtime design work because it affects cleanup, snapshot, and mutation semantics. Broader instance recovery remains intentionally out of scope unless a future runtime adds a specific checkpoint contract.
