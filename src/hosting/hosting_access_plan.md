@@ -260,7 +260,7 @@ Direction: introduce explicit sandbox instance IDs, routing policy, and state sn
 
 Current node responses support `state_patch`. Workflow Python node requests now also have an explicit, opt-in host-managed state provider with versioned JSON values and `state.<scope>.(get|set|list|delete)` Host Capability methods.
 
-Gap: long-lived and restarted instances still need snapshot/restore hooks, and state cleanup policy for explicit long-lived instances is not yet defined.
+Gap: arbitrary Python/JS heap recovery is intentionally not supported. Host-managed JSON state has snapshot/restore hooks, and failed-request artifact handoff exists, but automatic garbage collection for retained recovery folders is still deferred.
 
 Direction: build instance snapshot/restore and routable instance lifecycle on top of the explicit state capability model. Do not snapshot arbitrary Python memory.
 
@@ -954,7 +954,7 @@ The implementation phases above are complete except for the explicitly deferred 
   - Edit+continue rule: `instance_id` is the stable logical worker identity. Python replacement starts a fresh process under the same `instance_id`; JS module/snippet edits can reuse the same compatible worker process while updating `code_key`. Persistent module state makes replacement explicit: edited code is rejected during instance execute and accepted through `create(..., replace=true)`.
   - Artifact namespace rule: recovery claim defaults to `@artifacts/instances/<instance_id>/...` when the failed request or claim supplies an instance id.
   - Client responsibility: partial artifact validity is client-owned. Hosting provides hint labels only.
-  - Cleanup boundary: disk garbage collection is deferred to a later task; explicit cleanup remains available by request id.
+  - Cleanup boundary: successful requests clean prepared run folders after artifact collection. Failed requests with declared output artifacts intentionally keep their run folders so clients can inspect/claim recovery candidates. Those retained run folders can remain on disk until the client calls `workflow-artifact-recovery-cleanup`; automatic disk garbage collection by age/size/quota is deferred to a later task.
 
 ### JavaScript Project Instances
 
