@@ -124,7 +124,7 @@ Host callback methods supported by the worker:
 6. `http.fetch`
 7. `callback.invoke`
 
-Brokered filesystem and HTTP calls go through `EngineHostService` and are authorized from the persisted sandbox policy for the worker `engine_id`.
+Brokered filesystem and HTTP calls go through `EngineHostService` and are authorized from the persisted sandbox policy for the worker `engine_id`. The worker also attaches shared callable-surface metadata to callback context under `callable_surface`. That metadata uses `hosting.toolbox.brokered_io.call_surface.v1` and includes method identity, schema/method/policy digests, safe correlation fields, and the effective bridge-policy intersection. This is metadata only; toolbox execution and brokered IO authorization remain toolbox-native.
 
 ## Hosted Callback Relay
 
@@ -132,7 +132,7 @@ Generic hosted callbacks use a per-execute callback binding. The worker connects
 
 1. `callback_name`
 2. callback payload
-3. context with `engine_id`, `toolbox_id`, `tool_name`, `tool_call_id`, `tool_arguments`, and optional `callback_signature`
+3. context with `engine_id`, `toolbox_id`, `tool_name`, `tool_call_id`, `tool_arguments`, optional `callback_signature`, and `callable_surface`
 
 The caller-side hosted execution harness processes callbacks concurrently. A blocked callback processor blocks only that callback response, not the entire worker callback path.
 

@@ -938,6 +938,7 @@ The implementation phases above are complete except for the explicitly deferred 
 
 - [x] Decide the toolbox lifecycle pillar should not force HostedToolbox brokered IO onto Host Capability dispatch by default.
   - Current state: hosted toolbox sessions can already act as Host Capability providers, but toolbox-specific brokered IO paths still exist.
+  - Implemented simplification: toolbox brokered IO remains toolbox-native, but brokered host calls now carry shared callable-surface identity, schema/method/policy digests, safe correlation fields, and effective bridge-policy metadata in callback context.
   - Decision: share callable-surface primitives and approval/audit helper contracts, while keeping HostedToolbox brokered IO toolbox-native unless a specific later maintenance problem requires deeper runtime unification.
   - Conflict rule: one workflow/session may own multiple hosted toolbox instances with overlapping method names. Duplicate advertised names must use namespaces/aliases or an explicit conflict policy; they must not silently collapse.
   - Identity rule: stable callable identity is `provider_kind + provider_id/toolbox_id + session_id + method`.
@@ -984,7 +985,7 @@ The implementation phases above are complete except for the explicitly deferred 
 
 ## Current Recommendation
 
-Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The toolbox brokered IO decision is also closed for now: use shared callable-surface/bridge helpers, not forced runtime unification.
+Do not start deferred runtime cleanup until there is a concrete owning feature or client migration signal. The client adoption blocker for Host Capability fallback removal is now closed. The toolbox brokered IO simplification is also closed for now: use shared callable-surface/bridge helpers and metadata, not forced runtime unification.
 
 The next high-leverage work is to let the client integrate the callable-surface bridge helpers, adapter-based toolbox callable export, and conflict/approval policy rules.
 

@@ -249,6 +249,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Expanded approval/correlation helper fields with session, toolbox, branch, session-tree, and provider-kind context.
 - [x] Added client integration instructions for multiple toolbox instances, conflict handling, approval scope, bridge policy, and correlation metadata.
 
+### Toolbox Brokered IO Simplification Slice
+
+- [x] Added `toolbox_brokered_io_call_surface(...)` as shared callable-surface metadata for toolbox-native brokered host calls.
+- [x] Reused known `fs.*` / `http.fetch` descriptors for brokered IO identity and schema/method/policy digests.
+- [x] Attached callable identity, digests, safe correlation fields, and effective bridge-policy intersection to toolbox executor `callback_context`.
+- [x] Kept toolbox execution, storage, lifecycle, and brokered IO authorization toolbox-native.
+- [x] Reset `HOSTING_CLIENT_BREAKING_CHANGES.md` after dependent clients consumed the previous notes; no new client breaking changes are required for this slice.
+
 ### State And Long-Lived Instances Slice 23: Artifact Recovery Handoff
 
 - [x] Constrained recovery semantics to explicit host-managed state plus artifact handoff; no heap recovery or mutation replay.

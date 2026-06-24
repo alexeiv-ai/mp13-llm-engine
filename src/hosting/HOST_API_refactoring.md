@@ -95,7 +95,7 @@ Clients should use high-level helpers and avoid raw provider session tokens or c
 - [x] Toolbox-backed provider sessions use provider kind `toolbox_session`.
 - [x] Toolbox-backed provider invocation executes through the existing toolbox harness.
 - [x] Toolbox `ToolsView`, gating, scoped approvals, and execution accounting are reused where practical.
-- [x] HostedToolbox brokered IO unification is intentionally deferred to a later uber-plan pillar.
+- [x] HostedToolbox brokered IO remains toolbox-native, but brokered host calls now carry shared callable-surface identity, digest, correlation, and bridge-policy metadata.
 
 ## Audit And Diagnostics
 
@@ -157,6 +157,7 @@ These items are intentionally outside the completed Host Capability pillar. They
 - [x] Decide against forcing HostedToolbox brokered IO onto Host Capability dispatch as the default toolbox lifecycle direction.
   - Owning pillar: toolbox lifecycle and brokered IO simplification.
   - Current state: hosted toolbox sessions can already register as Host Capability providers and execute through the existing toolbox harness. Toolbox brokered IO remains toolbox-native.
+  - Implemented simplification: toolbox brokered IO calls now attach `hosting.toolbox.brokered_io.call_surface.v1` metadata to callback context, including callable identity, schema/method/policy digests, safe correlation fields, and effective bridge-policy intersection.
   - Decision: use shared callable-surface descriptors, identity/digest helpers, approval/audit helper contracts, and explicit bridge policies. Keep toolbox lifecycle/execution ownership separate from sandbox Host Capability dispatch unless a later concrete duplication problem justifies deeper runtime unification.
   - Conflict rule: overlapping method names are allowed across provider sessions but must not silently collapse in a merged advertised surface. Stable identity is `provider_kind + provider_id/toolbox_id + session_id + method`.
   - Approval rule: reusable grants default to same provider/session scope. Cross-toolbox reuse requires explicit scope identity such as toolbox definition digest, owner/workspace, method/schema/policy digests, and compatible constraints.

@@ -59,6 +59,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Deterministic non-executing uv install plans from `pyproject_toml`, `uv_lock`, and dependency groups.
 - uv install plan locking/verification, explicit uv execution through install APIs, uv install receipts, uv receipt verification, and uv-managed interpreter selection for dependency-bearing node execution.
 - Toolbox executor runtime execution, cancellation, request-status, and resource accounting through the shared hosted pool lifecycle layer, while toolbox registration/repair/GC orchestration remains toolbox-specific.
+- Toolbox brokered IO calls carry shared callable-surface identity, digest, correlation, and bridge-policy metadata while keeping toolbox-native execution and authorization.
 - Python node host API back channel for discoverable, dispatcher-based cooperative host calls over the built-in node harness control channel, including artifact-root filesystem operations and policy-gated brokered HTTP.
 - Node host API discovery now exposes method descriptions, argument schemas, result schemas, permissions, roots, policy, and transport capabilities through `host.describe`.
 - Node host API built-in namespaces can now be disabled through node sandbox policy; the current built-in `fs`/`artifact_fs` namespace is omitted from discovery and dispatch when disabled.

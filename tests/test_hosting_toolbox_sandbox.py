@@ -3158,26 +3158,26 @@ def test_toolbox_executor_context_fs_wrapper_uses_host_call(monkeypatch) -> None
     out = ctx.fs.read_text(root_id="rw", relative_path="a.txt")
 
     assert out == {"text": "hello"}
-    assert calls == [
-        (
-            "fs.read_text",
-            {
-                "engine_id": "toolbox-a",
-                "root_id": "rw",
-                "relative_path": "a.txt",
-                "encoding": "utf-8",
-                "callback_context": {
-                    "engine_id": "toolbox-a",
-                    "toolbox_id": "toolbox-demo",
-                    "tool_name": "peek_tool",
-                    "tool_call_id": "call-123",
-                    "tool_arguments": {"path": "a.txt"},
-                    "callback_signature": None,
-                    "user_context": None,
-                },
-            },
-        )
-    ]
+    assert calls[0][0] == "fs.read_text"
+    payload = calls[0][1]
+    assert payload["engine_id"] == "toolbox-a"
+    assert payload["root_id"] == "rw"
+    assert payload["relative_path"] == "a.txt"
+    assert payload["encoding"] == "utf-8"
+    callback_context = dict(payload["callback_context"])
+    assert callback_context["engine_id"] == "toolbox-a"
+    assert callback_context["toolbox_id"] == "toolbox-demo"
+    assert callback_context["tool_name"] == "peek_tool"
+    assert callback_context["tool_call_id"] == "call-123"
+    assert callback_context["tool_arguments"] == {"path": "a.txt"}
+    surface = dict(callback_context["callable_surface"])
+    assert surface["contract"] == "hosting.toolbox.brokered_io.call_surface.v1"
+    assert surface["method"] == "fs.read_text"
+    assert surface["identity"]["provider_kind"] == "toolbox_session"
+    assert surface["identity"]["provider_id"] == "toolbox-a"
+    assert surface["identity"]["toolbox_id"] == "toolbox-demo"
+    assert surface["identity"]["session_id"] == "call-123"
+    assert surface["bridge_policy"]["namespaces"]["fs"] is True
 
 
 def test_sandboxed_toolbox_facade_execute_does_not_serialize_callback_user_context() -> None:
@@ -3595,15 +3595,22 @@ def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
         tool_row = dict(exec_out.get("tool_call") or {})
         parsed = json.loads(str(tool_row.get("result") or "{}"))
         assert parsed["text"] == "callback-ok"
-        assert parsed["callback_context"] == {
-            "engine_id": "toolbox-live-callback",
-            "toolbox_id": "bundle-live-callback",
-            "tool_name": "read_name_tool",
-            "tool_call_id": "call-live-fs-1",
-            "tool_arguments": {},
-            "callback_signature": None,
-            "user_context": None,
-        }
+        callback_context = dict(parsed["callback_context"])
+        assert callback_context["engine_id"] == "toolbox-live-callback"
+        assert callback_context["toolbox_id"] == "bundle-live-callback"
+        assert callback_context["tool_name"] == "read_name_tool"
+        assert callback_context["tool_call_id"] == "call-live-fs-1"
+        assert callback_context["tool_arguments"] == {}
+        assert callback_context["callback_signature"] is None
+        assert callback_context["user_context"] is None
+        surface = dict(callback_context["callable_surface"])
+        assert surface["contract"] == "hosting.toolbox.brokered_io.call_surface.v1"
+        assert surface["method"] == "fs.read_text"
+        assert surface["identity"]["provider_id"] == "toolbox-live-callback"
+        assert surface["identity"]["toolbox_id"] == "bundle-live-callback"
+        assert surface["identity"]["session_id"] == "call-live-fs-1"
+        assert surface["bridge_policy"]["namespaces"]["fs"] is True
+        assert surface["bridge_policy"]["namespaces"]["http"] is False
     finally:
         try:
             os.kill(int(reg.get("pid") or 0), signal.SIGTERM)

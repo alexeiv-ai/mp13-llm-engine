@@ -16,6 +16,7 @@ from hosting.callable_surface import (
     host_capability_descriptors_to_callable_schemas,
     host_capability_provider_success,
     normalize_host_capability_provider_response,
+    toolbox_brokered_io_call_surface,
     toolbox_to_callable_schemas,
     toolbox_to_host_capability_descriptors,
 )
@@ -326,3 +327,33 @@ def test_host_capability_bridge_policy_intersects_explicit_permissions() -> None
     assert policy["namespaces"]["fs"] is True
     assert policy["namespaces"]["http"] is False
     assert policy["namespaces"]["state"] is False
+
+
+def test_toolbox_brokered_io_call_surface_reuses_known_method_descriptors() -> None:
+    surface = toolbox_brokered_io_call_surface(
+        "fs.read_text",
+        arguments={"root_id": "rw", "relative_path": "a.txt"},
+        context={"request_id": "req-1", "toolbox_id": "tb-1"},
+        toolbox_policy={"sandbox": {"brokered_io": {"filesystem": True, "http": False}}},
+        provider_id="provider-1",
+        toolbox_id="tb-1",
+        session_id="call-1",
+    )
+
+    assert surface["contract"] == "hosting.toolbox.brokered_io.call_surface.v1"
+    assert surface["method"] == "fs.read_text"
+    assert surface["namespace"] == "fs"
+    assert surface["argument_keys"] == ["relative_path", "root_id"]
+    assert surface["identity"] == {
+        "provider_kind": "toolbox_session",
+        "provider_id": "provider-1",
+        "toolbox_id": "tb-1",
+        "session_id": "call-1",
+        "method": "fs.read_text",
+    }
+    assert surface["digests"]["schema_digest"]
+    assert surface["digests"]["method_digest"]
+    assert surface["digests"]["policy_digest"]
+    assert surface["bridge_policy"]["namespaces"]["fs"] is True
+    assert surface["bridge_policy"]["namespaces"]["http"] is False
+    assert surface["correlation"]["request_id"] == "req-1"

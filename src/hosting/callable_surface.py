@@ -23,6 +23,7 @@ HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT = "hosting.sandbox.host_capability_ap
 HOST_CAPABILITY_PROVIDER_CALLBACK_NAME = "host_capability.call"
 HOST_CAPABILITY_APPROVAL_CALLBACK_NAME = "host_capability.approval"
 HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT = "hosting.sandbox.host_capability_bridge_policy.v1"
+TOOLBOX_BROKERED_IO_CALL_SURFACE_CONTRACT = "hosting.toolbox.brokered_io.call_surface.v1"
 
 SAFE_CORRELATION_FIELDS = (
     "workflow_id",
@@ -331,6 +332,97 @@ def callable_surface_digests(descriptor: HostCapabilityDescriptor | Dict[str, An
     }
 
 
+def toolbox_brokered_io_call_surface(
+    method: str,
+    *,
+    arguments: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    toolbox_policy: Optional[Dict[str, Any]] = None,
+    host_capability_policy: Optional[Dict[str, Any]] = None,
+    bridge_policy: Optional[Dict[str, Any]] = None,
+    provider_id: str = "",
+    toolbox_id: str = "",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """Describe one toolbox brokered-IO call using shared callable-surface metadata.
+
+    This keeps toolbox execution and brokered IO toolbox-native, while sharing
+    the same identity, digest, correlation, and bridge-policy vocabulary used by
+    Host Capability provider calls.
+    """
+    meth = _clean(method)
+    if not meth:
+        meth = "callback.invoke"
+    try:
+        from .sandbox.host_api import known_host_capability_method_descriptors
+
+        known = {str(row.get("name") or ""): dict(row or {}) for row in known_host_capability_method_descriptors()}
+    except Exception:
+        known = {}
+    descriptor_row = dict(known.get(meth) or {})
+    if descriptor_row:
+        descriptor_row["provider"] = HostCapabilityProviderRef(
+            provider_id=_clean(provider_id) or _clean(toolbox_id) or "toolbox",
+            kind="toolbox_session",
+            owner="client",
+            visibility="workflow",
+        ).to_dict()
+        metadata = dict(descriptor_row.get("metadata") or {})
+        metadata["toolbox"] = {
+            **dict(metadata.get("toolbox") or {}),
+            "toolbox_id": _clean(toolbox_id) or _clean(provider_id) or "toolbox",
+            "session_id": _clean(session_id) or None,
+            "brokered_io": True,
+        }
+        descriptor_row["metadata"] = metadata
+        descriptor = HostCapabilityDescriptor.from_dict(descriptor_row)
+    else:
+        if "." in meth:
+            normalized = ".".join(_method_segment(part) for part in meth.split(".") if _method_segment(part))
+        else:
+            normalized = f"callback.{_method_segment(meth)}"
+        namespace = normalized.split(".", 1)[0]
+        descriptor = HostCapabilityDescriptor(
+            name=normalized,
+            namespace=namespace,
+            group_path=default_group_path(normalized),
+            description=f"Invoke toolbox brokered host method {meth}.",
+            args_schema={"type": "object"},
+            result_schema={"type": "object"},
+            provider=HostCapabilityProviderRef(
+                provider_id=_clean(provider_id) or _clean(toolbox_id) or "toolbox",
+                kind="toolbox_session",
+                owner="client",
+                visibility="workflow",
+            ),
+            metadata={
+                "toolbox": {
+                    "toolbox_id": _clean(toolbox_id) or _clean(provider_id) or "toolbox",
+                    "session_id": _clean(session_id) or None,
+                    "brokered_io": True,
+                }
+            },
+        )
+    toolbox = dict(toolbox_policy or {})
+    host_api = dict(host_capability_policy if host_capability_policy is not None else toolbox)
+    bridge = dict(bridge_policy if bridge_policy is not None else toolbox)
+    row = descriptor.to_dict()
+    return {
+        "contract": TOOLBOX_BROKERED_IO_CALL_SURFACE_CONTRACT,
+        "method": meth,
+        "namespace": row["namespace"],
+        "argument_keys": sorted(str(key) for key in dict(arguments or {}).keys()),
+        "identity": callable_surface_identity(descriptor, session_id=session_id, provider_id=provider_id, toolbox_id=toolbox_id, provider_kind="toolbox_session"),
+        "digests": callable_surface_digests(descriptor),
+        "bridge_policy": host_capability_bridge_policy(
+            toolbox_policy=toolbox,
+            host_capability_policy=host_api,
+            bridge_policy=bridge,
+        ),
+        "correlation": extract_safe_correlation_metadata(context or {}, {"method": meth, "provider_id": provider_id, "toolbox_id": toolbox_id, "session_id": session_id}),
+    }
+
+
 def host_capability_bridge_policy(
     *,
     toolbox_policy: Optional[Dict[str, Any]] = None,
@@ -342,9 +434,9 @@ def host_capability_bridge_policy(
     A namespace is effectively allowed only when the explicit bridge policy and
     both endpoint policies allow it. Missing bridge entries are denied.
     """
-    toolbox = dict(toolbox_policy or {})
-    host_api = dict(host_capability_policy or {})
-    bridge = dict(bridge_policy or {})
+    toolbox = _policy_payload(toolbox_policy)
+    host_api = _policy_payload(host_capability_policy)
+    bridge = _policy_payload(bridge_policy)
     namespace_names = sorted(
         {
             *_policy_namespace_names(toolbox),
@@ -371,6 +463,7 @@ def host_capability_bridge_policy(
 
 
 def _policy_namespace_names(policy: Dict[str, Any]) -> set[str]:
+    policy = _policy_payload(policy)
     names = {str(key or "").strip() for key in dict(policy.get("namespaces") or {}).keys()}
     names.update(str(key or "").strip() for key in ("fs", "http", "state", "subprocess") if key in policy)
     brokered = dict(policy.get("brokered_io") or {})
@@ -381,6 +474,7 @@ def _policy_namespace_names(policy: Dict[str, Any]) -> set[str]:
 
 
 def _policy_namespace_allowed(policy: Dict[str, Any], namespace: str) -> bool:
+    policy = _policy_payload(policy)
     ns = _clean(namespace)
     names = dict(policy.get("namespaces") or {})
     if ns in names:
@@ -393,6 +487,11 @@ def _policy_namespace_allowed(policy: Dict[str, Any], namespace: str) -> bool:
     if ns in brokered:
         return bool(brokered.get(ns))
     return False
+
+
+def _policy_payload(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    row = dict(policy or {})
+    return dict(row.get("sandbox") or row)
 
 
 def extract_safe_correlation_metadata(*payloads: Any) -> Dict[str, Any]:
@@ -725,6 +824,7 @@ __all__ = [
     "HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT",
     "HOST_CAPABILITY_PROVIDER_CALLBACK_NAME",
     "HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT",
+    "TOOLBOX_BROKERED_IO_CALL_SURFACE_CONTRACT",
     "HostCapabilityApprovalCallbackRelay",
     "HostCapabilityProviderCallbackRelay",
     "SAFE_CORRELATION_FIELDS",
@@ -740,6 +840,7 @@ __all__ = [
     "host_capability_provider_error",
     "host_capability_provider_success",
     "normalize_host_capability_provider_response",
+    "toolbox_brokered_io_call_surface",
     "toolbox_to_callable_schemas",
     "toolbox_to_host_capability_descriptors",
 ]

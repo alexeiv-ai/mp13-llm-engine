@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 
 from mp13_engine.mp13_config import ToolCall
 
+from .callable_surface import toolbox_brokered_io_call_surface
 from .toolbox_harness import ToolboxWorkerStartupSpec, load_toolbox_from_manifest
 
 PROTOCOL_VERSION = 1
@@ -210,22 +211,41 @@ class HostCallbackClient:
         self.callback_signature = dict(callback_signature or {}) or None
         self.user_context = user_context
 
+    def _brokered_io_policy(self) -> Dict[str, Any]:
+        spec = _startup_spec_or_none()
+        if spec is not None and isinstance(spec.policy, dict):
+            return dict(spec.policy or {})
+        return {"sandbox": {"brokered_io": {"filesystem": True, "http": True, "subprocess": False}}}
+
+    def _callback_context(self, *, method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        context = {
+            "engine_id": self.engine_id,
+            "toolbox_id": self.toolbox_id,
+            "tool_name": self.tool_name,
+            "tool_call_id": self.tool_call_id or None,
+            "tool_arguments": dict(self.tool_arguments or {}),
+            "callback_signature": dict(self.callback_signature or {}) or None,
+            "user_context": self.user_context,
+        }
+        policy = self._brokered_io_policy()
+        context["callable_surface"] = toolbox_brokered_io_call_surface(
+            str(method or ""),
+            arguments=dict(arguments or {}),
+            context=context,
+            toolbox_policy=policy,
+            host_capability_policy=policy,
+            bridge_policy=policy,
+            provider_id=self.engine_id,
+            toolbox_id=self.toolbox_id,
+            session_id=self.tool_call_id,
+        )
+        return context
+
     def call(self, method: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         meth = str(method or "").strip()
         req = dict(arguments or {})
         req.setdefault("engine_id", self.engine_id)
-        req.setdefault(
-            "callback_context",
-            {
-                "engine_id": self.engine_id,
-                "toolbox_id": self.toolbox_id,
-                "tool_name": self.tool_name,
-                "tool_call_id": self.tool_call_id or None,
-                "tool_arguments": dict(self.tool_arguments or {}),
-                "callback_signature": dict(self.callback_signature or {}) or None,
-                "user_context": self.user_context,
-            },
-        )
+        req.setdefault("callback_context", self._callback_context(method=meth, arguments=req))
         if meth == "callback.invoke":
             callback_name = str(req.get("callback_name") or req.get("name") or "").strip()
             if not callback_name:
@@ -243,6 +263,7 @@ class HostCallbackClient:
                     "tool_call_id": self.tool_call_id or None,
                     "tool_arguments": dict(self.tool_arguments or {}),
                     "callback_signature": dict(self.callback_signature or {}) or None,
+                    "callable_surface": dict(dict(req.get("callback_context") or {}).get("callable_surface") or {}),
                 },
             )
             return {"status": "ok", "callback_name": callback_name, "result": response.get("result")}
