@@ -373,3 +373,13 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `pytest -q tests/test_callable_surface.py`
 - [x] `pytest -q tests/test_engine_host_channel.py -k "approval_requester_binding or workflow_python_channel_facade or workflow_js_channel_facade"`
 - [x] `pytest -q tests/test_workflow_helper_service.py -k "approval_requester or approval_requester_binding or daemon_dispatches_workflow_python_facade or daemon_dispatches_workflow_js_facade"`
+
+## 2026-06-23 Dynamic Action Discovery
+
+- [x] Added opt-in `workflow_python_action_describe(dynamic=True, ...)` and `workflow_js_action_describe(dynamic=True, ...)` execution paths that call sandbox-owned discovery entrypoints and normalize their output as `hosting.sandbox.action_manifest.v1`.
+- [x] Exposed dynamic discovery routing fields through the control channel, daemon local IPC, and CLI JSON-command dispatch.
+- [x] Documented client adoption for dynamic discovery, including pinned-instance usage and approval requester forwarding.
+- [x] `python -m py_compile src/hosting/service/workflow_helpers.py src/hosting/engine_host_channel.py src/hosting/daemon/local_ipc.py src/hosting/engine_host_cli.py`
+- [x] `pytest tests/test_workflow_helper_service.py -q -k "dynamic_action_discovery or action_manifest"`
+- [x] `pytest tests/test_engine_host_channel.py::test_workflow_python_channel_facade_forwards_expected_payloads tests/test_engine_host_channel.py::test_workflow_js_channel_facade_forwards_expected_payloads -q`
+- [x] `pytest tests/test_workflow_helper_service.py::test_daemon_dispatches_workflow_python_facade tests/test_workflow_helper_service.py::test_daemon_dispatches_workflow_js_facade -q`

@@ -1194,6 +1194,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.workflow_js_action_describe(
                     request=dict(payload.get("request") or {}),
                     include_hidden=bool(payload.get("include_hidden", False)),
+                    dynamic=bool(payload.get("dynamic", False)),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-js-node"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    node=dict(payload.get("node") or {}),
+                    javascript=dict(payload.get("javascript") or {}),
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    instance_id=str(payload.get("instance_id") or "").strip() or None,
                 )
             )
             return 0
@@ -1442,6 +1452,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.workflow_python_action_describe(
                     request=dict(payload.get("request") or {}),
                     include_hidden=bool(payload.get("include_hidden", False)),
+                    dynamic=bool(payload.get("dynamic", False)),
+                    profile=str(payload.get("profile") or "node"),
+                    environment_name=str(payload.get("environment_name") or "workflow-python-node"),
+                    environment_key=str(payload.get("environment_key") or "").strip() or None,
+                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
+                    capacity=int(payload.get("capacity") or 1),
+                    sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
+                    instance_id=str(payload.get("instance_id") or "").strip() or None,
                 )
             )
             return 0

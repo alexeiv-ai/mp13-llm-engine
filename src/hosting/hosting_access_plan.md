@@ -268,9 +268,9 @@ Direction: build instance snapshot/restore and routable instance lifecycle on to
 
 Current node execution is centered on a simple callable such as `run(payload)`. Card designers cannot discover a structured action manifest from a sandbox and bind buttons to supported entry points.
 
-Gap: workflow composition needs action discovery without abandoning simple `run(payload)` for small nodes.
+Current state: static `action_manifest` / `actions` requests are normalized into `hosting.sandbox.action_manifest.v1`. Python and JavaScript action describe helpers can also run an opt-in dynamic discovery entrypoint, defaulting to `describe_actions(payload)`, and normalize its returned manifest into the same card-facing shape. Dynamic discovery can target an already-created pinned instance when `instance_id` is supplied.
 
-Direction: support an optional action manifest. `run(payload)` remains the minimal default, while richer sandboxes can expose toolbox-like action entries.
+Direction: keep `run(payload)` as the minimal default. Richer sandboxes can expose toolbox-like action entries either statically through request metadata or dynamically through a sandbox-owned discovery callable.
 
 ## Feasibility By Direction
 
@@ -909,6 +909,10 @@ Work:
   - [x] Keep `run(payload)` as the default action when no manifest is supplied.
 - [x] Add card-facing action discovery.
   - [x] Add Python and JavaScript service helpers that return advertised actions and can include hidden actions when requested.
+  - [x] Add opt-in dynamic sandbox discovery through `workflow_python_action_describe(dynamic=True, ...)` and `workflow_js_action_describe(dynamic=True, ...)`.
+  - [x] Normalize dynamic `describe_actions(payload)` output through the same `hosting.sandbox.action_manifest.v1` path used by static manifests.
+  - [x] Allow dynamic discovery to target an existing pinned Python or JavaScript instance by passing `instance_id`.
+  - [x] Expose dynamic discovery fields over daemon, control channel, and CLI action-describe commands.
 - [x] Add action invocation routing.
   - [x] Route selected actions through existing `export_name`, `operation`, snippet, and project callable request fields before worker execution.
   - [x] Add explicit Python and JavaScript action execution helpers on top of normal execute.
@@ -921,7 +925,7 @@ Work:
 - Event helpers should continue to expose `started`, `progress`, `stdout`, `stderr`, `log`, `artifact`, `result`, `error`, `canceled`, and `done` as normalized event kinds.
 - Legacy workflow stream receive command shapes have been removed from public workflow command paths; workflow clients should use `workflow-*-event-subscribe`.
 - Client-owned host APIs are opt-in through provider sessions and callable-surface helpers.
-- Action manifests are additive. Existing `run(payload)` requests remain valid and become the default action when no manifest is supplied.
+- Action manifests and dynamic action discovery are additive. Existing `run(payload)` requests remain valid and become the default action when no manifest is supplied.
 
 ## Remaining Open And Deferred Items
 

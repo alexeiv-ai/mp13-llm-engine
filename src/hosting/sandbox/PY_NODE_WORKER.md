@@ -147,6 +147,16 @@ routes the selected action into the existing worker contract by setting
 `export_name` / `operation`, `execution_mode="snippet"`, or
 `project.callable` before the worker receives the request.
 
+Dynamic discovery is opt-in. Calling
+`workflow_python_action_describe(dynamic=True, request=...)` executes
+`describe_actions(payload)` by default, or the entrypoint configured under
+`request["action_discovery"]["entrypoint"]`, and normalizes the returned
+manifest through `hosting.sandbox.action_manifest.v1`. The discovery callable
+may return either `{"output": {"actions": [...]}}`,
+`{"output": {"action_manifest": {...}}}`, or a raw list/dict manifest from the
+worker response. Passing `instance_id` targets an already-created pinned
+instance; it does not implicitly create one.
+
 Host-side callers can import request builders from `hosting.sandbox.workflow_python_contract` instead of hand-authoring low-level request fields:
 
 1. `build_workflow_python_node_module_request(...)`

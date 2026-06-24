@@ -1552,6 +1552,85 @@ def test_workflow_python_node_action_manifest_discovers_and_routes_exports(tmp_p
     assert out["audit"]["action"]["entrypoint"]["export_name"] == "approve"
 
 
+def test_workflow_python_node_dynamic_action_discovery_routes_exports(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def describe_actions(payload):\n"
+        "    return {'output': {'default_action': 'preview', 'actions': [\n"
+        "        {'name': 'preview', 'title': 'Preview', 'entrypoint': {'kind': 'export', 'export_name': 'preview'}},\n"
+        "        {'name': 'internal', 'hidden_allowed': True, 'entrypoint': {'kind': 'export', 'export_name': 'internal'}},\n"
+        "    ]}}\n\n"
+        "def preview(payload):\n"
+        "    return {'output': {'action': 'preview', 'value': payload['value']}}\n\n"
+        "def internal(payload):\n"
+        "    return {'output': {'action': 'internal'}}\n"
+    )
+    request = {
+        "request_id": "req-py-dynamic-actions",
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "payload": {"value": 11},
+        "action_discovery": {"entrypoint": {"kind": "export", "export_name": "describe_actions"}},
+    }
+
+    visible = svc.workflow_python_action_describe(request=request, dynamic=True)
+    hidden = svc.workflow_python_action_describe(request=request, dynamic=True, include_hidden=True)
+    out = svc.execute_workflow_python_action(
+        profile="node",
+        action_name="preview",
+        request={**request, "action_manifest": visible},
+    )
+
+    assert visible["status"] == "ok"
+    assert visible["dynamic"] is True
+    assert visible["discovery"]["entrypoint"]["export_name"] == "describe_actions"
+    assert [row["name"] for row in visible["actions"]] == ["preview"]
+    assert [row["name"] for row in hidden["actions"]] == ["preview", "internal"]
+    assert out["status"] == "ok"
+    assert out["output"] == {"action": "preview", "value": 11}
+
+
+def test_workflow_python_dynamic_action_discovery_can_target_pinned_instance(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "counter = 0\n\n"
+        "def describe_actions(payload):\n"
+        "    global counter\n"
+        "    counter += 1\n"
+        "    return {'output': {'actions': [{'name': 'run', 'title': 'Run %s' % counter}]}}\n\n"
+        "def run(payload):\n"
+        "    return {'output': {'ok': True}}\n"
+    )
+    request = {
+        "request_id": "req-py-dynamic-instance",
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "export_name": "run",
+        "payload": {},
+        "instance": {"reuse": "persistent_module"},
+        "action_discovery": {"entrypoint": {"kind": "export", "export_name": "describe_actions"}},
+    }
+    created = svc.workflow_python_instance_create(instance_id="py-actions", request=request)
+
+    first = svc.workflow_python_action_describe(instance_id="py-actions", request=request, dynamic=True)
+
+    assert created["status"] == "ok"
+    assert first["status"] == "ok"
+    assert first["actions"][0]["title"] == "Run 1"
+
+
 def test_workflow_js_node_action_manifest_routes_exports(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1585,6 +1664,44 @@ def test_workflow_js_node_action_manifest_routes_exports(tmp_path: Path) -> None
     assert out["output"] == {"action": "preview", "value": 9}
     assert out["audit"]["action"]["name"] == "preview"
     assert out["audit"]["action"]["entrypoint"]["export_name"] == "preview"
+
+
+def test_workflow_js_node_dynamic_action_discovery_routes_exports(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "exports.describe_actions = function(input) {\n"
+        "  return { output: { actions: [\n"
+        "    { name: 'preview', entrypoint: { kind: 'export', export_name: 'preview' } },\n"
+        "    { name: 'hidden', hidden_allowed: true, entrypoint: { kind: 'export', export_name: 'hidden' } }\n"
+        "  ] } };\n"
+        "};\n"
+        "exports.preview = function(input) { return { output: { action: 'preview', value: input.value } }; };\n"
+        "exports.hidden = function(input) { return { output: { action: 'hidden' } }; };\n"
+    )
+    request = {
+        "request_id": "req-js-dynamic-actions",
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "payload": {"value": 13},
+        "action_discovery": {"entrypoint": {"kind": "export", "export_name": "describe_actions"}},
+    }
+
+    visible = svc.workflow_js_action_describe(request=request, dynamic=True)
+    hidden = svc.workflow_js_action_describe(request=request, dynamic=True, include_hidden=True)
+    out = svc.execute_workflow_js_action(action_name="preview", request={**request, "action_manifest": visible})
+
+    assert visible["status"] == "ok"
+    assert visible["dynamic"] is True
+    assert [row["name"] for row in visible["actions"]] == ["preview"]
+    assert [row["name"] for row in hidden["actions"]] == ["preview", "hidden"]
+    assert out["status"] == "ok"
+    assert out["output"] == {"action": "preview", "value": 13}
 
 
 def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ from ..sandbox.workflow_python_contract import (
 )
 
 WORKFLOW_ACTION_MANIFEST_CONTRACT = "hosting.sandbox.action_manifest.v1"
+WORKFLOW_ACTION_DISCOVERY_CONTRACT = "hosting.sandbox.action_discovery.v1"
 
 
 class WorkflowHelperMixin:
@@ -650,11 +651,246 @@ class WorkflowHelperMixin:
                 routed["operation"] = str(entrypoint.get("operation") or "").strip()
         return routed
 
-    def workflow_python_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
-        return self._workflow_action_manifest_card_view(dict(request or {}), runtime="python", include_hidden=include_hidden)
+    @staticmethod
+    def _workflow_action_discovery_raw(request: Dict[str, Any]) -> Dict[str, Any]:
+        req = dict(request or {})
+        for key in ("action_discovery", "dynamic_action_discovery", "dynamic_actions"):
+            raw = req.get(key)
+            if isinstance(raw, dict):
+                return dict(raw)
+        return {}
 
-    def workflow_js_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
-        return self._workflow_action_manifest_card_view(dict(request or {}), runtime="javascript", include_hidden=include_hidden)
+    @classmethod
+    def _workflow_action_discovery_enabled(cls, request: Dict[str, Any], dynamic: bool) -> bool:
+        return bool(dynamic) or bool(cls._workflow_action_discovery_raw(request))
+
+    @classmethod
+    def _workflow_request_with_action_discovery(cls, request: Dict[str, Any], *, runtime: str) -> Dict[str, Any]:
+        req = dict(request or {})
+        discovery = cls._workflow_action_discovery_raw(req)
+        entrypoint = dict(discovery.get("entrypoint") or {})
+        if not entrypoint:
+            entrypoint = {
+                "kind": "export",
+                "export_name": str(discovery.get("export_name") or discovery.get("callable") or "describe_actions").strip()
+                or "describe_actions",
+            }
+
+        routed = dict(req)
+        for key in ("action", "action_name", "_workflow_action_context", "_workflow_action_error"):
+            routed.pop(key, None)
+
+        if "payload" in discovery:
+            routed["payload"] = discovery.get("payload")
+        elif "discovery_payload" in routed:
+            routed["payload"] = routed.get("discovery_payload")
+
+        routed["_workflow_action_discovery_context"] = {
+            "contract": WORKFLOW_ACTION_DISCOVERY_CONTRACT,
+            "entrypoint": entrypoint,
+        }
+        kind = str(entrypoint.get("kind") or entrypoint.get("type") or "export").strip().lower()
+        if kind == "snippet":
+            routed["execution_mode"] = "snippet"
+        elif kind == "project":
+            project = dict(routed.get("project") or {})
+            module_name = str(entrypoint.get("module") or entrypoint.get("entrypoint") or "").strip()
+            callable_name = str(entrypoint.get("callable") or entrypoint.get("function") or entrypoint.get("export_name") or "describe_actions").strip()
+            if module_name:
+                project["entrypoint"] = module_name
+            project["callable"] = callable_name or "describe_actions"
+            routed["project"] = project
+            routed["execution_mode"] = "project"
+            routed["export_name"] = project["callable"]
+        else:
+            export_name = str(
+                entrypoint.get("export_name")
+                or entrypoint.get("operation")
+                or entrypoint.get("callable")
+                or "describe_actions"
+            ).strip() or "describe_actions"
+            routed["export_name"] = export_name
+            if entrypoint.get("operation"):
+                routed["operation"] = str(entrypoint.get("operation") or "").strip()
+        return routed
+
+    @classmethod
+    def _workflow_action_manifest_from_discovery_response(
+        cls,
+        response: Dict[str, Any],
+        *,
+        request: Dict[str, Any],
+        runtime: str,
+        include_hidden: bool = False,
+    ) -> Dict[str, Any]:
+        resp = dict(response or {})
+        if not bool(resp.get("ok")):
+            return {
+                "status": "error",
+                "ok": False,
+                "contract": WORKFLOW_ACTION_MANIFEST_CONTRACT,
+                "runtime": str(runtime or "").strip(),
+                "dynamic": True,
+                "reason": str(resp.get("reason") or "workflow_action_discovery_failed"),
+                "error": dict(resp.get("error") or {}) if isinstance(resp.get("error"), dict) else {},
+                "discovery": {
+                    "contract": WORKFLOW_ACTION_DISCOVERY_CONTRACT,
+                    "status": "error",
+                    "request_id": resp.get("request_id"),
+                },
+            }
+
+        output = resp.get("output")
+        if isinstance(output, dict) and "action_manifest" in output:
+            raw = output.get("action_manifest")
+        else:
+            raw = output
+        if isinstance(raw, list):
+            manifest = {"actions": list(raw)}
+        elif isinstance(raw, dict):
+            manifest = dict(raw)
+        else:
+            return {
+                "status": "error",
+                "ok": False,
+                "contract": WORKFLOW_ACTION_MANIFEST_CONTRACT,
+                "runtime": str(runtime or "").strip(),
+                "dynamic": True,
+                "reason": "workflow_action_discovery_invalid_output",
+                "discovery": {
+                    "contract": WORKFLOW_ACTION_DISCOVERY_CONTRACT,
+                    "status": "error",
+                    "request_id": resp.get("request_id"),
+                },
+            }
+        context = dict(dict(request or {}).get("_workflow_action_discovery_context") or {})
+        view = cls._workflow_action_manifest_card_view(
+            {**dict(request or {}), "action_manifest": manifest},
+            runtime=runtime,
+            include_hidden=include_hidden,
+        )
+        return {
+            **view,
+            "dynamic": True,
+            "discovery": {
+                "contract": WORKFLOW_ACTION_DISCOVERY_CONTRACT,
+                "status": "ok",
+                "request_id": resp.get("request_id"),
+                "entrypoint": dict(context.get("entrypoint") or {}),
+            },
+        }
+
+    def workflow_python_action_describe(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        include_hidden: bool = False,
+        dynamic: bool = False,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        instance_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        req = dict(request or {})
+        if not self._workflow_action_discovery_enabled(req, dynamic):
+            return self._workflow_action_manifest_card_view(req, runtime="python", include_hidden=include_hidden)
+        discovery_req = self._workflow_request_with_action_discovery(req, runtime="python")
+        iid = str(instance_id or req.get("instance_id") or "").strip()
+        if iid:
+            response = self.workflow_python_instance_execute(
+                instance_id=iid,
+                request=discovery_req,
+                profile=profile,
+                environment_name=environment_name,
+                environment_key=environment_key,
+                engine_id=engine_id,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
+            )
+        else:
+            response = self.execute_workflow_python(
+                profile=profile,
+                environment_name=environment_name,
+                environment_key=environment_key,
+                engine_id=engine_id,
+                request=discovery_req,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
+            )
+        return self._workflow_action_manifest_from_discovery_response(
+            response,
+            request=discovery_req,
+            runtime="python",
+            include_hidden=include_hidden,
+        )
+
+    def workflow_js_action_describe(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        include_hidden: bool = False,
+        dynamic: bool = False,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        instance_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        req = dict(request or {})
+        if not self._workflow_action_discovery_enabled(req, dynamic):
+            return self._workflow_action_manifest_card_view(req, runtime="javascript", include_hidden=include_hidden)
+        discovery_req = self._workflow_request_with_action_discovery(req, runtime="javascript")
+        iid = str(instance_id or req.get("instance_id") or "").strip()
+        if iid:
+            response = self.workflow_js_instance_execute(
+                instance_id=iid,
+                request=discovery_req,
+                profile=profile,
+                environment_name=environment_name,
+                environment_key=environment_key,
+                engine_id=engine_id,
+                node=node,
+                javascript=javascript,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
+            )
+        else:
+            response = self.execute_workflow_js(
+                profile=profile,
+                environment_name=environment_name,
+                environment_key=environment_key,
+                engine_id=engine_id,
+                request=discovery_req,
+                node=node,
+                javascript=javascript,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
+            )
+        return self._workflow_action_manifest_from_discovery_response(
+            response,
+            request=discovery_req,
+            runtime="javascript",
+            include_hidden=include_hidden,
+        )
 
     def execute_workflow_python_action(
         self,

@@ -1753,10 +1753,38 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def workflow_python_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
+    def workflow_python_action_describe(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        include_hidden: bool = False,
+        dynamic: bool = False,
+        profile: str = "node",
+        environment_name: str = "workflow-python-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        instance_id: Optional[str] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "request": dict(request or {}),
+            "include_hidden": bool(include_hidden),
+            "dynamic": bool(dynamic),
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+            "instance_id": str(instance_id or "").strip() or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-python-action-describe",
-            {"request": dict(request or {}), "include_hidden": bool(include_hidden)},
+            payload,
         )
         return dict(res or {})
 
@@ -2097,10 +2125,42 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def workflow_js_action_describe(self, *, request: Optional[Dict[str, Any]] = None, include_hidden: bool = False) -> Dict[str, Any]:
+    def workflow_js_action_describe(
+        self,
+        *,
+        request: Optional[Dict[str, Any]] = None,
+        include_hidden: bool = False,
+        dynamic: bool = False,
+        profile: str = "node",
+        environment_name: str = "workflow-js-node",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        instance_id: Optional[str] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "request": dict(request or {}),
+            "include_hidden": bool(include_hidden),
+            "dynamic": bool(dynamic),
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "node": dict(node or {}),
+            "javascript": dict(javascript or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+            "instance_id": str(instance_id or "").strip() or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-js-action-describe",
-            {"request": dict(request or {}), "include_hidden": bool(include_hidden)},
+            payload,
         )
         return dict(res or {})
 

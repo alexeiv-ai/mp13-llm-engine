@@ -156,6 +156,16 @@ routes the selected action into the existing worker contract by setting
 `export_name` or `execution_mode="snippet"` before the worker receives the
 request.
 
+Dynamic discovery is opt-in. Calling
+`workflow_js_action_describe(dynamic=True, request=...)` executes
+`exports.describe_actions(payload)` by default, or the entrypoint configured
+under `request["action_discovery"]["entrypoint"]`, and normalizes the returned
+manifest through `hosting.sandbox.action_manifest.v1`. The discovery callable
+may return either `{"output": {"actions": [...]}}`,
+`{"output": {"action_manifest": {...}}}`, or a raw list/dict manifest from the
+worker response. Passing `instance_id` targets an already-created pinned
+instance; it does not implicitly create one.
+
 ## JavaScript Execution API
 
 The QuickJS context should expose a small global surface:
