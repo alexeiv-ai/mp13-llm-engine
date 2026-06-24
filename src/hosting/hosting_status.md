@@ -11,6 +11,10 @@ Purpose: record the current implementation state and the discrepancies against `
 - Pinned Python and JavaScript module instances can opt into
   `instance_state_mode="persistent_module"` for sequential in-process
   module/global state.
+- Pinned Python project instances reuse a worker process with explicit
+  per-request cleanup of cwd, `sys.path`, environment, and project imports.
+- Pinned JavaScript project instances reuse a worker process with a fresh
+  QuickJS context and fresh project module cache per request.
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
@@ -60,7 +64,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node host API built-in namespaces can now be disabled through node sandbox policy; the current built-in `fs`/`artifact_fs` namespace is omitted from discovery and dispatch when disabled.
 - Node host API now supports policy-gated brokered HTTP through `http.fetch` / `host.http_fetch(...)` when sandbox policy enables brokered HTTP.
 - Node host API transport now correlates concurrent host responses by `host_call_id` and advertises out-of-order-safe responses.
-- Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests remain one-shot until project state recycling is implemented.
+- Python node workers now support warm sequential reuse for compatible module/snippet requests through a long-lived harness control loop. Project requests can use pinned instances when their runtime-specific reset policy is explicit.
 - Module/snippet warm worker routing now includes code revision identity using explicit `code_revision` or `module_sha256`; edited source reroutes to a new worker and old idle revisions are trimmed to configured capacity.
 - Warm node worker recycling now stops idle workers for superseded derived environment identities, capacity-trimmed idle workers, and unhealthy idle workers discovered during resource inspection.
 - Node request builders now cover module functions, snippets, staged projects, and uv projects, including explicit project identity defaults for project mode.
@@ -87,7 +91,7 @@ Purpose: record the current implementation state and the discrepancies against `
 - Add deeper verified-runtime integration coverage if real dependency installs become available in CI.
 - Add deeper artifact authorization, expiry, cleanup, and external read/API coverage when dependent clients consume refs.
 - Generalize the Python node runtime for long-running job lifecycle/heartbeat behavior and uv-managed environments.
-- Extend warm long-lived Python node harness workers beyond sequential compatible module/snippet reuse, including project-mode recycling.
+- Add persistent project heap/module-cache state only if a future runtime defines explicit checkpoint, cleanup, and invalidation semantics.
 - Add worker recycling for warm node workers, including explicit unhealthy-worker, policy-change, and project invalidation behavior.
 - Keep Python helper internals minimally changed unless helper-profile maintenance cost justifies retiring or replacing the helper facade.
 
@@ -240,6 +244,9 @@ Purpose: record the current implementation state and the discrepancies against `
 - Node-profile clients should pass input artifacts as alias refs, inline payloads, or inline zip payloads, optionally use `path_mask` / `mask` and `recursive` for multi-file refs, write file outputs only to provided `artifact_outputs` paths or output directories, declare inline outputs before returning inline artifact payloads, use `export_inline_zip` for many output files when ownership should stay with the producer, request `host_takeover` only when the host should own returned ref lifetime, consume host-minted output refs, and still handle unavailable/missing artifact cases when no refs are produced.
 - Node-profile clients may use artifact helper constructors in `hosting.sandbox.artifacts` instead of hand-authoring common artifact input/output rows.
 - Node-profile clients may use `execution_mode=snippet` for source snippets or `execution_mode=project` with `project.ref` / `project.entrypoint` / `project.callable` for staged projects.
+- Pinned project-mode clients should distinguish worker-process reuse from heap
+  reuse: Python project mode resets project imports between calls, and
+  JavaScript project mode resets the QuickJS context/module cache between calls.
 - Node-profile clients may use the host-owned request builders in `hosting.sandbox.workflow_python_contract` for module functions, snippets, staged projects, and uv projects instead of hand-authoring low-level request fields.
 - Node-profile callers can use capacity APIs at runtime to trim or expand reserved workers for an environment-keyed pool; compatible jobs route through that pool while incompatible environment/import/dependency/sandbox identities route to separate pools.
 - Node-profile callers may see `node_runtime_recycle` metrics when a request causes stale idle workers from a prior derived environment identity to be stopped.
