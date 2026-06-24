@@ -455,7 +455,12 @@ class WorkflowHelperMixin:
     @staticmethod
     def _workflow_python_with_project_artifact_input(request: Dict[str, Any]) -> Dict[str, Any]:
         req = dict(request or {})
-        mode = str(req.get("execution_mode") or dict(req.get("python") or {}).get("execution_mode") or "").strip().lower()
+        mode = str(
+            req.get("execution_mode")
+            or dict(req.get("python") or {}).get("execution_mode")
+            or dict(req.get("javascript") or {}).get("execution_mode")
+            or ""
+        ).strip().lower()
         if mode != "project":
             return req
         project = dict(req.get("project") or {})
@@ -1625,6 +1630,7 @@ class WorkflowHelperMixin:
         req = dict(request or {})
         runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
         req = self._workflow_request_with_action(req, runtime="javascript")
+        req = self._workflow_python_with_project_artifact_input(req)
         action_error = dict(req.pop("_workflow_action_error", {}) or {})
         if action_error:
             return self._workflow_js_node_response_from_execution(
@@ -1676,7 +1682,9 @@ class WorkflowHelperMixin:
                 "reason": str(scheduled.get("reason") or "capacity_exceeded"),
                 "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
             }
-        required = ["module_source", "module_sha256", "package_id", "workflow_id", "package_source_digest"]
+        required = ["module_sha256", "package_id", "workflow_id", "package_source_digest"]
+        if str(req.get("execution_mode") or js.get("execution_mode") or "").strip().lower() != "project":
+            required.insert(0, "module_source")
         missing = [name for name in required if not str(req.get(name) or "").strip()]
         if missing:
             result = {"ok": False, "reason": "workflow_js_node_invalid_request", "detail": {"message": f"missing required fields: {', '.join(missing)}"}}
@@ -1786,9 +1794,11 @@ class WorkflowHelperMixin:
         replace: bool = False,
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
-        req = dict(request or {})
+        req = self._workflow_python_with_project_artifact_input(dict(request or {}))
         js = {**dict(javascript or {}), **dict(req.get("javascript") or {})}
-        required = ["module_source", "module_sha256", "package_id", "workflow_id", "package_source_digest"]
+        required = ["module_sha256", "package_id", "workflow_id", "package_source_digest"]
+        if str(req.get("execution_mode") or js.get("execution_mode") or "").strip().lower() != "project":
+            required.insert(0, "module_source")
         missing = [name for name in required if not str(req.get(name) or "").strip()]
         if missing:
             return {
@@ -1888,7 +1898,7 @@ class WorkflowHelperMixin:
         approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
-        req = dict(request or {})
+        req = self._workflow_python_with_project_artifact_input(dict(request or {}))
         js = {**dict(javascript or {}), **dict(req.get("javascript") or {})}
         ensured = self.ensure_workflow_js(
             profile=prof,

@@ -5,6 +5,7 @@ import atexit
 import asyncio
 import hashlib
 import inspect
+import json
 import os
 import posixpath
 import queue
@@ -476,7 +477,16 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         js = dict(request.get("javascript") or {})
         environment_key = _clean(request.get("environment_key")) or _clean(js.get("environment_key")) or _clean(js.get("environment_name")) or "workflow-js-node"
         runtime_hash = _clean(js.get("runtime_hash")) or "quickjs-default"
-        return "|".join([_clean(executable), environment_key, runtime_hash, WorkflowJsNodeRuntimeRegistry._state_mode(request)])
+        return "|".join(
+            [
+                _clean(executable),
+                environment_key,
+                runtime_hash,
+                WorkflowJsNodeRuntimeRegistry._execution_mode(request),
+                WorkflowJsNodeRuntimeRegistry._state_mode(request),
+                WorkflowJsNodeRuntimeRegistry._project_instance_policy_key(request),
+            ]
+        )
 
     @staticmethod
     def _code_key(request: Dict[str, Any]) -> str:
@@ -521,6 +531,53 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             return "persistent_module"
         return "ephemeral"
 
+    @staticmethod
+    def _project_instance_policy(request: Dict[str, Any]) -> Dict[str, Any]:
+        js = dict(request.get("javascript") or {})
+        project = dict(request.get("project") or {})
+        raw = project.get("instance_policy")
+        if not isinstance(raw, dict):
+            raw = js.get("project_instance_policy")
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
+    @staticmethod
+    def _required_project_instance_policy() -> Dict[str, str]:
+        return {
+            "context": "new_per_request",
+            "module_cache": "reset",
+            "globals": "reset",
+            "async_jobs": "drain_or_cancel",
+            "host_handles": "reset",
+        }
+
+    @classmethod
+    def _project_instance_policy_key(cls, request: Dict[str, Any]) -> str:
+        if cls._execution_mode(request) != "project":
+            return ""
+        policy = cls._project_instance_policy(request)
+        return json.dumps({key: str(policy.get(key) or "") for key in sorted(policy)}, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def _project_instance_policy_error(cls, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if cls._execution_mode(request) != "project":
+            return None
+        policy = cls._project_instance_policy(request)
+        required = cls._required_project_instance_policy()
+        if not policy:
+            return {
+                "ok": False,
+                "reason": "workflow_js_instance_project_policy_required",
+                "detail": {"required_policy": required},
+            }
+        mismatched = {key: {"expected": value, "actual": str(policy.get(key) or "")} for key, value in required.items() if str(policy.get(key) or "") != value}
+        if mismatched:
+            return {
+                "ok": False,
+                "reason": "workflow_js_instance_project_policy_invalid",
+                "detail": {"required_policy": required, "mismatched": mismatched},
+            }
+        return None
+
     @classmethod
     def _state_mode_error(cls, request: Dict[str, Any], *, instance_id: str = "") -> Optional[Dict[str, Any]]:
         state_mode = cls._state_mode(request)
@@ -540,26 +597,6 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             }
         return None
 
-    @classmethod
-    def _instance_reusable(cls, request: Dict[str, Any]) -> bool:
-        return cls._execution_mode(request) != "project"
-
-    @staticmethod
-    def _project_instance_unsupported_detail() -> Dict[str, Any]:
-        return {
-            "message": (
-                "JS project-mode pinned instances are deferred because project mode needs a "
-                "declared JS project/module loading contract and cleanup policy."
-            ),
-            "deferred": True,
-            "pinned_worker_semantics": "module_instances_support_ephemeral_or_persistent_module_state",
-            "required_runtime_work": [
-                "JS project/module loading contract",
-                "declared cwd/env/import-cache cleanup policy",
-                "snapshot/restore boundary for mutable JS state",
-            ],
-        }
-
     def create_instance(
         self,
         request: Dict[str, Any],
@@ -572,13 +609,9 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         validation_error = self._validate_module_identity(child_req)
         if validation_error is not None:
             return {"status": "error", **validation_error}
-        if not self._instance_reusable(child_req):
-            return {
-                "status": "error",
-                "ok": False,
-                "reason": "workflow_js_instance_project_mode_unsupported",
-                "detail": self._project_instance_unsupported_detail(),
-            }
+        project_policy_error = self._project_instance_policy_error(child_req)
+        if project_policy_error is not None:
+            return {"status": "error", **project_policy_error}
         state_mode_error = self._state_mode_error(child_req, instance_id=_clean(instance_id) or "pending")
         if state_mode_error is not None:
             return {"status": "error", **state_mode_error}
@@ -683,6 +716,11 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         validation_error = self._validate_module_identity(req)
         if validation_error is not None:
             return validation_error
+        pinned_instance_id = _clean(instance_id)
+        if pinned_instance_id:
+            project_policy_error = self._project_instance_policy_error(req)
+            if project_policy_error is not None:
+                return project_policy_error
         state_mode_error = self._state_mode_error(req, instance_id=instance_id)
         if state_mode_error is not None:
             return state_mode_error
@@ -693,7 +731,6 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         runtime_key = self._runtime_key(child_req, executable)
         code_key = self._code_key(child_req)
         runtime: Optional[WorkflowJsNodeRuntime] = None
-        pinned_instance_id = _clean(instance_id)
         if pinned_instance_id:
             with self._instance_lock:
                 instance_row = self._instances.get(pinned_instance_id)

@@ -1381,31 +1381,131 @@ def test_workflow_js_node_persistent_module_requires_explicit_replace_for_code_e
     assert closed["closed"] is True
 
 
-def test_workflow_js_node_project_instance_explains_deferred_semantics(tmp_path: Path) -> None:
+def test_execute_workflow_js_node_runs_project_from_ref(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src" / "lib").mkdir(parents=True)
+    (project_root / "src" / "lib" / "math.js").write_text("exports.double = function (value) { return value * 2; };\n", encoding="utf-8")
+    (project_root / "src" / "runner.js").write_text(
+        "const math = require('./lib/math');\n"
+        "exports.run = function(payload) { return {output: {value: math.double(payload.value)}}; };\n",
+        encoding="utf-8",
+    )
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    source = "exports.run = function(input) { return { output: input }; };"
-    out = svc.workflow_js_instance_create(
-        instance_id="js-inst-project",
+    out = svc.execute_workflow_js(
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
         request={
-            "request_id": "req-js-project-instance",
+            "request_id": "req-js-project-one-shot",
             "execution_mode": "project",
-            "module_source": source,
-            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "module_source": "",
+            "module_sha256": hashlib.sha256(b"").hexdigest(),
             "package_id": "pkg-demo",
             "workflow_id": "wf-demo",
             "package_source_digest": "sha256:digest",
+            "project": {"ref": "@project/src", "entrypoint": "runner", "callable": "run"},
+            "payload": {"value": 21},
+            "limits": {"timeout_ms": 1000},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"value": 42}
+
+
+def test_workflow_js_node_project_instance_requires_explicit_policy(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src").mkdir(parents=True)
+    (project_root / "src" / "runner.js").write_text("exports.run = function(payload) { return {output: payload}; };\n", encoding="utf-8")
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    out = svc.workflow_js_instance_create(
+        instance_id="js-inst-project-policy",
+        sandbox_policy={"sandbox": {"artifact_roots": {"project": str(project_root)}}},
+        request={
+            "request_id": "req-js-project-policy",
+            "execution_mode": "project",
+            "module_source": "",
+            "module_sha256": hashlib.sha256(b"").hexdigest(),
+            "package_id": "pkg-demo",
+            "workflow_id": "wf-demo",
+            "package_source_digest": "sha256:digest",
+            "project": {"ref": "@project/src", "entrypoint": "runner", "callable": "run"},
             "payload": {"value": "create"},
         },
     )
 
     assert out["status"] == "error"
-    assert out["reason"] == "workflow_js_instance_project_mode_unsupported"
-    assert out["detail"]["deferred"] is True
-    assert out["detail"]["pinned_worker_semantics"] == "module_instances_support_ephemeral_or_persistent_module_state"
-    assert "project/module loading contract" in out["detail"]["message"]
+    assert out["reason"] == "workflow_js_instance_project_policy_required"
+    assert out["detail"]["required_policy"]["context"] == "new_per_request"
+
+
+def test_workflow_js_node_project_instance_routes_with_isolated_context(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "src").mkdir(parents=True)
+    (project_root / "src" / "state.js").write_text("exports.counter = 0;\n", encoding="utf-8")
+    (project_root / "src" / "runner.js").write_text(
+        "const state = require('./state');\n"
+        "exports.run = function(payload) {\n"
+        "  state.counter += 1;\n"
+        "  globalThis.__project_seen = (globalThis.__project_seen || 0) + 1;\n"
+        "  return {output: {counter: state.counter, global_counter: globalThis.__project_seen, value: payload.value}};\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    project_policy = {
+        "context": "new_per_request",
+        "module_cache": "reset",
+        "globals": "reset",
+        "async_jobs": "drain_or_cancel",
+        "host_handles": "reset",
+    }
+    base_request = {
+        "execution_mode": "project",
+        "module_source": "",
+        "module_sha256": hashlib.sha256(b"").hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "project": {"ref": "@project/src", "entrypoint": "runner", "callable": "run"},
+        "javascript": {"project_instance_policy": project_policy},
+        "limits": {"timeout_ms": 1000},
+    }
+    sandbox_policy = {"sandbox": {"artifact_roots": {"project": str(project_root)}}}
+
+    created = svc.workflow_js_instance_create(
+        instance_id="js-inst-project",
+        sandbox_policy=sandbox_policy,
+        request={**base_request, "request_id": "req-js-project-create", "payload": {"value": "create"}},
+    )
+    first = svc.workflow_js_instance_execute(
+        instance_id="js-inst-project",
+        sandbox_policy=sandbox_policy,
+        request={**base_request, "request_id": "req-js-project-a", "payload": {"value": "a"}},
+    )
+    second = svc.workflow_js_instance_execute(
+        instance_id="js-inst-project",
+        sandbox_policy=sandbox_policy,
+        request={**base_request, "request_id": "req-js-project-b", "payload": {"value": "b"}},
+    )
+    closed = svc.workflow_js_instance_close(instance_id="js-inst-project")
+
+    assert created["status"] == "ok"
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"] == {"counter": 1, "global_counter": 1, "value": "a"}
+    assert second["output"] == {"counter": 1, "global_counter": 1, "value": "b"}
+    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert closed["closed"] is True
 
 
 def test_workflow_python_node_action_manifest_discovers_and_routes_exports(tmp_path: Path) -> None:

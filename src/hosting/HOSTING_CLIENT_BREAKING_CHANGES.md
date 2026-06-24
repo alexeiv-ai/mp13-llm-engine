@@ -82,6 +82,41 @@ Default behavior remains request-global ephemeral: a warm worker process may be
 reused, but Python module globals or JavaScript QuickJS globals are not
 preserved unless `persistent_module` is explicitly requested.
 
+## JavaScript Project Instance Runtime
+
+Pinned JavaScript project-mode instances are now supported, but only as warm
+worker-process routing with reset-per-request project state.
+
+Client requirements:
+
+1. Provide project code through `project.ref`, normally pointing at a staged
+   artifact root such as `@project/src`.
+2. Set `execution_mode="project"` and identify the entrypoint with
+   `project.entrypoint` plus `project.callable`.
+3. For pinned project instances, include this exact policy in either
+   `javascript.project_instance_policy` or `project.instance_policy`:
+
+```json
+{
+  "context": "new_per_request",
+  "module_cache": "reset",
+  "globals": "reset",
+  "async_jobs": "drain_or_cancel",
+  "host_handles": "reset"
+}
+```
+
+The project loader supports CommonJS-style files with `exports`,
+`module.exports`, and relative `require("./...")`. Dot entrypoints map to paths;
+for example, `pkg.runner` maps to `pkg/runner.js`. Extensionless paths resolve
+to `.js`, and directory paths resolve to `index.js`.
+
+Do not rely on Node built-ins, `node_modules`, ESM `import`, or persistent
+project heap/module-cache state. Sequential calls to the same pinned project
+instance reuse the same host worker process, but every call gets a fresh QuickJS
+context and fresh project module cache. `instance_state_mode="persistent_module"`
+remains invalid for project mode.
+
 ## Recovery Pattern Clarification
 
 The recommended edit+continue recovery model is instance-scoped artifact refs, not old-path remapping.

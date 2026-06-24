@@ -362,12 +362,26 @@ instances, executing a different code revision without `replace=true` returns
 `workflow_js_instance_code_replacement_required`; replacement is the explicit
 state reset boundary.
 
-Project-mode JS instances are therefore intentionally unsupported for now.
-`workflow_js_instance_create` returns
-`workflow_js_instance_project_mode_unsupported` with structured detail when
-`execution_mode` is `project`. Enabling project-mode JS instances still
-requires a module/project loading contract, explicit cwd/env/import-cache cleanup
-policy, and snapshot/restore boundaries for mutable JS state.
+Project-mode JS instances can reuse the pinned host worker process, but they do
+not preserve a project heap. Each project execution creates a fresh QuickJS
+context and fresh project module cache. Clients must declare this reset policy
+with `javascript.project_instance_policy` or `project.instance_policy`:
+
+```json
+{
+  "context": "new_per_request",
+  "module_cache": "reset",
+  "globals": "reset",
+  "async_jobs": "drain_or_cancel",
+  "host_handles": "reset"
+}
+```
+
+Project code is loaded from `project.ref` through the artifact staging path.
+Entrypoints are CommonJS-style files using `exports`, `module.exports`, and
+relative `require("./...")`. Dot entrypoints map to paths, for example
+`pkg.runner` maps to `pkg/runner.js`. Node built-ins, `node_modules`, ESM
+imports, and persistent project module state are not part of this contract.
 
 Authoring with imports is supported by host-side helpers that emit the
 single-script worker contract. These helpers are preprocessing tools; their

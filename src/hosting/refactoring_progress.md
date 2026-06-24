@@ -181,10 +181,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ### State And Long-Lived Instances Slice 19: JS Project Instance Decision
 
-- [x] Kept JS project-mode pinned instances unsupported because project mode still needs a module/project loading contract plus cleanup semantics.
-- [x] Added structured deferred detail to `workflow_js_instance_create` while preserving the existing `workflow_js_instance_project_mode_unsupported` reason.
-- [x] Added a workflow-helper test for the deferred JS project-mode instance response.
-- [x] Updated the main plan, Host API plan, and JS worker docs to record the decision and future runtime prerequisites.
+- [x] Initially kept JS project-mode pinned instances unsupported while the project loading and cleanup contract was undefined.
+- [x] Recorded the deferred detail and test coverage that later guided the reset-per-request project runtime.
+- [x] Superseded by Slice 24, which implements warm worker-process routing with fresh QuickJS project contexts.
 
 ### Action Manifest Slice 20: Service-Level Discovery And Routing
 
@@ -284,6 +283,16 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Ensured approval callbacks receive normalized `hosting.sandbox.host_capability_approval.v1` payloads with sanitized `argument_keys` instead of raw arguments.
 - [x] Preserved broker approval events and durable audit rows for approved and denied decisions.
 
+### State And Long-Lived Instances Slice 24: JS Project Instance Runtime
+
+- [x] Added a QuickJS project loader for JavaScript project-mode requests staged from `project.ref`.
+- [x] Supported CommonJS-style project files with `exports`, `module.exports`, and relative `require("./...")`.
+- [x] Added one-shot JS project execution from an artifact-backed project root.
+- [x] Allowed pinned JS project instances when reset-per-request policy is explicit.
+- [x] Required `context=new_per_request`, `module_cache=reset`, `globals=reset`, `async_jobs=drain_or_cancel`, and `host_handles=reset` for pinned project instances.
+- [x] Kept JS project instances as warm worker-process routing only; QuickJS context and project module cache reset on every request.
+- [x] Updated the Host API plan, main hosting plan, progress notes, and client breaking-change notes.
+
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
@@ -301,7 +310,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Decide JS project-mode long-lived semantics.
 - [x] Implement persistent module state for pinned Python and JavaScript module/script instances.
 - [x] Implement service-level action manifest discovery and invocation routing.
-- [ ] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
+- [x] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
 - [x] Expose action describe/execute over daemon/channel/CLI.
 - [x] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests.
 - [x] Expose Host Capability approval requester relay for workflow Python/JS public execution APIs.

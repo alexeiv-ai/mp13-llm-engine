@@ -137,7 +137,7 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [x] Python and JavaScript pinned module instances support explicit `instance_state_mode="persistent_module"` for sequential process-local module/global state.
 - [x] Persistent module instances require `create(..., replace=true)` as the explicit code-revision/state reset boundary.
 - [x] Python project-mode pinned instances are allowed only with an explicit isolation policy that resets cwd, `sys.path`, env, and project import modules between calls.
-- [x] JavaScript project-mode pinned instances remain unsupported until JS project/module loading and cleanup semantics are defined.
+- [x] JavaScript project-mode pinned instances support warm worker-process routing with an explicit reset-per-request policy and a CommonJS-style project loader.
 - [x] Service-level Python and JavaScript action manifests, card-facing discovery helpers, and action execution routing were added on top of existing worker entrypoint fields.
 - [x] Action describe/execute commands were exposed through the daemon, control channel, CLI, auth, and policy command sets.
 
@@ -171,13 +171,12 @@ These items are intentionally outside the completed Host Capability pillar. They
   - Ownership rule: clients decide whether partial artifacts are usable. Hosting only provides hint labels such as `declared_output`, `crash_recovery_candidate`, and `partial_possible`.
   - Cleanup rule: disk garbage collection remains deferred. Recovery notices include a crash/shutdown timestamp and cleanup is explicit.
 
-- [ ] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
+- [x] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
   - Owning pillar: JavaScript runtime evolution.
-  - Current state: `workflow_js_instance_*` pins a host worker process. Default module/snippet execution still uses a fresh QuickJS context per call, while `instance_state_mode="persistent_module"` keeps one QuickJS context for the current code revision. Project-mode instance creation returns `workflow_js_instance_project_mode_unsupported` with deferred detail.
-  - Rework candidate: define JS project/module loading, then choose a persistent QuickJS context or module graph cache and define explicit cwd/env/import-cache cleanup rules plus snapshot/restore boundaries for mutable JS state.
-  - Expected benefit: JS project-style authoring can become truly warm and routable instead of only using a pinned transport process.
-  - Main risk: persistent JS contexts can leak globals, async jobs, host handles, or imported module state across actions unless cleanup policy is explicit.
-  - Trigger to start: after JS runtime design accepts persistent context/module-cache ownership and defines the state cleanup contract.
+  - Current state: `workflow_js_instance_*` can pin a host worker process for project requests. Each project execute creates a fresh QuickJS context and fresh project module cache.
+  - Implemented contract: project code is loaded from `project.ref` into an artifact-backed project root. Entrypoints are CommonJS-style files with `exports`, `module.exports`, and relative `require("./...")`; dot entrypoints such as `pkg.runner` map to `pkg/runner.js`. Node built-ins, `node_modules`, ESM imports, and persistent project heap state are not part of this contract.
+  - Required policy: pinned project instances must declare `javascript.project_instance_policy` or `project.instance_policy` with `context="new_per_request"`, `module_cache="reset"`, `globals="reset"`, `async_jobs="drain_or_cancel"`, and `host_handles="reset"`.
+  - Boundary: this is long-lived worker-process routing, not persistent project module state. Persistent JS project heaps remain out of scope until a future runtime defines explicit checkpoint/cleanup semantics.
 
 - [x] Decide native toolbox metadata should continue using adapters rather than directly adopting Host Capability descriptors.
   - Owning pillar: native toolbox metadata and discovery.

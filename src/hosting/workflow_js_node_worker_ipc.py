@@ -10,6 +10,7 @@ import threading
 import time
 import traceback
 from multiprocessing.connection import Client
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -44,6 +45,59 @@ def _state_mode(req: Dict[str, Any]) -> str:
     if mode in {"persistent", "persistent_module", "module_persistent"}:
         return "persistent_module"
     return "ephemeral"
+
+
+def _under_root(path: str, root: str) -> bool:
+    try:
+        resolved = os.path.abspath(path)
+        resolved_root = os.path.abspath(root)
+        return resolved == resolved_root or resolved.startswith(resolved_root + os.sep)
+    except Exception:
+        return False
+
+
+def _project_entry_to_path(spec: str, *, parent_id: str = "") -> str:
+    raw = str(spec or "").strip().replace("\\", "/")
+    if not raw:
+        raise RuntimeError("workflow_sandbox_project_entrypoint_required")
+    if raw.startswith("./") or raw.startswith("../"):
+        base = os.path.dirname(str(parent_id or "").replace("\\", "/"))
+        raw = os.path.normpath(os.path.join(base, raw)).replace("\\", "/")
+    elif "/" not in raw and not raw.endswith(".js"):
+        raw = raw.replace(".", "/")
+    raw = raw.lstrip("/")
+    if raw.endswith("/"):
+        raw += "index.js"
+    root, ext = os.path.splitext(raw)
+    if not ext:
+        raw = raw + ".js"
+    return os.path.normpath(raw).replace("\\", "/")
+
+
+def _make_project_reader(project_root: str):
+    root = os.path.abspath(str(project_root or ""))
+
+    def read_module(spec: str, parent_id: str = "") -> str:
+        module_id = _project_entry_to_path(spec, parent_id=parent_id)
+        path = os.path.abspath(os.path.join(root, module_id))
+        if not _under_root(path, root):
+            raise RuntimeError("workflow_sandbox_project_module_outside_root")
+        if os.path.isdir(path):
+            path = os.path.join(path, "index.js")
+            module_id = os.path.relpath(path, root).replace("\\", "/")
+        if not os.path.isfile(path):
+            raise RuntimeError(f"workflow_sandbox_project_module_not_found:{module_id}")
+        return json.dumps(
+            {
+                "id": module_id,
+                "filename": path,
+                "source": Path(path).read_text(encoding="utf-8"),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    return read_module
 
 
 class HostApiBridge:
@@ -227,11 +281,18 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     source = str(req.get("module_source") or "")
     export_name = str(req.get("export_name") or "run").strip() or "run"
     execution_mode = str(req.get("execution_mode") or "script").strip().lower() or "script"
+    project = req.get("project") if isinstance(req.get("project"), dict) else {}
     payload = req.get("payload")
+    artifact_context = req.get("artifact_context") if isinstance(req.get("artifact_context"), dict) else {}
+    artifact_inputs = artifact_context.get("inputs") if isinstance(artifact_context.get("inputs"), dict) else {}
     output_limit_bytes = max(1, int(req.get("output_limit_bytes") or 65536))
     limits = dict(req.get("limits") or {})
     timeout_ms = max(1, int(limits.get("timeout_ms") or 5000))
     memory_limit_mb = limits.get("memory_limit_mb")
+    project_root = ""
+    if execution_mode == "project":
+        root_input = str(project.get("root_input") or project.get("input") or "project")
+        project_root = os.path.abspath(str(artifact_inputs.get(root_input) or ""))
 
     try:
         import quickjs  # type: ignore
@@ -332,8 +393,26 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
         ctx.add_callable("__base64_encode", _base64_encode)
         ctx.add_callable("__base64_decode", _base64_decode)
         ctx.add_callable("__sha256", _sha256)
+        if execution_mode == "project":
+            if not project_root or not os.path.isdir(project_root):
+                _send(
+                    conn,
+                    {
+                        "type": "error",
+                        "request_id": request_id,
+                        "reason": "workflow_sandbox_project_root_unavailable",
+                        "detail": {"root_input": str(project.get("root_input") or project.get("input") or "project")},
+                        "stdout": "",
+                        "stderr": "",
+                        "runtime": _runtime_metadata(),
+                    },
+                )
+                return 0
+            ctx.add_callable("__project_read_module", _make_project_reader(project_root))
     ctx.set("__payload_json", json.dumps(payload, ensure_ascii=False))
     ctx.set("__export_name", export_name)
+    ctx.set("__project_entrypoint", str(project.get("entrypoint") or project.get("module") or project.get("path") or "").strip())
+    ctx.set("__project_callable", str(project.get("callable") or project.get("function") or export_name or "run").strip() or "run")
     prelude = r"""
 globalThis.exports = globalThis.exports || {};
 globalThis.payload = JSON.parse(globalThis.__payload_json || "null");
@@ -449,6 +528,22 @@ globalThis.sandbox = {
   describe: function () { return api.call("sandbox.describe", {}); },
   describeAsync: function () { return api.callAsync("sandbox.describe", {}); }
 };
+if (typeof __project_read_module === "function") {
+  globalThis.__workflowProjectModules = {};
+  globalThis.__workflowProjectLoad = function (spec, parentId) {
+    const row = JSON.parse(__project_read_module(String(spec || ""), String(parentId || "")));
+    const id = String(row.id || "");
+    if (globalThis.__workflowProjectModules[id]) return globalThis.__workflowProjectModules[id].exports;
+    const module = {id: id, filename: String(row.filename || ""), exports: {}};
+    globalThis.__workflowProjectModules[id] = module;
+    const localRequire = function (childSpec) {
+      return globalThis.__workflowProjectLoad(String(childSpec || ""), id);
+    };
+    const fn = new Function("exports", "module", "require", "api", "progress", "payload", String(row.source || "") + "\n//# sourceURL=" + id);
+    fn(module.exports, module, localRequire, globalThis.api, globalThis.progress, globalThis.payload);
+    return module.exports;
+  };
+}
 """.strip()
     request_prelude = r"""
 globalThis.payload = JSON.parse(globalThis.__payload_json || "null");
@@ -495,6 +590,18 @@ globalThis.__workflow_result_json = "";
   let value;
   if ("%EXECUTION_MODE%" === "snippet") {
     value = globalThis.result;
+  } else if ("%EXECUTION_MODE%" === "project") {
+    if (typeof globalThis.__workflowProjectLoad !== "function") {
+      return JSON.stringify({__workflow_error: {reason: "workflow_sandbox_project_loader_unavailable", detail: {}}});
+    }
+    const projectEntry = String(globalThis.__project_entrypoint || "");
+    const callableName = String(globalThis.__project_callable || globalThis.__export_name || "run");
+    const projectExports = globalThis.__workflowProjectLoad(projectEntry, "");
+    const fn = projectExports[callableName];
+    if (typeof fn !== "function") {
+      return JSON.stringify({__workflow_error: {reason: "workflow_sandbox_export_not_found", detail: {export_name: callableName, module: projectEntry}}});
+    }
+    value = fn(globalThis.payload, globalThis.api);
   } else {
     const fn = exports[globalThis.__export_name || "run"];
     if (typeof fn !== "function") {
