@@ -2,6 +2,54 @@
 
 Date: 2026-06-22
 
+## Host Capability Approval Requester Relay
+
+Workflow Python/JS Host Capability approvals can now be handled through public
+execution APIs.
+
+In-process service clients may pass `approval_requester=callback` to:
+
+- `execute_workflow_python(...)`
+- `workflow_python_instance_execute(...)`
+- `workflow_python_stream_open(...)`
+- `execute_workflow_js(...)`
+- `workflow_js_instance_execute(...)`
+- `workflow_js_stream_open(...)`
+
+Daemon/control-channel clients must use a relay binding instead of passing a raw
+callable:
+
+```python
+from hosting import HostCapabilityApprovalCallbackRelay, host_capability_approval_decision
+
+relay = HostCapabilityApprovalCallbackRelay()
+binding = relay.bind_callback(
+    lambda request: host_capability_approval_decision(
+        "allow_once",
+        approval_id=request["approval_id"],
+    )
+)
+
+channel.execute_workflow_python(
+    profile="node",
+    request=request,
+    approval_requester_binding=binding,
+)
+```
+
+The approval callback receives a normalized
+`hosting.sandbox.host_capability_approval.v1` payload. It includes method,
+provider, approval policy, context, correlation ids, and `argument_keys`; it
+does not include raw `arguments`.
+
+Return `host_capability_approval_decision("deny" | "allow_once" |
+"add_to_scope", ...)`. Stream-open starts execution immediately, so pass the
+approval requester binding on `workflow_*_stream_open(...)` when gated calls may
+happen before event subscription.
+
+Audit and approval stream events are still emitted whether the decision is
+approved or denied.
+
 ## Persistent Module Instance State
 
 Pinned Python and JavaScript module instances now support explicit in-process

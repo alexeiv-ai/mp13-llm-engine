@@ -276,6 +276,14 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Required `workflow-*-instance-create(..., replace=True)` as the code-revision/state reset boundary for persistent module instances.
 - [x] Added regression coverage for Python and JavaScript persistent globals plus explicit replacement requirements.
 
+### Host Capability Slice 26: Approval Requester Relay Exposure
+
+- [x] Exposed `approval_requester` on Python/JavaScript workflow execute, pinned execute, and stream-open service APIs.
+- [x] Added `HostCapabilityApprovalCallbackRelay` for daemon/control-channel clients that need a serializable approval callback binding.
+- [x] Added `approval_requester_binding` forwarding on Python/JavaScript workflow execute, pinned execute, action execute, and stream-open channel/daemon APIs.
+- [x] Ensured approval callbacks receive normalized `hosting.sandbox.host_capability_approval.v1` payloads with sanitized `argument_keys` instead of raw arguments.
+- [x] Preserved broker approval events and durable audit rows for approved and denied decisions.
+
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
@@ -296,6 +304,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [ ] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
 - [x] Expose action describe/execute over daemon/channel/CLI.
 - [x] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests.
+- [x] Expose Host Capability approval requester relay for workflow Python/JS public execution APIs.
 
 ## Verification
 
@@ -342,3 +351,8 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] `python -m pytest tests/test_hosting_artifact_helpers.py tests/test_engine_host_channel.py -q -k "artifact_recovery"`
 - [x] `python -m pytest tests/test_workflow_helper_service.py -q -k "js_node_instance or artifact_recovery"`
 - [x] `python -m pytest tests/test_workflow_js_node_runtime.py -q`
+- [x] `python -m py_compile src/hosting/callable_surface.py src/hosting/__init__.py src/hosting/service/workflow_helpers.py src/hosting/daemon/local_ipc.py src/hosting/engine_host_channel.py tests/test_callable_surface.py tests/test_engine_host_channel.py tests/test_workflow_helper_service.py`
+- [x] `pytest -q tests/test_callable_surface.py -k "approval_callback_relay or approval_bridge"`
+- [x] `pytest -q tests/test_callable_surface.py`
+- [x] `pytest -q tests/test_engine_host_channel.py -k "approval_requester_binding or workflow_python_channel_facade or workflow_js_channel_facade"`
+- [x] `pytest -q tests/test_workflow_helper_service.py -k "approval_requester or approval_requester_binding or daemon_dispatches_workflow_python_facade or daemon_dispatches_workflow_js_facade"`

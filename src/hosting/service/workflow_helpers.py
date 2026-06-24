@@ -290,6 +290,26 @@ class WorkflowHelperMixin:
             "result": self._toolbox_provider_result(dict(out or {})),
         }
 
+    def _host_capability_approval_requester_from_binding(self, binding: Optional[Dict[str, Any]]) -> Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]:
+        row = dict(binding or {})
+        callback_binding = dict(row.get("callback_binding") or row)
+        if not callback_binding:
+            return None
+
+        def _request_approval(payload: Dict[str, Any]) -> Dict[str, Any]:
+            from ..callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME
+            from ..toolbox_executor_ipc import _invoke_callback_binding
+
+            response = _invoke_callback_binding(
+                callback_binding,
+                callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+                payload=dict(payload or {}),
+                context=dict(dict(payload or {}).get("context") or {}),
+            )
+            return dict(response.get("result") or response or {})
+
+        return _request_approval
+
     def _workflow_python_node_recycle_changed_environment(
         self,
         *,
@@ -841,6 +861,7 @@ class WorkflowHelperMixin:
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         audit_emitter: Optional[Callable[[Dict[str, Any]], None]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ):
         child = dict(dict(artifact_context or {}).get("child_context") or artifact_context or {})
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
@@ -895,6 +916,15 @@ class WorkflowHelperMixin:
         if instance_id and _state_scope_enabled("instance"):
             state_scopes.append("instance")
         state_available = bool(state_scopes)
+
+        def _approval_requester(payload: Dict[str, Any]) -> Dict[str, Any]:
+            if approval_requester is None:
+                return {"status": "denied", "approved": False, "decision": "deny", "reason": "approval_requester_unavailable"}
+            from ..callable_surface import host_capability_approval_request
+
+            normalized = host_capability_approval_request(dict(payload or {}))
+            return approval_requester(normalized)
+
         registry = HostApiRegistry(
             contract="hosting.workflow_python.node.host_api.v1",
             request_id=str(dict(request or {}).get("request_id") or ""),
@@ -1088,6 +1118,7 @@ class WorkflowHelperMixin:
             event_emitter=event_emitter,
             audit_emitter=audit_emitter or self._append_host_capability_audit_event,
             provider_invoker=self._host_capability_provider_invoker,
+            approval_requester=_approval_requester if approval_requester is not None else None,
             state_info={
                 "available": state_available,
                 "scopes": list(state_scopes),
@@ -1588,7 +1619,8 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
-        ) -> Dict[str, Any]:
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         req = dict(request or {})
         runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
@@ -1691,6 +1723,7 @@ class WorkflowHelperMixin:
                         sandbox_policy=sandbox_policy,
                         event_emitter=_record_js_broker_event,
                         host_capability_sessions=host_capability_sessions,
+                        approval_requester=approval_requester,
                     ),
                     instance_id=runtime_instance_id,
                 )
@@ -1811,6 +1844,7 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         iid = str(instance_id or "").strip()
         if not iid:
@@ -1829,6 +1863,7 @@ class WorkflowHelperMixin:
             capacity=capacity,
             sandbox_policy=sandbox_policy,
             host_capability_sessions=host_capability_sessions,
+            approval_requester=approval_requester,
         )
 
     def workflow_js_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
@@ -1850,6 +1885,7 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
         req = dict(request or {})
@@ -1897,6 +1933,7 @@ class WorkflowHelperMixin:
                 "request": {**req, "request_id": request_id, "javascript": js},
                 "sandbox_policy": sandbox_policy,
                 "host_capability_sessions": host_capability_sessions,
+                "approval_requester": approval_requester,
             },
             name=f"workflow-js-node-stream-{request_id}",
             daemon=True,
@@ -1918,6 +1955,7 @@ class WorkflowHelperMixin:
         request: Dict[str, Any],
         sandbox_policy: Optional[Dict[str, Any]],
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         base = self._workflow_js_stream_base()
         live_stdout_seen = False
@@ -1981,6 +2019,7 @@ class WorkflowHelperMixin:
                 sandbox_policy=sandbox_policy,
                 event_emitter=_emit_js_broker_event,
                 host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
             ),
         )
         if artifact_context is not None and bool(result.get("ok", False)):
@@ -2201,7 +2240,8 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
-        ) -> Dict[str, Any]:
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
         runtime_instance_id = str(req.pop("_runtime_instance_id", "") or "").strip()
@@ -2368,6 +2408,7 @@ class WorkflowHelperMixin:
                     sandbox_policy=sandbox_policy,
                     event_emitter=_record_node_broker_event,
                     host_capability_sessions=host_capability_sessions,
+                    approval_requester=approval_requester,
                 ),
                 max_idle=int(pool.resources().get("metrics", {}).get("desired_capacity") or capacity or 1),
                 instance_id=runtime_instance_id,
@@ -2601,6 +2642,7 @@ class WorkflowHelperMixin:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         iid = str(instance_id or "").strip()
         if not iid:
@@ -2617,6 +2659,7 @@ class WorkflowHelperMixin:
             capacity=capacity,
             sandbox_policy=sandbox_policy,
             host_capability_sessions=host_capability_sessions,
+            approval_requester=approval_requester,
         )
 
     def workflow_python_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
@@ -2841,6 +2884,7 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         prof = self._workflow_python_profile(profile)
         req = dict(request or {})
@@ -2931,6 +2975,7 @@ class WorkflowHelperMixin:
                     "capacity": capacity,
                     "node_runtime_recycle": node_runtime_recycle,
                     "host_capability_sessions": host_capability_sessions,
+                    "approval_requester": approval_requester,
                 },
                 name=f"workflow-python-node-stream-{request_id}",
                 daemon=True,
@@ -2955,6 +3000,7 @@ class WorkflowHelperMixin:
         capacity: int,
         node_runtime_recycle: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         base = self._workflow_python_stream_base()
         def _emit_node_event(event_type: str, payload: Dict[str, Any]) -> None:
@@ -3006,6 +3052,7 @@ class WorkflowHelperMixin:
                 sandbox_policy=sandbox_policy,
                 event_emitter=_emit_node_broker_event,
                 host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
             ),
             max_idle=capacity,
         )

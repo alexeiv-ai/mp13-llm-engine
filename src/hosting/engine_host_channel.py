@@ -1734,18 +1734,22 @@ class EngineHostControlChannel:
         request: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "profile": str(profile or "helper").strip() or "helper",
+            "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-python-execute",
-            {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -1767,19 +1771,23 @@ class EngineHostControlChannel:
         request: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "action_name": str(action_name or "").strip(),
+            "profile": str(profile or "helper").strip() or "helper",
+            "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-python-action-execute",
-            {
-                "action_name": str(action_name or "").strip(),
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_name": str(environment_name or "workflow-python-helper").strip() or "workflow-python-helper",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -1821,19 +1829,23 @@ class EngineHostControlChannel:
         engine_id: Optional[str] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "instance_id": str(instance_id or "").strip(),
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-python-instance-execute",
-            {
-                "instance_id": str(instance_id or "").strip(),
-                "profile": str(profile or "node").strip() or "node",
-                "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -1939,19 +1951,23 @@ class EngineHostControlChannel:
         python: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "python": dict(python or {}),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+            "capacity": max(1, min(int(capacity or 1), 256)),
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-python-stream-open",
-            {
-                "profile": str(profile or "node").strip() or "node",
-                "environment_name": str(environment_name or "workflow-python-node").strip() or "workflow-python-node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "python": dict(python or {}),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-                "capacity": max(1, min(int(capacity or 1), 256)),
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -2060,20 +2076,24 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "node": dict(node or {}),
+            "javascript": dict(javascript or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-js-execute",
-            {
-                "profile": str(profile or "node").strip() or "node",
-                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "node": dict(node or {}),
-                "javascript": dict(javascript or {}),
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -2097,21 +2117,25 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "action_name": str(action_name or "").strip(),
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "node": dict(node or {}),
+            "javascript": dict(javascript or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-js-action-execute",
-            {
-                "action_name": str(action_name or "").strip(),
-                "profile": str(profile or "node").strip() or "node",
-                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "node": dict(node or {}),
-                "javascript": dict(javascript or {}),
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -2159,21 +2183,25 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "instance_id": str(instance_id or "").strip(),
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "node": dict(node or {}),
+            "javascript": dict(javascript or {}),
+            "capacity": max(1, min(int(capacity or 1), 256)),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-js-instance-execute",
-            {
-                "instance_id": str(instance_id or "").strip(),
-                "profile": str(profile or "node").strip() or "node",
-                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "node": dict(node or {}),
-                "javascript": dict(javascript or {}),
-                "capacity": max(1, min(int(capacity or 1), 256)),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-            },
+            payload,
         )
         return dict(res or {})
 
@@ -2257,20 +2285,24 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
+        approval_requester_binding: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload = {
+            "profile": str(profile or "node").strip() or "node",
+            "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
+            "environment_key": str(environment_key or "").strip() or None,
+            "engine_id": str(engine_id or "").strip() or None,
+            "request": dict(request or {}),
+            "node": dict(node or {}),
+            "javascript": dict(javascript or {}),
+            "sandbox_policy": dict(sandbox_policy or {}) or None,
+            "capacity": max(1, min(int(capacity or 1), 256)),
+        }
+        if approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
         res = self._invoke(
             "workflow-js-stream-open",
-            {
-                "profile": str(profile or "node").strip() or "node",
-                "environment_name": str(environment_name or "workflow-js-node").strip() or "workflow-js-node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request": dict(request or {}),
-                "node": dict(node or {}),
-                "javascript": dict(javascript or {}),
-                "sandbox_policy": dict(sandbox_policy or {}) or None,
-                "capacity": max(1, min(int(capacity or 1), 256)),
-            },
+            payload,
         )
         return dict(res or {})
 

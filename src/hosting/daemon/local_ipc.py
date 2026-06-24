@@ -1358,6 +1358,11 @@ class EngineHostDaemon:
                     self._host_capability_sessions.pop(sid, None)
             return list(self._host_capability_sessions.values())
 
+    def _host_capability_approval_requester_from_payload(self, payload: Dict[str, Any]) -> Any:
+        if payload.get("approval_requester_binding") is None:
+            return None
+        return self.svc._host_capability_approval_requester_from_binding(payload.get("approval_requester_binding"))  # noqa: SLF001
+
     def _should_shutdown_on_owner_disconnect(self) -> bool:
         policy = self.svc.get_lifecycle_policy_effective()
         eff = dict(policy.get("effective") or {})
@@ -2343,6 +2348,7 @@ class EngineHostDaemon:
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-js-action-describe":
             return svc.workflow_js_action_describe(
@@ -2362,6 +2368,7 @@ class EngineHostDaemon:
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-js-instance-create":
             return svc.workflow_js_instance_create(
@@ -2389,6 +2396,7 @@ class EngineHostDaemon:
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-js-instance-close":
             return svc.workflow_js_instance_close(
@@ -2430,6 +2438,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 capacity=int(payload.get("capacity") or 1),
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-js-event-subscribe":
             return svc.workflow_js_event_subscribe(
@@ -2527,6 +2536,7 @@ class EngineHostDaemon:
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-python-action-describe":
             return svc.workflow_python_action_describe(
@@ -2544,6 +2554,7 @@ class EngineHostDaemon:
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-python-instance-create":
             return svc.workflow_python_instance_create(
@@ -2567,6 +2578,7 @@ class EngineHostDaemon:
                 capacity=int(payload.get("capacity") or 1),
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-python-instance-close":
             return svc.workflow_python_instance_close(
@@ -2616,6 +2628,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 capacity=int(payload.get("capacity") or 1),
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
+                approval_requester=self._host_capability_approval_requester_from_payload(payload),
             )
         if cmd == "workflow-python-event-subscribe":
             return svc.workflow_python_event_subscribe(

@@ -10,11 +10,12 @@ import time
 import zipfile
 
 import pytest
-from hosting.callable_surface import HostCapabilityProviderCallbackRelay
+from hosting.callable_surface import HostCapabilityProviderCallbackRelay, host_capability_approval_decision
 from hosting._process_utils import terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
 from hosting.sandbox.host_capabilities import (
+    HostCapabilityApproval,
     HostCapabilityDescriptor,
     HostCapabilityMethod,
     HostCapabilityProviderRef,
@@ -256,6 +257,38 @@ def test_workflow_node_uses_client_host_capability_callback_session(tmp_path: Pa
     assert out == {"method": "crm.customer.lookup", "name": "Ada", "request_id": "req-client"}
 
 
+def _approval_test_session(relay: HostCapabilityProviderCallbackRelay, *, workflow_id: str) -> HostCapabilitySession:
+    binding = relay.bind_callback(
+        lambda method, arguments, context: {
+            "method": method,
+            "customer_id": arguments["customer_id"],
+            "request_id": context["request_id"],
+        }
+    )
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.lookup",
+        namespace="crm",
+        group_path=["CRM", "Customer"],
+        args_schema={
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}, "secret": {"type": "string"}},
+            "required": ["customer_id"],
+        },
+        result_schema={"type": "object", "properties": {"customer_id": {"type": "string"}}},
+        approval=HostCapabilityApproval(mode="always"),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+    return HostCapabilitySession(
+        session_id="client-crm-approvals",
+        owner="client-a",
+        provider_kind="client_session",
+        visibility="workflow",
+        scope={"workflow_id": workflow_id},
+        methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        binding=binding,
+    )
+
+
 def test_daemon_spawn_preserves_worker_profile_class() -> None:
     class FakeService:
         def __init__(self) -> None:
@@ -443,6 +476,67 @@ def test_daemon_passes_host_capability_sessions_to_workflow_execute() -> None:
     assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
 
     assert fake.calls[0]["host_capability_sessions"] == [session]
+
+
+def test_daemon_passes_approval_requester_binding_to_workflow_execute_paths() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = []
+            self.bindings = []
+
+        def _host_capability_approval_requester_from_binding(self, binding):
+            self.bindings.append(dict(binding or {}))
+            return "approval-requester"
+
+        def execute_workflow_python(self, **kwargs):
+            self.calls.append(("python_execute", dict(kwargs)))
+            return {"status": "ok"}
+
+        def workflow_python_instance_execute(self, **kwargs):
+            self.calls.append(("python_instance_execute", dict(kwargs)))
+            return {"status": "ok"}
+
+        def workflow_python_stream_open(self, **kwargs):
+            self.calls.append(("python_stream_open", dict(kwargs)))
+            return {"status": "ok"}
+
+        def execute_workflow_js(self, **kwargs):
+            self.calls.append(("js_execute", dict(kwargs)))
+            return {"status": "ok"}
+
+        def workflow_js_instance_execute(self, **kwargs):
+            self.calls.append(("js_instance_execute", dict(kwargs)))
+            return {"status": "ok"}
+
+        def workflow_js_stream_open(self, **kwargs):
+            self.calls.append(("js_stream_open", dict(kwargs)))
+            return {"status": "ok"}
+
+    binding = {"transport": "local_ipc", "callback_binding": {"session_token": "tok"}}
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+    daemon._host_capability_sessions = {}
+    daemon._host_capability_sessions_lock = threading.RLock()
+
+    daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-py"}, "approval_requester_binding": binding})
+    daemon._call_service("workflow-python-instance-execute", {"instance_id": "inst-py", "request": {"request_id": "req-py-inst"}, "approval_requester_binding": binding})
+    daemon._call_service("workflow-python-stream-open", {"request": {"request_id": "req-py-stream"}, "approval_requester_binding": binding})
+    daemon._call_service("workflow-js-execute", {"request": {"request_id": "req-js"}, "approval_requester_binding": binding})
+    daemon._call_service("workflow-js-instance-execute", {"instance_id": "inst-js", "request": {"request_id": "req-js-inst"}, "approval_requester_binding": binding})
+    daemon._call_service("workflow-js-stream-open", {"request": {"request_id": "req-js-stream"}, "approval_requester_binding": binding})
+
+    assert [name for name, _kwargs in fake.calls] == [
+        "python_execute",
+        "python_instance_execute",
+        "python_stream_open",
+        "js_execute",
+        "js_instance_execute",
+        "js_stream_open",
+    ]
+    assert len(fake.bindings) == 6
+    assert all(row == binding for row in fake.bindings)
+    assert all(kwargs["approval_requester"] == "approval-requester" for _name, kwargs in fake.calls)
 
 
 def test_daemon_dispatches_workflow_js_facade() -> None:
@@ -2173,6 +2267,166 @@ def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequenti
     assert resources["workflow_python_idle_process_count"] == 1
     assert resources["workflow_python_active_process_count"] == 0
     svc._workflow_python_node_runtime_registry().shutdown()
+
+
+def test_execute_workflow_python_node_approval_requester_receives_normalized_payload(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    result = host.call('crm.customer.lookup', {'customer_id': payload['customer_id'], 'secret': 'hidden'})\n"
+        "    return {'output': result}\n"
+    )
+    approvals: list[dict] = []
+    relay = HostCapabilityProviderCallbackRelay()
+    session = _approval_test_session(relay, workflow_id="wf-approval-python")
+
+    def approve(request: dict) -> dict:
+        approvals.append(dict(request))
+        return host_capability_approval_decision("allow_once", approval_id=str(request.get("approval_id") or ""))
+
+    try:
+        out = svc.execute_workflow_python(
+            profile="node",
+            request={
+                "request_id": "req-node-approval",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf-approval-python",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {"customer_id": "c-1"},
+            },
+            host_capability_sessions=[session],
+            approval_requester=approve,
+        )
+    finally:
+        relay.release(session.binding)
+        svc._workflow_python_node_runtime_registry().shutdown()
+
+    audit = svc.host_capability_audit_list(request_id="req-node-approval", method="crm.customer.lookup")
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"method": "crm.customer.lookup", "customer_id": "c-1", "request_id": "req-node-approval"}
+    assert len(approvals) == 1
+    assert approvals[0]["contract"] == "hosting.sandbox.host_capability_approval.v1"
+    assert approvals[0]["method"] == "crm.customer.lookup"
+    assert approvals[0]["argument_keys"] == ["customer_id", "secret"]
+    assert "arguments" not in approvals[0]
+    assert approvals[0]["context"]["request_id"] == "req-node-approval"
+    assert audit["count"] == 1
+    assert audit["events"][0]["result"] == "approved"
+
+
+def test_execute_workflow_js_node_approval_requester_receives_normalized_payload(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "exports.run = function(payload, api) {\n"
+        "  return {output: api.call('crm.customer.lookup', {customer_id: payload.customer_id, secret: 'hidden'})};\n"
+        "};\n"
+    )
+    approvals: list[dict] = []
+    relay = HostCapabilityProviderCallbackRelay()
+    session = _approval_test_session(relay, workflow_id="wf-approval-js")
+
+    def approve(request: dict) -> dict:
+        approvals.append(dict(request))
+        return host_capability_approval_decision("allow_once", approval_id=str(request.get("approval_id") or ""))
+
+    try:
+        out = svc.execute_workflow_js(
+            profile="node",
+            request={
+                "request_id": "req-js-approval",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf-approval-js",
+                "package_source_digest": "digest",
+                "payload": {"customer_id": "c-2"},
+            },
+            host_capability_sessions=[session],
+            approval_requester=approve,
+        )
+    finally:
+        relay.release(session.binding)
+        svc._workflow_js_node_runtime_registry().shutdown()
+
+    audit = svc.host_capability_audit_list(request_id="req-js-approval", method="crm.customer.lookup")
+
+    assert out["status"] == "ok"
+    assert out["output"] == {"method": "crm.customer.lookup", "customer_id": "c-2", "request_id": "req-js-approval"}
+    assert len(approvals) == 1
+    assert approvals[0]["contract"] == "hosting.sandbox.host_capability_approval.v1"
+    assert approvals[0]["argument_keys"] == ["customer_id", "secret"]
+    assert "arguments" not in approvals[0]
+    assert approvals[0]["context"]["request_id"] == "req-js-approval"
+    assert audit["count"] == 1
+    assert audit["events"][0]["result"] == "approved"
+
+
+def test_workflow_python_stream_open_uses_approval_requester_before_subscription(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "def run(payload):\n"
+        "    result = host.call('crm.customer.lookup', {'customer_id': payload['customer_id'], 'secret': 'hidden'})\n"
+        "    return {'output': result}\n"
+    )
+    approvals: list[dict] = []
+    relay = HostCapabilityProviderCallbackRelay()
+    session = _approval_test_session(relay, workflow_id="wf-approval-stream")
+    opened: dict = {}
+
+    def approve(request: dict) -> dict:
+        approvals.append(dict(request))
+        return host_capability_approval_decision("allow_once", approval_id=str(request.get("approval_id") or ""))
+
+    try:
+        opened = svc.workflow_python_stream_open(
+            profile="node",
+            request={
+                "request_id": "req-node-approval-stream",
+                "module_source": source,
+                "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "package_id": "pkg",
+                "workflow_id": "wf-approval-stream",
+                "package_source_digest": "digest",
+                "operation": "run",
+                "payload": {"customer_id": "c-3"},
+            },
+            host_capability_sessions=[session],
+            approval_requester=approve,
+        )
+        events = []
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            received = svc.workflow_python_event_subscribe(stream_id=opened["stream_id"], max_items=8)
+            events.extend(list(received.get("normalized_events") or []))
+            if any(dict(row or {}).get("kind") == "done" for row in events):
+                break
+            time.sleep(0.05)
+    finally:
+        relay.release(session.binding)
+        if opened:
+            svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
+        svc._workflow_python_node_runtime_registry().shutdown()
+
+    event_kinds = [row["kind"] for row in events]
+
+    assert opened["status"] == "ok"
+    assert len(approvals) == 1
+    assert approvals[0]["argument_keys"] == ["customer_id", "secret"]
+    assert "approval" in event_kinds
+    assert any(row["kind"] == "done" and row["status"] == "ok" for row in events)
 
 
 def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(tmp_path: Path) -> None:

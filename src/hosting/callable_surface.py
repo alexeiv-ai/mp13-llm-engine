@@ -21,6 +21,7 @@ HOST_CALLABLE_SCHEMA_CONTRACT = "hosting.sandbox.callable_schema.v1"
 HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT = "hosting.sandbox.host_capability_provider_response.v1"
 HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT = "hosting.sandbox.host_capability_approval_decision.v1"
 HOST_CAPABILITY_PROVIDER_CALLBACK_NAME = "host_capability.call"
+HOST_CAPABILITY_APPROVAL_CALLBACK_NAME = "host_capability.approval"
 HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT = "hosting.sandbox.host_capability_bridge_policy.v1"
 
 SAFE_CORRELATION_FIELDS = (
@@ -545,6 +546,111 @@ class HostCapabilityProviderCallbackRelay:
         return None
 
 
+def bind_host_capability_approval_callback(callback: Callable[..., Any]) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """Wrap a client approval callback so it consumes normalized approval requests."""
+
+    def _invoke(envelope: Dict[str, Any]) -> Dict[str, Any]:
+        request = host_capability_approval_request(dict(envelope or {}))
+        try:
+            if len(inspect.signature(callback).parameters) <= 1:
+                result = callback(request)
+            else:
+                result = callback(request.get("method"), request)
+            row = dict(result or {})
+            if not _clean(row.get("decision")):
+                row["decision"] = "allow_once" if bool(row.get("approved")) else "deny"
+            decision = _clean(row.get("decision")).lower()
+            if decision not in _APPROVAL_DECISIONS:
+                decision = "deny"
+            approved = decision in {"allow_once", "add_to_scope"}
+            row["contract"] = _clean(row.get("contract")) or HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT
+            row["decision"] = decision
+            row["approved"] = bool(row.get("approved", approved))
+            row["status"] = _clean(row.get("status")) or ("approved" if row["approved"] else "denied")
+            row["approval_id"] = _clean(row.get("approval_id")) or request.get("approval_id") or None
+            row["scope_constraints"] = dict(row.get("scope_constraints") or row.get("constraints") or {})
+            return row
+        except TimeoutError as exc:
+            return host_capability_approval_decision("deny", approval_id=str(request.get("approval_id") or ""), reason="approval_timeout", message=str(exc))
+        except KeyboardInterrupt:
+            return host_capability_approval_decision("deny", approval_id=str(request.get("approval_id") or ""), reason="approval_canceled", message="approval callback canceled")
+        except Exception as exc:
+            return host_capability_approval_decision(
+                "deny",
+                approval_id=str(request.get("approval_id") or ""),
+                reason="approval_callback_error",
+                message=str(exc),
+            )
+
+    return _invoke
+
+
+class HostCapabilityApprovalCallbackRelay:
+    """Local approval callback relay for daemon/control-channel workflow execution."""
+
+    def __init__(self) -> None:
+        from .toolbox.callbacks import _HostedToolCallbackRelay
+
+        self._relay = _HostedToolCallbackRelay()
+        self._session_tokens: set[str] = set()
+
+    def bind_callback(
+        self,
+        callback: Callable[..., Any],
+        *,
+        provider_id: str = "",
+        method: str = "",
+        user_context: Any = None,
+        callback_signature: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        wrapped = bind_host_capability_approval_callback(callback)
+
+        def _processor(*, callback_name: str, payload: Any, context: Any) -> Dict[str, Any]:
+            name = _clean(callback_name)
+            row = dict(payload or {}) if isinstance(payload, dict) else {}
+            if name not in {HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPABILITY_APPROVAL_CONTRACT}:
+                return host_capability_approval_decision(
+                    "deny",
+                    approval_id=str(row.get("approval_id") or ""),
+                    reason="host_capability_approval_callback_unsupported",
+                    message=f"unsupported callback {name}",
+                )
+            return wrapped(row)
+
+        callback_binding = self._relay.bind_session(
+            processor=_processor,
+            toolbox_id=_clean(provider_id) or "host_capability",
+            tool_name=_clean(method) or HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+            tool_call_id="",
+            tool_arguments={},
+            callback_signature=dict(callback_signature or {"contract": HOST_CAPABILITY_APPROVAL_CONTRACT}),
+            user_context=user_context,
+        )
+        token = _clean(callback_binding.get("session_token"))
+        if token:
+            self._session_tokens.add(token)
+        return {
+            "transport": "local_ipc",
+            "callback_binding": callback_binding,
+        }
+
+    def release(self, binding: Dict[str, Any]) -> None:
+        row = dict(binding or {})
+        callback_binding = dict(row.get("callback_binding") or row)
+        token = _clean(callback_binding.get("session_token"))
+        self._relay.release_session(token)
+        self._session_tokens.discard(token)
+
+    def __enter__(self) -> "HostCapabilityApprovalCallbackRelay":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        for token in list(self._session_tokens):
+            self._relay.release_session(token)
+            self._session_tokens.discard(token)
+        return None
+
+
 def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(payload or {})
     arguments = dict(row.get("arguments") or {})
@@ -614,12 +720,15 @@ def host_capability_approval_decision(
 
 __all__ = [
     "HOST_CALLABLE_SCHEMA_CONTRACT",
+    "HOST_CAPABILITY_APPROVAL_CALLBACK_NAME",
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",
     "HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT",
     "HOST_CAPABILITY_PROVIDER_CALLBACK_NAME",
     "HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT",
+    "HostCapabilityApprovalCallbackRelay",
     "HostCapabilityProviderCallbackRelay",
     "SAFE_CORRELATION_FIELDS",
+    "bind_host_capability_approval_callback",
     "bind_host_capability_provider_callback",
     "callable_surface_digests",
     "callable_surface_identity",

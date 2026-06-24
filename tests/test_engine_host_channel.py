@@ -1386,6 +1386,30 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     ]
 
 
+def test_workflow_channels_forward_approval_requester_binding() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    binding = {"transport": "local_ipc", "callback_binding": {"family": "AF_PIPE", "address": "pipe", "session_token": "tok"}}
+
+    ch.execute_workflow_python(request={"request_id": "req-py"}, approval_requester_binding=binding)
+    ch.workflow_python_instance_execute(instance_id="inst-py", request={"request_id": "req-py-inst"}, approval_requester_binding=binding)
+    ch.workflow_python_stream_open(request={"request_id": "req-py-stream"}, approval_requester_binding=binding)
+    ch.execute_workflow_js(request={"request_id": "req-js"}, approval_requester_binding=binding)
+    ch.workflow_js_instance_execute(instance_id="inst-js", request={"request_id": "req-js-inst"}, approval_requester_binding=binding)
+    ch.workflow_js_stream_open(request={"request_id": "req-js-stream"}, approval_requester_binding=binding)
+
+    assert [cmd for cmd, _payload in fake.calls] == [
+        "workflow-python-execute",
+        "workflow-python-instance-execute",
+        "workflow-python-stream-open",
+        "workflow-js-execute",
+        "workflow-js-instance-execute",
+        "workflow-js-stream-open",
+    ]
+    assert all(payload["approval_requester_binding"] == binding for _cmd, payload in fake.calls)
+
+
 def test_workflow_artifact_recovery_channel_facade_forwards_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})

@@ -80,6 +80,9 @@ Clients should use high-level helpers and avoid raw provider session tokens or c
 - [x] Added approval helpers for `hosting.sandbox.host_capability_approval.v1`.
 - [x] Approval requests expose sanitized argument keys, method, provider, approval policy, workflow/request/instance context, and safe correlation ids.
 - [x] Approval decisions normalize to `deny`, `allow_once`, or `add_to_scope`.
+- [x] Public Python/JavaScript workflow execute, pinned execute, and stream-open service APIs accept `approval_requester` callbacks.
+- [x] Daemon/control-channel Python/JavaScript workflow execute, pinned execute, and stream-open APIs accept `approval_requester_binding` relay payloads.
+- [x] `HostCapabilityApprovalCallbackRelay.bind_callback(...)` creates local approval callback bindings for daemon/control-channel clients.
 - [x] `deny` rejects the current call before provider execution.
 - [x] `allow_once` approves only the current call.
 - [x] `add_to_scope` records a scoped grant with optional argument constraints and TTL for later matching calls.

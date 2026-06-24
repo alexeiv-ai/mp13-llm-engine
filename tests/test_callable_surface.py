@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from hosting.callable_surface import (
+    HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+    HostCapabilityApprovalCallbackRelay,
     HostCapabilityProviderCallbackRelay,
     bind_host_capability_provider_callback,
     callable_surface_digests,
@@ -236,6 +238,36 @@ def test_provider_callback_relay_binds_local_callback_transport() -> None:
         "call-relay-1",
         {"method": "demo.echo", "value": 11, "request_id": "req-relay-1"},
     )
+
+
+def test_approval_callback_relay_binds_local_callback_transport() -> None:
+    approvals: list[dict] = []
+    relay = HostCapabilityApprovalCallbackRelay()
+    binding = relay.bind_callback(lambda request: approvals.append(dict(request)) or host_capability_approval_decision("allow_once", approval_id=request["approval_id"]))
+    try:
+        from hosting.toolbox_executor_ipc import _invoke_callback_binding
+
+        response = _invoke_callback_binding(
+            binding["callback_binding"],
+            callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+            payload={
+                "contract": "hosting.sandbox.host_capability_approval.v1",
+                "approval_id": "approval-relay-1",
+                "provider_call_id": "provider-call-1",
+                "method": "demo.approve",
+                "arguments": {"value": 11, "secret": "not copied"},
+                "context": {"request_id": "req-relay-approval"},
+            },
+            context={"request_id": "req-relay-approval"},
+        )
+    finally:
+        relay.release(binding)
+
+    assert approvals[0]["argument_keys"] == ["secret", "value"]
+    assert "arguments" not in approvals[0]
+    assert response["result"]["contract"] == "hosting.sandbox.host_capability_approval_decision.v1"
+    assert response["result"]["decision"] == "allow_once"
+    assert response["result"]["approval_id"] == "approval-relay-1"
 
 
 def test_approval_bridge_sanitizes_arguments_and_normalizes_decisions() -> None:
