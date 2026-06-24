@@ -42,6 +42,7 @@ SAFE_BUILTINS = {
 }
 
 _PROJECT_MODULE_ROOTS: set[str] = set()
+_PERSISTENT_MODULE: Dict[str, Any] = {}
 
 
 def _detail_from_error(err: BaseException) -> Dict[str, Any]:
@@ -157,6 +158,15 @@ class HostApi:
         self._recv_lock = threading.Lock()
         self._response_cv = threading.Condition()
         self._pending_responses: Dict[str, Dict[str, Any]] = {}
+
+    def bind(self, *, conn: Any, request_id: str) -> None:
+        self.conn = conn
+        self.request_id = str(request_id or "")
+        with self._seq_lock:
+            self._seq = 0
+        with self._response_cv:
+            self._pending_responses.clear()
+            self._response_cv.notify_all()
 
     def _next_call_id(self) -> str:
         with self._seq_lock:
@@ -283,11 +293,102 @@ def _send(conn: Any, row: Dict[str, Any]) -> None:
     conn.send(dict(row or {}))
 
 
+def _state_mode(req: Dict[str, Any]) -> str:
+    py = req.get("python") if isinstance(req.get("python"), dict) else {}
+    raw = req.get("instance_state_mode") or req.get("state_mode") or py.get("instance_state_mode") or py.get("state_mode")
+    mode = str(raw or "ephemeral").strip().lower().replace("-", "_")
+    if mode in {"persistent", "persistent_module", "module_persistent"}:
+        return "persistent_module"
+    return "ephemeral"
+
+
+def _make_progress(context: Dict[str, Any]):
+    def progress(progress_payload: Any) -> None:
+        row = progress_payload if isinstance(progress_payload, dict) else {"value": progress_payload}
+        _send(context["conn"], {"type": "progress", "request_id": str(context.get("request_id") or ""), "payload": row})
+
+    return progress
+
+
+def _rebind_module_globals(
+    globals_row: Dict[str, Any],
+    *,
+    conn: Any,
+    request_id: str,
+    builtins_row: Dict[str, Any],
+    artifact_inputs: Dict[str, str],
+    artifact_outputs: Dict[str, str],
+    payload: Any,
+) -> None:
+    context = globals_row.setdefault("__workflow_request_context", {})
+    if not isinstance(context, dict):
+        context = {}
+        globals_row["__workflow_request_context"] = context
+    context["conn"] = conn
+    context["request_id"] = str(request_id or "")
+    progress = globals_row.get("progress")
+    if not callable(progress):
+        progress = _make_progress(context)
+    host_api = globals_row.get("host")
+    if isinstance(host_api, HostApi):
+        host_api.bind(conn=conn, request_id=request_id)
+    else:
+        host_api = HostApi(conn=conn, request_id=request_id)
+    artifact_inputs_global = globals_row.get("artifact_inputs")
+    if isinstance(artifact_inputs_global, dict):
+        artifact_inputs_global.clear()
+        artifact_inputs_global.update(dict(artifact_inputs or {}))
+    else:
+        artifact_inputs_global = dict(artifact_inputs or {})
+    artifact_outputs_global = globals_row.get("artifact_outputs")
+    if isinstance(artifact_outputs_global, dict):
+        artifact_outputs_global.clear()
+        artifact_outputs_global.update(dict(artifact_outputs or {}))
+    else:
+        artifact_outputs_global = dict(artifact_outputs or {})
+    globals_row.update(
+        {
+            "__builtins__": builtins_row,
+            "__name__": "workflow_python_node_module",
+            "progress": progress,
+            "emit_progress": progress,
+            "host": host_api,
+            "sandbox": SandboxApi(host_api),
+            "artifact_inputs": artifact_inputs_global,
+            "artifact_outputs": artifact_outputs_global,
+            "payload": payload,
+        }
+    )
+
+
+def _new_module_globals(
+    *,
+    conn: Any,
+    request_id: str,
+    builtins_row: Dict[str, Any],
+    artifact_inputs: Dict[str, str],
+    artifact_outputs: Dict[str, str],
+    payload: Any,
+) -> Dict[str, Any]:
+    globals_row: Dict[str, Any] = {}
+    _rebind_module_globals(
+        globals_row,
+        conn=conn,
+        request_id=request_id,
+        builtins_row=builtins_row,
+        artifact_inputs=artifact_inputs,
+        artifact_outputs=artifact_outputs,
+        payload=payload,
+    )
+    return globals_row
+
+
 def _execute(conn: Any, req: Dict[str, Any]) -> int:
     request_id = str(req.get("request_id") or "")
     source = str(req.get("module_source") or "")
     export_name = str(req.get("export_name") or req.get("operation") or "")
     execution_mode = str(req.get("execution_mode") or "module").strip().lower() or "module"
+    state_mode = _state_mode(req)
     project = req.get("project") if isinstance(req.get("project"), dict) else {}
     allowlist = list(req.get("import_allowlist") or [])
     payload = req.get("payload")
@@ -307,24 +408,29 @@ def _execute(conn: Any, req: Dict[str, Any]) -> int:
     if artifact_inputs or artifact_outputs:
         builtins_row["open"] = _make_artifact_open(artifact_inputs, artifact_outputs)
 
-    def progress(progress_payload: Any) -> None:
-        row = progress_payload if isinstance(progress_payload, dict) else {"value": progress_payload}
-        _send(conn, {"type": "progress", "request_id": request_id, "payload": row})
-
     stdout_io = io.StringIO()
     stderr_io = io.StringIO()
-    host_api = HostApi(conn=conn, request_id=request_id)
-    globals_row = {
-        "__builtins__": builtins_row,
-        "__name__": "workflow_python_node_module",
-        "progress": progress,
-        "emit_progress": progress,
-        "host": host_api,
-        "sandbox": SandboxApi(host_api),
-        "artifact_inputs": dict(artifact_inputs or {}),
-        "artifact_outputs": dict(artifact_outputs or {}),
-        "payload": payload,
-    }
+    if state_mode == "persistent_module" and execution_mode != "module":
+        _send(
+            conn,
+            {
+                "type": "error",
+                "request_id": request_id,
+                "reason": "workflow_sandbox_persistent_module_requires_module_mode",
+                "detail": {"execution_mode": execution_mode},
+                "stdout": "",
+                "stderr": "",
+            },
+        )
+        return 0
+    globals_row = _new_module_globals(
+        conn=conn,
+        request_id=request_id,
+        builtins_row=builtins_row,
+        artifact_inputs=artifact_inputs,
+        artifact_outputs=artifact_outputs,
+        payload=payload,
+    )
     try:
         with contextlib.redirect_stdout(stdout_io), contextlib.redirect_stderr(stderr_io):
             if execution_mode == "snippet":
@@ -399,7 +505,29 @@ def _execute(conn: Any, req: Dict[str, Any]) -> int:
                     except Exception:
                         pass
             else:
-                exec(compile(source, "<workflow_python_node>", "exec"), globals_row, globals_row)
+                if state_mode == "persistent_module":
+                    state_key = str(req.get("instance_state_key") or req.get("code_revision") or req.get("module_sha256") or "")
+                    if not state_key:
+                        state_key = str(hash(source))
+                    if _PERSISTENT_MODULE.get("state_key") != state_key:
+                        _PERSISTENT_MODULE.clear()
+                        _PERSISTENT_MODULE["state_key"] = state_key
+                        _PERSISTENT_MODULE["globals"] = globals_row
+                        exec(compile(source, "<workflow_python_node>", "exec"), globals_row, globals_row)
+                    else:
+                        globals_row = _PERSISTENT_MODULE.get("globals") or {}
+                        _rebind_module_globals(
+                            globals_row,
+                            conn=conn,
+                            request_id=request_id,
+                            builtins_row=builtins_row,
+                            artifact_inputs=artifact_inputs,
+                            artifact_outputs=artifact_outputs,
+                            payload=payload,
+                        )
+                        _PERSISTENT_MODULE["globals"] = globals_row
+                else:
+                    exec(compile(source, "<workflow_python_node>", "exec"), globals_row, globals_row)
                 fn = globals_row.get(export_name)
                 if not callable(fn):
                     _send(

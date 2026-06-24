@@ -19,6 +19,7 @@ NODE_REQUEST_FIELDS = [
     "export_name",
     "operation",
     "execution_mode",
+    "instance_state_mode",
     "project",
     "payload",
     "provenance",
@@ -88,6 +89,7 @@ def workflow_python_node_contract() -> Dict[str, Any]:
             "payload",
         ],
         "execution_modes": ["module", "snippet", "project"],
+        "instance_state_modes": ["ephemeral", "persistent_module"],
         "request_templates": ["module_function", "snippet", "staged_project", "uv_project"],
         "limits": ["timeout_ms", "output_limit_bytes", "memory_limit_mb", "heartbeat_interval_ms", "stream_max_events"],
         "job_lifecycle_states": ["submitted", "running", "ok", "error", "timeout", "canceled"],
@@ -140,6 +142,7 @@ def build_workflow_python_node_module_request(
     limits: Optional[Dict[str, Any]] = None,
     policy: Optional[Dict[str, Any]] = None,
     python: Optional[Dict[str, Any]] = None,
+    instance_state_mode: str = "",
     artifact_inputs: Optional[list[Dict[str, Any]]] = None,
     artifact_outputs: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
@@ -158,6 +161,7 @@ def build_workflow_python_node_module_request(
             "package_source_digest": digest,
             "operation": op,
             "export_name": _clean(export_name) or op,
+            "instance_state_mode": _clean(instance_state_mode),
             "payload": payload if payload is not None else {},
             "provenance": _clean_dict(provenance),
             "limits": _clean_dict(limits),
@@ -320,6 +324,11 @@ def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) ->
     execution_mode = _clean(req.get("execution_mode") or _dict(req.get("python")).get("execution_mode")).lower() or "module"
     if execution_mode not in {"module", "snippet", "project"}:
         execution_mode = "module"
+    instance_state_mode = _clean(req.get("instance_state_mode") or req.get("state_mode") or _dict(req.get("python")).get("instance_state_mode") or _dict(req.get("python")).get("state_mode")).lower().replace("-", "_")
+    if instance_state_mode in {"persistent", "module_persistent"}:
+        instance_state_mode = "persistent_module"
+    if instance_state_mode not in {"", "ephemeral", "persistent_module"}:
+        instance_state_mode = "ephemeral"
     normalized = {
         "request_id": _clean(req.get("request_id")) or f"workflow-python-node-{int(time.time() * 1000)}",
         "module_source": str(req.get("module_source") or ""),
@@ -331,6 +340,7 @@ def normalize_workflow_python_node_request(request: Optional[Dict[str, Any]]) ->
         "export_name": export_name or operation,
         "operation": operation or export_name,
         "execution_mode": execution_mode,
+        "instance_state_mode": instance_state_mode or "ephemeral",
         "project": _dict(req.get("project")),
         "payload": req.get("payload") if "payload" in req else {},
         "provenance": _dict(req.get("provenance")),

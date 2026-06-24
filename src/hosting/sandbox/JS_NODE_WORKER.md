@@ -84,8 +84,9 @@ Optional fields:
 8. `execution_mode`
 9. `code_revision`
 10. `export_name`
-11. `action_manifest` / `actions`
-12. `action_name`
+11. `instance_state_mode`
+12. `action_manifest` / `actions`
+13. `action_name`
 
 The host verifies `sha256(module_source) == module_sha256` before execution.
 
@@ -99,6 +100,12 @@ The material difference is the entrypoint contract. `script` mode is for
 reusable node code with explicit callable exports and `export_name` selection.
 `snippet` mode is for short evaluated source that writes one global `result`;
 it does not call an exported function and ignores `export_name`.
+
+`instance_state_mode` defaults to `ephemeral`. For pinned script/module
+instances, clients may set `instance_state_mode="persistent_module"` to keep a
+QuickJS context and its globals alive across sequential
+`workflow-js-instance-execute` calls. Persistent module state is not valid for
+`snippet` or `project` execution.
 
 Script mode should use a single-script contract:
 
@@ -331,10 +338,18 @@ Runtime import policy:
 
 `workflow_js_instance_create`, `workflow_js_instance_execute`,
 `workflow_js_instance_list`, and `workflow_js_instance_close` route compatible
-module/snippet calls to a pinned host worker process. The pinned process is a
-transport and startup optimization only. Each execution still creates a fresh
-QuickJS context from the submitted `module_source`, so module globals, closures,
-and other in-context JS values are not reused between requests.
+module/snippet calls to a pinned host worker process. By default the pinned
+process is a transport and startup optimization only: each execution creates a
+fresh QuickJS context from the submitted `module_source`, so module globals,
+closures, and other in-context JS values are not reused between requests.
+
+When clients set `instance_state_mode="persistent_module"` on an explicit
+pinned script/module instance, the child harness creates one QuickJS context for
+the current code revision and reuses that context for sequential calls.
+Top-level JS state, closures, and exported functions persist until close,
+crash, cancel-driven process termination, or explicit replacement. Request-local
+bindings such as `payload`, `api` callbacks, progress, console, and host-call
+correlation are reset for each call.
 
 Pinned module/snippet instances separate worker-process compatibility from code
 identity. `runtime_key` identifies the reusable worker process, while `code_key`
@@ -342,14 +357,17 @@ identifies the currently submitted code/package revision. Edited code with a new
 `module_sha256` or `code_revision` can run on the same pinned worker process
 when the instance is idle and the worker-process `runtime_key` is unchanged.
 `workflow_js_instance_create(..., replace=True, ...)` updates `code_key` without
-restarting that worker in this compatible case.
+restarting that worker in this compatible case. For persistent module
+instances, executing a different code revision without `replace=true` returns
+`workflow_js_instance_code_replacement_required`; replacement is the explicit
+state reset boundary.
 
 Project-mode JS instances are therefore intentionally unsupported for now.
 `workflow_js_instance_create` returns
 `workflow_js_instance_project_mode_unsupported` with structured detail when
-`execution_mode` is `project`. Enabling project-mode JS instances requires a
-persistent QuickJS context or module graph cache, explicit cwd/env/import-cache
-cleanup policy, and snapshot/restore boundaries for mutable JS state.
+`execution_mode` is `project`. Enabling project-mode JS instances still
+requires a module/project loading contract, explicit cwd/env/import-cache cleanup
+policy, and snapshot/restore boundaries for mutable JS state.
 
 Authoring with imports is supported by host-side helpers that emit the
 single-script worker contract. These helpers are preprocessing tools; their

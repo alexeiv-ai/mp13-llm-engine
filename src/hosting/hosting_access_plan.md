@@ -891,9 +891,11 @@ Work:
   - [x] Require cwd reset, `sys.path` reset, env reset, and project import-cache clearing.
   - [x] Restore cwd, `sys.path`, env, and project modules after each project request.
 - [x] Decide JS project-mode long-lived semantics separately.
-  - [x] Keep JS project-mode pinned instances unsupported in this pillar because the current JS node worker pins only the host worker process and creates a fresh QuickJS context per request.
+  - [x] Keep JS project-mode pinned instances unsupported in this pillar because project mode still needs a module/project loading contract plus cleanup semantics.
   - [x] Return a structured deferred detail from `workflow_js_instance_create` so clients can distinguish unsupported project persistence from ordinary instance routing failures.
-  - [ ] Later JS project-mode support requires a persistent QuickJS context or module graph cache, declared cwd/env/import-cache cleanup semantics, and snapshot/restore boundaries for mutable JS state.
+  - [x] Add explicit `instance_state_mode="persistent_module"` for pinned Python module instances and pinned JS script/module instances.
+  - [x] Require explicit `replace=true` as the code-revision/state reset boundary for persistent module instances.
+  - [ ] Later JS project-mode support requires a project/module loading contract, declared cwd/env/import-cache cleanup semantics, and snapshot/restore boundaries for mutable JS state.
 
 ### Phase 6: Action Manifest And Card Integration
 
@@ -949,16 +951,16 @@ The implementation phases above are complete except for the explicitly deferred 
   - Boundary: arbitrary Python/JS process memory, open handles, async jobs, and imported module internals are not recoverable state.
   - Decision: no heap recovery and no mutation replay. Hosting does not infer semantic validity of mutated state.
   - Implemented artifact handoff: failed workflow requests with declared output artifacts keep their run folder and expose an `artifact_recovery` notice. Clients can call `workflow-artifact-recovery-inspect`, `workflow-artifact-recovery-claim`, and `workflow-artifact-recovery-cleanup`.
-  - Edit+continue rule: `instance_id` is the stable logical worker identity. Python replacement starts a fresh process under the same `instance_id`; JS module/snippet edits can reuse the same compatible worker process while updating `code_key`.
+  - Edit+continue rule: `instance_id` is the stable logical worker identity. Python replacement starts a fresh process under the same `instance_id`; JS module/snippet edits can reuse the same compatible worker process while updating `code_key`. Persistent module state makes replacement explicit: edited code is rejected during instance execute and accepted through `create(..., replace=true)`.
   - Artifact namespace rule: recovery claim defaults to `@artifacts/instances/<instance_id>/...` when the failed request or claim supplies an instance id.
   - Client responsibility: partial artifact validity is client-owned. Hosting provides hint labels only.
   - Cleanup boundary: disk garbage collection is deferred to a later task; explicit cleanup remains available by request id.
 
 ### JavaScript Project Instances
 
-- [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
-  - Current state: JS pinned module/snippet instances reuse the host worker process across compatible code edits; each call creates a fresh QuickJS context. Project-mode JS instance creation is rejected with structured deferred detail.
-  - Decision needed: persistent QuickJS context versus persistent module graph cache, plus cleanup policy for globals, async jobs, imports, env, and host handles.
+- [ ] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
+  - Current state: JS pinned module/snippet instances can either use default fresh QuickJS contexts per call or opt into `instance_state_mode="persistent_module"` for a persistent QuickJS context. Project-mode JS instance creation is rejected with structured deferred detail.
+  - Decision needed: project/module loading shape, cleanup policy for globals, async jobs, imports, env, and host handles, plus whether project state uses a persistent QuickJS context or a module graph cache.
   - Recommended constraint: do not enable JS project-mode routing until cleanup and snapshot boundaries are explicit.
 
 ### Native Toolbox Metadata
@@ -976,7 +978,7 @@ The implementation phases above are complete except for the explicitly deferred 
 - Approval reuse is explicit scoped-grant behavior, not an implicit broker cache.
 - State recovery is explicit host-managed JSON state plus client-directed artifact handoff from failed request folders.
 - Python project-mode pinned instances require a reset policy for cwd, `sys.path`, env, and project imports.
-- JS project-mode pinned instances remain unsupported until persistent JS runtime semantics are defined.
+- JS project-mode pinned instances remain unsupported until project/module loading and cleanup semantics are defined.
 - Action manifests are static request metadata for now; sandbox-executed dynamic discovery is deferred unless a future workflow composition feature needs it.
 
 ## Current Recommendation
@@ -985,4 +987,4 @@ Do not start deferred runtime cleanup until there is a concrete owning feature o
 
 The next high-leverage work is to let the client integrate the callable-surface bridge helpers, adapter-based toolbox callable export, and conflict/approval policy rules.
 
-JS project-mode persistence should stay behind explicit runtime design work because it affects cleanup, snapshot, and mutation semantics. Broader instance recovery remains intentionally out of scope unless a future runtime adds a specific checkpoint contract.
+JS project-mode persistence should stay behind explicit runtime design work because it affects project loading, cleanup, snapshot, and mutation semantics. Broader instance recovery remains intentionally out of scope unless a future runtime adds a specific checkpoint contract.

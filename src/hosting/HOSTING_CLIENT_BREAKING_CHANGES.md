@@ -2,6 +2,38 @@
 
 Date: 2026-06-22
 
+## Persistent Module Instance State
+
+Pinned Python and JavaScript module instances now support explicit in-process
+module state:
+
+```json
+{
+  "instance_state_mode": "persistent_module"
+}
+```
+
+Client requirements:
+
+1. Use `persistent_module` only with explicit `workflow-python-instance-*` or
+   `workflow-js-instance-*` routing.
+2. Use it only for Python `execution_mode="module"` or JavaScript script/module
+   requests. It is not valid for snippets or project mode.
+3. Treat module globals, JS globals, singletons, caches, and open handles as
+   process-local state. They survive sequential calls on the same live instance,
+   but are lost on close, crash, cancellation that kills the process, or
+   replacement.
+4. Submit edited code with `workflow-*-instance-create(..., replace=True)`.
+   Executing changed code directly against a persistent module instance returns
+   `workflow_python_instance_code_replacement_required` or
+   `workflow_js_instance_code_replacement_required`.
+5. Treat `runtime_key` and `code_key` as opaque diagnostics. Do not parse their
+   internal pipe-delimited shape.
+
+Default behavior remains request-global ephemeral: a warm worker process may be
+reused, but Python module globals or JavaScript QuickJS globals are not
+preserved unless `persistent_module` is explicitly requested.
+
 ## Recovery Pattern Clarification
 
 The recommended edit+continue recovery model is instance-scoped artifact refs, not old-path remapping.

@@ -483,6 +483,34 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         return _clean(request.get("execution_mode") or "module").lower() or "module"
 
     @staticmethod
+    def _state_mode(request: Dict[str, Any]) -> str:
+        py = dict(request.get("python") or {})
+        raw = request.get("instance_state_mode") or request.get("state_mode") or py.get("instance_state_mode") or py.get("state_mode")
+        mode = _clean(raw or "ephemeral").lower().replace("-", "_")
+        if mode in {"persistent", "persistent_module", "module_persistent"}:
+            return "persistent_module"
+        return "ephemeral"
+
+    @classmethod
+    def _state_mode_error(cls, request: Dict[str, Any], *, instance_id: str = "") -> Optional[Dict[str, Any]]:
+        state_mode = cls._state_mode(request)
+        if state_mode != "persistent_module":
+            return None
+        if cls._execution_mode(request) != "module":
+            return {
+                "ok": False,
+                "reason": "workflow_python_persistent_module_requires_module_mode",
+                "detail": {"execution_mode": cls._execution_mode(request), "state_mode": state_mode},
+            }
+        if not _clean(instance_id):
+            return {
+                "ok": False,
+                "reason": "workflow_python_persistent_module_requires_instance",
+                "detail": {"state_mode": state_mode},
+            }
+        return None
+
+    @staticmethod
     def _project_instance_policy(request: Dict[str, Any]) -> Dict[str, Any]:
         py = dict(request.get("python") or {})
         project = dict(request.get("project") or {})
@@ -529,7 +557,10 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         py = dict(request.get("python") or {})
         environment_key = _clean(request.get("environment_key")) or _clean(py.get("environment_key")) or _clean(py.get("environment_name")) or "workflow-python-node"
         execution_mode = WorkflowPythonNodeRuntimeRegistry._execution_mode(request)
-        code_revision = _clean(request.get("code_revision")) or _clean(request.get("module_sha256")).lower() or _sha256_text(str(request.get("module_source") or ""))
+        state_mode = WorkflowPythonNodeRuntimeRegistry._state_mode(request)
+        code_revision = ""
+        if state_mode != "persistent_module":
+            code_revision = _clean(request.get("code_revision")) or _clean(request.get("module_sha256")).lower() or _sha256_text(str(request.get("module_source") or ""))
         package_revision = _clean(request.get("package_source_digest"))
         return "|".join(
             [
@@ -537,6 +568,7 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 environment_key,
                 ",".join(_import_allowlist(request)),
                 execution_mode,
+                state_mode,
                 code_revision,
                 package_revision,
                 WorkflowPythonNodeRuntimeRegistry._project_instance_policy_key(request),
@@ -550,19 +582,28 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
 
     @staticmethod
     def _warm_reusable(request: Dict[str, Any]) -> bool:
-        return WorkflowPythonNodeRuntimeRegistry._execution_mode(request) != "project"
+        return WorkflowPythonNodeRuntimeRegistry._execution_mode(request) != "project" and WorkflowPythonNodeRuntimeRegistry._state_mode(request) != "persistent_module"
+
+    @staticmethod
+    def _code_key(request: Dict[str, Any]) -> str:
+        code_revision = _clean(request.get("code_revision")) or _clean(request.get("module_sha256")).lower() or _sha256_text(str(request.get("module_source") or ""))
+        package_revision = _clean(request.get("package_source_digest"))
+        return "|".join([code_revision, package_revision])
 
     @staticmethod
     def _child_request(request: Dict[str, Any]) -> Dict[str, Any]:
         req = dict(request or {})
         limits = dict(req.get("limits") or {})
         output_limit_bytes = max(1, min(int(limits.get("output_limit_bytes") or 65536), 10 * 1024 * 1024))
+        code_key = WorkflowPythonNodeRuntimeRegistry._code_key(req)
         return {
             **req,
             "request_id": _clean(req.get("request_id")),
             "export_name": _clean(req.get("export_name")) or _clean(req.get("operation")),
             "import_allowlist": _import_allowlist(req),
             "output_limit_bytes": output_limit_bytes,
+            "instance_state_mode": WorkflowPythonNodeRuntimeRegistry._state_mode(req),
+            "instance_state_key": code_key,
         }
 
     @staticmethod
@@ -590,7 +631,11 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             return {"status": "error", **project_policy_error}
         executable = _clean(python_executable) or _python_executable_from_request(child_req)
         runtime_key = self._runtime_key(child_req, executable)
+        code_key = self._code_key(child_req)
         iid = _clean(instance_id) or f"pyinst_{secrets.token_urlsafe(18)}"
+        state_mode_error = self._state_mode_error(child_req, instance_id=iid)
+        if state_mode_error is not None:
+            return {"status": "error", **state_mode_error}
         with self._instance_lock:
             existing = self._instances.get(iid)
             if existing is not None and not bool(replace):
@@ -602,6 +647,8 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         row = {
             "instance_id": iid,
             "runtime_key": runtime_key,
+            "code_key": code_key,
+            "instance_state_mode": self._state_mode(child_req),
             "environment_key": self._runtime_key_environment(runtime_key),
             "python_executable": executable,
             "pid": int(runtime.proc.pid or 0) or None,
@@ -813,11 +860,15 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             project_policy_error = self._project_instance_policy_error(req)
             if project_policy_error is not None:
                 return project_policy_error
+        state_mode_error = self._state_mode_error(req, instance_id=instance_id)
+        if state_mode_error is not None:
+            return state_mode_error
         limits = dict(req.get("limits") or {})
         timeout_ms = max(1, min(int(limits.get("timeout_ms") or 5000), 300000))
         child_req = {**self._child_request(req), "request_id": request_id}
         executable = _clean(python_executable) or _python_executable_from_request(req)
         runtime_key = self._runtime_key(child_req, executable)
+        code_key = self._code_key(child_req)
         reusable = self._warm_reusable(child_req)
         pinned_instance_id = _clean(instance_id)
         runtime = None
@@ -832,6 +883,17 @@ class WorkflowPythonNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                         "ok": False,
                         "reason": "workflow_python_instance_incompatible_request",
                         "detail": {"instance_id": pinned_instance_id, "runtime_key": runtime_key, "expected_runtime_key": instance_row.get("runtime_key")},
+                    }
+                if self._state_mode(child_req) == "persistent_module" and _clean(instance_row.get("code_key")) != code_key:
+                    return {
+                        "ok": False,
+                        "reason": "workflow_python_instance_code_replacement_required",
+                        "detail": {
+                            "instance_id": pinned_instance_id,
+                            "code_key": code_key,
+                            "expected_code_key": instance_row.get("code_key"),
+                            "message": "persistent module state changes require workflow_python_instance_create(..., replace=True)",
+                        },
                     }
                 if _clean(instance_row.get("active_request_id")):
                     return {"ok": False, "reason": "workflow_python_instance_busy", "detail": {"instance_id": pinned_instance_id}}

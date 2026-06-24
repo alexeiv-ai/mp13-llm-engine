@@ -13,6 +13,9 @@ from multiprocessing.connection import Client
 from typing import Any, Dict, Optional
 
 
+_PERSISTENT_QUICKJS: Dict[str, Any] = {}
+
+
 class HostApiError(RuntimeError):
     def __init__(self, *, reason: str, message: str, detail: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(message)
@@ -32,6 +35,15 @@ def _detail_from_error(err: BaseException) -> Dict[str, Any]:
 
 def _send(conn: Any, row: Dict[str, Any]) -> None:
     conn.send(dict(row or {}))
+
+
+def _state_mode(req: Dict[str, Any]) -> str:
+    js = req.get("javascript") if isinstance(req.get("javascript"), dict) else {}
+    raw = req.get("instance_state_mode") or req.get("state_mode") or js.get("instance_state_mode") or js.get("state_mode")
+    mode = str(raw or "ephemeral").strip().lower().replace("-", "_")
+    if mode in {"persistent", "persistent_module", "module_persistent"}:
+        return "persistent_module"
+    return "ephemeral"
 
 
 class HostApiBridge:
@@ -240,28 +252,53 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     stdout_io = io.StringIO()
     stderr_io = io.StringIO()
     host = HostApiBridge(conn=conn, request_id=request_id)
-    ctx = quickjs.Context()
-    memory_limit_report: Dict[str, Any] = {
-        "requested_mb": int(memory_limit_mb) if memory_limit_mb is not None else None,
-        "enforced": False,
-        "reason": "not_requested" if memory_limit_mb is None else "not_enforced",
-    }
-    # The Python quickjs binding cannot call Python callbacks while a context
-    # time limit is active. Host APIs, console, and progress all use callbacks,
-    # so wall-clock limits are enforced by the parent process for this slice.
-    if memory_limit_mb is not None:
-        try:
-            ctx.set_memory_limit(max(1, int(memory_limit_mb)) * 1024 * 1024)
-            memory_limit_report["enforced"] = True
-            memory_limit_report["reason"] = None
-        except Exception as exc:
-            memory_limit_report["reason"] = f"unavailable:{type(exc).__name__}"
+    state_mode = _state_mode(req)
+    if state_mode == "persistent_module" and execution_mode in {"snippet", "project"}:
+        _send(
+            conn,
+            {
+                "type": "error",
+                "request_id": request_id,
+                "reason": "workflow_sandbox_persistent_module_requires_module_mode",
+                "detail": {"execution_mode": execution_mode},
+                "stdout": "",
+                "stderr": "",
+                "runtime": _runtime_metadata(),
+            },
+        )
+        return 0
+    state_key = str(req.get("instance_state_key") or req.get("code_revision") or req.get("module_sha256") or "")
+    callback_state: Dict[str, Any] = {"conn": conn, "request_id": request_id, "host": host, "stdout": stdout_io}
+    persistent_reused = False
+    if state_mode == "persistent_module" and _PERSISTENT_QUICKJS.get("state_key") == state_key and _PERSISTENT_QUICKJS.get("ctx") is not None:
+        ctx = _PERSISTENT_QUICKJS["ctx"]
+        callback_state = _PERSISTENT_QUICKJS["callback_state"]
+        callback_state.update({"conn": conn, "request_id": request_id, "host": host, "stdout": stdout_io})
+        memory_limit_report = dict(_PERSISTENT_QUICKJS.get("memory_limit_report") or {})
+        persistent_reused = True
+    else:
+        ctx = quickjs.Context()
+        memory_limit_report: Dict[str, Any] = {
+            "requested_mb": int(memory_limit_mb) if memory_limit_mb is not None else None,
+            "enforced": False,
+            "reason": "not_requested" if memory_limit_mb is None else "not_enforced",
+        }
+        # The Python quickjs binding cannot call Python callbacks while a context
+        # time limit is active. Host APIs, console, and progress all use callbacks,
+        # so wall-clock limits are enforced by the parent process for this slice.
+        if memory_limit_mb is not None:
+            try:
+                ctx.set_memory_limit(max(1, int(memory_limit_mb)) * 1024 * 1024)
+                memory_limit_report["enforced"] = True
+                memory_limit_report["reason"] = None
+            except Exception as exc:
+                memory_limit_report["reason"] = f"unavailable:{type(exc).__name__}"
 
     def _host_call(method: str, args_json: str = "{}") -> str:
-        return host.call_json(method, args_json)
+        return callback_state["host"].call_json(method, args_json)
 
     def _host_call_async(method: str, args_json: str = "{}") -> str:
-        return host.send_call(method, args_json)
+        return callback_state["host"].send_call(method, args_json)
 
     def _progress(payload_json: str = "{}") -> None:
         try:
@@ -270,13 +307,13 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
             payload_row = {"value": str(payload_json or "")}
         if not isinstance(payload_row, dict):
             payload_row = {"value": payload_row}
-        _send(conn, {"type": "progress", "request_id": request_id, "payload": payload_row})
+        _send(callback_state["conn"], {"type": "progress", "request_id": str(callback_state.get("request_id") or ""), "payload": payload_row})
 
     def _console(level: str, args_json: str = "[]") -> None:
         message = _normalize_console_args(args_json)
         line = f"{str(level or 'log')}: {message}"
-        stdout_io.write(line + "\n")
-        _send(conn, {"type": "console", "request_id": request_id, "payload": {"level": str(level or "log"), "message": message}})
+        callback_state["stdout"].write(line + "\n")
+        _send(callback_state["conn"], {"type": "console", "request_id": str(callback_state.get("request_id") or ""), "payload": {"level": str(level or "log"), "message": message}})
 
     def _base64_encode(value: str = "") -> str:
         return base64.b64encode(str(value or "").encode("utf-8")).decode("ascii")
@@ -287,17 +324,18 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     def _sha256(value: str = "") -> str:
         return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
-    ctx.add_callable("__host_call", _host_call)
-    ctx.add_callable("__host_call_async", _host_call_async)
-    ctx.add_callable("__progress", _progress)
-    ctx.add_callable("__console", _console)
-    ctx.add_callable("__base64_encode", _base64_encode)
-    ctx.add_callable("__base64_decode", _base64_decode)
-    ctx.add_callable("__sha256", _sha256)
+    if not persistent_reused:
+        ctx.add_callable("__host_call", _host_call)
+        ctx.add_callable("__host_call_async", _host_call_async)
+        ctx.add_callable("__progress", _progress)
+        ctx.add_callable("__console", _console)
+        ctx.add_callable("__base64_encode", _base64_encode)
+        ctx.add_callable("__base64_decode", _base64_decode)
+        ctx.add_callable("__sha256", _sha256)
     ctx.set("__payload_json", json.dumps(payload, ensure_ascii=False))
     ctx.set("__export_name", export_name)
     prelude = r"""
-globalThis.exports = {};
+globalThis.exports = globalThis.exports || {};
 globalThis.payload = JSON.parse(globalThis.__payload_json || "null");
 globalThis.progress = function (value) { __progress(JSON.stringify(value === undefined ? null : value)); };
 globalThis.emitProgress = globalThis.progress;
@@ -412,6 +450,12 @@ globalThis.sandbox = {
   describeAsync: function () { return api.callAsync("sandbox.describe", {}); }
 };
 """.strip()
+    request_prelude = r"""
+globalThis.payload = JSON.parse(globalThis.__payload_json || "null");
+globalThis.__workflowPendingHostCalls = {};
+globalThis.__workflow_async_settled = false;
+globalThis.__workflow_result_json = "";
+""".strip()
     runner = r"""
 (function () {
   function errorDetail(err) {
@@ -473,8 +517,20 @@ globalThis.sandbox = {
 """.replace("%EXECUTION_MODE%", execution_mode)
 
     try:
-        ctx.eval(prelude)
-        ctx.eval(source)
+        if not persistent_reused:
+            ctx.eval(prelude)
+            ctx.eval(source)
+            if state_mode == "persistent_module":
+                _PERSISTENT_QUICKJS.clear()
+                _PERSISTENT_QUICKJS.update(
+                    {
+                        "state_key": state_key,
+                        "ctx": ctx,
+                        "callback_state": callback_state,
+                        "memory_limit_report": dict(memory_limit_report or {}),
+                    }
+                )
+        ctx.eval(request_prelude)
         result_json = ctx.eval(runner)
         if result_json == "__workflow_pending__":
             result_json = _pump_quickjs_until_settled(ctx=ctx, host=host, timeout_ms=timeout_ms)

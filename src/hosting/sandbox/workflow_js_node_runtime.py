@@ -476,7 +476,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         js = dict(request.get("javascript") or {})
         environment_key = _clean(request.get("environment_key")) or _clean(js.get("environment_key")) or _clean(js.get("environment_name")) or "workflow-js-node"
         runtime_hash = _clean(js.get("runtime_hash")) or "quickjs-default"
-        return "|".join([_clean(executable), environment_key, runtime_hash])
+        return "|".join([_clean(executable), environment_key, runtime_hash, WorkflowJsNodeRuntimeRegistry._state_mode(request)])
 
     @staticmethod
     def _code_key(request: Dict[str, Any]) -> str:
@@ -497,17 +497,48 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         req = dict(request or {})
         limits = dict(req.get("limits") or {})
         output_limit_bytes = max(1, min(int(limits.get("output_limit_bytes") or 65536), 10 * 1024 * 1024))
+        code_key = WorkflowJsNodeRuntimeRegistry._code_key(req)
         return {
             **req,
             "request_id": _clean(req.get("request_id")),
             "export_name": _clean(req.get("export_name")) or "run",
             "output_limit_bytes": output_limit_bytes,
+            "instance_state_mode": WorkflowJsNodeRuntimeRegistry._state_mode(req),
+            "instance_state_key": code_key,
         }
 
     @staticmethod
     def _execution_mode(request: Dict[str, Any]) -> str:
         js = dict(request.get("javascript") or {})
         return _clean(request.get("execution_mode") or js.get("execution_mode") or "module").lower()
+
+    @staticmethod
+    def _state_mode(request: Dict[str, Any]) -> str:
+        js = dict(request.get("javascript") or {})
+        raw = request.get("instance_state_mode") or request.get("state_mode") or js.get("instance_state_mode") or js.get("state_mode")
+        mode = _clean(raw or "ephemeral").lower().replace("-", "_")
+        if mode in {"persistent", "persistent_module", "module_persistent"}:
+            return "persistent_module"
+        return "ephemeral"
+
+    @classmethod
+    def _state_mode_error(cls, request: Dict[str, Any], *, instance_id: str = "") -> Optional[Dict[str, Any]]:
+        state_mode = cls._state_mode(request)
+        if state_mode != "persistent_module":
+            return None
+        if cls._execution_mode(request) in {"snippet", "project"}:
+            return {
+                "ok": False,
+                "reason": "workflow_js_persistent_module_requires_module_mode",
+                "detail": {"execution_mode": cls._execution_mode(request), "state_mode": state_mode},
+            }
+        if not _clean(instance_id):
+            return {
+                "ok": False,
+                "reason": "workflow_js_persistent_module_requires_instance",
+                "detail": {"state_mode": state_mode},
+            }
+        return None
 
     @classmethod
     def _instance_reusable(cls, request: Dict[str, Any]) -> bool:
@@ -517,13 +548,13 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
     def _project_instance_unsupported_detail() -> Dict[str, Any]:
         return {
             "message": (
-                "JS project-mode pinned instances are deferred because workflow_js_instance_* "
-                "pins the host worker process, while every request still creates a fresh QuickJS context."
+                "JS project-mode pinned instances are deferred because project mode needs a "
+                "declared JS project/module loading contract and cleanup policy."
             ),
             "deferred": True,
-            "pinned_worker_semantics": "host_worker_process_only",
+            "pinned_worker_semantics": "module_instances_support_ephemeral_or_persistent_module_state",
             "required_runtime_work": [
-                "persistent QuickJS context or module graph cache",
+                "JS project/module loading contract",
                 "declared cwd/env/import-cache cleanup policy",
                 "snapshot/restore boundary for mutable JS state",
             ],
@@ -548,6 +579,9 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 "reason": "workflow_js_instance_project_mode_unsupported",
                 "detail": self._project_instance_unsupported_detail(),
             }
+        state_mode_error = self._state_mode_error(child_req, instance_id=_clean(instance_id) or "pending")
+        if state_mode_error is not None:
+            return {"status": "error", **state_mode_error}
         executable = _clean(python_executable) or _python_executable_from_request(child_req)
         runtime_key = self._runtime_key(child_req, executable)
         code_key = self._code_key(child_req)
@@ -564,6 +598,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 if runtime is None or not runtime.alive():
                     return {"status": "error", "ok": False, "reason": "workflow_js_instance_not_alive", "instance_id": iid}
                 existing["code_key"] = code_key
+                existing["instance_state_mode"] = self._state_mode(child_req)
                 existing["last_used_at"] = time.time()
                 existing["closed"] = False
                 return {
@@ -581,6 +616,7 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
             "instance_id": iid,
             "runtime_key": runtime_key,
             "code_key": code_key,
+            "instance_state_mode": self._state_mode(child_req),
             "environment_key": str(child_req.get("environment_key") or ""),
             "python_executable": executable,
             "pid": int(runtime.proc.pid or 0) or None,
@@ -647,6 +683,9 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
         validation_error = self._validate_module_identity(req)
         if validation_error is not None:
             return validation_error
+        state_mode_error = self._state_mode_error(req, instance_id=instance_id)
+        if state_mode_error is not None:
+            return state_mode_error
         limits = dict(req.get("limits") or {})
         timeout_ms = max(1, min(int(limits.get("timeout_ms") or 5000), 300000))
         child_req = {**self._child_request(req), "request_id": request_id}
@@ -676,8 +715,20 @@ class WorkflowJsNodeRuntimeRegistry(HostedActiveChildRuntimeRegistry):
                 runtime = instance_row.get("runtime")
                 if runtime is None or not runtime.alive():
                     return {"ok": False, "reason": "workflow_js_instance_not_alive", "detail": {"instance_id": pinned_instance_id}}
+                if self._state_mode(child_req) == "persistent_module" and _clean(instance_row.get("code_key")) != code_key:
+                    return {
+                        "ok": False,
+                        "reason": "workflow_js_instance_code_replacement_required",
+                        "detail": {
+                            "instance_id": pinned_instance_id,
+                            "code_key": code_key,
+                            "expected_code_key": instance_row.get("code_key"),
+                            "message": "persistent module state changes require workflow_js_instance_create(..., replace=True)",
+                        },
+                    }
                 instance_row["active_request_id"] = request_id
-                instance_row["code_key"] = code_key
+                if self._state_mode(child_req) != "persistent_module":
+                    instance_row["code_key"] = code_key
                 instance_row["last_used_at"] = time.time()
         else:
             last_start_error: Optional[Exception] = None

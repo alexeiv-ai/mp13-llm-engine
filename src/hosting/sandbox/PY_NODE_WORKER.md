@@ -78,11 +78,18 @@ Optional fields:
 6. `artifact_inputs`
 7. `artifact_outputs`
 8. `execution_mode`
-9. `project`
-10. `action_manifest` / `actions`
-11. `action_name`
+9. `instance_state_mode`
+10. `project`
+11. `action_manifest` / `actions`
+12. `action_name`
 
 The host verifies `sha256(module_source) == module_sha256` before execution. In default module mode, the requested function is found by `export_name` or `operation`, and is called with `payload`.
+
+`instance_state_mode` defaults to `ephemeral`. For pinned module instances,
+clients may set `instance_state_mode="persistent_module"` to keep module globals
+alive across sequential `workflow-python-instance-execute` calls. Persistent
+module state is valid only for `execution_mode="module"` and explicit
+`instance_id` routing.
 
 Snippet request:
 
@@ -563,7 +570,34 @@ Node stream event types:
 
 ## Long-Lived Workers And Code Edits
 
-Current implementation: the host keeps warm child harness processes for compatible sequential module/snippet requests under the same environment/import/revision identity. A fixed `module_source` plus `module_sha256` is the default source revision identity for each request; callers may pass explicit `code_revision` when they need a host-defined revision label. Corrected snippets/modules should be submitted as new requests with new digests or revision labels. Those requests route to a different warm worker instead of mutating already-loaded code in place. In-flight requests keep their original revision, and idle workers from older revisions are trimmed back to configured capacity after completion. Project requests remain one-shot for now because they can mutate `cwd`, `sys.path`, environment variables, and import caches.
+Current implementation has two module/snippet reuse models:
+
+1. ordinary warm worker reuse, where compatible sequential requests reuse a
+   child process but each module/snippet request evaluates source into fresh
+   request globals;
+2. explicit pinned persistent module state, where
+   `instance_state_mode="persistent_module"` loads module source once for a
+   compatible live instance and later calls reuse the same module globals.
+
+A fixed `module_source` plus `module_sha256` is the default source revision
+identity for each request; callers may pass explicit `code_revision` when they
+need a host-defined revision label. Corrected snippets/modules should be
+submitted as new requests with new digests or revision labels. Ordinary warm
+requests route to a different warm worker for new revisions. Persistent module
+instances reject edited code during `workflow-python-instance-execute` with
+`workflow_python_instance_code_replacement_required`; clients must call
+`workflow-python-instance-create` with `replace=true` to establish a new code
+revision/state boundary under the same logical `instance_id`.
+
+Persistent module state keeps Python module globals, class objects, singletons,
+and other process-local Python objects alive until close, crash, cancel-driven
+process termination, or explicit replacement. It is not recoverable after
+process loss. Request-local globals such as `host`, `progress`,
+`artifact_inputs`, and `artifact_outputs` are rebound for each call; sandbox
+code should still treat host calls and artifact paths as request-scoped.
+
+Project requests use a different cleanup model because they can mutate `cwd`,
+`sys.path`, environment variables, and import caches.
 
 Idle warm workers are recycled when:
 
@@ -573,7 +607,9 @@ Idle warm workers are recycled when:
 
 The recycling path stops only idle workers. In-flight requests keep their original runtime identity and finish or cancel through normal request lifecycle handling.
 
-For a future long-lived Python node worker, code updates should not rely on uv. uv manages dependencies and interpreter environments; it is not the right mechanism for hot-editing workflow source modules.
+Code updates should not rely on uv or uvx. uv manages dependencies and
+interpreter environments; it does not reset in-process globals, import caches,
+`cwd`, `sys.path`, or `os.environ` inside a reused Python worker.
 
 Implemented module/snippet model:
 
@@ -582,6 +618,7 @@ Implemented module/snippet model:
 3. When module/snippet code changes, the host starts or reuses a worker for the new revision and lets old in-flight requests finish.
 4. In-flight requests keep their original revision.
 5. Failed snippets are fixed by submitting a new revision; the old revision is not mutated in place.
+6. Persistent module instances make source replacement explicit with `replace=true`; source replacement resets in-process module state.
 
 The restart/reroute approach used by toolbox remains the conservative default for correctness. A hot-reload path is still future work, and it must be explicit and revision-scoped; otherwise Python import caches and module globals will make bug-fix behavior ambiguous.
 

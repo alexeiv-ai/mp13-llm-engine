@@ -1200,6 +1200,93 @@ def test_workflow_js_node_instance_reuses_worker_process_after_code_edit(tmp_pat
     assert closed["closed"] is True
 
 
+def test_workflow_js_node_persistent_module_instance_preserves_globals(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = """
+let counter = 0;
+exports.run = function(input) {
+  counter += 1;
+  return {output: {counter: counter, value: input.value}};
+};
+"""
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg-demo",
+        "workflow_id": "wf-demo",
+        "package_source_digest": "sha256:digest",
+        "export_name": "run",
+        "instance_state_mode": "persistent_module",
+        "limits": {"timeout_ms": 1000},
+    }
+
+    created = svc.workflow_js_instance_create(
+        instance_id="js-inst-stateful",
+        request={**base_request, "request_id": "req-js-state-create", "payload": {"value": "create"}},
+    )
+    first = svc.workflow_js_instance_execute(
+        instance_id="js-inst-stateful",
+        request={**base_request, "request_id": "req-js-state-a", "payload": {"value": "a"}},
+    )
+    second = svc.workflow_js_instance_execute(
+        instance_id="js-inst-stateful",
+        request={**base_request, "request_id": "req-js-state-b", "payload": {"value": "b"}},
+    )
+    closed = svc.workflow_js_instance_close(instance_id="js-inst-stateful")
+
+    assert created["status"] == "ok"
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"] == {"counter": 1, "value": "a"}
+    assert second["output"] == {"counter": 2, "value": "b"}
+    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert closed["closed"] is True
+
+
+def test_workflow_js_node_persistent_module_requires_explicit_replace_for_code_edit(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    def request(source: str, request_id: str) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg-demo",
+            "workflow_id": "wf-demo",
+            "package_source_digest": "sha256:digest",
+            "export_name": "run",
+            "instance_state_mode": "persistent_module",
+            "payload": {},
+            "limits": {"timeout_ms": 1000},
+        }
+
+    first_source = "let counter = 0; exports.run = function() { counter += 1; return {output: {version: 1, counter}}; };"
+    second_source = "let counter = 40; exports.run = function() { counter += 1; return {output: {version: 2, counter}}; };"
+
+    created = svc.workflow_js_instance_create(instance_id="js-inst-state-edit", request=request(first_source, "req-js-state-edit-create"))
+    first = svc.workflow_js_instance_execute(instance_id="js-inst-state-edit", request=request(first_source, "req-js-state-edit-a"))
+    rejected = svc.workflow_js_instance_execute(instance_id="js-inst-state-edit", request=request(second_source, "req-js-state-edit-reject"))
+    replaced = svc.workflow_js_instance_create(instance_id="js-inst-state-edit", replace=True, request=request(second_source, "req-js-state-edit-replace"))
+    second = svc.workflow_js_instance_execute(instance_id="js-inst-state-edit", request=request(second_source, "req-js-state-edit-b"))
+    closed = svc.workflow_js_instance_close(instance_id="js-inst-state-edit")
+
+    assert created["status"] == "ok"
+    assert first["output"] == {"version": 1, "counter": 1}
+    assert rejected["status"] == "error"
+    assert rejected["reason"] == "workflow_js_instance_code_replacement_required"
+    assert replaced["status"] == "ok"
+    assert replaced["reused_worker_process"] is True
+    assert second["output"] == {"version": 2, "counter": 41}
+    assert closed["closed"] is True
+
+
 def test_workflow_js_node_project_instance_explains_deferred_semantics(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
@@ -1223,8 +1310,8 @@ def test_workflow_js_node_project_instance_explains_deferred_semantics(tmp_path:
     assert out["status"] == "error"
     assert out["reason"] == "workflow_js_instance_project_mode_unsupported"
     assert out["detail"]["deferred"] is True
-    assert out["detail"]["pinned_worker_semantics"] == "host_worker_process_only"
-    assert "fresh QuickJS context" in out["detail"]["message"]
+    assert out["detail"]["pinned_worker_semantics"] == "module_instances_support_ephemeral_or_persistent_module_state"
+    assert "project/module loading contract" in out["detail"]["message"]
 
 
 def test_workflow_python_node_action_manifest_discovers_and_routes_exports(tmp_path: Path) -> None:
@@ -2141,6 +2228,96 @@ def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(
         instance_id="inst-pinned",
         request={**base_request, "request_id": "req-node-instance-after-close", "payload": {"value": "closed"}},
     )["reason"] == "workflow_python_instance_not_found"
+
+
+def test_workflow_python_node_persistent_module_instance_preserves_globals(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    source = (
+        "import os\n\n"
+        "COUNTER = 0\n\n"
+        "def run(payload):\n"
+        "    global COUNTER\n"
+        "    COUNTER += 1\n"
+        "    return {'output': {'pid': os.getpid(), 'counter': COUNTER, 'value': payload['value']}}\n"
+    )
+    base_request = {
+        "module_source": source,
+        "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "package_id": "pkg",
+        "workflow_id": "wf",
+        "package_source_digest": "digest",
+        "operation": "run",
+        "instance_state_mode": "persistent_module",
+        "python": {"import_allowlist": ["os"]},
+        "limits": {"timeout_ms": 2000},
+    }
+
+    created = svc.workflow_python_instance_create(
+        instance_id="inst-stateful",
+        request={**base_request, "request_id": "req-node-state-create", "payload": {"value": "create"}},
+    )
+    first = svc.workflow_python_instance_execute(
+        instance_id="inst-stateful",
+        request={**base_request, "request_id": "req-node-state-a", "payload": {"value": "a"}},
+    )
+    second = svc.workflow_python_instance_execute(
+        instance_id="inst-stateful",
+        request={**base_request, "request_id": "req-node-state-b", "payload": {"value": "b"}},
+    )
+    listed = svc.workflow_python_instance_list()
+    closed = svc.workflow_python_instance_close(instance_id="inst-stateful")
+
+    assert created["status"] == "ok"
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert first["output"]["pid"] == created["pid"]
+    assert second["output"]["pid"] == created["pid"]
+    assert first["output"]["counter"] == 1
+    assert second["output"]["counter"] == 2
+    assert listed["instances"][0]["instance_state_mode"] == "persistent_module"
+    assert closed["closed"] is True
+
+
+def test_workflow_python_node_persistent_module_requires_explicit_replace_for_code_edit(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+
+    def request(source: str, request_id: str) -> dict:
+        return {
+            "request_id": request_id,
+            "module_source": source,
+            "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "package_id": "pkg",
+            "workflow_id": "wf",
+            "package_source_digest": "digest",
+            "operation": "run",
+            "instance_state_mode": "persistent_module",
+            "payload": {},
+            "limits": {"timeout_ms": 2000},
+        }
+
+    first_source = "COUNTER = 0\n\ndef run(payload):\n    global COUNTER\n    COUNTER += 1\n    return {'output': {'version': 1, 'counter': COUNTER}}\n"
+    second_source = "COUNTER = 40\n\ndef run(payload):\n    global COUNTER\n    COUNTER += 1\n    return {'output': {'version': 2, 'counter': COUNTER}}\n"
+
+    created = svc.workflow_python_instance_create(instance_id="inst-state-edit", request=request(first_source, "req-node-state-edit-create"))
+    first = svc.workflow_python_instance_execute(instance_id="inst-state-edit", request=request(first_source, "req-node-state-edit-a"))
+    rejected = svc.workflow_python_instance_execute(instance_id="inst-state-edit", request=request(second_source, "req-node-state-edit-reject"))
+    replaced = svc.workflow_python_instance_create(instance_id="inst-state-edit", replace=True, request=request(second_source, "req-node-state-edit-replace"))
+    second = svc.workflow_python_instance_execute(instance_id="inst-state-edit", request=request(second_source, "req-node-state-edit-b"))
+    closed = svc.workflow_python_instance_close(instance_id="inst-state-edit")
+
+    assert created["status"] == "ok"
+    assert first["output"] == {"version": 1, "counter": 1}
+    assert rejected["status"] == "error"
+    assert rejected["reason"] == "workflow_python_instance_code_replacement_required"
+    assert replaced["status"] == "ok"
+    assert second["output"] == {"version": 2, "counter": 41}
+    assert closed["closed"] is True
 
 
 def test_workflow_python_node_project_instance_requires_explicit_policy(tmp_path: Path) -> None:

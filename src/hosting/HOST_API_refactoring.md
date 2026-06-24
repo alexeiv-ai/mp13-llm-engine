@@ -131,8 +131,10 @@ These items were enabled by the Host Capability model but belong to later plan p
 - [x] JavaScript node pinned instance create/execute/list/close routing was added.
 - [x] JavaScript worker runtime metadata now reports the host worker pid for routed live instances.
 - [x] JavaScript module/snippet pinned instances can reuse the same worker process across code edits; `runtime_key` is worker compatibility and `code_key` is submitted code identity.
+- [x] Python and JavaScript pinned module instances support explicit `instance_state_mode="persistent_module"` for sequential process-local module/global state.
+- [x] Persistent module instances require `create(..., replace=true)` as the explicit code-revision/state reset boundary.
 - [x] Python project-mode pinned instances are allowed only with an explicit isolation policy that resets cwd, `sys.path`, env, and project import modules between calls.
-- [x] JavaScript project-mode pinned instances remain unsupported until the JS runtime can preserve a QuickJS context or module graph under explicit cleanup and snapshot/restore semantics.
+- [x] JavaScript project-mode pinned instances remain unsupported until JS project/module loading and cleanup semantics are defined.
 - [x] Service-level Python and JavaScript action manifests, card-facing discovery helpers, and action execution routing were added on top of existing worker entrypoint fields.
 - [x] Action describe/execute commands were exposed through the daemon, control channel, CLI, auth, and policy command sets.
 
@@ -166,10 +168,10 @@ These items are intentionally outside the completed Host Capability pillar. They
   - Ownership rule: clients decide whether partial artifacts are usable. Hosting only provides hint labels such as `declared_output`, `crash_recovery_candidate`, and `partial_possible`.
   - Cleanup rule: disk garbage collection remains deferred. Recovery notices include a crash/shutdown timestamp and cleanup is explicit.
 
-- [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context or module graph cache semantics are available.
+- [ ] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
   - Owning pillar: JavaScript runtime evolution.
-  - Current state: `workflow_js_instance_*` pins a host worker process, but each request creates a fresh QuickJS context from `module_source`. Project-mode instance creation returns `workflow_js_instance_project_mode_unsupported` with deferred detail.
-  - Rework candidate: add a persistent QuickJS context or module graph cache, then define explicit cwd/env/import-cache cleanup rules and snapshot/restore boundaries for mutable JS state.
+  - Current state: `workflow_js_instance_*` pins a host worker process. Default module/snippet execution still uses a fresh QuickJS context per call, while `instance_state_mode="persistent_module"` keeps one QuickJS context for the current code revision. Project-mode instance creation returns `workflow_js_instance_project_mode_unsupported` with deferred detail.
+  - Rework candidate: define JS project/module loading, then choose a persistent QuickJS context or module graph cache and define explicit cwd/env/import-cache cleanup rules plus snapshot/restore boundaries for mutable JS state.
   - Expected benefit: JS project-style authoring can become truly warm and routable instead of only using a pinned transport process.
   - Main risk: persistent JS contexts can leak globals, async jobs, host handles, or imported module state across actions unless cleanup policy is explicit.
   - Trigger to start: after JS runtime design accepts persistent context/module-cache ownership and defines the state cleanup contract.

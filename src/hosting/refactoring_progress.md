@@ -181,7 +181,7 @@ Scope: implementation progress for the legacy cleanup items following the comple
 
 ### State And Long-Lived Instances Slice 19: JS Project Instance Decision
 
-- [x] Kept JS project-mode pinned instances unsupported because the current worker pins only the host worker process and creates a fresh QuickJS context for each request.
+- [x] Kept JS project-mode pinned instances unsupported because project mode still needs a module/project loading contract plus cleanup semantics.
 - [x] Added structured deferred detail to `workflow_js_instance_create` while preserving the existing `workflow_js_instance_project_mode_unsupported` reason.
 - [x] Added a workflow-helper test for the deferred JS project-mode instance response.
 - [x] Updated the main plan, Host API plan, and JS worker docs to record the decision and future runtime prerequisites.
@@ -267,6 +267,15 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Made artifact recovery claim default to `@artifacts/instances/<instance_id>/...` when an instance id is known.
 - [x] Updated client breaking-change instructions for JS edit+continue, Python process replacement under stable `instance_id`, and instance-scoped artifact recovery.
 
+### State And Long-Lived Instances Slice 25: Persistent Module Instance State
+
+- [x] Added explicit `instance_state_mode="persistent_module"` for pinned Python module instances.
+- [x] Added explicit `instance_state_mode="persistent_module"` for pinned JavaScript script/module instances using a persistent QuickJS context.
+- [x] Kept default module/snippet execution ephemeral at the language-global level, even when a warm worker process is reused.
+- [x] Rebound request-local harness globals/callbacks for each persistent instance call.
+- [x] Required `workflow-*-instance-create(..., replace=True)` as the code-revision/state reset boundary for persistent module instances.
+- [x] Added regression coverage for Python and JavaScript persistent globals plus explicit replacement requirements.
+
 ## Still Pending
 
 - [x] Original Host Capability Protocol implementation checklist is complete.
@@ -282,8 +291,9 @@ Scope: implementation progress for the legacy cleanup items following the comple
 - [x] Dependent clients adopted explicit callable-session registration, callback relay bindings, and callable-surface helpers for the fallback-removal slice.
 - [x] Decide and implement Python long-lived project-mode cwd/sys.path/env/import-cache policy.
 - [x] Decide JS project-mode long-lived semantics.
+- [x] Implement persistent module state for pinned Python and JavaScript module/script instances.
 - [x] Implement service-level action manifest discovery and invocation routing.
-- [ ] Implement JS project-mode long-lived runtime after persistent QuickJS context/module-cache support exists.
+- [ ] Implement JS project-mode long-lived runtime after project/module loading semantics are defined.
 - [x] Expose action describe/execute over daemon/channel/CLI.
 - [x] Remove diagnostic service-owned `fs.*` / `http.fetch` fallback and fallback-only tests.
 

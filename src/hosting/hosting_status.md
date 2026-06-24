@@ -8,6 +8,9 @@ Purpose: record the current implementation state and the discrepancies against `
 
 - Helper-profile workflow Python facade: implemented.
 - Workflow JS QuickJS node facade: implemented.
+- Pinned Python and JavaScript module instances can opt into
+  `instance_state_mode="persistent_module"` for sequential in-process
+  module/global state.
 - Environment-keyed host routing/accounting: implemented for current workflow facades.
 - First-class workflow Python node execution path: implemented.
 - Full node sandbox hardening: still in progress.
