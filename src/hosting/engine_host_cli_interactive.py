@@ -445,6 +445,17 @@ def _resource_bits(resources: Dict[str, Any]) -> list[str]:
         bits.append(f"js_cpu={_format_percent_or_na(res.get('workflow_js_node_cpu_percent'))}")
     if res.get("workflow_js_node_memory_mb") is not None:
         bits.append(f"js_rss={_format_mb_or_na(res.get('workflow_js_node_memory_mb'))}")
+    if "workflow_python_process_count" in res:
+        bits.append(
+            "py_nodes="
+            f"{int(res.get('workflow_python_active_process_count') or 0)}/"
+            f"{int(res.get('workflow_python_process_count') or 0)}/"
+            f"{int(res.get('workflow_python_capacity') or 0)}"
+        )
+    if res.get("workflow_python_cpu_percent") is not None:
+        bits.append(f"py_cpu={_format_percent_or_na(res.get('workflow_python_cpu_percent'))}")
+    if res.get("workflow_python_memory_mb") is not None:
+        bits.append(f"py_rss={_format_mb_or_na(res.get('workflow_python_memory_mb'))}")
     return bits
 
 
@@ -2063,11 +2074,15 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
             active = (
                 resources.get("workflow_js_active_calls")
                 if is_js
+                else resources.get("workflow_python_active_calls")
+                if resources.get("workflow_python_active_calls") is not None
                 else resources.get("workflow_helper_pool_active_process_count")
             )
             total = (
                 resources.get("workflow_js_node_process_count")
                 if is_js
+                else resources.get("workflow_python_process_count")
+                if resources.get("workflow_python_process_count") is not None
                 else resources.get("workflow_helper_pool_process_count")
             )
             label = "JS node" if is_js else "Python helper"
@@ -2158,8 +2173,30 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                     f"idle={pool.get('idle_process_count') if pool.get('idle_process_count') is not None else pool.get('idle_node_process_count')}, "
                     f"total={pool.get('process_count') if pool.get('process_count') is not None else pool.get('node_process_count') if pool.get('node_process_count') is not None else len(node_rows)}"
                 )),
-                ("CPU", _format_percent_or_na(pool.get("cpu_percent") if pool.get("cpu_percent") is not None else pool.get("node_cpu_percent") if pool.get("node_cpu_percent") is not None else resources.get("node_cpu_percent") if not is_python else resources.get("python_cpu_percent"))),
-                ("RSS", _format_mb_or_na(pool.get("memory_mb") if pool.get("memory_mb") is not None else pool.get("node_memory_mb") if pool.get("node_memory_mb") is not None else resources.get("node_memory_mb") if not is_python else resources.get("python_memory_mb"))),
+                (
+                    "CPU",
+                    _format_percent_or_na(
+                        pool.get("cpu_percent")
+                        if pool.get("cpu_percent") is not None
+                        else pool.get("node_cpu_percent")
+                        if pool.get("node_cpu_percent") is not None
+                        else resources.get("workflow_python_cpu_percent")
+                        if is_python
+                        else resources.get("workflow_js_node_cpu_percent")
+                    ),
+                ),
+                (
+                    "RSS",
+                    _format_mb_or_na(
+                        pool.get("memory_mb")
+                        if pool.get("memory_mb") is not None
+                        else pool.get("node_memory_mb")
+                        if pool.get("node_memory_mb") is not None
+                        else resources.get("workflow_python_memory_mb")
+                        if is_python
+                        else resources.get("workflow_js_node_memory_mb")
+                    ),
+                ),
                 ("Active Requests", ", ".join(active_request_ids) or "<none>"),
             ])
             if workflow_pool_metrics:

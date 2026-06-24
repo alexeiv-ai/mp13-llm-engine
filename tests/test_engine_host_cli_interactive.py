@@ -289,7 +289,11 @@ def test_manage_workflow_helpers_prefers_workflow_python_facade(
                     "wf-py": {
                         "executor_kind": "workflow_python_helper",
                         "environment": {"environment_key": "env-demo"},
-                        "process_resources": {"workflow_python_capacity": 2},
+                        "process_resources": {
+                            "workflow_python_capacity": 2,
+                            "workflow_python_active_calls": 1,
+                            "workflow_python_process_count": 2,
+                        },
                     }
                 }
             }
@@ -312,6 +316,8 @@ def test_manage_workflow_helpers_prefers_workflow_python_facade(
                         "recent_requests": [{"request_id": "req-0", "status": "ok", "lifetime_ms": 12}],
                     },
                 },
+                "workflow_python_cpu_percent": 7.5,
+                "workflow_python_memory_mb": 128.0,
             }
         raise AssertionError(cmd)
 
@@ -328,6 +334,8 @@ def test_manage_workflow_helpers_prefers_workflow_python_facade(
     assert "Environment Key" in out
     assert "workflow_python/env-demo" in out
     assert "req-1" in out
+    assert "7.5%" in out
+    assert "128.0MB" in out
 
 
 def test_manage_workflow_helpers_can_ensure_python_runtime(
@@ -731,6 +739,73 @@ def test_resource_formatters_show_na_for_unknown_values() -> None:
     ]
     assert interactive._resource_bits({"gpu_vram_mb": None, "gpu_vram_pending": True}) == ["vram=pending"]
     assert interactive._resource_bits({"gpu_vram_mb": 5120.0}) == ["vram=5.0GB"]
+    assert interactive._resource_bits(
+        {
+            "workflow_python_capacity": 3,
+            "workflow_python_active_process_count": 1,
+            "workflow_python_process_count": 2,
+            "workflow_python_cpu_percent": 7.5,
+            "workflow_python_memory_mb": 128.0,
+        }
+    ) == ["py_nodes=1/2/3", "py_cpu=7.5%", "py_rss=128.0MB"]
+    assert interactive._resource_bits(
+        {
+            "workflow_js_capacity": 4,
+            "workflow_js_active_node_process_count": 2,
+            "workflow_js_node_process_count": 3,
+            "workflow_js_node_cpu_percent": 9.25,
+            "workflow_js_node_memory_mb": 256.0,
+        }
+    ) == ["js_nodes=2/3/4", "js_cpu=9.2%", "js_rss=256.0MB"]
+
+
+def test_operator_resource_kind_labels_all_worker_kinds() -> None:
+    assert interactive._operator_resource_kind(
+        {
+            "worker_profile_class": "model",
+            "command": ["python", "-m", "hosting.engine_worker_ipc"],
+            "env": {"MP13_MODEL_PATH": "C:/models/demo"},
+        }
+    ) == "model instance"
+    assert interactive._operator_resource_kind(
+        {
+            "worker_profile_class": "model",
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        }
+    ) == "sandboxed model instance"
+    assert interactive._operator_resource_kind({"worker_profile_class": "generic"}) == "generic worker"
+    assert interactive._operator_resource_kind(
+        {
+            "worker_profile_class": "generic",
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        }
+    ) == "sandboxed worker"
+    assert interactive._operator_resource_kind(
+        {
+            "executor_kind": "toolbox_executor",
+            "tool_access": {},
+        }
+    ) == "tools worker"
+    assert interactive._operator_resource_kind(
+        {
+            "command": ["python", "-m", "hosting.toolbox_executor_ipc"],
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        }
+    ) == "tools sandbox"
+    assert interactive._operator_resource_kind({"executor_kind": "workflow_python_helper"}) == "workflow python worker"
+    assert interactive._operator_resource_kind(
+        {
+            "command": ["python", "-m", "hosting.workflow_python_helper_ipc"],
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        }
+    ) == "workflow python sandbox"
+    assert interactive._operator_resource_kind({"executor_kind": "workflow_js_node"}) == "workflow js node worker"
+    assert interactive._operator_resource_kind(
+        {
+            "command": ["python", "-m", "hosting.workflow_js_node_worker_ipc"],
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        }
+    ) == "workflow js node sandbox"
 
 
 def test_python_runtime_rows_show_daemon_and_engine_python() -> None:
@@ -896,6 +971,34 @@ def test_list_engines_derives_labels_for_older_daemon_response(
                 "executor_kind": "toolbox_executor",
                 "sandbox_policy": {"sandbox": {"enabled": True}},
             },
+            {
+                "engine_id": "wf-py",
+                "pid": 789,
+                "alive": True,
+                "reachable": True,
+                "executor_kind": "workflow_python_helper",
+                "process_resources": {
+                    "workflow_python_capacity": 3,
+                    "workflow_python_active_process_count": 1,
+                    "workflow_python_process_count": 2,
+                    "workflow_python_cpu_percent": 7.5,
+                    "workflow_python_memory_mb": 128.0,
+                },
+            },
+            {
+                "engine_id": "wf-js",
+                "pid": 987,
+                "alive": False,
+                "reachable": False,
+                "executor_kind": "workflow_js_node",
+                "process_resources": {
+                    "workflow_js_capacity": 4,
+                    "workflow_js_active_node_process_count": 2,
+                    "workflow_js_node_process_count": 3,
+                    "workflow_js_node_cpu_percent": 9.25,
+                    "workflow_js_node_memory_mb": 256.0,
+                },
+            },
         ],
     )
 
@@ -904,8 +1007,17 @@ def test_list_engines_derives_labels_for_older_daemon_response(
     out = capsys.readouterr().out
     assert "model instance" in out
     assert "tools sandbox" in out
+    assert "workflow python worker" in out
+    assert "workflow js node worker" in out
     assert "pid=123" in out
     assert "reachable=no" in out
+    assert "py_nodes=1/2/3" in out
+    assert "py_cpu=7.5%" in out
+    assert "py_rss=128.0MB" in out
+    assert "js_nodes=2/3/4" in out
+    assert "js_cpu=9.2%" in out
+    assert "js_rss=256.0MB" in out
+    assert "[stopped]" in out
 
 
 def test_kill_resource_is_unavailable_when_local_daemon_stopped(
