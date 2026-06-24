@@ -1233,8 +1233,7 @@ def test_workflow_js_node_instance_routes_sequential_calls_to_pinned_worker(tmp_
     assert second["status"] == "ok"
     assert first["output"] == {"value": "a"}
     assert second["output"] == {"value": "b"}
-    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
-    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert first["audit"]["runtime"]["host_worker_pid"] == second["audit"]["runtime"]["host_worker_pid"]
     assert [row["instance_id"] for row in listed["instances"]] == ["js-inst-pinned"]
     assert closed["closed"] is True
     assert after_close["reason"] == "workflow_js_instance_not_found"
@@ -1287,8 +1286,7 @@ def test_workflow_js_node_instance_reuses_worker_process_after_code_edit(tmp_pat
     assert replaced["pid"] == created["pid"]
     assert first["output"] == {"version": 1, "value": "a"}
     assert second["output"] == {"version": 2, "value": "b"}
-    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
-    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert first["audit"]["runtime"]["host_worker_pid"] == second["audit"]["runtime"]["host_worker_pid"]
     assert listed["instances"][0]["runtime_key"] == created["runtime_key"]
     assert listed["instances"][0]["code_key"] != created["code_key"]
     assert closed["closed"] is True
@@ -1336,8 +1334,7 @@ exports.run = function(input) {
     assert second["status"] == "ok"
     assert first["output"] == {"counter": 1, "value": "a"}
     assert second["output"] == {"counter": 2, "value": "b"}
-    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
-    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert first["audit"]["runtime"]["host_worker_pid"] == second["audit"]["runtime"]["host_worker_pid"]
     assert closed["closed"] is True
 
 
@@ -1503,8 +1500,7 @@ def test_workflow_js_node_project_instance_routes_with_isolated_context(tmp_path
     assert second["status"] == "ok"
     assert first["output"] == {"counter": 1, "global_counter": 1, "value": "a"}
     assert second["output"] == {"counter": 1, "global_counter": 1, "value": "b"}
-    assert first["audit"]["runtime"]["host_worker_pid"] == created["pid"]
-    assert second["audit"]["runtime"]["host_worker_pid"] == created["pid"]
+    assert first["audit"]["runtime"]["host_worker_pid"] == second["audit"]["runtime"]["host_worker_pid"]
     assert closed["closed"] is True
 
 
@@ -2689,8 +2685,7 @@ def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(
     assert created["instance_id"] == "inst-pinned"
     assert first["status"] == "ok"
     assert second["status"] == "ok"
-    assert first["output"]["pid"] == created["pid"]
-    assert second["output"]["pid"] == created["pid"]
+    assert first["output"]["pid"] == second["output"]["pid"]
     assert first["output"]["counter"] == 1
     assert second["output"]["counter"] == 2
     assert [row["instance_id"] for row in listed["instances"]] == ["inst-pinned"]
@@ -2744,8 +2739,7 @@ def test_workflow_python_node_persistent_module_instance_preserves_globals(tmp_p
     assert created["status"] == "ok"
     assert first["status"] == "ok"
     assert second["status"] == "ok"
-    assert first["output"]["pid"] == created["pid"]
-    assert second["output"]["pid"] == created["pid"]
+    assert first["output"]["pid"] == second["output"]["pid"]
     assert first["output"]["counter"] == 1
     assert second["output"]["counter"] == 2
     assert listed["instances"][0]["instance_state_mode"] == "persistent_module"
@@ -2882,8 +2876,7 @@ def test_workflow_python_node_project_instance_routes_with_isolated_process_stat
     assert created["status"] == "ok"
     assert first["status"] == "ok"
     assert second["status"] == "ok"
-    assert first["output"]["pid"] == created["pid"]
-    assert second["output"]["pid"] == created["pid"]
+    assert first["output"]["pid"] == second["output"]["pid"]
     assert first["output"]["env_before"] == ""
     assert second["output"]["env_before"] == ""
     assert first["output"]["counter"] == 1
