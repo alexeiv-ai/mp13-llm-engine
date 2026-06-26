@@ -260,10 +260,80 @@ class WorkflowHelperMixin:
             "result": dict(result or {}) if isinstance(result, dict) else {"result": result},
         }
 
+    def _host_capability_service_broker_response(
+        self,
+        session: HostCapabilitySession,
+        call: HostCapabilityProviderCall,
+    ) -> Dict[str, Any]:
+        engine_id = str(call.context.engine_id or dict(session.binding or {}).get("engine_id") or "").strip()
+        if not engine_id:
+            raise HostCapabilityProviderUnavailable(
+                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "reason": "engine_id_required"}
+            )
+        args = dict(call.arguments or {})
+        method = str(call.method or "").strip()
+        if method == "fs.list":
+            result = self.sandbox_fs_list(
+                engine_id=engine_id,
+                root_id=str(args.get("root_id") or ""),
+                relative_path=str(args.get("relative_path") or ""),
+            )
+        elif method == "fs.read_text":
+            result = self.sandbox_fs_read_text(
+                engine_id=engine_id,
+                root_id=str(args.get("root_id") or ""),
+                relative_path=str(args.get("relative_path") or ""),
+                encoding=str(args.get("encoding") or "utf-8"),
+            )
+        elif method == "fs.write_text":
+            result = self.sandbox_fs_write_text(
+                engine_id=engine_id,
+                root_id=str(args.get("root_id") or ""),
+                relative_path=str(args.get("relative_path") or ""),
+                text=str(args.get("text") or ""),
+                encoding=str(args.get("encoding") or "utf-8"),
+                create_parents=bool(args.get("create_parents", True)),
+            )
+        elif method == "fs.mkdir":
+            result = self.sandbox_fs_mkdir(
+                engine_id=engine_id,
+                root_id=str(args.get("root_id") or ""),
+                relative_path=str(args.get("relative_path") or ""),
+                parents=bool(args.get("parents", True)),
+                exist_ok=bool(args.get("exist_ok", True)),
+            )
+        elif method == "fs.stat":
+            result = self.sandbox_fs_stat(
+                engine_id=engine_id,
+                root_id=str(args.get("root_id") or ""),
+                relative_path=str(args.get("relative_path") or ""),
+            )
+        elif method == "http.fetch":
+            result = self.sandbox_http_fetch(
+                engine_id=engine_id,
+                url=str(args.get("url") or ""),
+                method=str(args.get("method") or "GET"),
+                headers=dict(args.get("headers") or {}) if isinstance(args.get("headers"), dict) else None,
+                body_b64=str(args.get("body_b64") or ""),
+                timeout_seconds=float(args.get("timeout_seconds") or 30.0),
+                max_response_bytes=int(args.get("max_response_bytes") or 1024 * 1024),
+            )
+        else:
+            raise HostCapabilityProviderUnavailable(
+                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "method": method}
+            )
+        return {
+            "status": "ok",
+            "provider_call_id": call.provider_call_id,
+            "result": dict(result or {}),
+        }
+
     def _host_capability_provider_invoker(self, session: HostCapabilitySession, call: HostCapabilityProviderCall) -> Dict[str, Any]:
         provider_kind = str(session.provider_kind or "").strip()
         if provider_kind == "client_session":
             return self._host_capability_client_session_provider_response(session, call)
+        if provider_kind == "service_broker":
+            return self._host_capability_service_broker_response(session, call)
         if provider_kind != "toolbox_session":
             raise HostCapabilityProviderUnavailable(
                 detail={"provider_id": session.session_id, "provider_kind": session.provider_kind}
@@ -1098,6 +1168,7 @@ class WorkflowHelperMixin:
         *,
         request: Dict[str, Any],
         artifact_context: Optional[Dict[str, Any]],
+        engine_id: str = "",
         sandbox_policy: Optional[Dict[str, Any]] = None,
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         audit_emitter: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -1123,6 +1194,7 @@ class WorkflowHelperMixin:
             if key in namespace_policy:
                 http_namespace_enabled = bool(namespace_policy.get(key))
         worker_policy = WorkerSandboxPolicy.from_mapping(dict(sandbox_policy or {}))
+        host_api_enabled = bool(host_api_policy.get("enabled", True))
         http_enabled = (
             http_namespace_enabled
             and bool(worker_policy.enabled)
@@ -1132,6 +1204,7 @@ class WorkflowHelperMixin:
         workflow_id = str(dict(request or {}).get("workflow_id") or "")
         instance_id = str(dict(request or {}).get("instance_id") or "")
         request_id = str(dict(request or {}).get("request_id") or "")
+        effective_engine_id = str(engine_id or dict(request or {}).get("engine_id") or "").strip()
         state_policy = host_api_policy.get("state")
         state_namespace_enabled = bool(namespace_policy.get("state", False))
 
@@ -1157,6 +1230,11 @@ class WorkflowHelperMixin:
         if instance_id and _state_scope_enabled("instance"):
             state_scopes.append("instance")
         state_available = bool(state_scopes)
+        disabled_namespaces: set[str] = set()
+        if not artifact_fs_enabled:
+            disabled_namespaces.add("fs")
+        if not http_namespace_enabled:
+            disabled_namespaces.add("http")
 
         def _approval_requester(payload: Dict[str, Any]) -> Dict[str, Any]:
             if approval_requester is None:
@@ -1353,6 +1431,7 @@ class WorkflowHelperMixin:
             workflow_id=workflow_id,
             package_id=str(dict(request or {}).get("package_id") or ""),
             instance_id=instance_id,
+            engine_id=effective_engine_id,
             runtime_kind="workflow_node",
             policy=dict(registry.policy or {}),
             roots=dict(registry.roots or {}),
@@ -1360,6 +1439,8 @@ class WorkflowHelperMixin:
             audit_emitter=audit_emitter or self._append_host_capability_audit_event,
             provider_invoker=self._host_capability_provider_invoker,
             approval_requester=_approval_requester if approval_requester is not None else None,
+            allowed_namespaces=set() if not host_api_enabled else None,
+            disabled_namespaces=disabled_namespaces,
             state_info={
                 "available": state_available,
                 "scopes": list(state_scopes),
@@ -1964,6 +2045,7 @@ class WorkflowHelperMixin:
                     host_dispatcher=self._workflow_python_node_host_dispatcher(
                         request={**req, "request_id": lifecycle.request_id},
                         artifact_context=artifact_context,
+                        engine_id=str(ensured["engine_id"]),
                         sandbox_policy=sandbox_policy,
                         event_emitter=_record_js_broker_event,
                         host_capability_sessions=host_capability_sessions,
@@ -2262,6 +2344,7 @@ class WorkflowHelperMixin:
             host_dispatcher=self._workflow_python_node_host_dispatcher(
                 request=dict(request or {}),
                 artifact_context=artifact_context,
+                engine_id=engine_id,
                 sandbox_policy=sandbox_policy,
                 event_emitter=_emit_js_broker_event,
                 host_capability_sessions=host_capability_sessions,
@@ -2651,6 +2734,7 @@ class WorkflowHelperMixin:
                 host_dispatcher=self._workflow_python_node_host_dispatcher(
                     request={**req, "request_id": lifecycle.request_id},
                     artifact_context=artifact_context,
+                    engine_id=eid,
                     sandbox_policy=sandbox_policy,
                     event_emitter=_record_node_broker_event,
                     host_capability_sessions=host_capability_sessions,
@@ -3295,6 +3379,7 @@ class WorkflowHelperMixin:
             host_dispatcher=self._workflow_python_node_host_dispatcher(
                 request=dict(request or {}),
                 artifact_context=artifact_context,
+                engine_id=engine_id,
                 sandbox_policy=sandbox_policy,
                 event_emitter=_emit_node_broker_event,
                 host_capability_sessions=host_capability_sessions,

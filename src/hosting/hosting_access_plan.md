@@ -36,32 +36,32 @@ No legacy compatibility is required beyond clear instructions in
 
 ## Phase 1: Service Broker Registry And Discovery
 
-- [ ] Add static host-owned method registry for `fs.list`, `fs.read_text`,
+- [x] Add static host-owned method registry for `fs.list`, `fs.read_text`,
   `fs.write_text`, `fs.mkdir`, `fs.stat`, and `http.fetch`.
-- [ ] Derive method descriptions, parameter descriptions, schemas, and required
+- [x] Derive method descriptions, parameter descriptions, schemas, and required
   fields from Python callable docstrings/signatures.
-- [ ] Expose registry discovery as contract descriptions reusable by channel,
+- [x] Expose registry discovery as contract descriptions reusable by channel,
   daemon, workflow nodes, and toolbox workers.
-- [ ] Add tests for descriptor generation, docstring extraction, and stable
+- [x] Add tests for descriptor generation, docstring extraction, and stable
   contract shape.
-- [ ] Update client breaking-change notes with the new descriptor/discovery
+- [x] Update client breaking-change notes with the new descriptor/discovery
   helper names.
 
 ## Phase 2: Node Service-Broker Provider Sessions
 
-- [ ] Add `provider_kind="service_broker"` registration support in daemon Host
+- [x] Add `provider_kind="service_broker"` registration support in daemon Host
   Capability session handling.
-- [ ] Add a client/channel helper to register known service-broker methods for a
+- [x] Add a client/channel helper to register known service-broker methods for a
   request, instance, workflow, or consumer scope.
-- [ ] Route service-broker provider calls to daemon local broker implementations
+- [x] Route service-broker provider calls to daemon local broker implementations
   through the existing Host Capability provider path.
-- [ ] Ensure approval, audit, and host-call events are emitted for service-broker
+- [x] Ensure approval, audit, and host-call events are emitted for service-broker
   calls before local broker execution.
-- [ ] Make workflow Python and JS node discovery show selected service-broker
+- [x] Make workflow Python and JS node discovery show selected service-broker
   methods and hide unselected ones.
-- [ ] Add tests for approved, denied, unsupported, and sandbox-policy-denied
+- [x] Add tests for approved, denied, unsupported, and sandbox-policy-denied
   `fs.*` calls from node workers.
-- [ ] Update Python/JS node docs and client migration instructions.
+- [x] Update Python/JS node docs and client migration instructions.
 
 ## Phase 3: Toolbox Host API Unification
 

@@ -220,9 +220,12 @@ Base discoverable methods:
 1. `host.describe`
 
 Known methods such as `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`,
-`fs.stat`, and `http.fetch` appear only when a hosting client/provider session
-registers and advertises them for the request. Sandbox policy can further
-disable namespaces, but policy no longer causes the hosting service to register
+`fs.stat`, and `http.fetch` appear only when a Host Capability session registers
+and advertises them for the request. The daemon-owned implementation uses
+`provider_kind="service_broker"` and is registered through the known
+service-broker method helpers. Client-owned callback APIs still use
+`provider_kind="client_session"`. Sandbox policy can further disable
+namespaces, but policy no longer causes the hosting service to register
 service-owned `fs.*` or `http.fetch` methods by itself.
 
 Convenience methods on `host` call those dispatcher methods:
@@ -238,8 +241,9 @@ Convenience methods on `host` call those dispatcher methods:
 
 Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. Worker host calls correlate responses by `host_call_id`, so concurrent blocking calls can receive out-of-order host responses safely.
 
-When a client registers the known artifact filesystem methods, the expected
-provider behavior maps `fs.*` calls to declared artifact roots:
+When a client registers known artifact filesystem methods as a `service_broker`
+session, the daemon maps `fs.*` calls to the worker engine's declared artifact
+roots after Host Capability approval:
 
 1. readable roots: declared artifact inputs and declared artifact outputs
 2. writable roots: declared artifact outputs only
@@ -280,7 +284,7 @@ session registered them. Calling a disabled or unregistered method returns an
 unsupported-host-method error through the normal host response path.
 
 The HTTP namespace is disabled unless the same sandbox broker policy used by
-generic workers allows brokered HTTP and a client/provider session registers
+generic workers allows brokered HTTP and a Host Capability session registers
 `http.fetch`:
 
 ```json
@@ -301,11 +305,13 @@ generic workers allows brokered HTTP and a client/provider session registers
 }
 ```
 
-When enabled and registered, `host.describe()` includes `http.fetch`. Node code
-can call either `host.call("http.fetch", {...})` or `host.http_fetch(...)`. The
-provider must enforce the URL scheme, host allowlist, URL prefix allowlist,
-request method, request headers, response size limit, and timeout. Response
-bodies are returned as `body_b64`.
+When enabled and registered as `service_broker`, `host.describe()` includes
+`http.fetch`. Node code can call either `host.call("http.fetch", {...})` or
+`host.http_fetch(...)`. The daemon broker enforces the URL scheme, host
+allowlist, URL prefix allowlist, request method, request headers, response size
+limit, and timeout from the worker sandbox policy. Client-owned providers must
+enforce their own backend policy before returning results. Response bodies are
+returned as `body_b64`.
 
 Single-file inline inputs resolve to the file itself. Directory-like inputs and outputs are created by masked/recursive declarations, inline zip inputs, or output declarations with `path_mask` / `mask`.
 

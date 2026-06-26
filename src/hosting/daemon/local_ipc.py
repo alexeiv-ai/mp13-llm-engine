@@ -1226,7 +1226,7 @@ class EngineHostDaemon:
         transport_name = str(binding.get("transport") or "").strip().lower()
         if not transport_name:
             transport_name = "ssh_relay" if str(transport or "").strip() == "tcp" else "daemon_callback"
-        if transport_name not in {"daemon_callback", "local_ipc", "ssh_relay", "toolbox_harness"}:
+        if transport_name not in {"daemon_callback", "local_ipc", "ssh_relay", "toolbox_harness", "service_broker"}:
             raise ValueError(f"host_capability_invalid_binding_transport:{transport_name}")
         out = dict(binding)
         out["transport"] = transport_name
@@ -1248,7 +1248,7 @@ class EngineHostDaemon:
         session_id = str(row.get("session_id") or "").strip() or f"cap_{secrets.token_urlsafe(18)}"
         provider_kind = str(row.get("provider_kind") or dict(row.get("provider") or {}).get("kind") or "client_session").strip()
         visibility = str(row.get("visibility") or dict(row.get("provider") or {}).get("visibility") or "workflow").strip()
-        if provider_kind not in {"client_session", "toolbox_session"}:
+        if provider_kind not in {"client_session", "toolbox_session", "service_broker"}:
             raise ValueError(f"host_capability_invalid_provider_kind:{provider_kind}")
         if visibility not in {"request", "workflow", "instance", "consumer"}:
             raise ValueError(f"host_capability_invalid_visibility:{visibility}")
@@ -1261,6 +1261,10 @@ class EngineHostDaemon:
             visibility=visibility,
             methods=[dict(item or {}) for item in list(row.get("methods") or [])],
         )
+        if provider_kind == "service_broker":
+            raw_binding = dict(row.get("binding") or {})
+            raw_binding["transport"] = "service_broker"
+            row["binding"] = raw_binding
         binding = self._normalize_host_capability_binding(row, transport=transport)
         binding.setdefault("peer_host", str(peer_host or "") or None)
         binding.setdefault("peer_pid", int(peer_pid or 0) or None)

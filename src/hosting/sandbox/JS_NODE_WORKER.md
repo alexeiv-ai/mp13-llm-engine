@@ -228,9 +228,12 @@ Base discoverable methods:
 4. `crypto.sha256`
 
 Known methods such as `fs.list`, `fs.read_text`, `fs.write_text`, `fs.mkdir`,
-`fs.stat`, and `http.fetch` appear only when a hosting client/provider session
-registers and advertises them for the request. Sandbox policy can further
-disable namespaces, but policy no longer causes the hosting service to register
+`fs.stat`, and `http.fetch` appear only when a Host Capability session registers
+and advertises them for the request. The daemon-owned implementation uses
+`provider_kind="service_broker"` and is registered through the known
+service-broker method helpers. Client-owned callback APIs still use
+`provider_kind="client_session"`. Sandbox policy can further disable
+namespaces, but policy no longer causes the hosting service to register
 service-owned `fs.*` or `http.fetch` methods by itself.
 
 Convenience methods on `api` may wrap dispatcher methods:
@@ -268,8 +271,9 @@ The implementation difference is child-local: the QuickJS harness can keep
 multiple JS promises pending and resolve or reject them when the matching
 `host_response` arrives.
 
-When a client registers the known artifact filesystem methods, the expected
-provider behavior maps `fs.*` calls to declared artifact roots:
+When a client registers known artifact filesystem methods as a `service_broker`
+session, the daemon maps `fs.*` calls to the worker engine's declared artifact
+roots after Host Capability approval:
 
 1. readable roots: declared artifact inputs and declared artifact outputs
 2. writable roots: declared artifact outputs only
@@ -279,9 +283,11 @@ provider behavior maps `fs.*` calls to declared artifact roots:
 5. relative paths cannot escape the selected root
 
 The HTTP namespace is disabled unless sandbox policy enables brokered HTTP and
-a client/provider session registers `http.fetch`. When enabled and registered,
-the provider validates URL scheme, host allowlist, URL prefix allowlist, method,
-headers, timeout, and response size.
+a Host Capability session registers `http.fetch`. When enabled and registered
+as `service_broker`, the daemon validates URL scheme, host allowlist, URL
+prefix allowlist, method, headers, timeout, and response size from the worker
+sandbox policy. Client-owned providers must enforce their own backend policy
+before returning results.
 
 ## Async Semantics
 

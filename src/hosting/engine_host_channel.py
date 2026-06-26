@@ -2423,7 +2423,7 @@ class EngineHostControlChannel:
         *,
         scope: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
-        provider_kind: str = "client_session",
+        provider_kind: str = "service_broker",
         visibility: str = "workflow",
         binding: Optional[Dict[str, Any]] = None,
         close_on_client_disconnect: bool = True,
@@ -2432,15 +2432,45 @@ class EngineHostControlChannel:
         include_http: bool = True,
         allow_override: bool = False,
     ) -> Dict[str, Any]:
+        effective_provider_kind = str(provider_kind or "service_broker").strip() or "service_broker"
+        effective_binding = dict(binding or {})
+        if effective_provider_kind == "service_broker":
+            effective_binding["transport"] = "service_broker"
         return self.host_capability_session_register(
             methods=self.known_host_capability_methods(include_fs=include_fs, include_http=include_http),
             scope=scope,
             session_id=session_id,
-            provider_kind=provider_kind,
+            provider_kind=effective_provider_kind,
+            visibility=visibility,
+            binding=effective_binding,
+            close_on_client_disconnect=close_on_client_disconnect,
+            expires_at_ms=expires_at_ms,
+            allow_override=allow_override,
+        )
+
+    def host_capability_session_register_service_broker_methods(
+        self,
+        *,
+        scope: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        visibility: str = "workflow",
+        binding: Optional[Dict[str, Any]] = None,
+        close_on_client_disconnect: bool = True,
+        expires_at_ms: Optional[int] = None,
+        include_fs: bool = True,
+        include_http: bool = True,
+        allow_override: bool = False,
+    ) -> Dict[str, Any]:
+        return self.host_capability_session_register_known_methods(
+            scope=scope,
+            session_id=session_id,
+            provider_kind="service_broker",
             visibility=visibility,
             binding=binding,
             close_on_client_disconnect=close_on_client_disconnect,
             expires_at_ms=expires_at_ms,
+            include_fs=include_fs,
+            include_http=include_http,
             allow_override=allow_override,
         )
 

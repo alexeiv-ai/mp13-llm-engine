@@ -1378,6 +1378,33 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
     assert closed["result"] == {"status": "closed", "session_id": "cap-session-1", "closed": True}
 
 
+def test_daemon_registers_service_broker_host_capability_session(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-cap-service", "secret-cap-service")
+
+    registered = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload={
+            "session_token": token,
+            "session_id": "cap-session-service-broker",
+            "provider_kind": "service_broker",
+            "scope": {"workflow_id": "wf-cap-service"},
+            "methods": [{"name": "fs.read_text", "group_path": ["FS"], "args_schema": {}, "result_schema": {}}],
+        },
+    )
+
+    assert registered["ok"] is True
+    session = registered["result"]["session"]
+    assert session["provider"]["kind"] == "service_broker"
+    assert session["methods"][0]["provider"]["kind"] == "service_broker"
+    assert "binding" not in session
+    stored = daemon._host_capability_sessions["cap-session-service-broker"]  # noqa: SLF001
+    assert stored.binding["transport"] == "service_broker"
+
+
 def test_daemon_rejects_duplicate_host_capability_method_unless_override_requested(tmp_path: Path) -> None:
     daemon = _make_daemon(tmp_path)
     daemon.svc.set_control_config(require_auth=True)

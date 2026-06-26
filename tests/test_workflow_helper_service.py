@@ -22,6 +22,7 @@ from hosting.sandbox.host_capabilities import (
     HostCapabilitySession,
     HostCapabilityTimeout,
 )
+from hosting.sandbox.service_broker_registry import service_broker_method_descriptors
 from hosting.sandbox.workflow_python_contract import build_workflow_python_node_snippet_request
 from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntime, WorkflowPythonNodeRuntimeRegistry
 
@@ -164,6 +165,164 @@ def test_workflow_node_service_owned_fallback_policy_is_ignored(tmp_path: Path) 
     assert events == []
     with pytest.raises(RuntimeError, match="unsupported_host_method:fs.list"):
         dispatch({"method": "fs.list", "arguments": {"root_id": "report"}})
+
+
+def _service_broker_session(*, workflow_id: str, approval: dict | None = None) -> HostCapabilitySession:
+    descriptors = {
+        row["name"]: HostCapabilityDescriptor.from_dict(row)
+        for row in service_broker_method_descriptors(include_fs=True, include_http=False, approval=approval)
+    }
+    return HostCapabilitySession(
+        session_id="service-broker-test",
+        owner="client-a",
+        provider_kind="service_broker",
+        visibility="workflow",
+        scope={"workflow_id": workflow_id},
+        methods={
+            name: HostCapabilityMethod(descriptor=descriptor)
+            for name, descriptor in descriptors.items()
+        },
+        binding={"transport": "service_broker"},
+    )
+
+
+def test_workflow_node_uses_service_broker_host_capability_session(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.txt").write_text("hello", encoding="utf-8")
+    svc.register_spawned(
+        engine_id="worker-service-broker",
+        pid=1234,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        sandbox_policy={
+            "sandbox": {
+                "enabled": True,
+                "filesystem": {"rules": [{"root_id": "report", "path": str(root), "access": ["read"]}]},
+                "brokered_io": {"filesystem": True, "http": False, "subprocess": False},
+            }
+        },
+    )
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-service-broker", "workflow_id": "wf-service-broker", "package_id": "pkg"},
+        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
+        engine_id="worker-service-broker",
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
+        host_capability_sessions=[_service_broker_session(workflow_id="wf-service-broker")],
+    )
+
+    described = dispatch({"method": "sandbox.describe", "arguments": {}})
+    out = dispatch({"method": "fs.read_text", "arguments": {"root_id": "report", "relative_path": "report.txt"}})
+
+    assert "fs.read_text" in [row["name"] for row in described["host_capabilities"]["methods"]]
+    assert out["text"] == "hello"
+
+
+def test_workflow_node_service_broker_approval_denies_before_io(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.txt").write_text("hello", encoding="utf-8")
+    svc.register_spawned(
+        engine_id="worker-service-broker-deny",
+        pid=1234,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        sandbox_policy={
+            "sandbox": {
+                "enabled": True,
+                "filesystem": {"rules": [{"root_id": "report", "path": str(root), "access": ["read"]}]},
+                "brokered_io": {"filesystem": True, "http": False, "subprocess": False},
+            }
+        },
+    )
+    approvals: list[dict] = []
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-service-broker-deny", "workflow_id": "wf-service-broker-deny", "package_id": "pkg"},
+        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
+        engine_id="worker-service-broker-deny",
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
+        host_capability_sessions=[
+            _service_broker_session(workflow_id="wf-service-broker-deny", approval={"mode": "always"})
+        ],
+        approval_requester=lambda payload: approvals.append(dict(payload or {})) or {"decision": "deny", "approved": False},
+    )
+
+    with pytest.raises(Exception, match="approval denied"):
+        dispatch({"method": "fs.read_text", "arguments": {"root_id": "report", "relative_path": "report.txt"}})
+
+    assert approvals[0]["method"] == "fs.read_text"
+    assert approvals[0]["provider"]["kind"] == "service_broker"
+
+
+def test_workflow_node_service_broker_keeps_sandbox_policy_boundary(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.txt").write_text("hello", encoding="utf-8")
+    svc.register_spawned(
+        engine_id="worker-service-broker-policy",
+        pid=1234,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        sandbox_policy={
+            "sandbox": {
+                "enabled": True,
+                "filesystem": {"rules": [{"root_id": "report", "path": str(root), "access": ["read"]}]},
+                "brokered_io": {"filesystem": False, "http": False, "subprocess": False},
+            }
+        },
+    )
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-service-broker-policy", "workflow_id": "wf-service-broker-policy", "package_id": "pkg"},
+        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
+        engine_id="worker-service-broker-policy",
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True}}},
+        host_capability_sessions=[_service_broker_session(workflow_id="wf-service-broker-policy")],
+    )
+
+    with pytest.raises(PermissionError, match="brokered_filesystem_disabled"):
+        dispatch({"method": "fs.read_text", "arguments": {"root_id": "report", "relative_path": "report.txt"}})
+
+
+def test_workflow_node_service_broker_respects_host_api_namespace_policy(tmp_path: Path) -> None:
+    svc = EngineHostService(
+        engines_state_file=tmp_path / "managed_engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    svc.register_spawned(
+        engine_id="worker-service-broker-namespace",
+        pid=1234,
+        command=["python", "-m", "hosting.engine_worker_ipc"],
+        sandbox_policy={
+            "sandbox": {
+                "enabled": True,
+                "filesystem": {"rules": [{"root_id": "report", "path": str(root), "access": ["read"]}]},
+                "brokered_io": {"filesystem": True, "http": False, "subprocess": False},
+            }
+        },
+    )
+    dispatch = svc._workflow_python_node_host_dispatcher(
+        request={"request_id": "req-service-broker-namespace", "workflow_id": "wf-service-broker-namespace", "package_id": "pkg"},
+        artifact_context={"child_context": {"inputs": {"report": str(root)}, "outputs": {}}},
+        engine_id="worker-service-broker-namespace",
+        sandbox_policy={"sandbox": {"host_api": {"enabled": True, "namespaces": {"fs": False}}}},
+        host_capability_sessions=[_service_broker_session(workflow_id="wf-service-broker-namespace")],
+    )
+
+    described = dispatch({"method": "sandbox.describe", "arguments": {}})
+    assert "fs.read_text" not in [row["name"] for row in described["host_capabilities"]["methods"]]
+    with pytest.raises(RuntimeError, match="unsupported_host_method:fs.read_text"):
+        dispatch({"method": "fs.read_text", "arguments": {"root_id": "report", "relative_path": "report.txt"}})
 
 
 def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monkeypatch) -> None:

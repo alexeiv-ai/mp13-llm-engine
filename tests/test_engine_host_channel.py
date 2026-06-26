@@ -575,12 +575,14 @@ def test_host_capability_register_known_methods_helper_forwards_descriptors() ->
     payload = fake.calls[0][1]
     method_names = [row["name"] for row in payload["methods"]]
     assert payload["session_id"] == "known-host-api"
+    assert payload["provider_kind"] == "service_broker"
+    assert payload["binding"] == {"transport": "service_broker", "address": "client-callback"}
     assert payload["scope"] == {"workflow_id": "wf-1"}
     assert payload["allow_override"] is True
     assert "fs.read_text" in method_names
     assert "fs.write_text" in method_names
     assert "http.fetch" in method_names
-    assert all("provider" not in row for row in payload["methods"])
+    assert all(dict(row.get("provider") or {}).get("kind") == "service_broker" for row in payload["methods"])
 
 
 def test_host_capability_session_filtered_helpers_use_public_session_shapes() -> None:

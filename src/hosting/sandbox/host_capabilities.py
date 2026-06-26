@@ -18,7 +18,7 @@ HOST_CAPABILITY_APPROVAL_CONTRACT = "hosting.sandbox.host_capability_approval.v1
 
 _METHOD_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-_ALLOWED_PROVIDER_KINDS = {"builtin", "client_session", "toolbox_session"}
+_ALLOWED_PROVIDER_KINDS = {"builtin", "client_session", "toolbox_session", "service_broker"}
 _ALLOWED_VISIBILITY = {"request", "workflow", "instance", "consumer"}
 _MAX_SCHEMA_CHARS = 65536
 _MAX_DESCRIPTION_CHARS = 4096
@@ -244,6 +244,7 @@ class HostCapabilityApprovalDenied(HostCapabilityProviderError):
 class HostCapabilityCallContext:
     request_id: str = ""
     instance_id: Optional[str] = None
+    engine_id: str = ""
     workflow_id: str = ""
     package_id: str = ""
     actor: str = ""
@@ -255,6 +256,7 @@ class HostCapabilityCallContext:
         return {
             "request_id": _clean(self.request_id) or None,
             "instance_id": _clean(self.instance_id) or None,
+            "engine_id": _clean(self.engine_id) or None,
             "workflow_id": _clean(self.workflow_id) or None,
             "package_id": _clean(self.package_id) or None,
             "actor": _clean(self.actor) or None,
@@ -368,8 +370,10 @@ class HostCapabilityBroker:
         provider_timeout_seconds: float = 30.0,
         cancel_checker: Optional[CancelChecker] = None,
         instance_id: str = "",
+        engine_id: str = "",
         consumer_id: str = "",
         allowed_namespaces: Optional[Any] = None,
+        disabled_namespaces: Optional[Any] = None,
         approved_permissions: Optional[Iterable[str]] = None,
         approval_requester: Optional[ApprovalRequester] = None,
         event_emitter: Optional[EventEmitter] = None,
@@ -380,6 +384,7 @@ class HostCapabilityBroker:
         self.workflow_id = _clean(workflow_id)
         self.package_id = _clean(package_id)
         self.instance_id = _clean(instance_id)
+        self.engine_id = _clean(engine_id)
         self.consumer_id = _clean(consumer_id)
         self.runtime_kind = _clean(runtime_kind)
         self.policy = dict(policy or {})
@@ -390,6 +395,7 @@ class HostCapabilityBroker:
         self._cancel_requested = False
         self._cancel_reason = "host_call_canceled"
         self._allowed_namespaces = self._normalize_allowed_namespaces(allowed_namespaces)
+        self._disabled_namespaces = self._normalize_allowed_namespaces(disabled_namespaces) or set()
         self._approved_permissions = set(_string_list(approved_permissions or [])) if approved_permissions is not None else None
         self.approval_requester = approval_requester
         self.event_emitter = event_emitter
@@ -457,6 +463,8 @@ class HostCapabilityBroker:
 
     def _method_allowed(self, method: HostCapabilityMethod) -> bool:
         descriptor = method.descriptor
+        if _clean(descriptor.namespace) in self._disabled_namespaces:
+            return False
         if self._allowed_namespaces is not None and _clean(descriptor.namespace) not in self._allowed_namespaces:
             return False
         if self._approved_permissions is not None:
@@ -876,6 +884,8 @@ class HostCapabilityBroker:
                             request_id=self.request_id,
                             workflow_id=self.workflow_id,
                             package_id=self.package_id,
+                            instance_id=self.instance_id or None,
+                            engine_id=self.engine_id,
                             actor=session.owner,
                             permissions=list(method.descriptor.permissions or []),
                             approved_scopes=[
