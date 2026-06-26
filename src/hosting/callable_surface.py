@@ -346,9 +346,10 @@ def toolbox_brokered_io_call_surface(
 ) -> Dict[str, Any]:
     """Describe one toolbox brokered-IO call using shared callable-surface metadata.
 
-    This keeps toolbox execution and brokered IO toolbox-native, while sharing
-    the same identity, digest, correlation, and bridge-policy vocabulary used by
-    Host Capability provider calls.
+    Toolbox execution remains toolbox-native, while brokered IO routes through
+    the shared service-broker Host Capability path. This surface shares the same
+    identity, digest, correlation, and bridge-policy vocabulary used by Host
+    Capability provider calls.
     """
     meth = _clean(method)
     if not meth:

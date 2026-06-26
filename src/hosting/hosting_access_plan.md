@@ -93,10 +93,10 @@ No legacy compatibility is required beyond clear instructions in
 
 ## Phase 5: Legacy Cleanup And Client Adoption
 
-- [ ] Remove service-owned implicit fallback paths for `fs.*` / `http.fetch`
+- [x] Remove service-owned implicit fallback paths for `fs.*` / `http.fetch`
   that bypass Host Capability descriptors.
-- [ ] Remove stale tests that assert toolbox-only brokered IO plumbing.
-- [ ] Verify full hosting sandbox and workflow test pass.
+- [x] Remove stale tests that assert toolbox-only brokered IO plumbing.
+- [x] Verify full hosting sandbox and workflow test pass.
 - [ ] Ask the client team to adopt the final breaking-change instructions and
   then reset [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md)
   for later work.
