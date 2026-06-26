@@ -265,63 +265,19 @@ class WorkflowHelperMixin:
         session: HostCapabilitySession,
         call: HostCapabilityProviderCall,
     ) -> Dict[str, Any]:
+        from ..sandbox.service_broker_registry import invoke_service_broker_method
+
         engine_id = str(call.context.engine_id or dict(session.binding or {}).get("engine_id") or "").strip()
         if not engine_id:
             raise HostCapabilityProviderUnavailable(
                 detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "reason": "engine_id_required"}
             )
-        args = dict(call.arguments or {})
-        method = str(call.method or "").strip()
-        if method == "fs.list":
-            result = self.sandbox_fs_list(
-                engine_id=engine_id,
-                root_id=str(args.get("root_id") or ""),
-                relative_path=str(args.get("relative_path") or ""),
-            )
-        elif method == "fs.read_text":
-            result = self.sandbox_fs_read_text(
-                engine_id=engine_id,
-                root_id=str(args.get("root_id") or ""),
-                relative_path=str(args.get("relative_path") or ""),
-                encoding=str(args.get("encoding") or "utf-8"),
-            )
-        elif method == "fs.write_text":
-            result = self.sandbox_fs_write_text(
-                engine_id=engine_id,
-                root_id=str(args.get("root_id") or ""),
-                relative_path=str(args.get("relative_path") or ""),
-                text=str(args.get("text") or ""),
-                encoding=str(args.get("encoding") or "utf-8"),
-                create_parents=bool(args.get("create_parents", True)),
-            )
-        elif method == "fs.mkdir":
-            result = self.sandbox_fs_mkdir(
-                engine_id=engine_id,
-                root_id=str(args.get("root_id") or ""),
-                relative_path=str(args.get("relative_path") or ""),
-                parents=bool(args.get("parents", True)),
-                exist_ok=bool(args.get("exist_ok", True)),
-            )
-        elif method == "fs.stat":
-            result = self.sandbox_fs_stat(
-                engine_id=engine_id,
-                root_id=str(args.get("root_id") or ""),
-                relative_path=str(args.get("relative_path") or ""),
-            )
-        elif method == "http.fetch":
-            result = self.sandbox_http_fetch(
-                engine_id=engine_id,
-                url=str(args.get("url") or ""),
-                method=str(args.get("method") or "GET"),
-                headers=dict(args.get("headers") or {}) if isinstance(args.get("headers"), dict) else None,
-                body_b64=str(args.get("body_b64") or ""),
-                timeout_seconds=float(args.get("timeout_seconds") or 30.0),
-                max_response_bytes=int(args.get("max_response_bytes") or 1024 * 1024),
-            )
-        else:
-            raise HostCapabilityProviderUnavailable(
-                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "method": method}
-            )
+        result = invoke_service_broker_method(
+            self,
+            engine_id=engine_id,
+            method=call.method,
+            arguments=dict(call.arguments or {}),
+        )
         return {
             "status": "ok",
             "provider_call_id": call.provider_call_id,

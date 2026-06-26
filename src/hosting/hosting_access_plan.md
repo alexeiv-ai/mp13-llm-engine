@@ -65,20 +65,20 @@ No legacy compatibility is required beyond clear instructions in
 
 ## Phase 3: Toolbox Host API Unification
 
-- [ ] Replace toolbox-specific hardcoded brokered IO dispatch with the shared
+- [x] Replace toolbox-specific hardcoded brokered IO dispatch with the shared
   service-broker registry/dispatcher.
-- [ ] Make toolbox `context.host.call(...)`, `context.fs.*`, and
+- [x] Make toolbox `context.host.call(...)`, `context.fs.*`, and
   `context.http.*` discover through the same Host Capability description shape
   used by node workers.
-- [ ] Add per-IO approval support for toolbox brokered IO, independent of
+- [x] Add per-IO approval support for toolbox brokered IO, independent of
   tool-level gated execution.
-- [ ] Preserve toolbox callable-surface metadata and bridge-policy/audit fields
+- [x] Preserve toolbox callable-surface metadata and bridge-policy/audit fields
   through the unified provider path.
-- [ ] Add tests proving toolbox filesystem/HTTP calls run through the shared
+- [x] Add tests proving toolbox filesystem/HTTP calls run through the shared
   registry, approval can deny/allow, and sandbox policy remains enforced.
-- [ ] Remove obsolete toolbox brokered IO helper code once tests cover the
+- [x] Remove obsolete toolbox brokered IO helper code once tests cover the
   unified path.
-- [ ] Update [sandbox/TOOLBOX_WORKER.md](sandbox/TOOLBOX_WORKER.md).
+- [x] Update [sandbox/TOOLBOX_WORKER.md](sandbox/TOOLBOX_WORKER.md).
 
 ## Phase 4: Typed Alias Cleanup
 

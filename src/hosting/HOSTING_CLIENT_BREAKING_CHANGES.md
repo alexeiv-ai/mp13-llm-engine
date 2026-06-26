@@ -48,9 +48,21 @@ Node worker behavior:
    `fs.*` and `http.fetch` are unsupported even if sandbox broker policy allows
    the underlying IO.
 
-Toolbox status:
+Toolbox behavior:
 
-Toolbox brokered IO is not migrated in this slice. It still uses toolbox-native
-dispatch and policy checks. A later phase will converge toolbox
-`context.host.call`, `context.fs.*`, and `context.http.*` onto the shared
-service-broker registry/dispatcher.
+1. Toolbox `context.host.call(...)`, `context.fs.*`, and `context.http.*` now
+   use the same local Host Capability broker and `service_broker` registry as
+   node workers.
+2. `context.host.describe()` returns Host Capability discovery for the toolbox
+   host-call surface.
+3. Worker `rpc.describe` and `toolbox.describe` responses include
+   `host_capabilities`.
+4. `toolbox.execute` may pass `host_api_approval` to require per-IO approval for
+   toolbox `fs.*` / `http.fetch` calls. This is independent from tool-level
+   gated execution.
+5. Toolbox per-IO approval requests use the same
+   `hosting.sandbox.host_capability_approval.v1` shape and are delivered through
+   the existing hosted callback binding under the Host Capability approval
+   callback name.
+6. Approval does not widen sandbox policy. Filesystem and HTTP policy remains
+   enforced by daemon-owned brokered IO.

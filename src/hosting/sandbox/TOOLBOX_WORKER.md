@@ -124,20 +124,31 @@ Host callback methods supported by the worker:
 6. `http.fetch`
 7. `callback.invoke`
 
-Brokered filesystem and HTTP calls currently go through toolbox-native
-`EngineHostService` dispatch and are authorized from the persisted sandbox
-policy for the worker `engine_id`. Node workers now expose daemon-owned
-filesystem/HTTP through `provider_kind="service_broker"` Host Capability
-sessions; toolbox brokered IO is scheduled to converge onto that shared
-service-broker registry/dispatcher in the next refactoring phase. Until that
-phase lands, toolbox execution and brokered IO authorization remain
-toolbox-native.
+Brokered filesystem and HTTP calls use the shared Host Capability
+`provider_kind="service_broker"` route. `context.host.call(...)`,
+`context.fs.*`, and `context.http.*` all dispatch through a local Host
+Capability broker, then into the shared service-broker registry/dispatcher.
+The daemon-owned broker still authorizes the actual IO from the persisted
+sandbox policy for the worker `engine_id`.
+
+`context.host.describe()` returns the same Host Capability discovery shape used
+by node workers. Worker `rpc.describe` / `toolbox.describe` responses also
+include `host_capabilities` for the advertised service-broker host-call
+surface.
+
+Toolbox host API approval is independent from toolbox tool gating. A toolbox
+execute call may provide `host_api_approval` with a Host Capability approval
+policy. When that policy requires approval, service-broker `fs.*` / `http.fetch`
+calls request approval through the hosted callback binding before brokered IO
+executes. Approval denial prevents the brokered IO call. Approval does
+not widen sandbox filesystem or network policy.
 
 The worker also attaches shared callable-surface metadata to callback context
 under `callable_surface`. That metadata uses
 `hosting.toolbox.brokered_io.call_surface.v1` and includes method identity,
 schema/method/policy digests, safe correlation fields, and the effective
-bridge-policy intersection.
+bridge-policy intersection. Approval/audit events use the Host Capability
+approval/audit shape.
 
 ## Hosted Callback Relay
 

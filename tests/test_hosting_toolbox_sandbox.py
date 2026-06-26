@@ -3141,7 +3141,7 @@ def test_sandboxed_toolbox_facade_register_python_callable_reads_module_source(t
 def test_toolbox_executor_context_fs_wrapper_uses_host_call(monkeypatch) -> None:
     calls: list[tuple[str, dict]] = []
 
-    def _fake_invoke(method: str, arguments: dict) -> dict:
+    def _fake_invoke(method: str, arguments: dict, **_kwargs: Any) -> dict:
         calls.append((str(method), dict(arguments)))
         return {"text": "hello"}
 
@@ -3156,8 +3156,12 @@ def test_toolbox_executor_context_fs_wrapper_uses_host_call(monkeypatch) -> None
     )
 
     out = ctx.fs.read_text(root_id="rw", relative_path="a.txt")
+    described = ctx.host.describe()
 
     assert out == {"text": "hello"}
+    described_methods = [row["name"] for row in described["host_capabilities"]["methods"]]
+    assert "fs.read_text" in described_methods
+    assert described["host_capabilities"]["providers"][0]["kind"] == "service_broker"
     assert calls[0][0] == "fs.read_text"
     payload = calls[0][1]
     assert payload["engine_id"] == "toolbox-a"
@@ -3178,6 +3182,78 @@ def test_toolbox_executor_context_fs_wrapper_uses_host_call(monkeypatch) -> None
     assert surface["identity"]["toolbox_id"] == "toolbox-demo"
     assert surface["identity"]["session_id"] == "call-123"
     assert surface["bridge_policy"]["namespaces"]["fs"] is True
+
+
+def test_toolbox_executor_context_fs_wrapper_uses_host_capability_approval(monkeypatch) -> None:
+    approvals: list[dict] = []
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self.audit_events: list[dict] = []
+
+        def sandbox_fs_read_text(self, **kwargs: Any) -> dict:
+            return {"text": "approved", "callback_context": dict(kwargs.get("callback_context") or {})}
+
+        def _append_host_capability_audit_event(self, payload: dict) -> None:
+            self.audit_events.append(dict(payload or {}))
+
+    fake_service = _FakeService()
+
+    def _fake_approval(_binding: dict, *, callback_name: str, payload: Any, context: dict) -> dict:
+        approvals.append({"callback_name": callback_name, "payload": dict(payload or {}), "context": dict(context or {})})
+        return {"result": {"decision": "allow_once", "approved": True}}
+
+    monkeypatch.setattr(toolbox_executor_ipc, "_host_service", lambda: fake_service)
+    monkeypatch.setattr(toolbox_executor_ipc, "_startup_spec_or_none", lambda: None)
+    monkeypatch.setattr(toolbox_executor_ipc, "_invoke_callback_binding", _fake_approval)
+
+    ctx = toolbox_executor_ipc.ToolboxExecutionContext(
+        engine_id="toolbox-approval",
+        toolbox_id="toolbox-demo",
+        tool_name="peek_tool",
+        tool_call_id="call-approval",
+        tool_arguments={"path": "a.txt"},
+        callback_binding={"session_token": "tok", "address": "addr", "family": "AF_UNIX"},
+        host_api_approval={"mode": "always"},
+    )
+
+    out = ctx.fs.read_text(root_id="rw", relative_path="a.txt")
+
+    assert out["text"] == "approved"
+    assert approvals[0]["callback_name"] == toolbox_executor_ipc.HOST_CAPABILITY_APPROVAL_CALLBACK_NAME
+    assert approvals[0]["payload"]["method"] == "fs.read_text"
+    assert approvals[0]["payload"]["provider"]["kind"] == "service_broker"
+    assert approvals[0]["context"]["tool_call_id"] == "call-approval"
+    assert fake_service.audit_events[0]["event_type"] == "host_capability_approval"
+    assert fake_service.audit_events[0]["method"] == "fs.read_text"
+
+
+def test_toolbox_executor_context_fs_wrapper_denies_host_capability_approval(monkeypatch) -> None:
+    class _FakeService:
+        def sandbox_fs_read_text(self, **_kwargs: Any) -> dict:
+            raise AssertionError("brokered IO should not execute after approval denial")
+
+        def _append_host_capability_audit_event(self, _payload: dict) -> None:
+            return None
+
+    def _fake_approval(_binding: dict, *, callback_name: str, payload: Any, context: dict) -> dict:
+        return {"result": {"decision": "deny", "approved": False, "reason": "unit_test"}}
+
+    monkeypatch.setattr(toolbox_executor_ipc, "_host_service", lambda: _FakeService())
+    monkeypatch.setattr(toolbox_executor_ipc, "_startup_spec_or_none", lambda: None)
+    monkeypatch.setattr(toolbox_executor_ipc, "_invoke_callback_binding", _fake_approval)
+
+    ctx = toolbox_executor_ipc.ToolboxExecutionContext(
+        engine_id="toolbox-deny",
+        toolbox_id="toolbox-demo",
+        tool_name="peek_tool",
+        tool_call_id="call-deny",
+        callback_binding={"session_token": "tok", "address": "addr", "family": "AF_UNIX"},
+        host_api_approval={"mode": "always"},
+    )
+
+    with pytest.raises(Exception, match="approval denied"):
+        ctx.fs.read_text(root_id="rw", relative_path="a.txt")
 
 
 def test_sandboxed_toolbox_facade_execute_does_not_serialize_callback_user_context() -> None:
@@ -3365,7 +3441,7 @@ def test_wait_for_toolbox_executor_ready_requires_inventory_match(monkeypatch) -
 def test_toolbox_executor_host_call_rpc_uses_host_dispatch(monkeypatch) -> None:
     calls: list[tuple[str, dict]] = []
 
-    def _fake_invoke(method: str, arguments: dict) -> dict:
+    def _fake_invoke(method: str, arguments: dict, **_kwargs: Any) -> dict:
         calls.append((str(method), dict(arguments)))
         return {"entries": []}
 

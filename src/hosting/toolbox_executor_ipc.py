@@ -15,7 +15,12 @@ from typing import Any, Dict, Optional
 
 from mp13_engine.mp13_config import ToolCall
 
-from .callable_surface import toolbox_brokered_io_call_surface
+from .callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, toolbox_brokered_io_call_surface
+from .sandbox.host_capabilities import HostCapabilityBroker, HostCapabilityProviderCall
+from .sandbox.service_broker_registry import (
+    invoke_service_broker_method,
+    service_broker_host_capability_session,
+)
 from .toolbox_harness import ToolboxWorkerStartupSpec, load_toolbox_from_manifest
 
 PROTOCOL_VERSION = 1
@@ -85,64 +90,127 @@ def _host_service():
     return svc
 
 
-def _invoke_host_call(method: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+def _toolbox_service_broker_provider_invoker(
+    svc: Any,
+    *,
+    callback_context: Optional[Dict[str, Any]] = None,
+):
+    def _invoke(session: Any, call: HostCapabilityProviderCall) -> Dict[str, Any]:
+        engine_id = str(call.context.engine_id or dict(getattr(session, "binding", {}) or {}).get("engine_id") or "").strip()
+        result = invoke_service_broker_method(
+            svc,
+            engine_id=engine_id,
+            method=call.method,
+            arguments=dict(call.arguments or {}),
+            callback_context=callback_context,
+        )
+        return {
+            "status": "ok",
+            "provider_call_id": call.provider_call_id,
+            "result": dict(result or {}),
+        }
+
+    return _invoke
+
+
+def _toolbox_approval_requester(
+    callback_binding: Optional[Dict[str, Any]],
+    *,
+    callback_context: Optional[Dict[str, Any]] = None,
+):
+    binding = dict(callback_binding or {})
+    if not binding:
+        return None
+
+    def _request_approval(payload: Dict[str, Any]) -> Dict[str, Any]:
+        response = _invoke_callback_binding(
+            binding,
+            callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+            payload=dict(payload or {}),
+            context=dict(callback_context or {}),
+        )
+        return dict(response.get("result") or response or {})
+
+    return _request_approval
+
+
+def _toolbox_host_capability_broker(
+    *,
+    engine_id: str,
+    approval: Optional[Dict[str, Any]] = None,
+    callback_binding: Optional[Dict[str, Any]] = None,
+    callback_context: Optional[Dict[str, Any]] = None,
+    svc: Any = None,
+) -> HostCapabilityBroker:
+    eid = str(engine_id or "").strip() or _worker_engine_id()
+    spec = _startup_spec_or_none()
+    broker = HostCapabilityBroker(
+        request_id=str(dict(callback_context or {}).get("tool_call_id") or ""),
+        workflow_id=str(dict(callback_context or {}).get("workflow_id") or ""),
+        package_id=str(dict(callback_context or {}).get("package_id") or ""),
+        instance_id=str(dict(callback_context or {}).get("instance_id") or ""),
+        engine_id=eid,
+        consumer_id=eid,
+        runtime_kind="toolbox_worker",
+        policy=dict(spec.policy or {}) if spec is not None else {},
+        provider_invoker=_toolbox_service_broker_provider_invoker(svc, callback_context=callback_context) if svc is not None else None,
+        approval_requester=_toolbox_approval_requester(callback_binding, callback_context=callback_context),
+        audit_emitter=getattr(svc, "_append_host_capability_audit_event", None) if svc is not None else None,
+    )
+    session = service_broker_host_capability_session(
+        session_id=f"{eid}.service_broker",
+        owner="service",
+        visibility="consumer",
+        scope={"consumer_id": eid},
+        approval=dict(approval or {}),
+        binding={"engine_id": eid},
+    )
+    broker.register_session(session)
+    return broker
+
+
+def _dispatch_host_capability_sync(broker: HostCapabilityBroker, call: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return broker.dispatch(call)
+    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def _run() -> None:
+        try:
+            result_queue.put(("ok", asyncio.run(broker.dispatch_async(call))))
+        except Exception as exc:
+            result_queue.put(("error", exc))
+
+    thread = threading.Thread(target=_run, name="toolbox-host-capability-dispatch", daemon=True)
+    thread.start()
+    status, payload = result_queue.get()
+    thread.join(timeout=0.1)
+    if status == "error":
+        raise payload
+    return dict(payload or {})
+
+
+def _invoke_host_call(
+    method: str,
+    arguments: Dict[str, Any],
+    *,
+    callback_binding: Optional[Dict[str, Any]] = None,
+    approval: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     svc = _host_service()
     req = dict(arguments or {})
     engine_id = str(req.get("engine_id") or _worker_engine_id()).strip() or _worker_engine_id()
     meth = str(method or "").strip()
-    if meth == "fs.list":
-        return svc.sandbox_fs_list(
-            engine_id=engine_id,
-            root_id=str(req.get("root_id") or ""),
-            relative_path=req.get("relative_path"),
-            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
-        )
-    if meth == "fs.read_text":
-        return svc.sandbox_fs_read_text(
-            engine_id=engine_id,
-            root_id=str(req.get("root_id") or ""),
-            relative_path=str(req.get("relative_path") or ""),
-            encoding=str(req.get("encoding") or "utf-8"),
-            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
-        )
-    if meth == "fs.write_text":
-        return svc.sandbox_fs_write_text(
-            engine_id=engine_id,
-            root_id=str(req.get("root_id") or ""),
-            relative_path=str(req.get("relative_path") or ""),
-            text=str(req.get("text") or ""),
-            encoding=str(req.get("encoding") or "utf-8"),
-            create_parents=bool(req.get("create_parents", True)),
-            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
-        )
-    if meth == "fs.mkdir":
-        return svc.sandbox_fs_mkdir(
-            engine_id=engine_id,
-            root_id=str(req.get("root_id") or ""),
-            relative_path=str(req.get("relative_path") or ""),
-            parents=bool(req.get("parents", True)),
-            exist_ok=bool(req.get("exist_ok", True)),
-            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
-        )
-    if meth == "fs.stat":
-        return svc.sandbox_fs_stat(
-            engine_id=engine_id,
-            root_id=str(req.get("root_id") or ""),
-            relative_path=req.get("relative_path"),
-            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
-        )
-    if meth == "http.fetch":
-        return svc.sandbox_http_fetch(
-            engine_id=engine_id,
-            url=str(req.get("url") or ""),
-            method=str(req.get("method") or "GET"),
-            headers=dict(req.get("headers") or {}),
-            body_b64=str(req.get("body_b64") or ""),
-            timeout_seconds=float(req.get("timeout_seconds") or 30.0),
-            max_response_bytes=int(req.get("max_response_bytes") or 1024 * 1024),
-            callback_context=dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None,
-        )
-    raise RuntimeError(f"unsupported_host_callback:{meth}")
+    callback_context = dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None
+    broker = _toolbox_host_capability_broker(
+        engine_id=engine_id,
+        approval=dict(approval or {}),
+        callback_binding=callback_binding,
+        callback_context=callback_context,
+        svc=svc,
+    )
+    return _dispatch_host_capability_sync(broker, {"method": meth, "arguments": req})
 
 
 def _invoke_callback_binding(
@@ -200,6 +268,7 @@ class HostCallbackClient:
         tool_call_id: str = "",
         tool_arguments: Optional[Dict[str, Any]] = None,
         callback_signature: Optional[Dict[str, Any]] = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
         user_context: Any = None,
     ) -> None:
         self.engine_id = str(engine_id or "").strip() or _worker_engine_id()
@@ -209,6 +278,7 @@ class HostCallbackClient:
         self.tool_call_id = str(tool_call_id or "").strip()
         self.tool_arguments = dict(tool_arguments or {})
         self.callback_signature = dict(callback_signature or {}) or None
+        self.host_api_approval = dict(host_api_approval or {})
         self.user_context = user_context
 
     def _brokered_io_policy(self) -> Dict[str, Any]:
@@ -267,7 +337,16 @@ class HostCallbackClient:
                 },
             )
             return {"status": "ok", "callback_name": callback_name, "result": response.get("result")}
-        return _invoke_host_call(meth, req)
+        approval = dict(req.pop("approval", None) or self.host_api_approval or {})
+        return _invoke_host_call(meth, req, callback_binding=self.callback_binding, approval=approval)
+
+    def describe(self) -> Dict[str, Any]:
+        return _toolbox_host_capability_broker(
+            engine_id=self.engine_id,
+            approval=self.host_api_approval,
+            callback_binding=self.callback_binding,
+            callback_context=self._callback_context(method="host.describe", arguments={}),
+        ).describe()
 
 
 class BrokeredFsClient:
@@ -371,6 +450,7 @@ class ToolboxExecutionContext:
         tool_arguments: Optional[Dict[str, Any]] = None,
         callback_binding: Optional[Dict[str, Any]] = None,
         callback_signature: Optional[Dict[str, Any]] = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
     ) -> None:
         callback_binding_payload = dict(callback_binding or {})
         self.engine_id = str(engine_id or "").strip() or _worker_engine_id()
@@ -382,6 +462,7 @@ class ToolboxExecutionContext:
             tool_call_id=tool_call_id,
             tool_arguments=tool_arguments,
             callback_signature=callback_signature,
+            host_api_approval=host_api_approval,
             user_context=None,
         )
         self.fs = BrokeredFsClient(host=self.host)
@@ -456,6 +537,7 @@ async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
         "cancellation": False,
         "all_registered_tool_names": tool_names,
         "tool_metadata": tool_metadata,
+        "host_capabilities": _toolbox_host_capability_broker(engine_id=_worker_engine_id()).describe().get("host_capabilities"),
         "executor_kind": str(manifest.get("executor_kind") or "toolbox_executor"),
     }
 
@@ -470,7 +552,12 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             return {"status": "error", "message": "host_call_method_required"}
         arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
         try:
-            result = _invoke_host_call(host_method, dict(arguments or {}))
+            result = _invoke_host_call(
+                host_method,
+                dict(arguments or {}),
+                callback_binding=dict(params.get("callback_binding") or {}) if isinstance(params.get("callback_binding"), dict) else None,
+                approval=dict(params.get("approval") or {}) if isinstance(params.get("approval"), dict) else None,
+            )
         except Exception as exc:
             return {"status": "error", "message": f"host_call_failed:{exc}"}
         return {"status": "ok", "result": result}
@@ -496,6 +583,7 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             },
             "all_registered_tool_names": tool_names,
             "tool_metadata": tool_metadata,
+            "host_capabilities": _toolbox_host_capability_broker(engine_id=_worker_engine_id()).describe().get("host_capabilities"),
             "parallel_execution": {
                 "async_within_executor": True,
                 "sandbox_pool": False,
@@ -518,6 +606,7 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             tool_arguments=dict(call.arguments or {}),
             callback_binding=callback_binding,
             callback_signature=dict(tool_def.get("callback_signature") or {}) or None,
+            host_api_approval=dict(params.get("host_api_approval") or {}) if isinstance(params.get("host_api_approval"), dict) else None,
         )
         result = await toolbox.execute(
             call,

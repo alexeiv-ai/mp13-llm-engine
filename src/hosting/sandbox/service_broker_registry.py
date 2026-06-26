@@ -13,7 +13,13 @@ from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Callable, Dict, Iterable, Optional, Union, get_args, get_origin
 
-from .host_capabilities import HostCapabilityDescriptor, HostCapabilityProviderRef, default_group_path
+from .host_capabilities import (
+    HostCapabilityDescriptor,
+    HostCapabilityMethod,
+    HostCapabilityProviderRef,
+    HostCapabilitySession,
+    default_group_path,
+)
 
 SERVICE_BROKER_PROVIDER_ID = "builtin.service_broker"
 SERVICE_BROKER_PROVIDER_KIND = "service_broker"
@@ -400,14 +406,113 @@ def service_broker_discover(*, include_fs: bool = True, include_http: bool = Tru
     }
 
 
+def service_broker_host_capability_session(
+    *,
+    session_id: str,
+    owner: str = "service",
+    visibility: str = "request",
+    scope: Optional[Dict[str, Any]] = None,
+    include_fs: bool = True,
+    include_http: bool = True,
+    approval: Optional[Dict[str, Any]] = None,
+    binding: Optional[Dict[str, Any]] = None,
+    allow_override: bool = False,
+) -> HostCapabilitySession:
+    descriptors = [
+        HostCapabilityDescriptor.from_dict(row)
+        for row in service_broker_method_descriptors(include_fs=include_fs, include_http=include_http, approval=approval)
+    ]
+    return HostCapabilitySession(
+        session_id=_clean(session_id) or SERVICE_BROKER_PROVIDER_ID,
+        owner=_clean(owner) or "service",
+        provider_kind=SERVICE_BROKER_PROVIDER_KIND,
+        visibility=_clean(visibility) or "request",
+        scope=dict(scope or {}),
+        methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor) for descriptor in descriptors},
+        binding={**dict(binding or {}), "transport": "service_broker"},
+        allow_override=allow_override,
+    )
+
+
+def invoke_service_broker_method(
+    svc: Any,
+    *,
+    engine_id: str,
+    method: str,
+    arguments: Optional[Dict[str, Any]] = None,
+    callback_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    req = dict(arguments or {})
+    meth = _clean(method)
+    eid = _clean(engine_id)
+    if not eid:
+        raise ValueError("service_broker_engine_id_required")
+    callback = dict(callback_context or {}) if isinstance(callback_context, dict) else None
+    if meth == "fs.list":
+        return svc.sandbox_fs_list(
+            engine_id=eid,
+            root_id=_clean(req.get("root_id")),
+            relative_path=req.get("relative_path"),
+            callback_context=callback,
+        )
+    if meth == "fs.read_text":
+        return svc.sandbox_fs_read_text(
+            engine_id=eid,
+            root_id=_clean(req.get("root_id")),
+            relative_path=_clean(req.get("relative_path")),
+            encoding=_clean(req.get("encoding")) or "utf-8",
+            callback_context=callback,
+        )
+    if meth == "fs.write_text":
+        return svc.sandbox_fs_write_text(
+            engine_id=eid,
+            root_id=_clean(req.get("root_id")),
+            relative_path=_clean(req.get("relative_path")),
+            text=str(req.get("text") or ""),
+            encoding=_clean(req.get("encoding")) or "utf-8",
+            create_parents=bool(req.get("create_parents", True)),
+            callback_context=callback,
+        )
+    if meth == "fs.mkdir":
+        return svc.sandbox_fs_mkdir(
+            engine_id=eid,
+            root_id=_clean(req.get("root_id")),
+            relative_path=_clean(req.get("relative_path")),
+            parents=bool(req.get("parents", True)),
+            exist_ok=bool(req.get("exist_ok", True)),
+            callback_context=callback,
+        )
+    if meth == "fs.stat":
+        return svc.sandbox_fs_stat(
+            engine_id=eid,
+            root_id=_clean(req.get("root_id")),
+            relative_path=req.get("relative_path"),
+            callback_context=callback,
+        )
+    if meth == "http.fetch":
+        return svc.sandbox_http_fetch(
+            engine_id=eid,
+            url=_clean(req.get("url")),
+            method=_clean(req.get("method")) or "GET",
+            headers=dict(req.get("headers") or {}) if isinstance(req.get("headers"), dict) else None,
+            body_b64=_clean(req.get("body_b64")),
+            timeout_seconds=float(req.get("timeout_seconds") or 30.0),
+            max_response_bytes=int(req.get("max_response_bytes") or 1024 * 1024),
+            callback_context=callback,
+        )
+    raise RuntimeError(f"unsupported_service_broker_method:{meth}")
+
+
 __all__ = [
     "SERVICE_BROKER_CONTRACT",
     "SERVICE_BROKER_METHOD_SPECS",
     "SERVICE_BROKER_PROVIDER_ID",
     "SERVICE_BROKER_PROVIDER_KIND",
     "ServiceBrokerMethodSpec",
+    "invoke_service_broker_method",
     "service_broker_contract_descriptions",
     "service_broker_discover",
+    "service_broker_host_capability_session",
     "service_broker_method_descriptors",
     "service_broker_method_names",
 ]
