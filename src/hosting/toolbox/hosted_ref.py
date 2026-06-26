@@ -579,6 +579,7 @@ class HostedToolBoxRef:
         callback_context: Any = None,
         scope_ref: Optional[ToolBoxRef] = None,
         tool_call_id: str = "",
+        host_api_approval: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute one hosted tool call through the current toolbox routing.
@@ -692,17 +693,22 @@ class HostedToolBoxRef:
                 user_context=callback_context,
             )
         try:
+            execute_kwargs = {
+                "toolbox_id": self.toolbox_id,
+                "tool_call": {
+                    "id": call_id,
+                    "name": name,
+                    "arguments": dict(arguments or {}),
+                },
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "tools_view": tools_view_payload,
+                "callback_binding": dict(callback_binding or {}) or None,
+            }
+            if isinstance(host_api_approval, dict):
+                execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
             return dict(
                 self.host.toolbox_execute(
-                    toolbox_id=self.toolbox_id,
-                    tool_call={
-                        "id": call_id,
-                        "name": name,
-                        "arguments": dict(arguments or {}),
-                    },
-                    timeout_seconds=float(timeout_seconds or 30.0),
-                    tools_view=tools_view_payload,
-                    callback_binding=dict(callback_binding or {}) or None,
+                    **execute_kwargs,
                 )
                 or {}
             )

@@ -79,6 +79,7 @@ class ToolboxExecutionHarness:
         native_execute_kwargs: Optional[Dict[str, Any]] = None,
         callback_processor: Optional[Callable[..., Any]] = None,
         callback_context: Any = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
     ) -> List[ToolCall]:
         calls = [item if isinstance(item, ToolCall) else ToolCall.from_dict(dict(item or {})) for item in list(tool_calls or [])]
         if not calls:
@@ -93,6 +94,7 @@ class ToolboxExecutionHarness:
                         native_execute_kwargs=dict(native_execute_kwargs or {}),
                         callback_processor=callback_processor,
                         callback_context=callback_context,
+                        host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
                     )
                 )
             return out
@@ -103,6 +105,7 @@ class ToolboxExecutionHarness:
                 native_execute_kwargs=dict(native_execute_kwargs or {}),
                 callback_processor=callback_processor,
                 callback_context=callback_context,
+                host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
             )
             for call in calls
         ]
@@ -122,6 +125,7 @@ class ToolboxExecutionHarness:
         timeout_seconds: float = 30.0,
         callback_processor: Optional[Callable[..., Any]] = None,
         callback_context: Any = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         mode = str(self.config.mode or "native").strip().lower()
@@ -204,6 +208,7 @@ class ToolboxExecutionHarness:
                     ),
                     callback_processor=callback_processor,
                     callback_context=callback_context,
+                    host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
                     approval_state=approval_state,
                 )
                 tool_call.result = executed.result
@@ -263,6 +268,7 @@ class ToolboxExecutionHarness:
         native_execute_kwargs: Dict[str, Any],
         callback_processor: Optional[Callable[..., Any]] = None,
         callback_context: Any = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
         approval_state: Optional[Dict[str, Any]] = None,
     ) -> ToolCall:
         mode = str(self.config.mode or "native").strip().lower()
@@ -426,23 +432,25 @@ class ToolboxExecutionHarness:
                     callback_signature=signature,
                     user_context=callback_context,
                 )
+            execute_kwargs = {
+                "tool_call": call.to_dict(),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "tools_view": tools_view_payload,
+                "callback_binding": dict(callback_binding or {}) or None,
+            }
+            if isinstance(host_api_approval, dict):
+                execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
             if toolbox_id:
                 rpc_out = await asyncio.to_thread(
                     self.control_channel.toolbox_execute,
                     toolbox_id=toolbox_id,
-                    tool_call=call.to_dict(),
-                    timeout_seconds=float(timeout_seconds or 30.0),
-                    tools_view=tools_view_payload,
-                    callback_binding=dict(callback_binding or {}) or None,
+                    **execute_kwargs,
                 )
             else:
                 rpc_out = await asyncio.to_thread(
                     self.control_channel.toolbox_execute,
                     engine_id=engine_id,
-                    tool_call=call.to_dict(),
-                    timeout_seconds=float(timeout_seconds or 30.0),
-                    tools_view=tools_view_payload,
-                    callback_binding=dict(callback_binding or {}) or None,
+                    **execute_kwargs,
                 )
         except Exception as exc:
             if _is_coarse_cancel_execution_error(exc):

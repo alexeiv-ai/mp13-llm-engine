@@ -1420,6 +1420,34 @@ def test_workflow_channels_forward_approval_requester_binding() -> None:
     assert all(payload["approval_requester_binding"] == binding for _cmd, payload in fake.calls)
 
 
+def test_toolbox_execute_forwards_host_api_approval() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    approval = {"mode": "always", "reason": "unit-test"}
+
+    ch.toolbox_execute(
+        toolbox_id="toolbox-1",
+        tool_call={"id": "call-1", "name": "tool"},
+        host_api_approval=approval,
+    )
+
+    assert fake.calls == [
+        (
+            "toolbox-execute",
+            {
+                "engine_id": "",
+                "toolbox_id": "toolbox-1",
+                "tool_call": {"id": "call-1", "name": "tool"},
+                "timeout_seconds": 30.0,
+                "tools_view": None,
+                "callback_binding": None,
+                "host_api_approval": approval,
+            },
+        )
+    ]
+
+
 def test_workflow_artifact_recovery_channel_facade_forwards_expected_payloads() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})

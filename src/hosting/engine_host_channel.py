@@ -3163,6 +3163,7 @@ class EngineHostControlChannel:
         timeout_seconds: float = 30.0,
         tools_view: Optional[Dict[str, Any]] = None,
         callback_binding: Optional[Dict[str, Any]] = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "toolbox-execute",
@@ -3173,6 +3174,7 @@ class EngineHostControlChannel:
                 "timeout_seconds": float(timeout_seconds or 30.0),
                 "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
                 "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
+                "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
             },
         )
         return dict(res or {})

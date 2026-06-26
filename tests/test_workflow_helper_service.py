@@ -474,6 +474,32 @@ def test_daemon_spawn_preserves_worker_profile_class() -> None:
     assert fake.kwargs["worker_profile_class"] == "generic"
 
 
+def test_daemon_toolbox_execute_forwards_host_api_approval() -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def toolbox_execute(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return {"status": "ok", "tool_call": dict(kwargs.get("tool_call") or {})}
+
+    fake = FakeService()
+    daemon = EngineHostDaemon.__new__(EngineHostDaemon)
+    daemon.svc = fake
+
+    out = daemon._call_service(
+        "toolbox-execute",
+        {
+            "toolbox_id": "toolbox-1",
+            "tool_call": {"id": "call-1", "name": "tool"},
+            "host_api_approval": {"mode": "always"},
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert fake.kwargs["host_api_approval"] == {"mode": "always"}
+
+
 def test_daemon_dispatches_workflow_python_facade() -> None:
     class FakeService:
         def __init__(self) -> None:

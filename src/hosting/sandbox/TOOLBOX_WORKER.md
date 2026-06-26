@@ -136,12 +136,12 @@ by node workers. Worker `rpc.describe` / `toolbox.describe` responses also
 include `host_capabilities` for the advertised service-broker host-call
 surface.
 
-Toolbox host API approval is independent from toolbox tool gating. A toolbox
-execute call may provide `host_api_approval` with a Host Capability approval
-policy. When that policy requires approval, service-broker `fs.*` / `http.fetch`
-calls request approval through the hosted callback binding before brokered IO
-executes. Approval denial prevents the brokered IO call. Approval does
-not widen sandbox filesystem or network policy.
+Toolbox host API approval is independent from toolbox tool gating. Public
+toolbox execution entrypoints may provide `host_api_approval` with a Host
+Capability approval policy. When that policy requires approval, service-broker
+`fs.*` / `http.fetch` calls request approval through the hosted callback
+binding before brokered IO executes. Approval denial prevents the brokered IO
+call. Approval does not widen sandbox filesystem or network policy.
 
 The worker also attaches shared callable-surface metadata to callback context
 under `callable_surface`. That metadata uses

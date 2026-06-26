@@ -1855,6 +1855,43 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     assert status["source"] in {"active", "recent"}
 
 
+def test_toolbox_execute_forwards_host_api_approval_to_worker_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _scratch_dir("toolbox-host-api-approval-forward-")
+    svc = EngineHostService(
+        engines_state_file=root / "managed_engines.json",
+        control_state_file=root / "access_control.json",
+    )
+    reg = svc.spawn(
+        engine_id="toolbox-host-api-approval-forward",
+        command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        worker_profile_class="generic",
+        executor_kind="toolbox_executor",
+        bundle={"toolbox_id": "toolbox-forward", "sandbox_profile_id": "default"},
+        environment={"environment_key": "toolbox-env-key"},
+        tool_access={"allowed_tool_names": ["demo_tool"], "advertised_tool_names": ["demo_tool"]},
+    )
+    seen: list[dict] = []
+
+    def fake_ipc_call(**kwargs):
+        seen.append(dict(kwargs))
+        return {"status": "ok", "tool_call": {"id": "call-demo-approval", "name": "demo_tool", "result": "{}"}}
+
+    monkeypatch.setattr(svc, "_ipc_call", fake_ipc_call)
+    try:
+        svc.toolbox_execute(
+            engine_id="toolbox-host-api-approval-forward",
+            tool_call={"id": "call-demo-approval", "name": "demo_tool", "arguments": {}},
+            host_api_approval={"mode": "always"},
+        )
+    finally:
+        svc.shutdown("toolbox-host-api-approval-forward", timeout_seconds=2.0)
+        svc.remove_registration("toolbox-host-api-approval-forward")
+        shutil.rmtree(root, ignore_errors=True)
+
+    params = dict(dict(seen[0]["payload"])["params"])
+    assert params["host_api_approval"] == {"mode": "always"}
+
+
 def test_toolbox_cancel_marks_shared_hosted_pool_request_canceled() -> None:
     root = _scratch_dir("toolbox-hosted-cancel-")
     svc = EngineHostService(
@@ -2508,6 +2545,63 @@ def test_sandbox_harness_round_robins_pool_members() -> None:
 
     assert channel.engine_ids == ["tbx-a", "tbx-b", "tbx-a"]
     assert json.loads(str(out[1].result or "{}"))["engine_id"] == "tbx-b"
+
+
+def test_sandbox_harness_forwards_host_api_approval() -> None:
+    class _FakeChannel:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def toolbox_gate(self, **_kwargs):
+            return {"outcome": "allowed", "reason": "allowed"}
+
+        def toolbox_execute(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            row = dict(kwargs["tool_call"])
+            row["result"] = "{}"
+            return {"status": "ok", "tool_call": row}
+
+    channel = _FakeChannel()
+    harness = ToolboxExecutionHarness(
+        config=ToolboxHarnessConfig(mode="sandbox", sandbox_engine_ids=["tbx-a"]),
+        control_channel=channel,
+    )
+
+    out = asyncio.run(
+        harness.execute_calls(
+            [ToolCall(name="hello_tool", arguments={})],
+            parallel=False,
+            host_api_approval={"mode": "always"},
+        )
+    )
+
+    assert out[0].error is None
+    assert channel.calls[0]["host_api_approval"] == {"mode": "always"}
+
+
+def test_hosted_toolbox_ref_execute_forwards_host_api_approval() -> None:
+    class _FakeHost:
+        def __init__(self) -> None:
+            self.execute_calls: list[dict] = []
+
+        def toolbox_gate(self, **_kwargs):
+            return {"outcome": "allowed", "reason": "allowed"}
+
+        def toolbox_execute(self, **kwargs):
+            self.execute_calls.append(dict(kwargs))
+            return {"status": "ok", "tool_call": dict(kwargs["tool_call"])}
+
+    host = _FakeHost()
+    ref = HostedToolBoxRef(toolbox_id="toolbox-ref-approval", host=host)
+
+    out = ref.execute(
+        tool_name="hello_tool",
+        arguments={"name": "Sam"},
+        host_api_approval={"mode": "always"},
+    )
+
+    assert out["status"] == "ok"
+    assert host.execute_calls[0]["host_api_approval"] == {"mode": "always"}
 
 
 def test_sandbox_harness_normalizes_missing_executor_into_canceled_tool_error() -> None:

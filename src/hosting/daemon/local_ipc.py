@@ -2859,6 +2859,7 @@ class EngineHostDaemon:
                 timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
                 tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
                 callback_binding=dict(payload.get("callback_binding") or {}) if isinstance(payload.get("callback_binding"), dict) else None,
+                host_api_approval=dict(payload.get("host_api_approval") or {}) if isinstance(payload.get("host_api_approval"), dict) else None,
             )
         if cmd == "toolbox-cancel":
             return svc.toolbox_cancel(
