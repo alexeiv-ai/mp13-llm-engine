@@ -158,6 +158,8 @@ class HostApi:
         self._recv_lock = threading.Lock()
         self._response_cv = threading.Condition()
         self._pending_responses: Dict[str, Dict[str, Any]] = {}
+        self.fs = HostFsApi(self)
+        self.http = HostHttpApi(self)
 
     def bind(self, *, conn: Any, request_id: str) -> None:
         self.conn = conn
@@ -241,25 +243,41 @@ class HostApi:
     def sandbox_describe(self) -> Dict[str, Any]:
         return self.call("sandbox.describe", {})
 
-    def fs_read_text(self, root_id: str, relative_path: str = "", encoding: str = "utf-8") -> Dict[str, Any]:
-        return self.call("fs.read_text", {"root_id": root_id, "relative_path": relative_path, "encoding": encoding})
+class HostFsApi:
+    def __init__(self, host: HostApi) -> None:
+        self._host = host
 
-    def fs_write_text(self, root_id: str, relative_path: str = "", text: str = "", encoding: str = "utf-8", create_parents: bool = True) -> Dict[str, Any]:
-        return self.call(
+    def read_text(self, root_id: str, relative_path: str = "", encoding: str = "utf-8") -> Dict[str, Any]:
+        return self._host.call("fs.read_text", {"root_id": root_id, "relative_path": relative_path, "encoding": encoding})
+
+    def write_text(
+        self,
+        root_id: str,
+        relative_path: str = "",
+        text: str = "",
+        encoding: str = "utf-8",
+        create_parents: bool = True,
+    ) -> Dict[str, Any]:
+        return self._host.call(
             "fs.write_text",
             {"root_id": root_id, "relative_path": relative_path, "text": text, "encoding": encoding, "create_parents": bool(create_parents)},
         )
 
-    def fs_list(self, root_id: str, relative_path: str = "") -> Dict[str, Any]:
-        return self.call("fs.list", {"root_id": root_id, "relative_path": relative_path})
+    def list(self, root_id: str, relative_path: str = "") -> Dict[str, Any]:
+        return self._host.call("fs.list", {"root_id": root_id, "relative_path": relative_path})
 
-    def fs_stat(self, root_id: str, relative_path: str = "") -> Dict[str, Any]:
-        return self.call("fs.stat", {"root_id": root_id, "relative_path": relative_path})
+    def stat(self, root_id: str, relative_path: str = "") -> Dict[str, Any]:
+        return self._host.call("fs.stat", {"root_id": root_id, "relative_path": relative_path})
 
-    def fs_mkdir(self, root_id: str, relative_path: str = "", parents: bool = True, exist_ok: bool = True) -> Dict[str, Any]:
-        return self.call("fs.mkdir", {"root_id": root_id, "relative_path": relative_path, "parents": bool(parents), "exist_ok": bool(exist_ok)})
+    def mkdir(self, root_id: str, relative_path: str = "", parents: bool = True, exist_ok: bool = True) -> Dict[str, Any]:
+        return self._host.call("fs.mkdir", {"root_id": root_id, "relative_path": relative_path, "parents": bool(parents), "exist_ok": bool(exist_ok)})
 
-    def http_fetch(
+
+class HostHttpApi:
+    def __init__(self, host: HostApi) -> None:
+        self._host = host
+
+    def fetch(
         self,
         url: str,
         method: str = "GET",
@@ -268,7 +286,7 @@ class HostApi:
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 1024 * 1024,
     ) -> Dict[str, Any]:
-        return self.call(
+        return self._host.call(
             "http.fetch",
             {
                 "url": url,

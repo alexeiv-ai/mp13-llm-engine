@@ -199,9 +199,9 @@ Node code can call the host through the `host` global:
 ```python
 def run(payload):
     described = host.describe()
-    seed = host.fs_read_text("seed")["text"]
-    host.fs_mkdir("reports", "nested")
-    host.fs_write_text("reports", "nested/report.txt", seed.upper())
+    seed = host.fs.read_text("seed")["text"]
+    host.fs.mkdir("reports", "nested")
+    host.fs.write_text("reports", "nested/report.txt", seed.upper())
     return {"output": {"methods": described["methods"]}}
 ```
 
@@ -232,12 +232,12 @@ Convenience methods on `host` call those dispatcher methods:
 
 1. `host.describe()`
 2. `host.call(method, arguments)`
-3. `host.fs_read_text(root_id, relative_path="", encoding="utf-8")`
-4. `host.fs_write_text(root_id, relative_path="", text="", encoding="utf-8", create_parents=True)`
-5. `host.fs_list(root_id, relative_path="")`
-6. `host.fs_stat(root_id, relative_path="")`
-7. `host.fs_mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
-8. `host.http_fetch(url, method="GET", headers=None, body_b64="", timeout_seconds=30.0, max_response_bytes=1048576)`
+3. `host.fs.read_text(root_id, relative_path="", encoding="utf-8")`
+4. `host.fs.write_text(root_id, relative_path="", text="", encoding="utf-8", create_parents=True)`
+5. `host.fs.list(root_id, relative_path="")`
+6. `host.fs.stat(root_id, relative_path="")`
+7. `host.fs.mkdir(root_id, relative_path="", parents=True, exist_ok=True)`
+8. `host.http.fetch(url, method="GET", headers=None, body_b64="", timeout_seconds=30.0, max_response_bytes=1048576)`
 
 Transport: the host starts the built-in `hosting.workflow_python_node_worker_ipc` harness with a dedicated multiprocessing control channel. The worker sends framed `host_call` messages with `host_call_id` on that channel, the host dispatcher evaluates them, and the host sends matching `host_response` messages back on the same channel. User stdout/stderr remain ordinary execution logs and are not the host RPC transport. The host-side dispatcher supports synchronous and asynchronous handlers. Worker host calls correlate responses by `host_call_id`, so concurrent blocking calls can receive out-of-order host responses safely.
 
@@ -307,7 +307,7 @@ generic workers allows brokered HTTP and a Host Capability session registers
 
 When enabled and registered as `service_broker`, `host.describe()` includes
 `http.fetch`. Node code can call either `host.call("http.fetch", {...})` or
-`host.http_fetch(...)`. The daemon broker enforces the URL scheme, host
+`host.http.fetch(...)`. The daemon broker enforces the URL scheme, host
 allowlist, URL prefix allowlist, request method, request headers, response size
 limit, and timeout from the worker sandbox policy. Client-owned providers must
 enforce their own backend policy before returning results. Response bodies are

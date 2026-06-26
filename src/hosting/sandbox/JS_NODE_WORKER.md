@@ -615,8 +615,8 @@ Within those modes, choosing JS node instead of Python node mainly changes:
    This is QuickJS promise support, not Node/libuv compatibility.
 2. host calls: both runtimes use the same host dispatcher pattern. JS exposes
    `api.call(...)`, `api.callAsync(...)`, and `api.fs/http/codec/crypto`
-   wrappers; Python exposes `host.call(...)`, `host.fs_*`, and
-   `host.http_fetch(...)`.
+   wrappers; Python exposes `host.call(...)`, `host.fs.*`, and
+   `host.http.fetch(...)`.
 3. imports and code shape: JS worker execution uses one finalized source and
    has no runtime loader; local JS modules must be bundled first. Python
    module/snippet mode can use allowlisted Python imports at runtime.

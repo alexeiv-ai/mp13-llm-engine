@@ -42,11 +42,18 @@ Node worker behavior:
 
 1. Python and JS node workers discover selected service-broker methods through
    `host.describe()` / `api.describe()`.
-2. `host.call("fs.read_text", {...})`, Python convenience wrappers, and JS
-   `api.fs.*` wrappers call the same Host Capability route.
+2. `host.call("fs.read_text", {...})`, Python grouped convenience wrappers, and
+   JS `api.fs.*` wrappers call the same Host Capability route.
 3. If no matching service-broker session is registered for the worker scope,
    `fs.*` and `http.fetch` are unsupported even if sandbox broker policy allows
    the underlying IO.
+4. Python node flat wrappers were removed. Replace:
+   `host.fs_read_text(...)` with `host.fs.read_text(...)`,
+   `host.fs_write_text(...)` with `host.fs.write_text(...)`,
+   `host.fs_list(...)` with `host.fs.list(...)`,
+   `host.fs_stat(...)` with `host.fs.stat(...)`,
+   `host.fs_mkdir(...)` with `host.fs.mkdir(...)`, and
+   `host.http_fetch(...)` with `host.http.fetch(...)`.
 
 Toolbox behavior:
 

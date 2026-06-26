@@ -3566,7 +3566,7 @@ def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tm
     )
     read_source = (
         "def run(payload):\n"
-        "    return {'output': host.fs_read_text('seed')}\n"
+        "    return {'output': host.fs.read_text('seed')}\n"
     )
     sandbox_policy = {"sandbox": {"host_api": {"namespaces": {"fs": False}}}}
     artifact_inputs = [
@@ -3820,7 +3820,7 @@ def test_execute_workflow_python_node_host_api_http_fetch_requires_broker_policy
     )
     fetch_source = (
         "def run(payload):\n"
-        "    return {'output': host.http_fetch('https://example.com/api/node')}\n"
+        "    return {'output': host.http.fetch('https://example.com/api/node')}\n"
     )
     sandbox_policy = {
         "sandbox": {

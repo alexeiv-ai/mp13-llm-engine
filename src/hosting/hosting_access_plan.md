@@ -82,13 +82,13 @@ No legacy compatibility is required beyond clear instructions in
 
 ## Phase 4: Typed Alias Cleanup
 
-- [ ] Standardize Python node aliases as `host.fs.read_text(...)`,
+- [x] Standardize Python node aliases as `host.fs.read_text(...)`,
   `host.fs.write_text(...)`, `host.fs.list(...)`, `host.fs.stat(...)`,
   `host.fs.mkdir(...)`, and `host.http.fetch(...)`.
-- [ ] Keep `host.call(method, args)` as the canonical escape hatch.
-- [ ] Align JS node and toolbox naming documentation with the shared method
+- [x] Keep `host.call(method, args)` as the canonical escape hatch.
+- [x] Align JS node and toolbox naming documentation with the shared method
   names while preserving idiomatic JS casing where appropriate.
-- [ ] Remove redundant one-off wrappers after replacement aliases and tests are
+- [x] Remove redundant one-off wrappers after replacement aliases and tests are
   in place.
 
 ## Phase 5: Legacy Cleanup And Client Adoption
