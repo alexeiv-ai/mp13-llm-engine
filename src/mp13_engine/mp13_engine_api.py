@@ -235,6 +235,8 @@ async def handle_call_tool(
 
     # --- Engine Lifecycle and Management Tools (do not use _get_engine) ---
     if name == "initialize-engine":
+        final_alias = None
+        engine_id = None
         try:
             config = GlobalEngineConfig(**arguments)
             
@@ -276,8 +278,28 @@ async def handle_call_tool(
             full_error_summary = f"GlobalEngineConfig Validation Error: {'; '.join(error_details)}"
             return _create_response(status=APIStatus.ERROR.value, message=full_error_summary)
         except (EngineInitializationError, ConfigurationError) as e:
+            if final_alias is not None and engine_id is not None:
+                with _api_lock:
+                    _ENGINE_INSTANCES.pop(engine_id, None)
+                    _ALIAS_TO_ID.pop(final_alias, None)
+                    if _DEFAULT_ENGINE_ALIAS == final_alias:
+                        _DEFAULT_ENGINE_ALIAS = next(iter(_ALIAS_TO_ID), None)
+            payload = e.args[0] if getattr(e, "args", None) else None
+            if isinstance(payload, dict):
+                error_message = payload.get("message") or str(e)
+                return _create_response(
+                    status=APIStatus.ERROR.value,
+                    message=f"Initializing engine failed: {error_message}",
+                    details=payload.get("details"),
+                )
             return _create_response(status=APIStatus.ERROR.value, message=f"Initializing engine failed: {e}")
         except Exception as e:
+            if final_alias is not None and engine_id is not None:
+                with _api_lock:
+                    _ENGINE_INSTANCES.pop(engine_id, None)
+                    _ALIAS_TO_ID.pop(final_alias, None)
+                    if _DEFAULT_ENGINE_ALIAS == final_alias:
+                        _DEFAULT_ENGINE_ALIAS = next(iter(_ALIAS_TO_ID), None)
             return _create_response(status=APIStatus.ERROR.value, message=f"Failed to initialize engine ({type(e).__name__}). Check logs.", details={"error_str": str(e)})
 
     elif name == "shutdown-engine":

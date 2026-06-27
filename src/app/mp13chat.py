@@ -103,6 +103,8 @@ from mp13_engine.mp13_config_paths import (
     save_json_config,
     extract_engine_params,
     build_engine_init_payload,
+    is_hf_remote_model_ref,
+    strip_hf_remote_model_prefix,
 )
 from .engine_session import EngineSession, Turn, Command, ChatSession, InferenceParams, Colors
 from .context_cursor import ChatCursor, ChatContext, ChatContextScope, StreamDisplayContext, StreamDisplayPlan, ChatForks
@@ -2002,6 +2004,90 @@ def _input_with_default_optional(prompt_text: str, default_value: Optional[Any],
         return str(display_value) if display_value else None # Return current or default, or None if both empty
     return user_input
 
+
+_STARTUP_QUIT_INPUTS = {"q", "quit", "exit"}
+_HF_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
+
+
+def _is_startup_quit_input(value: str) -> bool:
+    return value.strip().lower() in _STARTUP_QUIT_INPUTS
+
+
+def _validate_hf_model_ref(value: str) -> Optional[str]:
+    repo_id = str(strip_hf_remote_model_prefix(value) or "").strip()
+    if not repo_id:
+        return "Remote model ID is empty. Use hf:<repo-id>, for example hf:microsoft/Phi-3-mini-4k-instruct."
+    if len(repo_id) > 96 or not _HF_REPO_ID_RE.match(repo_id):
+        return (
+            "Remote model ID must be a Hugging Face repo ID like hf:namespace/model-name. "
+            "Use a local folder path for downloaded models."
+        )
+    for part in repo_id.split("/"):
+        if part.endswith(("-", ".")):
+            return "Remote model ID components cannot end with '-' or '.'."
+    return None
+
+
+def _resolve_base_model_input(model_input: str, config_resolver: Any) -> Tuple[Optional[str], Optional[str]]:
+    raw = str(model_input or "").strip()
+    if not raw:
+        return None, "No base model path provided."
+    if is_hf_remote_model_ref(raw):
+        validation_error = _validate_hf_model_ref(raw)
+        if validation_error:
+            return None, validation_error
+        return raw, None
+
+    if config_resolver:
+        resolved = resolve_engine_inputs({"base_model_path": raw}, config_resolver)
+        resolved_model = str(resolved.get("base_model_path", raw))
+    else:
+        resolved_model = raw
+
+    candidate = Path(resolved_model).expanduser()
+    if not candidate.exists():
+        return (
+            None,
+            f"Base model path does not exist: {candidate}. "
+            "Enter a local model folder, or use hf:<repo-id> to load from Hugging Face."
+        )
+    if not candidate.is_dir():
+        return None, f"Base model path is not a folder: {candidate}"
+    return str(candidate.resolve()), None
+
+
+def _prompt_for_base_model_path(config_resolver: Any, *, reason: Optional[str] = None) -> Optional[str]:
+    if reason:
+        print(f"{Colors.TOOL_WARNING}{reason}{Colors.RESET}")
+    while True:
+        model_input = input("Enter base model folder, hf:<repo-id>, or q to quit: ").strip()
+        if not model_input or _is_startup_quit_input(model_input):
+            print("No base model path provided. Exiting.")
+            return None
+        resolved_model, error = _resolve_base_model_input(model_input, config_resolver)
+        if error:
+            print(f"{Colors.ERROR}{error}{Colors.RESET}")
+            continue
+        return resolved_model
+
+
+def _startup_model_error_for_config(config: Dict[str, Any]) -> Optional[str]:
+    model_ref = str(config.get("base_model_path") or "").strip()
+    if not model_ref:
+        return "Base model path not configured."
+    if is_hf_remote_model_ref(model_ref):
+        return _validate_hf_model_ref(model_ref)
+    candidate = Path(model_ref).expanduser()
+    if not candidate.exists():
+        return (
+            f"Configured base model path does not exist: {candidate}. "
+            "Enter a local model folder, or use hf:<repo-id> to load from Hugging Face."
+        )
+    if not candidate.is_dir():
+        return f"Configured base model path is not a folder: {candidate}"
+    return None
+
+
 def prompt_for_config(config_to_update: Optional[Dict[str, Any]] = None, save_to_path: Path = DEFAULT_CONFIG_FILE, *, prompt_for_name: bool = False) -> Dict[str, Any]:
     print(f"{Colors.HEADER}--- MP13 Chat Configuration ---{Colors.RESET}")
     # Initialize with defaults, then override with config_to_update if provided
@@ -2035,7 +2121,7 @@ def prompt_for_config(config_to_update: Optional[Dict[str, Any]] = None, save_to
     tools_root_dir = _input_with_default("Enter tools root directory", category_dirs.get("tools_root_dir", ""), category_dirs.get("tools_root_dir"))
     logs_root_dir = _input_with_default("Enter logs root directory", category_dirs.get("logs_root_dir", ""), category_dirs.get("logs_root_dir"))
     engine_params = dict(current_values.get("engine_params") or {})
-    base_model_path = _input_with_default("Enter base model path (prefix with hf: for remote IDs)", engine_params.get("base_model_path", ""), engine_params.get("base_model_path"))
+    base_model_path = _input_with_default("Enter base model folder (or hf:<repo-id> for Hugging Face)", engine_params.get("base_model_path", ""), engine_params.get("base_model_path"))
     base_model_dtype = _input_with_default("Enter base model dtype (auto, bfloat16, float16, float32)", engine_params.get("base_model_dtype", "auto"), engine_params.get("base_model_dtype"))
     attn_implementation = _input_with_default("Enter attention implementation (auto, flash_attention_2, sdpa, eager)", engine_params.get("attn_implementation", "auto"), engine_params.get("attn_implementation"))
     quant_prompt = "Enter quantization method (none, hqq, eetq, te)"
@@ -12499,24 +12585,20 @@ async def main_logic():
         sys.exit(1)
 
     if args.base_model_override:
-        if config_resolver:
-            resolved = resolve_engine_inputs({"base_model_path": args.base_model_override}, config_resolver)
-            current_config["base_model_path"] = resolved.get("base_model_path", args.base_model_override)
+        resolved_model, override_error = _resolve_base_model_input(args.base_model_override, config_resolver)
+        if override_error:
+            print(f"{Colors.ERROR}Invalid --base-model value: {override_error}{Colors.RESET}")
+            current_config["base_model_path"] = ""
         else:
-            current_config["base_model_path"] = args.base_model_override
-        print(f"{Colors.SYSTEM}Base model overridden from command line: {current_config['base_model_path']}{Colors.RESET}")
+            current_config["base_model_path"] = resolved_model
+            print(f"{Colors.SYSTEM}Base model overridden from command line: {current_config['base_model_path']}{Colors.RESET}")
 
-    if not current_config.get("base_model_path"):
-        print(f"{Colors.TOOL_WARNING}Base model path not configured.{Colors.RESET}")
-        model_input = input("Enter base model path (or press Enter to quit): ").strip()
-        if not model_input:
-            print("No base model path provided. Exiting.")
+    model_config_error = _startup_model_error_for_config(current_config)
+    if model_config_error:
+        resolved_model = _prompt_for_base_model_path(config_resolver, reason=model_config_error)
+        if not resolved_model:
             return
-        if config_resolver:
-            resolved = resolve_engine_inputs({"base_model_path": model_input}, config_resolver)
-            current_config["base_model_path"] = resolved.get("base_model_path", model_input)
-        else:
-            current_config["base_model_path"] = model_input
+        current_config["base_model_path"] = resolved_model
 
     print(f"Using configuration from: {EFFECTIVE_CONFIG_FILE_PATH}")
 
@@ -12546,8 +12628,24 @@ async def main_logic():
         config_for_engine_init["use_torch_compile"] = False
         if current_config: current_config["use_torch_compile"] = False # Also update current_config for /config command
     
-    init_resp = await initialize_mp13_engine(config_for_engine_init)
-    if not init_resp: print("Exiting: engine init fail."); return
+    init_resp = None
+    while init_resp is None:
+        init_resp = await initialize_mp13_engine(config_for_engine_init)
+        if init_resp:
+            break
+        resolved_model = _prompt_for_base_model_path(
+            config_resolver,
+            reason="Engine initialization failed. Enter another model to retry.",
+        )
+        if not resolved_model:
+            return
+        current_config["base_model_path"] = resolved_model
+        config_for_engine_init = current_config.copy()
+        if args.quantize_bits_override:
+            config_for_engine_init["quantize_bits"] = args.quantize_bits_override
+        config_for_engine_init["use_torch_compile"] = config_for_engine_init.get("use_torch_compile", True)
+        if args.no_torch_compile:
+            config_for_engine_init["use_torch_compile"] = False
 
     if args.hosted_demo:
         demo_project_root = Path(args.hosted_demo_project_root).expanduser().resolve() if args.hosted_demo_project_root else Path.cwd().resolve()

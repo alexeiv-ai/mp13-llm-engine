@@ -118,7 +118,7 @@ CATEGORY_ROOT_KEYS = {
 
 TOOLS_CONFIG_KEYS = ("tools_config_path",)
 ENGINE_PATH_KEYS = {
-    "base_model_path": ("models", False),
+    "base_model_path": ("models", True),
     "adapters_root_dir": ("adapters", False),
     "sessions_save_dir": ("sessions", False),
     "data_root_dir": ("data", False),
@@ -200,6 +200,19 @@ def resolve_hosting_config_path(selector: Optional[str]) -> Path:
     if name == "default":
         return get_default_config_path()
     return (get_hosting_config_store_dir() / f"{name}.json").resolve()
+
+
+HF_REMOTE_MODEL_PREFIX = "hf:"
+
+
+def is_hf_remote_model_ref(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower().startswith(HF_REMOTE_MODEL_PREFIX)
+
+
+def strip_hf_remote_model_prefix(value: Any) -> Any:
+    if not is_hf_remote_model_ref(value):
+        return value
+    return str(value).strip()[len(HF_REMOTE_MODEL_PREFIX):].strip()
 
 
 
@@ -345,6 +358,8 @@ class PathResolver:
         raw = value.strip()
         if not raw:
             return value
+        if allow_remote_id and is_hf_remote_model_ref(raw):
+            return raw
         if raw.startswith("@"):
             anchor, rest = _split_anchor(raw)
             base = self._anchor_base(anchor)
@@ -436,7 +451,7 @@ def resolve_config_paths(
         config["base_model_path"] = resolver.resolve(
             config["base_model_path"],
             category="models",
-            allow_remote_id=False,
+            allow_remote_id=True,
         )
     for key in TOOLS_CONFIG_KEYS:
         if key in config:
@@ -552,7 +567,7 @@ def build_engine_init_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     params = extract_engine_params(config)
     payload = {
-        "base_model_name_or_path": params.get("base_model_path") or config.get("base_model_path"),
+        "base_model_name_or_path": strip_hf_remote_model_prefix(params.get("base_model_path") or config.get("base_model_path")),
         "device_map": params.get("device_map", "auto"),
         "trust_remote_code": params.get("trust_remote_code", True),
         "base_model_torch_dtype": params.get("base_model_dtype", "auto"),

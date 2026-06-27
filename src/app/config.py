@@ -467,7 +467,7 @@ SECTION_SPECS: List[Tuple[str, str, List[FieldSpec]]] = [
         "Engine params",
         [
             FieldSpec(("engine_params", "instance_id"), "Instance id", "Optional engine instance identifier.", "text"),
-            FieldSpec(("engine_params", "base_model_path"), "Base model path", "Model folder name under models root or absolute path. Examples: llama-3.1-8b, D:/models/llama-3.1-8b.", "text"),
+            FieldSpec(("engine_params", "base_model_path"), "Base model path", "Model folder name under models root, absolute path, or hf:<repo-id> for Hugging Face. Examples: llama-3.1-8b, D:/models/llama-3.1-8b, hf:microsoft/Phi-3-mini-4k-instruct.", "text"),
             FieldSpec(("engine_params", "base_model_dtype"), "Base model dtype", "Torch dtype for the base model.", "enum", ["auto", "bfloat16", "float16", "float32"]),
             FieldSpec(
                 ("engine_params", "quantize_bits"),
