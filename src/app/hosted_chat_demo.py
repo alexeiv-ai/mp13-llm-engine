@@ -57,8 +57,6 @@ def ProjectFilePeek(
             effective_root = str(scoped.resolve_filesystem_root(root_path or None) or "")
         except Exception as exc:
             return f"Error: {type(exc).__name__}: {exc}"
-    elif str(root_path or "").strip():
-        effective_root = str(root_path or "").strip()
     root = Path(kwargs.get("project_root") or Path.cwd()).resolve()
     target_rel = Path(str(effective_root or "").strip()) / str(relative_path or "")
     target = (root / target_rel).resolve()
@@ -258,6 +256,8 @@ def SimpleCalc(expr=None, **kwargs):
         return f'Error: {type(exc).__name__}: {exc}'
 """.strip() + "\n"
     file_source = """
+from pathlib import Path
+
 def ProjectFilePeek(relative_path='src/app/mp13chat.py', root_path='', max_chars=400, **kwargs):
     \"\"\"
     Read a project file and return its first characters for inspection.
@@ -270,8 +270,6 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', root_path='', max_chars
     effective_root = ''
     if helper is not None:
         effective_root = str(helper.resolve_filesystem_root(root_path or None) or '')
-    elif str(root_path or '').strip():
-        effective_root = str(root_path or '').strip()
     ctx = kwargs.get('context')
     if ctx is None:
         return 'Error: missing execution context.'

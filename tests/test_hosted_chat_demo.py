@@ -63,6 +63,41 @@ def test_build_hosted_chat_demo_plan_produces_two_distinct_profiles() -> None:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_hosted_project_file_peek_source_executes_with_context_fs() -> None:
+    plan = build_hosted_chat_demo_plan(
+        toolbox_id="chat-hosted-demo",
+        project_root=Path.cwd(),
+    )
+    file_request = next(req for req in plan.auto_requests if req["callable_name"] == "ProjectFilePeek")
+    namespace: dict[str, object] = {}
+    exec(str(file_request["content"]), namespace)
+
+    class _Fs:
+        calls: list[dict[str, object]]
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def read_text(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return {"text": "abcdef"}
+
+    class _Context:
+        def __init__(self) -> None:
+            self.fs = _Fs()
+
+    context = _Context()
+    result = namespace["ProjectFilePeek"](
+        relative_path="src/app/mp13chat.py",
+        root_path="path/to/project",
+        max_chars=3,
+        context=context,
+    )
+
+    assert result == "src/app/mp13chat.py\n---\nabc"
+    assert context.fs.calls == [{"root_id": "project_ro", "relative_path": "src/app/mp13chat.py"}]
+
+
 def test_make_hosted_demo_callback_processor_returns_scoped_project_file_peek_approval() -> None:
     callback = make_hosted_demo_callback_processor(project_file_peek_root="src/app")
 
