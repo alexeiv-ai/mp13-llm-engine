@@ -15,7 +15,11 @@ from typing import Any, Dict, Optional
 
 from mp13_engine.mp13_config import ToolCall
 
-from .callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, toolbox_brokered_io_call_surface
+from .callable_surface import (
+    HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+    HOST_CAPABILITY_DISPATCH_CALLBACK_NAME,
+    toolbox_brokered_io_call_surface,
+)
 from .sandbox.host_capabilities import HostCapabilityBroker, HostCapabilityProviderCall
 from .sandbox.service_broker_registry import (
     invoke_service_broker_method,
@@ -198,19 +202,36 @@ def _invoke_host_call(
     callback_binding: Optional[Dict[str, Any]] = None,
     approval: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    svc = _host_service()
     req = dict(arguments or {})
     engine_id = str(req.get("engine_id") or _worker_engine_id()).strip() or _worker_engine_id()
     meth = str(method or "").strip()
-    callback_context = dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else None
-    broker = _toolbox_host_capability_broker(
-        engine_id=engine_id,
-        approval=dict(approval or {}),
-        callback_binding=callback_binding,
-        callback_context=callback_context,
-        svc=svc,
+    binding = dict(callback_binding or {})
+    if not binding:
+        raise RuntimeError("host_capability_dispatch_binding_missing")
+    callback_context = dict(req.get("callback_context") or {}) if isinstance(req.get("callback_context"), dict) else {}
+    response = _invoke_callback_binding(
+        binding,
+        callback_name=HOST_CAPABILITY_DISPATCH_CALLBACK_NAME,
+        payload={
+            "contract": "hosting.toolbox.host_capability_dispatch.v1",
+            "method": meth,
+            "arguments": req,
+            "approval": dict(approval or {}),
+        },
+        context={
+            "engine_id": engine_id,
+            **dict(callback_context or {}),
+        },
     )
-    return _dispatch_host_capability_sync(broker, {"method": meth, "arguments": req})
+    result = response.get("result")
+    if isinstance(result, dict):
+        if str(result.get("status") or "").strip().lower() == "error":
+            raise RuntimeError(str(result.get("message") or result.get("reason") or "host_capability_dispatch_failed"))
+        if "result" in result and len(result) <= 3:
+            nested = result.get("result")
+            return dict(nested or {}) if isinstance(nested, dict) else {"result": nested}
+        return dict(result or {})
+    return {"result": result}
 
 
 def _invoke_callback_binding(

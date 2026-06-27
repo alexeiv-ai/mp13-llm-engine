@@ -277,6 +277,8 @@ class WorkflowHelperMixin:
             engine_id=engine_id,
             method=call.method,
             arguments=dict(call.arguments or {}),
+            callback_context=dict(dict(call.arguments or {}).get("callback_context") or {})
+            if isinstance(dict(call.arguments or {}).get("callback_context"), dict) else None,
         )
         return {
             "status": "ok",

@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from mp13_engine.mp13_toolbox import ToolsView
 
+from ..callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPABILITY_DISPATCH_CALLBACK_NAME
+from ..sandbox.host_capabilities import HostCapabilityBroker
+from ..sandbox.service_broker_registry import service_broker_host_capability_session
+from ..toolbox.callbacks import _HostedToolCallbackRelay
 from .errors import ToolboxRolloutError
 
 
@@ -81,6 +85,107 @@ class ToolboxRuntimeMixin:
     def _registration_toolbox_id(reg: Dict[str, Any]) -> str:
         bundle = dict(reg.get("bundle") or {})
         return str(bundle.get("toolbox_id") or bundle.get("bundle_id") or "").strip()
+
+    @staticmethod
+    def _callback_context_payload(context: Any) -> Dict[str, Any]:
+        return {
+            "engine_id": str(getattr(context, "engine_id", "") or "").strip() or None,
+            "toolbox_id": str(getattr(context, "toolbox_id", "") or "").strip() or None,
+            "tool_name": str(getattr(context, "tool_name", "") or "").strip() or None,
+            "tool_call_id": str(getattr(context, "tool_call_id", "") or "").strip() or None,
+            "tool_arguments": dict(getattr(context, "tool_arguments", {}) or {}),
+        }
+
+    def _toolbox_host_capability_dispatch_binding(
+        self,
+        *,
+        engine_id: str,
+        toolbox_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        tool_arguments: Dict[str, Any],
+        sandbox_policy: Dict[str, Any],
+        callback_binding: Optional[Dict[str, Any]] = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[_HostedToolCallbackRelay, Dict[str, Any]]:
+        original_binding = dict(callback_binding or {}) if isinstance(callback_binding, dict) else {}
+        eid = str(engine_id or "").strip()
+        relay = _HostedToolCallbackRelay()
+
+        def _forward_callback(*, callback_name: str, payload: Any, context: Any) -> Dict[str, Any]:
+            if not original_binding:
+                return {"status": "error", "message": "callback_binding_missing"}
+            from ..toolbox_executor_ipc import _invoke_callback_binding
+
+            response = _invoke_callback_binding(
+                original_binding,
+                callback_name=str(callback_name or "").strip(),
+                payload=payload,
+                context=self._callback_context_payload(context),
+            )
+            return dict(response.get("result") or {}) if isinstance(response.get("result"), dict) else {"result": response.get("result")}
+
+        def _approval_requester(payload: Dict[str, Any]) -> Dict[str, Any]:
+            if not original_binding:
+                return {"status": "denied", "approved": False, "decision": "deny", "reason": "approval_requester_unavailable"}
+            from ..toolbox_executor_ipc import _invoke_callback_binding
+
+            response = _invoke_callback_binding(
+                original_binding,
+                callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+                payload=dict(payload or {}),
+                context=dict(dict(payload or {}).get("context") or {}),
+            )
+            return dict(response.get("result") or response or {})
+
+        def _dispatch_host_capability(payload: Dict[str, Any], context: Any) -> Dict[str, Any]:
+            row = dict(payload or {})
+            method = str(row.get("method") or "").strip()
+            arguments = dict(row.get("arguments") or {}) if isinstance(row.get("arguments"), dict) else {}
+            approval = dict(row.get("approval") or host_api_approval or {}) if isinstance(row.get("approval") or host_api_approval, dict) else {}
+            callback_context = dict(arguments.get("callback_context") or {}) if isinstance(arguments.get("callback_context"), dict) else {}
+            broker = HostCapabilityBroker(
+                request_id=str(callback_context.get("tool_call_id") or getattr(context, "tool_call_id", "") or tool_call_id or ""),
+                workflow_id=str(callback_context.get("workflow_id") or ""),
+                package_id=str(callback_context.get("package_id") or ""),
+                instance_id=str(callback_context.get("instance_id") or ""),
+                engine_id=eid,
+                consumer_id=eid,
+                runtime_kind="toolbox_worker",
+                policy=dict(sandbox_policy or {}),
+                provider_invoker=self._host_capability_provider_invoker,
+                approval_requester=_approval_requester if approval else None,
+                audit_emitter=self._append_host_capability_audit_event,
+            )
+            broker.register_session(
+                service_broker_host_capability_session(
+                    session_id=f"{eid}.service_broker",
+                    owner="service",
+                    visibility="consumer",
+                    scope={"consumer_id": eid},
+                    approval=approval,
+                    binding={"engine_id": eid},
+                )
+            )
+            result = broker.dispatch({"method": method, "arguments": arguments})
+            return {"status": "ok", "result": dict(result or {})}
+
+        def _processor(*, callback_name: str, payload: Any, context: Any) -> Dict[str, Any]:
+            name = str(callback_name or "").strip()
+            if name == HOST_CAPABILITY_DISPATCH_CALLBACK_NAME:
+                return _dispatch_host_capability(dict(payload or {}) if isinstance(payload, dict) else {}, context)
+            return _forward_callback(callback_name=name, payload=payload, context=context)
+
+        binding = relay.bind_session(
+            processor=_processor,
+            toolbox_id=str(toolbox_id or "").strip(),
+            tool_name=str(tool_name or "").strip(),
+            tool_call_id=str(tool_call_id or "").strip(),
+            tool_arguments=dict(tool_arguments or {}),
+            callback_signature={"callbacks": [{"name": HOST_CAPABILITY_DISPATCH_CALLBACK_NAME, "payload_type": "object"}]},
+            user_context=None,
+        )
+        return relay, binding
 
     def _toolbox_executor_registrations(self, toolbox_id: str) -> List[Dict[str, Any]]:
         tid = str(toolbox_id or "").strip()
@@ -566,7 +671,19 @@ class ToolboxRuntimeMixin:
                 "hosted_pool": base.resources(environment_key),
             }
         finished = False
+        dispatch_relay: Optional[_HostedToolCallbackRelay] = None
+        dispatch_binding: Optional[Dict[str, Any]] = None
         try:
+            dispatch_relay, dispatch_binding = self._toolbox_host_capability_dispatch_binding(
+                engine_id=eid,
+                toolbox_id=tid or self._registration_toolbox_id(reg),
+                tool_name=tool_name,
+                tool_call_id=request_id,
+                tool_arguments=call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                sandbox_policy=dict(reg.get("sandbox_policy") or {}),
+                callback_binding=dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
+                host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
+            )
             out = self._ipc_call(
                 reg=reg,
                 payload={
@@ -575,7 +692,7 @@ class ToolboxRuntimeMixin:
                     "method": "toolbox.execute",
                     "params": {
                         "tool_call": call,
-                        "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
+                        "callback_binding": dict(dispatch_binding or {}) if isinstance(dispatch_binding, dict) else None,
                         "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
                     },
                 },
@@ -602,6 +719,9 @@ class ToolboxRuntimeMixin:
             if not finished:
                 base.finish_request(environment_key=environment_key, request_id=request_id, status="error", reason=str(exc) or "toolbox_execute_failed")
             raise
+        finally:
+            if dispatch_relay is not None and dispatch_binding:
+                dispatch_relay.release_session(str(dispatch_binding.get("session_token") or ""))
 
     def toolbox_cancel(
         self,

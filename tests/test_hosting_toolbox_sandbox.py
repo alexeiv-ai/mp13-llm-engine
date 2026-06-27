@@ -3279,27 +3279,13 @@ def test_toolbox_executor_context_fs_wrapper_uses_host_call(monkeypatch) -> None
 
 
 def test_toolbox_executor_context_fs_wrapper_uses_host_capability_approval(monkeypatch) -> None:
-    approvals: list[dict] = []
+    dispatches: list[dict] = []
 
-    class _FakeService:
-        def __init__(self) -> None:
-            self.audit_events: list[dict] = []
+    def _fake_dispatch(_binding: dict, *, callback_name: str, payload: Any, context: dict) -> dict:
+        dispatches.append({"callback_name": callback_name, "payload": dict(payload or {}), "context": dict(context or {})})
+        return {"result": {"status": "ok", "result": {"text": "approved"}}}
 
-        def sandbox_fs_read_text(self, **kwargs: Any) -> dict:
-            return {"text": "approved", "callback_context": dict(kwargs.get("callback_context") or {})}
-
-        def _append_host_capability_audit_event(self, payload: dict) -> None:
-            self.audit_events.append(dict(payload or {}))
-
-    fake_service = _FakeService()
-
-    def _fake_approval(_binding: dict, *, callback_name: str, payload: Any, context: dict) -> dict:
-        approvals.append({"callback_name": callback_name, "payload": dict(payload or {}), "context": dict(context or {})})
-        return {"result": {"decision": "allow_once", "approved": True}}
-
-    monkeypatch.setattr(toolbox_executor_ipc, "_host_service", lambda: fake_service)
-    monkeypatch.setattr(toolbox_executor_ipc, "_startup_spec_or_none", lambda: None)
-    monkeypatch.setattr(toolbox_executor_ipc, "_invoke_callback_binding", _fake_approval)
+    monkeypatch.setattr(toolbox_executor_ipc, "_invoke_callback_binding", _fake_dispatch)
 
     ctx = toolbox_executor_ipc.ToolboxExecutionContext(
         engine_id="toolbox-approval",
@@ -3313,29 +3299,19 @@ def test_toolbox_executor_context_fs_wrapper_uses_host_capability_approval(monke
 
     out = ctx.fs.read_text(root_id="rw", relative_path="a.txt")
 
-    assert out["text"] == "approved"
-    assert approvals[0]["callback_name"] == toolbox_executor_ipc.HOST_CAPABILITY_APPROVAL_CALLBACK_NAME
-    assert approvals[0]["payload"]["method"] == "fs.read_text"
-    assert approvals[0]["payload"]["provider"]["kind"] == "service_broker"
-    assert approvals[0]["context"]["tool_call_id"] == "call-approval"
-    assert fake_service.audit_events[0]["event_type"] == "host_capability_approval"
-    assert fake_service.audit_events[0]["method"] == "fs.read_text"
+    assert out == {"text": "approved"}
+    assert dispatches[0]["callback_name"] == toolbox_executor_ipc.HOST_CAPABILITY_DISPATCH_CALLBACK_NAME
+    assert dispatches[0]["payload"]["method"] == "fs.read_text"
+    assert dispatches[0]["payload"]["approval"] == {"mode": "always"}
+    assert dispatches[0]["payload"]["arguments"]["engine_id"] == "toolbox-approval"
+    assert dispatches[0]["context"]["tool_call_id"] == "call-approval"
 
 
 def test_toolbox_executor_context_fs_wrapper_denies_host_capability_approval(monkeypatch) -> None:
-    class _FakeService:
-        def sandbox_fs_read_text(self, **_kwargs: Any) -> dict:
-            raise AssertionError("brokered IO should not execute after approval denial")
+    def _fake_dispatch(_binding: dict, *, callback_name: str, payload: Any, context: dict) -> dict:
+        return {"result": {"status": "error", "reason": "host_call_approval_denied", "message": "approval denied"}}
 
-        def _append_host_capability_audit_event(self, _payload: dict) -> None:
-            return None
-
-    def _fake_approval(_binding: dict, *, callback_name: str, payload: Any, context: dict) -> dict:
-        return {"result": {"decision": "deny", "approved": False, "reason": "unit_test"}}
-
-    monkeypatch.setattr(toolbox_executor_ipc, "_host_service", lambda: _FakeService())
-    monkeypatch.setattr(toolbox_executor_ipc, "_startup_spec_or_none", lambda: None)
-    monkeypatch.setattr(toolbox_executor_ipc, "_invoke_callback_binding", _fake_approval)
+    monkeypatch.setattr(toolbox_executor_ipc, "_invoke_callback_binding", _fake_dispatch)
 
     ctx = toolbox_executor_ipc.ToolboxExecutionContext(
         engine_id="toolbox-deny",
@@ -3348,6 +3324,99 @@ def test_toolbox_executor_context_fs_wrapper_denies_host_capability_approval(mon
 
     with pytest.raises(Exception, match="approval denied"):
         ctx.fs.read_text(root_id="rw", relative_path="a.txt")
+
+
+def test_toolbox_execute_dispatches_host_capability_in_parent_and_audits(monkeypatch) -> None:
+    from hosting.callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPABILITY_DISPATCH_CALLBACK_NAME
+    from hosting.toolbox.callbacks import _HostedToolCallbackRelay
+    from hosting.toolbox_executor_ipc import _invoke_callback_binding
+
+    root = _scratch_dir("toolbox-parent-host-api-")
+    project_root = root / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "a.txt").write_text("parent-owned", encoding="utf-8")
+    svc = EngineHostService(
+        engines_state_file=root / "managed_engines.json",
+        control_state_file=root / "access_control.json",
+    )
+    svc.register_spawned(
+        engine_id="toolbox-parent-host-api",
+        pid=os.getpid(),
+        command=[sys.executable, "-m", "hosting.toolbox_executor_ipc"],
+        executor_kind="toolbox_executor",
+        sandbox_policy={
+            "sandbox": {
+                "enabled": True,
+                "filesystem": {"rules": [{"root_id": "project", "path": str(project_root), "access": ["read"]}]},
+                "brokered_io": {"filesystem": True, "http": False, "subprocess": False},
+            }
+        },
+        bundle={"toolbox_id": "toolbox-parent-host-api"},
+        tool_access={"allowed_tool_names": ["peek"]},
+    )
+    caller_relay = _HostedToolCallbackRelay()
+    approvals: list[dict] = []
+    try:
+        caller_binding = caller_relay.bind_session(
+            processor=lambda **kwargs: approvals.append(dict(kwargs.get("payload") or {})) or {"decision": "allow_once", "approved": True}
+            if kwargs.get("callback_name") == HOST_CAPABILITY_APPROVAL_CALLBACK_NAME
+            else {"status": "error", "message": "unexpected_callback"},
+            toolbox_id="toolbox-parent-host-api",
+            tool_name="peek",
+            tool_call_id="call-parent-host-api",
+            tool_arguments={},
+        )
+
+        def _fake_ipc_call(*, reg: dict, payload: dict, timeout_seconds: float) -> dict:
+            params = dict(dict(payload or {}).get("params") or {})
+            service_binding = dict(params.get("callback_binding") or {})
+            response = _invoke_callback_binding(
+                service_binding,
+                callback_name=HOST_CAPABILITY_DISPATCH_CALLBACK_NAME,
+                payload={
+                    "method": "fs.read_text",
+                    "arguments": {
+                        "engine_id": "toolbox-parent-host-api",
+                        "root_id": "project",
+                        "relative_path": "a.txt",
+                        "encoding": "utf-8",
+                        "callback_context": {
+                            "tool_call_id": "call-parent-host-api",
+                            "toolbox_id": "toolbox-parent-host-api",
+                            "tool_name": "peek",
+                        },
+                    },
+                    "approval": {"mode": "always"},
+                },
+                context={"engine_id": "toolbox-parent-host-api", "tool_call_id": "call-parent-host-api"},
+            )
+            return {
+                "status": "ok",
+                "tool_call": {
+                    **dict(params.get("tool_call") or {}),
+                    "result": json.dumps(dict(response.get("result") or {}).get("result") or {}),
+                },
+            }
+
+        monkeypatch.setattr(svc, "_ipc_call", _fake_ipc_call)
+
+        out = svc.toolbox_execute(
+            engine_id="toolbox-parent-host-api",
+            tool_call={"id": "call-parent-host-api", "name": "peek", "arguments": {}},
+            callback_binding=caller_binding,
+            host_api_approval={"mode": "always"},
+        )
+
+        tool_call = dict(out.get("tool_call") or {})
+        assert json.loads(str(tool_call.get("result") or "{}"))["text"] == "parent-owned"
+        assert approvals[0]["method"] == "fs.read_text"
+        audit = svc.host_capability_audit_list(request_id="call-parent-host-api", method="fs.read_text")
+        assert audit["total"] == 1
+        assert audit["events"][0]["result"] == "approved"
+        assert audit["events"][0]["provider"]["kind"] == "service_broker"
+    finally:
+        caller_relay.release_session(str(locals().get("caller_binding", {}).get("session_token") or ""))
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_sandboxed_toolbox_facade_execute_does_not_serialize_callback_user_context() -> None:
@@ -3745,17 +3814,33 @@ def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
         else:
             raise AssertionError(f"toolbox executor did not become ready: {last_error}")
 
-        host_out = svc._ipc_call(  # type: ignore[attr-defined]
-            reg=svc.get_registration("toolbox-live-callback"),
-            payload={
-                "kind": "rpc_call",
-                "engine_id": "toolbox-live-callback",
-                "method": "host.call",
-                "params": {"method": "fs.read_text", "arguments": {"root_id": "rw", "relative_path": "name.txt"}},
-            },
-            timeout_seconds=5.0,
+        direct_reg = svc.get_registration("toolbox-live-callback")
+        direct_relay, direct_binding = svc._toolbox_host_capability_dispatch_binding(
+            engine_id="toolbox-live-callback",
+            toolbox_id="bundle-live-callback",
+            tool_name="read_name_tool",
+            tool_call_id="call-live-host-direct",
+            tool_arguments={},
+            sandbox_policy=dict(dict(direct_reg or {}).get("sandbox_policy") or {}),
         )
-        assert dict(host_out.get("result") or {})["text"] == "callback-ok"
+        try:
+            host_out = svc._ipc_call(  # type: ignore[attr-defined]
+                reg=direct_reg,
+                payload={
+                    "kind": "rpc_call",
+                    "engine_id": "toolbox-live-callback",
+                    "method": "host.call",
+                    "params": {
+                        "method": "fs.read_text",
+                        "arguments": {"root_id": "rw", "relative_path": "name.txt"},
+                        "callback_binding": direct_binding,
+                    },
+                },
+                timeout_seconds=5.0,
+            )
+            assert dict(host_out.get("result") or {})["text"] == "callback-ok"
+        finally:
+            direct_relay.release_session(str(direct_binding.get("session_token") or ""))
 
         exec_out = svc.toolbox_execute(
             engine_id="toolbox-live-callback",

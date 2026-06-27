@@ -21,6 +21,7 @@ HOST_CALLABLE_SCHEMA_CONTRACT = "hosting.sandbox.callable_schema.v1"
 HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT = "hosting.sandbox.host_capability_provider_response.v1"
 HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT = "hosting.sandbox.host_capability_approval_decision.v1"
 HOST_CAPABILITY_PROVIDER_CALLBACK_NAME = "host_capability.call"
+HOST_CAPABILITY_DISPATCH_CALLBACK_NAME = "host_capability.dispatch"
 HOST_CAPABILITY_APPROVAL_CALLBACK_NAME = "host_capability.approval"
 HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT = "hosting.sandbox.host_capability_bridge_policy.v1"
 TOOLBOX_BROKERED_IO_CALL_SURFACE_CONTRACT = "hosting.toolbox.brokered_io.call_surface.v1"
@@ -824,6 +825,7 @@ __all__ = [
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",
     "HOST_CAPABILITY_BRIDGE_POLICY_CONTRACT",
     "HOST_CAPABILITY_PROVIDER_CALLBACK_NAME",
+    "HOST_CAPABILITY_DISPATCH_CALLBACK_NAME",
     "HOST_CAPABILITY_PROVIDER_RESPONSE_CONTRACT",
     "TOOLBOX_BROKERED_IO_CALL_SURFACE_CONTRACT",
     "HostCapabilityApprovalCallbackRelay",
