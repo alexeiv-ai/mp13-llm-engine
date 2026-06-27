@@ -423,7 +423,10 @@ class HostCapabilityBroker:
     def _emit_audit(self, payload: Dict[str, Any]) -> None:
         if self.audit_emitter is None:
             return
-        self.audit_emitter(dict(payload or {}))
+        try:
+            self.audit_emitter(dict(payload or {}))
+        except Exception:
+            return
 
     def _provider_timeout_for_call(self, row: Dict[str, Any]) -> float:
         raw = row.get("provider_timeout_seconds")

@@ -521,6 +521,44 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
     assert audit_records[0]["provider_call_id"] == provider_calls[0]["provider_call_id"]
 
 
+def test_host_capability_broker_does_not_fail_call_when_audit_emitter_fails() -> None:
+    provider_calls: list[dict] = []
+    descriptor = HostCapabilityDescriptor(
+        name="crm.customer.delete",
+        namespace="crm",
+        group_path=["CRM"],
+        approval=HostCapabilityApproval(mode="always"),
+        provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
+    )
+
+    def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        provider_calls.append(call.to_dict())
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"deleted": True}}
+
+    def fail_audit(_payload: dict) -> None:
+        raise PermissionError("access_control.json")
+
+    broker = HostCapabilityBroker(
+        workflow_id="wf-1",
+        provider_invoker=invoke_provider,
+        approval_requester=lambda _request: {"decision": "allow_once", "approved": True},
+        audit_emitter=fail_audit,
+    )
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-1"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    assert broker.dispatch({"method": "crm.customer.delete", "arguments": {"customer_id": "c-1"}}) == {"deleted": True}
+    assert len(provider_calls) == 1
+
+
 def test_host_capability_broker_denies_gated_provider_call_before_execution() -> None:
     provider_calls: list[dict] = []
     events: list[tuple[str, dict]] = []
