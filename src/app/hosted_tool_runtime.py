@@ -115,6 +115,7 @@ async def execute_tool_round_on_cursor(
     non_restartable_tool_names: Optional[Sequence[str]] = None,
     callback_processor: Optional[Callable[..., Any]] = None,
     callback_context: Any = None,
+    host_api_approval: Optional[Dict[str, Any]] = None,
 ) -> ToolRoundResult:
     """
     Execute one hosted/native tool round for a chat cursor.
@@ -146,6 +147,9 @@ async def execute_tool_round_on_cursor(
       `toolbox_ref` inside `callback_context`
     - that gives hosted approval flows a stable scope target so
       `add_to_scope` can persist for later calls in the same chat context
+    - `host_api_approval` is forwarded to hosted sandbox execution for
+      per-IO approvals raised by `context.fs`, `context.http`, or
+      `context.host.call(...)` inside hosted tools
     """
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
@@ -179,19 +183,22 @@ async def execute_tool_round_on_cursor(
             resubmittable_tool_names=[],
         )
 
-    await tool_executor.execute_request_tools(
-        parser_profile=parser_profile,
-        final_response_items=final_response_items,
-        action_handler=action_handler,
-        serial_execution=bool(serial_execution),
-        tools_view=tools_view,
-        pt_session=pt_session,
-        context=cursor.current_turn,
-        tool_retries_max=tool_retries_max,
-        tool_retries_left=tool_retries_left,
-        callback_processor=callback_processor,
-        callback_context=_build_hosted_callback_context(cursor=cursor, callback_context=callback_context),
-    )
+    execute_kwargs = {
+        "parser_profile": parser_profile,
+        "final_response_items": final_response_items,
+        "action_handler": action_handler,
+        "serial_execution": bool(serial_execution),
+        "tools_view": tools_view,
+        "pt_session": pt_session,
+        "context": cursor.current_turn,
+        "tool_retries_max": tool_retries_max,
+        "tool_retries_left": tool_retries_left,
+        "callback_processor": callback_processor,
+        "callback_context": _build_hosted_callback_context(cursor=cursor, callback_context=callback_context),
+    }
+    if isinstance(host_api_approval, dict):
+        execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
+    await tool_executor.execute_request_tools(**execute_kwargs)
     canceled_summary = summarize_canceled_tool_calls(
         all_tool_blocks,
         non_restartable_tool_names=non_restartable_tool_names,

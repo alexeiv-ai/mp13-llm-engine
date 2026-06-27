@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from hosting import HostedToolBoxRef
+from hosting import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HostedToolBoxRef, host_capability_approval_decision
 from hosting.service.host_service import EngineHostService
 from mp13_engine.mp13_toolbox import Toolbox
 
@@ -115,6 +115,7 @@ class HostedChatDemoRuntime:
     toolbox_ref: HostedToolBoxRef
     plan: HostedChatDemoPlan
     callback_processor: Optional[Callable[..., Dict[str, Any]]] = None
+    host_api_approval: Optional[Dict[str, Any]] = None
 
 
 def hosted_demo_non_restartable_tool_names(
@@ -141,6 +142,8 @@ def hosted_demo_tool_round_options(
     }
     if isinstance(runtime_or_plan, HostedChatDemoRuntime) and callable(runtime_or_plan.callback_processor):
         out["callback_processor"] = runtime_or_plan.callback_processor
+    if isinstance(runtime_or_plan, HostedChatDemoRuntime) and isinstance(runtime_or_plan.host_api_approval, dict):
+        out["host_api_approval"] = dict(runtime_or_plan.host_api_approval or {})
     return out
 
 
@@ -152,6 +155,27 @@ def make_hosted_demo_callback_processor(
     approval_seen: set[str] = set()
 
     def _callback_processor(*, callback_name: str, payload: Dict[str, Any], context: Any) -> Dict[str, Any]:
+        if str(callback_name or "").strip() == HOST_CAPABILITY_APPROVAL_CALLBACK_NAME:
+            request = dict(payload or {})
+            method = str(request.get("method") or "").strip()
+            approval_id = str(request.get("approval_id") or "").strip()
+            if method in {"fs.list", "fs.read_text", "http.fetch"}:
+                print(
+                    f"[hosted-demo host-api approval] Auto-approved {method or '<unknown>'} "
+                    f"for hosted tool {str(getattr(context, 'tool_name', '') or '<unknown>')}."
+                )
+                return host_capability_approval_decision(
+                    "allow_once",
+                    approval_id=approval_id,
+                )
+            print(
+                f"[hosted-demo host-api approval] Denied unsupported method {method or '<unknown>'}."
+            )
+            return host_capability_approval_decision(
+                "deny",
+                approval_id=approval_id,
+                reason="unsupported_demo_host_api_method",
+            )
         if str(callback_name or "").strip() != "tool_requires_confirmation":
             return {"decision": "deny"}
         tool_name = str(dict(payload or {}).get("tool_name") or "").strip()
@@ -389,6 +413,7 @@ def setup_hosted_chat_demo(
     project_root: Path,
     toolbox_id: str,
     project_file_peek_scope_root: Optional[str] = None,
+    host_api_approval: Optional[Dict[str, Any]] = None,
     python_executable: Optional[str] = None,
     worker_profile_class: str = "generic",
 ) -> HostedChatDemoRuntime:
@@ -420,7 +445,7 @@ def setup_hosted_chat_demo(
         )
     builder.resolve_sandbox()
     callback_processor = None
-    if project_file_peek_scope_root is not None:
+    if project_file_peek_scope_root is not None or isinstance(host_api_approval, dict):
         callback_processor = make_hosted_demo_callback_processor(
             project_file_peek_root=project_file_peek_scope_root,
         )
@@ -429,6 +454,7 @@ def setup_hosted_chat_demo(
         toolbox_ref=toolbox_ref,
         plan=plan,
         callback_processor=callback_processor,
+        host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
     )
 
 

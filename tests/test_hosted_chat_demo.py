@@ -3,7 +3,10 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from hosting import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME
+
 from app.hosted_chat_demo import (
+    HostedChatDemoRuntime,
     build_hosted_chat_demo_plan,
     hosted_demo_non_restartable_tool_names,
     hosted_demo_tool_round_options,
@@ -96,6 +99,26 @@ def test_make_hosted_demo_callback_processor_returns_scoped_project_file_peek_ap
     }
 
 
+def test_hosted_demo_tool_round_options_exposes_host_api_approval() -> None:
+    plan = build_hosted_chat_demo_plan(
+        toolbox_id="chat-hosted-demo",
+        project_root=Path.cwd(),
+    )
+    runtime = HostedChatDemoRuntime(
+        service=object(),
+        toolbox_ref=object(),
+        plan=plan,
+        callback_processor=lambda **_kwargs: {"decision": "deny"},
+        host_api_approval={"mode": "always"},
+    )
+
+    options = hosted_demo_tool_round_options(runtime)
+
+    assert options["non_restartable_tool_names"] == []
+    assert callable(options["callback_processor"])
+    assert options["host_api_approval"] == {"mode": "always"}
+
+
 def test_make_hosted_demo_callback_processor_prints_auto_approval(capsys) -> None:
     class _Context:
         tool_call_id = "call-1"
@@ -124,3 +147,32 @@ def test_make_hosted_demo_callback_processor_prints_denial_for_other_tools(capsy
     assert out == {"decision": "deny"}
     captured = capsys.readouterr()
     assert "Denied gated tool SimpleCalc" in captured.out
+
+
+def test_make_hosted_demo_callback_processor_handles_host_api_approval(capsys) -> None:
+    class _Context:
+        tool_name = "ProjectFilePeek"
+
+    callback = make_hosted_demo_callback_processor(project_file_peek_root="src/app")
+
+    allowed = callback(
+        callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+        payload={"method": "fs.read_text", "approval_id": "approval-1"},
+        context=_Context(),
+    )
+
+    assert allowed["decision"] == "allow_once"
+    assert allowed["approval_id"] == "approval-1"
+
+    denied = callback(
+        callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+        payload={"method": "fs.write_text", "approval_id": "approval-2"},
+        context=_Context(),
+    )
+
+    assert denied["decision"] == "deny"
+    assert denied["approval_id"] == "approval-2"
+    assert denied["reason"] == "unsupported_demo_host_api_method"
+    captured = capsys.readouterr()
+    assert "Auto-approved fs.read_text" in captured.out
+    assert "Denied unsupported method fs.write_text" in captured.out

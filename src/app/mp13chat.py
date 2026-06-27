@@ -109,7 +109,12 @@ from .context_cursor import ChatCursor, ChatContext, ChatContextScope, StreamDis
 from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsView, ToolBoxRef
 from hosting.toolbox_harness import ToolboxExecutionHarness
 from .hosted_tool_runtime import execute_tool_round_on_cursor
-from .hosted_chat_demo import HostedChatDemoRuntime, setup_hosted_chat_demo, shutdown_hosted_chat_demo
+from .hosted_chat_demo import (
+    HostedChatDemoRuntime,
+    hosted_demo_tool_round_options,
+    setup_hosted_chat_demo,
+    shutdown_hosted_chat_demo,
+)
 from .hosted_tool_visibility import annotate_tool_listing, summarize_effective_tool_view
 from .mp13chat_tools_cli import (
     LightweightToolsCliHandler,
@@ -9802,6 +9807,10 @@ async def _execute_inference_round(
 
             _record_response_adapters(active_cursor, primary_response_item)
             tool_retries_max, tool_retries_left = _tool_retry_counters(active_cursor)
+            hosted_tool_round_options = (
+                hosted_demo_tool_round_options(hosted_chat_demo_runtime)
+                if hosted_chat_demo_runtime is not None else {}
+            )
             tool_round_result = await execute_tool_round_on_cursor(
                 cursor=active_cursor,
                 final_response_items=final_response_item_objects,
@@ -9816,11 +9825,9 @@ async def _execute_inference_round(
                 tool_retries_left=tool_retries_left,
                 auto_tool_retry_limit=_auto_tool_retry_limit(),
                 auto_anchor_prefix=_auto_anchor_name("auto_tool", active_cursor),
-                callback_processor=(
-                    hosted_chat_demo_runtime.callback_processor
-                    if hosted_chat_demo_runtime is not None and callable(hosted_chat_demo_runtime.callback_processor)
-                    else None
-                ),
+                non_restartable_tool_names=hosted_tool_round_options.get("non_restartable_tool_names"),
+                callback_processor=hosted_tool_round_options.get("callback_processor"),
+                host_api_approval=hosted_tool_round_options.get("host_api_approval"),
             )
             if active_tool_executor is None:
                 print(f"{Colors.TOOL_WARNING}Tool execution skipped: toolbox unavailable.{Colors.RESET}")
@@ -12341,7 +12348,7 @@ async def main_logic():
     parser.add_argument(
         "--hosted-demo",
         action="store_true",
-        help="Enable a hosted toolbox demo with two sandboxed tools and route chat tool execution through hosting.",
+        help="Enable a hosted toolbox demo with sandboxed tools and route chat tool execution through hosting.",
     )
     parser.add_argument(
         "--hosted-demo-toolbox-id",
@@ -12366,6 +12373,13 @@ async def main_logic():
         type=str,
         default=None,
         help="Install a hosted-demo approval callback for ProjectFilePeek that persists scoped access under this sub-root after the tool is gated in chat scope.",
+    )
+    parser.add_argument(
+        "--hosted-demo-host-api-approval",
+        type=str,
+        default="none",
+        choices=["none", "always"],
+        help="Enable per-IO Host API approval for hosted demo brokered fs/http calls. Default: none.",
     )
     parser.add_argument(
         "config_path_name",
@@ -12547,6 +12561,10 @@ async def main_logic():
             project_root=demo_project_root,
             toolbox_id=str(args.hosted_demo_toolbox_id or "").strip() or "chat-hosted-demo",
             project_file_peek_scope_root=args.hosted_demo_project_file_peek_scope_root,
+            host_api_approval=(
+                {"mode": str(args.hosted_demo_host_api_approval or "none").strip()}
+                if str(args.hosted_demo_host_api_approval or "none").strip() != "none" else None
+            ),
             python_executable=sys.executable,
         )
         configure_hosted_toolbox_execution(
@@ -12562,6 +12580,11 @@ async def main_logic():
             scoped_root = str(args.hosted_demo_project_file_peek_scope_root or "").strip()
             print(f"{Colors.SYSTEM}  demo approval root for ProjectFilePeek: {scoped_root or '<allow_once only>'}{Colors.RESET}")
             print(f"{Colors.SYSTEM}  invoke with: /t scope add advertised=ProjectFilePeek gated=ProjectFilePeek{Colors.RESET}")
+        if str(args.hosted_demo_host_api_approval or "none").strip() != "none":
+            print(
+                f"{Colors.SYSTEM}  host API approval: "
+                f"{str(args.hosted_demo_host_api_approval or '').strip()}{Colors.RESET}"
+            )
         print(f"{Colors.SYSTEM}  suggested prompts:{Colors.RESET}")
         for prompt in hosted_chat_demo_runtime.plan.suggested_prompts:
             print(f"{Colors.DIM}    - {prompt}{Colors.RESET}")

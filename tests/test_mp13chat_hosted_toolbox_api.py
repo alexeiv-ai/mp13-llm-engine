@@ -438,6 +438,64 @@ def test_execute_tool_round_on_cursor_forwards_callback_processor() -> None:
     assert forwarded_context["toolbox_ref"] is context.toolbox_ref
 
 
+def test_execute_tool_round_on_cursor_forwards_host_api_approval() -> None:
+    class _FakeExecutor:
+        def __init__(self) -> None:
+            self.calls: list[Dict[str, Any]] = []
+
+        async def execute_request_tools(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            response = list(kwargs.get("final_response_items") or [])[0]
+            block = list(response.tool_blocks or [])[0]
+            call = list(block.calls or [])[0]
+            call.result = '{"status":"ok"}'
+
+    async def _action_handler(execute_stage: str, **kwargs):
+        return None
+
+    session = EngineSession()
+    chat_session = session.add_conversation(
+        inference_defaults=InferenceParams(),
+        initial_params={},
+    )
+    context = ChatContext(session, chat_session=chat_session, toolbox=Toolbox())
+    cursor = context.active_cursor
+    cursor.add_user("hello")
+
+    executor = _FakeExecutor()
+    response = InferenceResponse(
+        chunkType="streaming_chunk",
+        prompt_index=0,
+        tool_blocks=[
+            ToolCallBlock(
+                calls=[
+                    ToolCall(
+                        id="call-1",
+                        name="remote_tool",
+                        arguments={},
+                    )
+                ]
+            )
+        ],
+    )
+
+    result = __import__("asyncio").run(
+        execute_tool_round_on_cursor(
+            cursor=cursor,
+            final_response_items=[response],
+            responses_in_progress={0: ""},
+            parser_profile=DEFAULT_PROFILE,
+            tool_executor=executor,
+            action_handler=_action_handler,
+            host_api_approval={"mode": "always"},
+        )
+    )
+
+    assert result.executed is True
+    assert len(executor.calls) == 1
+    assert executor.calls[0]["host_api_approval"] == {"mode": "always"}
+
+
 def test_execute_tool_round_on_cursor_reports_canceled_resubmit_guidance() -> None:
     class _FakeChannel:
         def toolbox_execute(self, **kwargs):
