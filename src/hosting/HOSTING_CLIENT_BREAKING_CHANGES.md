@@ -1,27 +1,31 @@
 # Hosting Client Breaking Changes
 
-## Toolbox Per-IO Host API Approval Is Publicly Forwarded
+## Current Status
 
-The previously worker-only `host_api_approval` option is now exposed through the
-public toolbox execution path.
+The dependent client has consumed the toolbox `host_api_approval` migration:
 
-Client action:
+- hosted toolbox execution derives and forwards `host_api_approval`;
+- connector execution forwards it through `ToolboxExecutionHarness.execute_calls(...)`;
+- Host Capability approvals are handled separately from tool-level confirmation;
+- source-tool `sandbox_policy` metadata is preserved at deploy time.
 
-1. When toolbox `context.fs.*`, `context.http.*`, or `context.host.call(...)`
-   should require per-IO Host Capability approval, pass
-   `host_api_approval={"mode": "always"}` or another Host Capability approval
-   policy on toolbox execution.
-2. Public entrypoints that now forward `host_api_approval`:
-   `EngineHostControlChannel.toolbox_execute(...)`,
-   `EngineHostService.toolbox_execute(...)`,
-   `HostedToolBoxRef.execute(...)`, and
-   `ToolboxExecutionHarness.execute_calls(...)` /
-   `ToolboxExecutionHarness.execute_request_tools(...)`.
-3. Keep passing the hosted callback processor/binding as before. Per-IO approval
-   requests are delivered over that existing callback binding using the Host
-   Capability approval callback name and
-   `hosting.sandbox.host_capability_approval.v1` payload shape.
+No additional public API migration is required for clients that execute hosted
+tools through `EngineHostControlChannel.toolbox_execute(...)`,
+`EngineHostService.toolbox_execute(...)`, `HostedToolBoxRef.execute(...)`, or
+`ToolboxExecutionHarness`.
 
-This does not replace tool-level gated execution. Tool gating still controls
-whether a tool can run. `host_api_approval` controls brokered host API calls made
-from inside an already-running toolbox tool.
+## Current Client Guidance
+
+Toolbox worker calls to `context.fs.*`, `context.http.*`, and
+`context.host.call(...)` are now dispatched back through the parent host service.
+This keeps approval, audit, and broker policy enforcement parent-owned.
+
+Client code should keep using the public toolbox execution APIs above and keep
+passing `host_api_approval` plus the normal hosted callback binding. The
+`host_capability.dispatch` callback is an internal parent-owned bridge; clients
+should not register, inspect, or handle it directly.
+
+If a client bypasses the public toolbox execution path and calls the toolbox
+worker RPC directly, it must stop doing that for host API calls. Direct worker
+RPC host calls no longer have enough context unless the parent-owned dispatch
+binding is installed by the service layer.
