@@ -97,9 +97,85 @@ No legacy compatibility is required beyond clear instructions in
   that bypass Host Capability descriptors.
 - [x] Remove stale tests that assert toolbox-only brokered IO plumbing.
 - [x] Verify full hosting sandbox and workflow test pass.
-- [ ] Ask the client team to adopt the final breaking-change instructions and
+- [x] Ask the client team to adopt the final breaking-change instructions and
   then reset [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md)
   for later work.
+
+## Phase 6: Approval Request Argument Visibility And Authority Boundaries
+
+Status: planned. This phase is not justified by the hosted chat demo bug alone,
+but the bug exposed a useful design gap to close deliberately.
+
+### Problem To Fix
+
+Approval callbacks need enough sanitized request detail to make policy decisions
+before execution. Today the canonical normalized Host Capability approval request
+preserves `argument_keys`, provider/method identity, approval policy, context,
+and correlation metadata, but not a stable sanitized argument preview. Some
+call paths may still carry raw arguments internally, but clients should not need
+to depend on transport-specific payload details.
+
+The hosted demo failure was caused by a model-facing `root_path` argument. That
+specific problem was fixed by removing `root_path` from the tool schema and
+moving root authority to host/client policy plus approval scope. The broader
+protocol question remains: when approval code must decide whether
+`fs.read_text(root_id, relative_path)` is acceptable, it should receive a
+bounded, sanitized argument view through the normalized approval contract.
+
+### Evidence And Limits
+
+Evidence:
+
+- model-facing tools can accidentally expose authority-bearing fields;
+- approval decisions for brokered filesystem/HTTP calls often depend on the
+  requested target, not only the method name;
+- current broker enforcement is correct as the final boundary, but approval UI
+  cannot give useful user-facing decisions if the normalized request hides all
+  argument values.
+
+Limits:
+
+- the demo bug itself was not strong evidence for broad protocol churn;
+- raw full arguments can contain secrets, large payloads, or data that should
+  not be displayed to users;
+- the broker must remain the hard enforcement point even after approval helpers
+  are added.
+
+### Intended Design Direction
+
+- Keep real filesystem roots owned by host/client configuration and sandbox
+  policy.
+- Keep virtual/narrowed roots owned by approval scope or client workflow state.
+- Treat model-provided file paths as requests, never authority.
+- Add sanitized argument previews to normalized Host Capability approval
+  requests, not raw unbounded argument dumps.
+- Add reusable approval helper functions for common service-broker decisions,
+  especially filesystem path containment and HTTP URL-prefix checks.
+- Keep approval helpers advisory for decision-making; daemon broker policy
+  remains authoritative.
+
+### Work Items
+
+- [ ] Define the sanitized approval argument preview contract:
+  - include small scalar values needed for policy decisions;
+  - redact known secret fields;
+  - summarize or omit large payloads;
+  - preserve existing `argument_keys`.
+- [ ] Add the preview to `host_capability_approval_request(...)` and all public
+  approval callback relays.
+- [ ] Add service-broker approval helpers for:
+  - resolving `root_id + relative_path` against the declared sandbox fs rule;
+  - checking containment under configured root and optional scoped virtual root;
+  - checking HTTP method and URL prefix against sandbox/network policy.
+- [ ] Update hosted toolbox, workflow Python, and workflow JS approval tests to
+  assert callbacks receive the same normalized preview shape.
+- [ ] Update client-facing docs with the corrected programming model:
+  roots are policy/scope-owned; sandbox/model code supplies only relative
+  targets where a tool explicitly allows that.
+- [ ] When implementation begins, rewrite
+  [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) with
+  the new approval-request payload contract and remove any compatibility
+  fallback requirements.
 
 ## Client Programming Model After Completion
 
