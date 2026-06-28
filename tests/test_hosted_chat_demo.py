@@ -39,7 +39,8 @@ def test_build_hosted_chat_demo_plan_produces_two_distinct_profiles() -> None:
         assert file_request["callable_name"] == "ProjectFilePeek"
         assert file_request["non_restartable"] is False
         assert "tool_constraints_view" in str(file_request["content"])
-        assert "resolve_filesystem_root" in str(file_request["content"])
+        assert "resolve_filesystem_root" not in str(file_request["content"])
+        assert "root_path=" not in str(file_request["content"])
         fs_rules = file_request["sandbox_policy"]["sandbox"]["filesystem"]["rules"]
         assert fs_rules == [
             {
@@ -92,22 +93,21 @@ def test_hosted_project_file_peek_source_executes_with_context_fs() -> None:
         def __init__(self) -> None:
             self.calls = []
 
-        def resolve_filesystem_root(self, value):
+        def get_domain(self, value):
             self.calls.append(value)
-            return value or ""
+            return {}
 
     context = _Context()
     constraints = _Constraints()
     result = namespace["ProjectFilePeek"](
         relative_path="src/app/mp13chat.py",
-        root_path="path/to/project",
         max_chars=3,
         context=context,
         tool_constraints_view=constraints,
     )
 
     assert result == "src/app/mp13chat.py\n---\nabc"
-    assert constraints.calls == [None]
+    assert constraints.calls == ["filesystem"]
     assert context.fs.calls == [{"root_id": "project_ro", "relative_path": "src/app/mp13chat.py"}]
 
 
@@ -137,11 +137,7 @@ def test_make_hosted_demo_callback_processor_returns_scoped_project_file_peek_ap
                         "allow_explicit_root_override": False,
                     }
                 },
-                "argument_policy": {
-                    "implied_args": {"root_path": "src/app"},
-                    "locked_args": ["root_path"],
-                    "normalizers": {"root_path": "path_under_implied_root"},
-                },
+                "argument_policy": {},
             }
         },
     }
@@ -205,7 +201,11 @@ def test_make_hosted_demo_callback_processor_handles_host_api_approval(capsys) -
 
     allowed = callback(
         callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
-        payload={"method": "fs.read_text", "approval_id": "approval-1"},
+        payload={
+            "method": "fs.read_text",
+            "approval_id": "approval-1",
+            "arguments": {"root_id": "project_ro", "relative_path": "src/app/mp13chat.py"},
+        },
         context=_Context(),
     )
 
@@ -224,3 +224,21 @@ def test_make_hosted_demo_callback_processor_handles_host_api_approval(capsys) -
     captured = capsys.readouterr()
     assert "Auto-approved fs.read_text" in captured.out
     assert "Denied unsupported method fs.write_text" in captured.out
+
+
+def test_hosted_demo_host_api_approval_denies_project_file_escape() -> None:
+    callback = make_hosted_demo_callback_processor(project_root=Path.cwd())
+
+    denied = callback(
+        callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+        payload={
+            "method": "fs.read_text",
+            "approval_id": "approval-escape",
+            "arguments": {"root_id": "project_ro", "relative_path": "../outside.txt"},
+        },
+        context=None,
+    )
+
+    assert denied["decision"] == "deny"
+    assert denied["approval_id"] == "approval-escape"
+    assert denied["reason"] == "path_traversal_denied"

@@ -39,7 +39,6 @@ def SimpleCalc(expr: Optional[str] = None, **kwargs: Any) -> str:
 
 def ProjectFilePeek(
     relative_path: str = "src/app/mp13chat.py",
-    root_path: str = "",
     max_chars: int = 400,
     **kwargs: Any,
 ) -> str:
@@ -54,7 +53,7 @@ def ProjectFilePeek(
     effective_root = ""
     if scoped is not None:
         try:
-            effective_root = str(scoped.resolve_filesystem_root(None) or "")
+            effective_root = str(dict(scoped.get_domain("filesystem") or {}).get("implied_root") or "")
         except Exception as exc:
             return f"Error: {type(exc).__name__}: {exc}"
     root = Path(kwargs.get("project_root") or Path.cwd()).resolve()
@@ -148,16 +147,65 @@ def hosted_demo_tool_round_options(
 def make_hosted_demo_callback_processor(
     *,
     project_file_peek_root: Optional[str] = None,
+    project_root: Optional[Path] = None,
 ) -> Callable[..., Dict[str, Any]]:
     scoped_root = str(project_file_peek_root or "").strip().replace("\\", "/").strip("/")
+    real_project_root = Path(project_root or Path.cwd()).expanduser().resolve()
     approval_seen: set[str] = set()
+
+    def _normalize_project_relative_path(value: Any, *, allow_empty: bool = False) -> Tuple[bool, str, str]:
+        raw = str(value or "").strip().replace("\\", "/")
+        if not raw:
+            if allow_empty:
+                return True, "", ""
+            return False, "", "relative_path_required"
+        if raw.startswith("/") or ":" in raw:
+            return False, raw, "absolute_path_denied"
+        target = (real_project_root / raw).resolve()
+        try:
+            resolved_rel = target.relative_to(real_project_root).as_posix()
+        except Exception:
+            return False, raw, "path_traversal_denied"
+        if scoped_root:
+            scoped_target = (real_project_root / scoped_root).resolve()
+            try:
+                target.relative_to(scoped_target)
+            except Exception:
+                return False, resolved_rel, "outside_approved_scope"
+        return True, resolved_rel, ""
 
     def _callback_processor(*, callback_name: str, payload: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if str(callback_name or "").strip() == HOST_CAPABILITY_APPROVAL_CALLBACK_NAME:
             request = dict(payload or {})
             method = str(request.get("method") or "").strip()
             approval_id = str(request.get("approval_id") or "").strip()
-            if method in {"fs.list", "fs.read_text", "http.fetch"}:
+            arguments = dict(request.get("arguments") or {}) if isinstance(request.get("arguments"), dict) else {}
+            if method in {"fs.list", "fs.read_text"}:
+                root_id = str(arguments.get("root_id") or "").strip()
+                ok, resolved_rel, reason = _normalize_project_relative_path(
+                    arguments.get("relative_path") or "",
+                    allow_empty=method == "fs.list",
+                )
+                if root_id != "project_ro" or not ok:
+                    print(
+                        f"[hosted-demo host-api approval] Denied {method or '<unknown>'} "
+                        f"for hosted tool {str(getattr(context, 'tool_name', '') or '<unknown>')}: "
+                        f"{reason or 'unsupported_root_id'} relative_path={resolved_rel or str(arguments.get('relative_path') or '')!r}."
+                    )
+                    return host_capability_approval_decision(
+                        "deny",
+                        approval_id=approval_id,
+                        reason=reason or "unsupported_root_id",
+                    )
+                print(
+                    f"[hosted-demo host-api approval] Auto-approved {method or '<unknown>'} "
+                    f"for hosted tool {str(getattr(context, 'tool_name', '') or '<unknown>')}."
+                )
+                return host_capability_approval_decision(
+                    "allow_once",
+                    approval_id=approval_id,
+                )
+            if method == "http.fetch":
                 print(
                     f"[hosted-demo host-api approval] Auto-approved {method or '<unknown>'} "
                     f"for hosted tool {str(getattr(context, 'tool_name', '') or '<unknown>')}."
@@ -210,11 +258,7 @@ def make_hosted_demo_callback_processor(
                             "allow_explicit_root_override": False,
                         }
                     },
-                    "argument_policy": {
-                        "implied_args": {"root_path": scoped_root},
-                        "locked_args": ["root_path"],
-                        "normalizers": {"root_path": "path_under_implied_root"},
-                    },
+                    "argument_policy": {},
                 }
             },
         }
@@ -258,7 +302,7 @@ def SimpleCalc(expr=None, **kwargs):
     file_source = """
 from pathlib import Path
 
-def ProjectFilePeek(relative_path='src/app/mp13chat.py', root_path='', max_chars=400, **kwargs):
+def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs):
     \"\"\"
     Read a project file and return its first characters for inspection.
 
@@ -269,7 +313,7 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', root_path='', max_chars
     helper = kwargs.get('tool_constraints_view')
     effective_root = ''
     if helper is not None:
-        effective_root = str(helper.resolve_filesystem_root(None) or '')
+        effective_root = str(dict(helper.get_domain('filesystem') or {}).get('implied_root') or '')
     ctx = kwargs.get('context')
     if ctx is None:
         return 'Error: missing execution context.'
@@ -446,6 +490,7 @@ def setup_hosted_chat_demo(
     if project_file_peek_scope_root is not None or isinstance(host_api_approval, dict):
         callback_processor = make_hosted_demo_callback_processor(
             project_file_peek_root=project_file_peek_scope_root,
+            project_root=plan.project_root,
         )
     return HostedChatDemoRuntime(
         service=service,
