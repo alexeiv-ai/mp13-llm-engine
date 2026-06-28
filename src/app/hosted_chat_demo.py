@@ -54,7 +54,7 @@ def ProjectFilePeek(
     effective_root = ""
     if scoped is not None:
         try:
-            effective_root = str(scoped.resolve_filesystem_root(root_path or None) or "")
+            effective_root = str(scoped.resolve_filesystem_root(None) or "")
         except Exception as exc:
             return f"Error: {type(exc).__name__}: {exc}"
     root = Path(kwargs.get("project_root") or Path.cwd()).resolve()
@@ -269,7 +269,7 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', root_path='', max_chars
     helper = kwargs.get('tool_constraints_view')
     effective_root = ''
     if helper is not None:
-        effective_root = str(helper.resolve_filesystem_root(root_path or None) or '')
+        effective_root = str(helper.resolve_filesystem_root(None) or '')
     ctx = kwargs.get('context')
     if ctx is None:
         return 'Error: missing execution context.'

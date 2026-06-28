@@ -86,15 +86,28 @@ def test_hosted_project_file_peek_source_executes_with_context_fs() -> None:
         def __init__(self) -> None:
             self.fs = _Fs()
 
+    class _Constraints:
+        calls: list[object]
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resolve_filesystem_root(self, value):
+            self.calls.append(value)
+            return value or ""
+
     context = _Context()
+    constraints = _Constraints()
     result = namespace["ProjectFilePeek"](
         relative_path="src/app/mp13chat.py",
         root_path="path/to/project",
         max_chars=3,
         context=context,
+        tool_constraints_view=constraints,
     )
 
     assert result == "src/app/mp13chat.py\n---\nabc"
+    assert constraints.calls == [None]
     assert context.fs.calls == [{"root_id": "project_ro", "relative_path": "src/app/mp13chat.py"}]
 
 
