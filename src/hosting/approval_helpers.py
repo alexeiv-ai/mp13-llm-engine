@@ -111,3 +111,33 @@ def host_capability_approval_check_http_fetch(request: Dict[str, Any], sandbox_p
     if prefixes and not any(url.startswith(prefix) for prefix in prefixes):
         return {"allowed": False, "reason": "brokered_http_url_not_allowed", "url": url, "method": method, "host": host}
     return {"allowed": True, "reason": "", "url": urllib.parse.urlunsplit(parsed), "method": method, "host": host}
+
+
+def service_broker_method_policy_hint(method: str) -> Dict[str, Any]:
+    """Return registry-owned approval-policy hints for a service-broker method."""
+    from .sandbox.service_broker_registry import service_broker_method_policy_hint as _policy_hint
+
+    return _policy_hint(str(method or ""))
+
+
+def host_capability_approval_check_service_broker_request(
+    request: Dict[str, Any],
+    sandbox_policy: Any,
+    *,
+    scoped_root: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate a service-broker approval request using registry policy hints."""
+    method = str(dict(request or {}).get("method") or "").strip()
+    hint = service_broker_method_policy_hint(method)
+    kind = str(hint.get("kind") or "").strip().lower()
+    if kind == "filesystem":
+        return host_capability_approval_check_fs_path(
+            request,
+            sandbox_policy,
+            access=str(hint.get("access") or "read"),
+            scoped_root=scoped_root,
+            allow_empty_relative_path=bool(hint.get("allow_empty_relative_path", False)),
+        )
+    if kind == "http":
+        return host_capability_approval_check_http_fetch(request, sandbox_policy)
+    return {"allowed": False, "reason": f"unsupported_service_broker_method:{method}", "method": method}

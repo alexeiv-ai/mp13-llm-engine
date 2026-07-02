@@ -178,12 +178,14 @@ Limits:
   the new approval-request payload contract and remove any compatibility
   fallback requirements.
 
-### Deferred Polish
+### Completed Polish
 
-- [ ] Consider adding a small shared helper that derives filesystem access mode
-  from service-broker method names such as `fs.read_text`, `fs.write_text`, and
-  `fs.list`. This is not blocking current clients, but would reduce duplicated
-  client-side mapping code around approval previews.
+- [x] Add registry-owned service-broker policy hints and public helper APIs so
+  clients do not need to duplicate method-name to approval-check mappings.
+  `service_broker_method_policy_hint(method)` exposes the method category and
+  policy hints; `host_capability_approval_check_service_broker_request(...)`
+  dispatches known filesystem and HTTP brokered methods to the existing preview
+  validators.
 
 ## Client Programming Model After Completion
 
@@ -206,3 +208,5 @@ text = host.fs.read_text(root_id="project", relative_path="notes.txt")["text"]
 
 Provider identity, approval policy, argument/result schemas, permissions,
 scope requirements, and method digests come from Host Capability discovery.
+Service-broker methods also expose registry-owned policy hints that clients can
+use when implementing approval callbacks.

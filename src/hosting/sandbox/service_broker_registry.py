@@ -107,6 +107,7 @@ class ServiceBrokerMethodSpec:
     permissions: tuple[str, ...]
     result_schema: Dict[str, Any]
     scope_requirements: tuple[Dict[str, Any], ...] = field(default_factory=tuple)
+    policy_hint: Dict[str, Any] = field(default_factory=dict)
     namespace: str = ""
     provider_id: str = SERVICE_BROKER_PROVIDER_ID
 
@@ -159,6 +160,7 @@ class ServiceBrokerMethodSpec:
                     "contract": SERVICE_BROKER_CONTRACT,
                     "provider_id": self.provider_id,
                     "method": self.name,
+                    "policy_hint": dict(self.policy_hint or {}),
                 }
             },
         )
@@ -174,6 +176,7 @@ class ServiceBrokerMethodSpec:
             "result_schema": descriptor["result_schema"],
             "permissions": descriptor["permissions"],
             "scope_requirements": descriptor["scope_requirements"],
+            "policy_hint": dict(self.policy_hint or {}),
             "provider": descriptor["provider"],
             "metadata": dict(descriptor.get("metadata") or {}),
         }
@@ -273,6 +276,7 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         callable=_CONTRACTS.fs_list,
         permissions=("artifact.read",),
         scope_requirements=({"scope": "artifact", "access": "read"},),
+        policy_hint={"kind": "filesystem", "access": "read", "allow_empty_relative_path": True},
         result_schema=_object_result(
             {
                 "status": {"type": "string"},
@@ -287,6 +291,7 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         callable=_CONTRACTS.fs_read_text,
         permissions=("artifact.read",),
         scope_requirements=({"scope": "artifact", "access": "read"},),
+        policy_hint={"kind": "filesystem", "access": "read", "allow_empty_relative_path": False},
         result_schema=_object_result(
             {
                 "status": {"type": "string"},
@@ -301,6 +306,7 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         callable=_CONTRACTS.fs_write_text,
         permissions=("artifact.write",),
         scope_requirements=({"scope": "artifact", "access": "write"},),
+        policy_hint={"kind": "filesystem", "access": "write", "allow_empty_relative_path": False},
         result_schema=_object_result(
             {
                 "status": {"type": "string"},
@@ -315,6 +321,7 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         callable=_CONTRACTS.fs_mkdir,
         permissions=("artifact.write",),
         scope_requirements=({"scope": "artifact", "access": "write"},),
+        policy_hint={"kind": "filesystem", "access": "write", "allow_empty_relative_path": True},
         result_schema=_object_result(
             {
                 "status": {"type": "string"},
@@ -329,6 +336,7 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         callable=_CONTRACTS.fs_stat,
         permissions=("artifact.read",),
         scope_requirements=({"scope": "artifact", "access": "read"},),
+        policy_hint={"kind": "filesystem", "access": "read", "allow_empty_relative_path": True},
         result_schema=_object_result(
             {
                 "status": {"type": "string"},
@@ -347,6 +355,7 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         callable=_CONTRACTS.http_fetch,
         permissions=("http.fetch",),
         scope_requirements=({"scope": "http", "access": "fetch"},),
+        policy_hint={"kind": "http", "operation": "fetch"},
         result_schema=_object_result(
             {
                 "status": {"type": "string"},
@@ -360,6 +369,13 @@ SERVICE_BROKER_METHOD_SPECS: Dict[str, ServiceBrokerMethodSpec] = {
         ),
     ),
 }
+
+
+def service_broker_method_policy_hint(method: str) -> Dict[str, Any]:
+    spec = SERVICE_BROKER_METHOD_SPECS.get(_clean(method))
+    if spec is None:
+        return {}
+    return dict(spec.policy_hint or {})
 
 
 def service_broker_method_names(*, include_fs: bool = True, include_http: bool = True) -> list[str]:
@@ -515,4 +531,5 @@ __all__ = [
     "service_broker_host_capability_session",
     "service_broker_method_descriptors",
     "service_broker_method_names",
+    "service_broker_method_policy_hint",
 ]

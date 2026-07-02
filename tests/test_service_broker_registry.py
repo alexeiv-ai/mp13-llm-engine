@@ -7,6 +7,7 @@ from hosting.sandbox.service_broker_registry import (
     SERVICE_BROKER_PROVIDER_KIND,
     service_broker_discover,
     service_broker_method_descriptors,
+    service_broker_method_policy_hint,
 )
 
 
@@ -26,6 +27,11 @@ def test_service_broker_registry_derives_descriptors_from_docstrings() -> None:
     assert read_text["args_schema"]["properties"]["encoding"]["default"] == "utf-8"
     assert read_text["permissions"] == ["artifact.read"]
     assert read_text["metadata"]["service_broker"]["contract"] == SERVICE_BROKER_CONTRACT
+    assert read_text["metadata"]["service_broker"]["policy_hint"] == {
+        "kind": "filesystem",
+        "access": "read",
+        "allow_empty_relative_path": False,
+    }
 
 
 def test_service_broker_discovery_returns_contract_descriptions() -> None:
@@ -36,6 +42,21 @@ def test_service_broker_discovery_returns_contract_descriptions() -> None:
     assert "fs.read_text" in discovery["method_names"]
     assert "http.fetch" not in discovery["method_names"]
     assert all(row["contract"] == SERVICE_BROKER_CONTRACT for row in discovery["methods"])
+    assert {row["name"]: row["policy_hint"] for row in discovery["methods"]}["fs.list"] == {
+        "kind": "filesystem",
+        "access": "read",
+        "allow_empty_relative_path": True,
+    }
+
+
+def test_service_broker_policy_hints_are_owned_by_registry() -> None:
+    assert service_broker_method_policy_hint("fs.write_text") == {
+        "kind": "filesystem",
+        "access": "write",
+        "allow_empty_relative_path": False,
+    }
+    assert service_broker_method_policy_hint("http.fetch") == {"kind": "http", "operation": "fetch"}
+    assert service_broker_method_policy_hint("unknown") == {}
 
 
 def test_known_host_capability_descriptors_delegate_to_service_broker_registry() -> None:

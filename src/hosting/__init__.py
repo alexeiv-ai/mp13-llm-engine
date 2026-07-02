@@ -115,8 +115,10 @@ from .engine_discovery import (
     is_engine_discoverable,
 )
 from .approval_helpers import (
+    host_capability_approval_check_service_broker_request,
     host_capability_approval_check_fs_path,
     host_capability_approval_check_http_fetch,
+    service_broker_method_policy_hint,
 )
 from .callable_surface import (
     HOST_CALLABLE_SCHEMA_CONTRACT,
@@ -223,6 +225,8 @@ __all__ = [
     "is_engine_discoverable",
     "host_capability_approval_check_fs_path",
     "host_capability_approval_check_http_fetch",
+    "host_capability_approval_check_service_broker_request",
+    "service_broker_method_policy_hint",
     "HOST_CALLABLE_SCHEMA_CONTRACT",
     "HOST_CAPABILITY_APPROVAL_CALLBACK_NAME",
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",
