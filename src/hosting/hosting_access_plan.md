@@ -103,7 +103,8 @@ No legacy compatibility is required beyond clear instructions in
 
 ## Phase 6: Approval Request Argument Visibility And Authority Boundaries
 
-Status: planned. This phase is not justified by the hosted chat demo bug alone,
+Status: implemented for the approval request preview and common brokered
+approval helpers. This phase is not justified by the hosted chat demo bug alone,
 but the bug exposed a useful design gap to close deliberately.
 
 ### Problem To Fix
@@ -156,23 +157,23 @@ Limits:
 
 ### Work Items
 
-- [ ] Define the sanitized approval argument preview contract:
+- [x] Define the sanitized approval argument preview contract:
   - include small scalar values needed for policy decisions;
   - redact known secret fields;
   - summarize or omit large payloads;
   - preserve existing `argument_keys`.
-- [ ] Add the preview to `host_capability_approval_request(...)` and all public
+- [x] Add the preview to `host_capability_approval_request(...)` and all public
   approval callback relays.
-- [ ] Add service-broker approval helpers for:
+- [x] Add service-broker approval helpers for:
   - resolving `root_id + relative_path` against the declared sandbox fs rule;
   - checking containment under configured root and optional scoped virtual root;
   - checking HTTP method and URL prefix against sandbox/network policy.
-- [ ] Update hosted toolbox, workflow Python, and workflow JS approval tests to
+- [x] Update hosted toolbox, workflow Python, and workflow JS approval tests to
   assert callbacks receive the same normalized preview shape.
-- [ ] Update client-facing docs with the corrected programming model:
+- [x] Update client-facing docs with the corrected programming model:
   roots are policy/scope-owned; sandbox/model code supplies only relative
   targets where a tool explicitly allows that.
-- [ ] When implementation begins, rewrite
+- [x] When implementation begins, rewrite
   [HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) with
   the new approval-request payload contract and remove any compatibility
   fallback requirements.

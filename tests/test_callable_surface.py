@@ -265,6 +265,8 @@ def test_approval_callback_relay_binds_local_callback_transport() -> None:
         relay.release(binding)
 
     assert approvals[0]["argument_keys"] == ["secret", "value"]
+    assert approvals[0]["argument_preview"]["value"] == 11
+    assert approvals[0]["argument_preview"]["secret"] == {"redacted": True, "reason": "secret_key"}
     assert "arguments" not in approvals[0]
     assert response["result"]["contract"] == "hosting.sandbox.host_capability_approval_decision.v1"
     assert response["result"]["decision"] == "allow_once"
@@ -297,6 +299,8 @@ def test_approval_bridge_sanitizes_arguments_and_normalizes_decisions() -> None:
 
     assert request["contract"] == "hosting.sandbox.host_capability_approval.v1"
     assert request["argument_keys"] == ["customer_id", "secret"]
+    assert request["argument_preview"]["customer_id"] == "c-1"
+    assert request["argument_preview"]["secret"] == {"redacted": True, "reason": "secret_key"}
     assert "arguments" not in request
     assert request["correlation"]["workflow_id"] == "wf-1"
     assert request["context"]["branch_id"] == "branch-1"

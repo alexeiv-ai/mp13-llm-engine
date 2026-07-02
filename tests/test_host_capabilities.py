@@ -505,12 +505,15 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
         )
     )
 
-    assert broker.dispatch({"method": "crm.customer.delete", "arguments": {"customer_id": "c-1"}}) == {"deleted": True}
+    assert broker.dispatch({"method": "crm.customer.delete", "arguments": {"customer_id": "c-1", "secret": "hidden"}}) == {"deleted": True}
     assert len(approval_requests) == 1
     assert len(provider_calls) == 1
     assert approval_requests[0]["contract"] == "hosting.sandbox.host_capability_approval.v1"
     assert approval_requests[0]["provider_call_id"] == provider_calls[0]["provider_call_id"]
     assert approval_requests[0]["approval"]["mode"] == "always"
+    assert approval_requests[0]["argument_preview"]["customer_id"] == "c-1"
+    assert approval_requests[0]["argument_preview"]["secret"] == {"redacted": True, "reason": "secret_key"}
+    assert "arguments" not in approval_requests[0]
     assert "binding" not in approval_requests[0]["provider"]
     assert [kind for kind, _payload in events] == ["host_call", "approval", "approval", "host_response"]
     assert events[1][1]["status"] == "requested"
@@ -519,6 +522,7 @@ def test_host_capability_broker_requests_approval_before_gated_provider_call() -
     assert audit_records[0]["result"] == "approved"
     assert audit_records[0]["approval_id"] == events[2][1]["approval_id"]
     assert audit_records[0]["provider_call_id"] == provider_calls[0]["provider_call_id"]
+    assert audit_records[0]["argument_preview"]["customer_id"] == "c-1"
 
 
 def test_host_capability_broker_does_not_fail_call_when_audit_emitter_fails() -> None:
@@ -702,7 +706,7 @@ def test_host_capability_broker_approval_add_to_scope_reuses_matching_grant() ->
         return {
             "decision": "add_to_scope",
             "approved": True,
-            "scope_constraints": {"customer_id": dict(request.get("arguments") or {}).get("customer_id")},
+            "scope_constraints": {"customer_id": dict(request.get("argument_preview") or {}).get("customer_id")},
         }
 
     def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:

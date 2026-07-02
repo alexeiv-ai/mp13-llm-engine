@@ -204,7 +204,7 @@ def test_make_hosted_demo_callback_processor_handles_host_api_approval(capsys) -
         payload={
             "method": "fs.read_text",
             "approval_id": "approval-1",
-            "arguments": {"root_id": "project_ro", "relative_path": "src/app/mp13chat.py"},
+            "argument_preview": {"root_id": "project_ro", "relative_path": "src/app/mp13chat.py"},
         },
         context=_Context(),
     )
@@ -234,7 +234,7 @@ def test_hosted_demo_host_api_approval_denies_project_file_escape() -> None:
         payload={
             "method": "fs.read_text",
             "approval_id": "approval-escape",
-            "arguments": {"root_id": "project_ro", "relative_path": "../outside.txt"},
+            "argument_preview": {"root_id": "project_ro", "relative_path": "../outside.txt"},
         },
         context=None,
     )

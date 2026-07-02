@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from mp13_engine.mp13_toolbox import ToolsView
 
-from ..callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPABILITY_DISPATCH_CALLBACK_NAME
+from ..callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPABILITY_DISPATCH_CALLBACK_NAME, host_capability_approval_request
 from ..sandbox.host_capabilities import HostCapabilityBroker
 from ..sandbox.service_broker_registry import service_broker_host_capability_session
 from ..toolbox.callbacks import _HostedToolCallbackRelay
@@ -133,7 +133,7 @@ class ToolboxRuntimeMixin:
             response = _invoke_callback_binding(
                 original_binding,
                 callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
-                payload=dict(payload or {}),
+                payload=host_capability_approval_request(dict(payload or {})),
                 context=dict(dict(payload or {}).get("context") or {}),
             )
             return dict(response.get("result") or response or {})

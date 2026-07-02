@@ -3410,9 +3410,14 @@ def test_toolbox_execute_dispatches_host_capability_in_parent_and_audits(monkeyp
         tool_call = dict(out.get("tool_call") or {})
         assert json.loads(str(tool_call.get("result") or "{}"))["text"] == "parent-owned"
         assert approvals[0]["method"] == "fs.read_text"
+        assert approvals[0]["argument_keys"] == ["callback_context", "encoding", "engine_id", "relative_path", "root_id"]
+        assert approvals[0]["argument_preview"]["root_id"] == "project"
+        assert approvals[0]["argument_preview"]["relative_path"] == "a.txt"
+        assert "arguments" not in approvals[0]
         audit = svc.host_capability_audit_list(request_id="call-parent-host-api", method="fs.read_text")
         assert audit["total"] == 1
         assert audit["events"][0]["result"] == "approved"
+        assert audit["events"][0]["argument_preview"]["relative_path"] == "a.txt"
         assert audit["events"][0]["provider"]["kind"] == "service_broker"
     finally:
         caller_relay.release_session(str(locals().get("caller_binding", {}).get("session_token") or ""))

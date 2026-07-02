@@ -5,9 +5,14 @@ import math
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from hosting import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HostedToolBoxRef, host_capability_approval_decision
+from hosting import (
+    HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
+    HostedToolBoxRef,
+    host_capability_approval_check_fs_path,
+    host_capability_approval_decision,
+)
 from hosting.service.host_service import EngineHostService
 from mp13_engine.mp13_toolbox import Toolbox
 
@@ -152,50 +157,38 @@ def make_hosted_demo_callback_processor(
     scoped_root = str(project_file_peek_root or "").strip().replace("\\", "/").strip("/")
     real_project_root = Path(project_root or Path.cwd()).expanduser().resolve()
     approval_seen: set[str] = set()
-
-    def _normalize_project_relative_path(value: Any, *, allow_empty: bool = False) -> Tuple[bool, str, str]:
-        raw = str(value or "").strip().replace("\\", "/")
-        if not raw:
-            if allow_empty:
-                return True, "", ""
-            return False, "", "relative_path_required"
-        if raw.startswith("/") or ":" in raw:
-            return False, raw, "absolute_path_denied"
-        target = (real_project_root / raw).resolve()
-        try:
-            resolved_rel = target.relative_to(real_project_root).as_posix()
-        except Exception:
-            return False, raw, "path_traversal_denied"
-        if scoped_root:
-            scoped_target = (real_project_root / scoped_root).resolve()
-            try:
-                target.relative_to(scoped_target)
-            except Exception:
-                return False, resolved_rel, "outside_approved_scope"
-        return True, resolved_rel, ""
+    demo_sandbox_policy = {
+        "sandbox": {
+            "enabled": True,
+            "filesystem": {"rules": [{"root_id": "project_ro", "path": str(real_project_root), "access": ["read"]}]},
+            "brokered_io": {"filesystem": True, "http": False, "subprocess": False},
+        }
+    }
 
     def _callback_processor(*, callback_name: str, payload: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if str(callback_name or "").strip() == HOST_CAPABILITY_APPROVAL_CALLBACK_NAME:
             request = dict(payload or {})
             method = str(request.get("method") or "").strip()
             approval_id = str(request.get("approval_id") or "").strip()
-            arguments = dict(request.get("arguments") or {}) if isinstance(request.get("arguments"), dict) else {}
+            argument_preview = dict(request.get("argument_preview") or {}) if isinstance(request.get("argument_preview"), dict) else {}
             if method in {"fs.list", "fs.read_text"}:
-                root_id = str(arguments.get("root_id") or "").strip()
-                ok, resolved_rel, reason = _normalize_project_relative_path(
-                    arguments.get("relative_path") or "",
-                    allow_empty=method == "fs.list",
+                fs_check = host_capability_approval_check_fs_path(
+                    request,
+                    demo_sandbox_policy,
+                    scoped_root=scoped_root or None,
+                    allow_empty_relative_path=method == "fs.list",
                 )
-                if root_id != "project_ro" or not ok:
+                if not bool(fs_check.get("allowed")):
                     print(
                         f"[hosted-demo host-api approval] Denied {method or '<unknown>'} "
                         f"for hosted tool {str(getattr(context, 'tool_name', '') or '<unknown>')}: "
-                        f"{reason or 'unsupported_root_id'} relative_path={resolved_rel or str(arguments.get('relative_path') or '')!r}."
+                        f"{str(fs_check.get('reason') or 'approval_denied')} "
+                        f"relative_path={str(fs_check.get('relative_path') or argument_preview.get('relative_path') or '')!r}."
                     )
                     return host_capability_approval_decision(
                         "deny",
                         approval_id=approval_id,
-                        reason=reason or "unsupported_root_id",
+                        reason=str(fs_check.get("reason") or "approval_denied"),
                     )
                 print(
                     f"[hosted-demo host-api approval] Auto-approved {method or '<unknown>'} "

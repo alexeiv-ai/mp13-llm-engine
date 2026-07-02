@@ -114,6 +114,10 @@ from .engine_discovery import (
     is_engine_available,
     is_engine_discoverable,
 )
+from .approval_helpers import (
+    host_capability_approval_check_fs_path,
+    host_capability_approval_check_http_fetch,
+)
 from .callable_surface import (
     HOST_CALLABLE_SCHEMA_CONTRACT,
     HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
@@ -217,6 +221,8 @@ __all__ = [
     "HostedToolboxAdmin",
     "is_engine_available",
     "is_engine_discoverable",
+    "host_capability_approval_check_fs_path",
+    "host_capability_approval_check_http_fetch",
     "HOST_CALLABLE_SCHEMA_CONTRACT",
     "HOST_CAPABILITY_APPROVAL_CALLBACK_NAME",
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",

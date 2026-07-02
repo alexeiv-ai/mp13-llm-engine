@@ -18,6 +18,7 @@ from mp13_engine.mp13_config import ToolCall
 from .callable_surface import (
     HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
     HOST_CAPABILITY_DISPATCH_CALLBACK_NAME,
+    host_capability_approval_request,
     toolbox_brokered_io_call_surface,
 )
 from .sandbox.host_capabilities import HostCapabilityBroker, HostCapabilityProviderCall
@@ -130,7 +131,7 @@ def _toolbox_approval_requester(
         response = _invoke_callback_binding(
             binding,
             callback_name=HOST_CAPABILITY_APPROVAL_CALLBACK_NAME,
-            payload=dict(payload or {}),
+            payload=host_capability_approval_request(dict(payload or {})),
             context=dict(callback_context or {}),
         )
         return dict(response.get("result") or response or {})

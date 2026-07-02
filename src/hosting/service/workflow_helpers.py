@@ -116,6 +116,7 @@ class WorkflowHelperMixin:
                 "provider": provider,
                 "approval": dict(row.get("approval") or {}),
                 "argument_keys": list(row.get("argument_keys") or []),
+                "argument_preview": dict(row.get("argument_preview") or {}),
                 "decision": dict(row.get("decision") or {}),
             }
         )

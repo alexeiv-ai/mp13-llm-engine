@@ -13,6 +13,7 @@ from .sandbox.host_capabilities import (
     HostCapabilityApproval,
     HostCapabilityDescriptor,
     HostCapabilityProviderRef,
+    build_argument_preview,
     default_group_path,
     validate_provider_response,
 )
@@ -755,6 +756,16 @@ class HostCapabilityApprovalCallbackRelay:
 def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(payload or {})
     arguments = dict(row.get("arguments") or {})
+    argument_preview = (
+        dict(row.get("argument_preview") or {})
+        if isinstance(row.get("argument_preview"), dict)
+        else build_argument_preview(arguments)
+    )
+    argument_keys = (
+        sorted(_clean(key) for key in arguments.keys() if _clean(key))
+        if arguments
+        else sorted(_clean(key) for key in list(row.get("argument_keys") or []) if _clean(key))
+    )
     context = dict(row.get("context") or {})
     descriptor = row.get("descriptor")
     identity = dict(row.get("identity") or {})
@@ -790,7 +801,8 @@ def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "identity": identity,
         "digests": digests,
-        "argument_keys": sorted(_clean(key) for key in arguments.keys() if _clean(key)),
+        "argument_keys": argument_keys,
+        "argument_preview": argument_preview,
         "correlation": extract_safe_correlation_metadata(row, context),
     }
 

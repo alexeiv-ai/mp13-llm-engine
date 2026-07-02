@@ -22,6 +22,9 @@ _ALLOWED_PROVIDER_KINDS = {"builtin", "client_session", "toolbox_session", "serv
 _ALLOWED_VISIBILITY = {"request", "workflow", "instance", "consumer"}
 _MAX_SCHEMA_CHARS = 65536
 _MAX_DESCRIPTION_CHARS = 4096
+_MAX_PREVIEW_STRING_CHARS = 512
+_MAX_PREVIEW_ITEMS = 12
+_SECRET_KEY_FRAGMENTS = ("secret", "token", "password", "passwd", "credential", "authorization", "api_key", "apikey", "private_key")
 
 CapabilityHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 AsyncCapabilityHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -43,6 +46,45 @@ def _jsonish_size(value: Any) -> int:
         return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     except Exception:
         return len(str(value))
+
+
+def _is_secret_argument_key(key: str) -> bool:
+    cleaned = _clean(key).lower().replace("-", "_")
+    return any(fragment in cleaned for fragment in _SECRET_KEY_FRAGMENTS)
+
+
+def _argument_preview_value(key: str, value: Any) -> Any:
+    if _is_secret_argument_key(key):
+        return {"redacted": True, "reason": "secret_key"}
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= _MAX_PREVIEW_STRING_CHARS:
+            return value
+        return {"type": "string", "chars": len(value), "omitted": True, "reason": "value_too_large"}
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        if len(items) <= _MAX_PREVIEW_ITEMS and all(item is None or isinstance(item, (bool, int, float, str)) for item in items):
+            preview_items = []
+            for index, item in enumerate(items):
+                preview_items.append(_argument_preview_value(f"{key}[{index}]", item))
+            return preview_items
+        return {"type": "array", "items": len(items), "omitted": True}
+    if isinstance(value, dict):
+        keys = sorted(_clean(name) for name in value.keys() if _clean(name))
+        return {"type": "object", "keys": keys[:_MAX_PREVIEW_ITEMS], "key_count": len(keys), "omitted": True}
+    return {"type": type(value).__name__, "omitted": True}
+
+
+def build_argument_preview(arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return bounded approval-safe argument values for policy/UI decisions."""
+    out: Dict[str, Any] = {}
+    for key in sorted(str(name) for name in dict(arguments or {}).keys()):
+        cleaned = _clean(key)
+        if not cleaned:
+            continue
+        out[cleaned] = _argument_preview_value(cleaned, dict(arguments or {}).get(key))
+    return out
 
 
 def _string_list(values: Iterable[Any]) -> list[str]:
@@ -619,6 +661,8 @@ class HostCapabilityBroker:
             return
         approval_id = f"cap_approval_{uuid.uuid4().hex}"
         call_id = _clean(host_call_id) or provider_call.provider_call_id
+        argument_keys = sorted(str(key) for key in dict(provider_call.arguments or {}).keys())
+        argument_preview = build_argument_preview(dict(provider_call.arguments or {}))
         audit_base = {
             "event_type": "host_capability_approval",
             "approval_id": approval_id,
@@ -626,7 +670,8 @@ class HostCapabilityBroker:
             "host_call_id": _clean(host_call_id) or None,
             "provider_call_id": provider_call.provider_call_id,
             "method": provider_call.method,
-            "argument_keys": sorted(str(key) for key in dict(provider_call.arguments or {}).keys()),
+            "argument_keys": argument_keys,
+            "argument_preview": argument_preview,
             "context": provider_call.context.to_dict(),
             "approval": method.descriptor.approval.to_dict(),
             "provider": {
@@ -667,7 +712,8 @@ class HostCapabilityBroker:
             "approval_id": approval_id,
             "provider_call_id": provider_call.provider_call_id,
             "method": provider_call.method,
-            "arguments": dict(provider_call.arguments or {}),
+            "argument_keys": argument_keys,
+            "argument_preview": argument_preview,
             "context": provider_call.context.to_dict(),
             "approval": method.descriptor.approval.to_dict(),
             "provider": {
@@ -1049,6 +1095,7 @@ __all__ = [
     "HostCapabilitySession",
     "HostCapabilityTimeout",
     "ProviderInvoker",
+    "build_argument_preview",
     "default_group_path",
     "validate_provider_response",
 ]

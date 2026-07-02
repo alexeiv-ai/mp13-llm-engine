@@ -142,6 +142,11 @@ Capability approval policy. When that policy requires approval, service-broker
 `fs.*` / `http.fetch` calls request approval through the hosted callback
 binding before brokered IO executes. Approval denial prevents the brokered IO
 call. Approval does not widen sandbox filesystem or network policy.
+Approval callbacks receive normalized
+`hosting.sandbox.host_capability_approval.v1` payloads. Use
+`argument_preview` for bounded policy-relevant values such as `root_id`,
+`relative_path`, `url`, and `method`; do not depend on raw `arguments` in
+client approval code.
 
 The worker also attaches shared callable-surface metadata to callback context
 under `callable_surface`. That metadata uses

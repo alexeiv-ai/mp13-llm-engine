@@ -2713,6 +2713,8 @@ def test_execute_workflow_python_node_approval_requester_receives_normalized_pay
     assert approvals[0]["contract"] == "hosting.sandbox.host_capability_approval.v1"
     assert approvals[0]["method"] == "crm.customer.lookup"
     assert approvals[0]["argument_keys"] == ["customer_id", "secret"]
+    assert approvals[0]["argument_preview"]["customer_id"] == "c-1"
+    assert approvals[0]["argument_preview"]["secret"] == {"redacted": True, "reason": "secret_key"}
     assert "arguments" not in approvals[0]
     assert approvals[0]["context"]["request_id"] == "req-node-approval"
     assert audit["count"] == 1
@@ -2763,6 +2765,8 @@ def test_execute_workflow_js_node_approval_requester_receives_normalized_payload
     assert len(approvals) == 1
     assert approvals[0]["contract"] == "hosting.sandbox.host_capability_approval.v1"
     assert approvals[0]["argument_keys"] == ["customer_id", "secret"]
+    assert approvals[0]["argument_preview"]["customer_id"] == "c-2"
+    assert approvals[0]["argument_preview"]["secret"] == {"redacted": True, "reason": "secret_key"}
     assert "arguments" not in approvals[0]
     assert approvals[0]["context"]["request_id"] == "req-js-approval"
     assert audit["count"] == 1
@@ -2823,6 +2827,8 @@ def test_workflow_python_stream_open_uses_approval_requester_before_subscription
     assert opened["status"] == "ok"
     assert len(approvals) == 1
     assert approvals[0]["argument_keys"] == ["customer_id", "secret"]
+    assert approvals[0]["argument_preview"]["customer_id"] == "c-3"
+    assert approvals[0]["argument_preview"]["secret"] == {"redacted": True, "reason": "secret_key"}
     assert "approval" in event_kinds
     assert any(row["kind"] == "done" and row["status"] == "ok" for row in events)
 
