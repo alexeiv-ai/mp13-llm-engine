@@ -178,6 +178,13 @@ Limits:
   the new approval-request payload contract and remove any compatibility
   fallback requirements.
 
+### Deferred Polish
+
+- [ ] Consider adding a small shared helper that derives filesystem access mode
+  from service-broker method names such as `fs.read_text`, `fs.write_text`, and
+  `fs.list`. This is not blocking current clients, but would reduce duplicated
+  client-side mapping code around approval previews.
+
 ## Client Programming Model After Completion
 
 Clients choose a provider model per callable method:
