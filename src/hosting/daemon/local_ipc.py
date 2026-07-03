@@ -1913,6 +1913,7 @@ class EngineHostDaemon:
                     },
                 }
                 assert self._stop_event is not None
+                self.pid_file.remove()
                 self._stop_event.set()
                 return {"seq": seq, "ok": True, "result": "shutting_down"}
             return {
