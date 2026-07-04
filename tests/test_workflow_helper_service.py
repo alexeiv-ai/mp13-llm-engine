@@ -4,6 +4,7 @@ from pathlib import Path
 import base64
 import hashlib
 import io
+import json
 import sys
 import threading
 import time
@@ -3683,7 +3684,7 @@ def test_execute_workflow_python_node_exposes_sandbox_describe(tmp_path: Path) -
     assert all("binding" not in dict(row.get("provider") or {}) for row in out["output"]["capabilities"])
 
 
-def test_execute_workflow_python_node_state_api_persists_workflow_state(tmp_path: Path) -> None:
+def test_execute_workflow_python_node_state_api_persists_only_sandbox_state(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
@@ -3743,6 +3744,20 @@ def test_execute_workflow_python_node_state_api_persists_workflow_state(tmp_path
     assert read["status"] == "ok"
     assert read["output"]["exists"] is True
     assert read["output"]["value"] == {"name": "Ada", "tier": 2}
+    assert not hasattr(svc, "workflow_state_records")
+    assert not hasattr(svc, "set_workflow_state_records")
+    assert not hasattr(svc, "_normalize_workflow_state_records")
+
+    runtime_state_path = svc.hosting_root / "state" / "runtime_state.json"
+    persisted = json.loads(runtime_state_path.read_text(encoding="utf-8"))
+    persisted_text = json.dumps(persisted, sort_keys=True)
+    assert "workflow_state_records" not in persisted_text
+    assert "workflowStateRecord" not in persisted_text
+    assert "workflow_state_record" not in persisted_text
+    sandbox_state = dict(persisted.get("sandbox_state") or {})
+    workflow_partition = dict(dict(sandbox_state.get("workflow") or {}).get("wf-state") or {})
+    workflow_items = dict(workflow_partition.get("items") or {})
+    assert workflow_items["customer.profile"]["value"] == {"name": "Ada", "tier": 2}
 
 
 def test_execute_workflow_python_node_state_api_is_disabled_by_default(tmp_path: Path) -> None:

@@ -121,3 +121,74 @@ not a retention guarantee.
 During shutdown, the daemon now writes `daemon_shutdown_progress` reports to this
 file as stages advance. If shutdown gets stuck, the file should contain the last
 known shutdown stage and relevant details for stale-pid investigation.
+
+## Workflow backend cleanup after state-management refactor
+
+The remaining legacy workflow-state compatibility surfaces have been removed or
+verified absent.
+
+### Removed/absent platform APIs
+
+Do not call or reintroduce these APIs:
+
+- `workflow_state_records(...)`
+- `set_workflow_state_records(...)`
+- `_normalize_workflow_state_records(...)`
+
+Tests now assert persisted workspace/runtime JSON instead of using these
+accessors. The canonical persisted state location is:
+
+```text
+<hosting_root>/state/runtime_state.json
+```
+
+under:
+
+```json
+{
+  "sandbox_state": {
+    "workflow": {
+      "<workflow_id>": {
+        "items": {}
+      }
+    }
+  }
+}
+```
+
+There must be no persisted `workflow_state_records`,
+`workflowStateRecord`, or `workflow_state_record` keys.
+
+### Graph diagnostics naming
+
+Backend search found no remaining response fields named
+`workflowStateRecord` or `workflow_state_record`. Client/UI code should not
+depend on those names. If graph inspection diagnostics need a response field,
+use `workflowGraphContext` for UI/client JSON and `workflow_graph_context` for
+Python internals.
+
+Do not use `workflowStateRecord` / `workflow_state_record` for response-only
+graph diagnostics; those names imply the old persisted workflow-state model.
+
+### Resolver/state payload casing
+
+There is no supported dual `workflow_state` / `workflowState` compatibility
+path in the backend. For Python/backend internals use snake_case. For UI/client
+JSON, use camelCase only at the UI boundary when a UI model requires it.
+
+Canonical backend persisted state remains `sandbox_state`; workflow-scoped
+sandbox state is addressed by `scope="workflow"` or host calls such as:
+
+- `state.workflow.get`
+- `state.workflow.set`
+- `state.workflow.list`
+- `state.workflow.delete`
+
+Clients should not send `workflow_state` or `workflowState` as resolver payload
+aliases. Use explicit sandbox-state APIs or the state host-call namespace above.
+
+### Runtime router split
+
+No route URL changes are required for this cleanup. The optional module split
+for workflow runtime routes can be done later as maintenance, preserving current
+route names and daemon command names.
