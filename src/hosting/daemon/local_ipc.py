@@ -778,6 +778,55 @@ class EngineHostDaemon:
             event.update({str(k): v for k, v in extra.items()})
         self._shutdown_stage_events.append(event)
 
+    def _shutdown_progress_snapshot(self, *, stage: str, status: str, message: str, **extra: Any) -> Dict[str, Any]:
+        now = time.time()
+        read_pid_file = getattr(self.pid_file, "read", None)
+        pid_info = dict(read_pid_file() or {}) if callable(read_pid_file) else {}
+        requested_at = float(pid_info.get("shutdown_requested_at") or 0.0)
+        progress: Dict[str, Any] = {
+            "stage": str(stage or "unknown"),
+            "status": str(status or "info"),
+            "message": str(message or ""),
+            "timestamp": now,
+            "pid": os.getpid(),
+            "pid_file": str(getattr(self.pid_file, "path", self.pid_file)),
+            "runtime_profile": str(self._runtime_profile or ""),
+            "local_transport": dict(self._local_transport or {}),
+            "shutdown_requested_at": requested_at or None,
+            "shutdown_age_seconds": max(0.0, now - requested_at) if requested_at else None,
+            "shutdown_reason": str(pid_info.get("shutdown_reason") or self._shutdown_report.get("reason") or ""),
+            "shutdown_requested_by": str(
+                pid_info.get("shutdown_requested_by")
+                or dict(self._shutdown_report.get("actor") or {}).get("requested_by")
+                or ""
+            ),
+            "shutdown_stages": list(self._shutdown_stage_events),
+            "last_shutdown_checkpoints": dict(self._last_shutdown_checkpoints or {}),
+        }
+        if extra:
+            progress.update({str(k): v for k, v in extra.items()})
+        return progress
+
+    def _publish_shutdown_progress(self, stage: str, status: str, message: str, **extra: Any) -> None:
+        self._record_shutdown_stage(stage, status, message, **extra)
+        progress = self._shutdown_progress_snapshot(stage=stage, status=status, message=message, **extra)
+        try:
+            update_progress = getattr(self.pid_file, "update_shutdown_progress", None)
+            if callable(update_progress):
+                update_progress(progress)
+        except Exception:
+            logger.debug("Failed to update daemon shutdown progress in pid file", exc_info=True)
+        try:
+            write_daemon_report(
+                event="daemon_shutdown_progress",
+                reason=str(stage or "shutdown_progress"),
+                actor=dict(self._shutdown_report.get("actor") or {}),
+                details={"shutdown_progress": progress},
+                path=self.svc.hosting_root / "logs" / "daemon-crash.log",
+            )
+        except Exception:
+            logger.debug("Failed to write daemon shutdown progress report", exc_info=True)
+
     def _terminal_control_enabled(self) -> bool:
         policy = self.svc.get_lifecycle_policy_effective()
         eff = dict(policy.get("effective") or {})
@@ -1700,8 +1749,19 @@ class EngineHostDaemon:
         try:
             read_pid_file = getattr(self.pid_file, "read", None)
             is_pid_alive = getattr(self.pid_file, "is_alive", None)
+            is_pid_process_alive = getattr(self.pid_file, "process_alive", None)
             existing = dict(read_pid_file() or {}) if callable(read_pid_file) else {}
-            if callable(is_pid_alive) and is_pid_alive() and existing.get("shutdown_token"):
+            existing_alive = (
+                bool(is_pid_process_alive())
+                if callable(is_pid_process_alive)
+                else bool(is_pid_alive()) if callable(is_pid_alive) else False
+            )
+            if existing_alive and existing.get("shutdown_token"):
+                existing_state = str(existing.get("lifecycle_state") or "running").strip().lower()
+                if existing_state in {"shutting_down", "stopping"}:
+                    raise RuntimeError(
+                        f"Engine host daemon is already shutting down for pid file {self.pid_file.path}"
+                    )
                 try:
                     from ..engine_host_connection import LocalSocketConnection
 
@@ -1796,39 +1856,41 @@ class EngineHostDaemon:
                 self._loop = None
             else:
                 try:
-                    self._shutdown_stage_events = []
-                    self._record_shutdown_stage(
+                    self._publish_shutdown_progress(
                         "shutdown.begin",
                         "running",
                         "Daemon shutdown sequence started",
                     )
-                    self._record_shutdown_stage(
+                    self._publish_shutdown_progress(
                         "shutdown.operations_drain",
                         "running",
                         "Draining in-flight operations",
                     )
                     drain_report = await self._drain_inflight_operations(timeout_seconds=5.0)
-                    self._record_shutdown_stage(
+                    self._publish_shutdown_progress(
                         "shutdown.operations_drain",
                         "completed",
                         "In-flight operations drain complete",
+                        operation_drain=dict(drain_report),
                         pending_before=int(drain_report.get("pending_before") or 0),
                         pending_after=int(drain_report.get("pending_after") or 0),
                         timed_out=bool(drain_report.get("timed_out", False)),
                     )
-                    self._record_shutdown_stage(
+                    self._publish_shutdown_progress(
                         "shutdown.managed_workers",
                         "running",
                         "Running managed worker shutdown checkpoints",
+                        operation_drain=dict(drain_report),
                     )
                     report = await asyncio.to_thread(self._execute_shutdown_checkpoints)
                     report["operation_drain"] = dict(drain_report)
                     report["shutdown_stages"] = list(self._shutdown_stage_events)
                     self._last_shutdown_checkpoints = dict(report)
-                    self._record_shutdown_stage(
+                    self._publish_shutdown_progress(
                         "shutdown.managed_workers",
                         "completed",
                         "Managed worker shutdown checkpoints complete",
+                        shutdown_checkpoints=dict(report),
                         attempted=int(report.get("attempted") or 0),
                         stopped=int(report.get("stopped") or 0),
                         failed=int(report.get("failed") or 0),
@@ -1840,6 +1902,12 @@ class EngineHostDaemon:
                         report.get("failed"),
                     )
                 except Exception as exc:
+                    self._publish_shutdown_progress(
+                        "shutdown.failed",
+                        "failed",
+                        "Shutdown checkpoints failed",
+                        error=str(exc),
+                    )
                     logger.warning("Shutdown checkpoints failed: %s", exc)
                 self._stop_local_control_listener()
                 self.pid_file.remove()
@@ -1913,7 +1981,18 @@ class EngineHostDaemon:
                     },
                 }
                 assert self._stop_event is not None
-                self.pid_file.remove()
+                self._shutdown_stage_events = []
+                mark_shutting_down = getattr(self.pid_file, "mark_shutting_down", None)
+                if callable(mark_shutting_down):
+                    mark_shutting_down(
+                        reason=str(payload.get("shutdown_reason") or payload.get("reason") or "client_requested_shutdown"),
+                        requested_by=str(payload.get("requested_by") or "unknown"),
+                    )
+                self._publish_shutdown_progress(
+                    "shutdown.accepted",
+                    "running",
+                    "Daemon shutdown request accepted",
+                )
                 self._stop_event.set()
                 return {"seq": seq, "ok": True, "result": "shutting_down"}
             return {

@@ -360,8 +360,51 @@ class EngineHostControlChannel:
             "pid": status.get("pid"),
             "port": status.get("port"),
             "started_at": status.get("started_at"),
+            "lifecycle_state": status.get("lifecycle_state"),
             "pid_alive": bool(status.get("pid_alive", False)),
             "reachable": bool(status.get("reachable", False)),
+        }
+
+    @staticmethod
+    def _pidfile_process_alive(pid_info: Any) -> bool:
+        process_alive = getattr(pid_info, "process_alive", None)
+        if callable(process_alive):
+            return bool(process_alive())
+        is_alive = getattr(pid_info, "is_alive", None)
+        return bool(is_alive()) if callable(is_alive) else False
+
+    def _shutdown_diagnostics_from_pid_info(self, info: Dict[str, Any], *, pid_file: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+        if not info:
+            return None
+        progress = dict(info.get("shutdown_progress") or {}) if isinstance(info.get("shutdown_progress"), dict) else {}
+        requested_at = float(info.get("shutdown_requested_at") or progress.get("shutdown_requested_at") or 0.0)
+        progress_updated_at = float(info.get("shutdown_progress_updated_at") or progress.get("timestamp") or 0.0)
+        now = time.time()
+        if not requested_at and not progress:
+            return None
+        try:
+            from .daemon.diagnostics import daemon_report_path_for_control_state
+
+            report_path = daemon_report_path_for_control_state(self._local_control_state_path())
+        except Exception:
+            report_path = None
+        return {
+            "pid": int(info.get("pid") or progress.get("pid") or 0) or None,
+            "pid_file": str(info.get("pid_file") or pid_file or self.control_settings.get("engine_host_daemon_pid_file") or ""),
+            "lifecycle_state": str(info.get("lifecycle_state") or "running"),
+            "shutdown_requested_at": requested_at or None,
+            "shutdown_age_seconds": max(0.0, now - requested_at) if requested_at else None,
+            "shutdown_reason": str(info.get("shutdown_reason") or progress.get("shutdown_reason") or "") or None,
+            "shutdown_requested_by": str(info.get("shutdown_requested_by") or progress.get("shutdown_requested_by") or "") or None,
+            "shutdown_progress_updated_at": progress_updated_at or None,
+            "shutdown_progress_age_seconds": max(0.0, now - progress_updated_at) if progress_updated_at else None,
+            "shutdown_stage": str(progress.get("stage") or "") or None,
+            "shutdown_stage_status": str(progress.get("status") or "") or None,
+            "shutdown_stage_message": str(progress.get("message") or "") or None,
+            "operation_drain": dict(progress.get("operation_drain") or {}),
+            "shutdown_checkpoints": dict(progress.get("shutdown_checkpoints") or progress.get("last_shutdown_checkpoints") or {}),
+            "shutdown_stages": list(progress.get("shutdown_stages") or []),
+            "daemon_report_path": str(report_path) if report_path is not None else None,
         }
 
     def _daemon_status_event(self, status: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -381,6 +424,8 @@ class EngineHostControlChannel:
             or previous.get("started_at") != current.get("started_at")
         ):
             reason = "pid_file_updated"
+        elif previous.get("lifecycle_state") != current.get("lifecycle_state"):
+            reason = "lifecycle_state_changed"
         elif previous.get("reachable") != current.get("reachable"):
             reason = "reachability_changed"
         return {
@@ -941,12 +986,15 @@ class EngineHostControlChannel:
         pid_info = DaemonPidFile(pid_file_path)
         pid_path = _resolved_pid_path(pid_info, pid_file_path)
         info = pid_info.read() or {}
-        pid_alive = bool(pid_info.is_alive())
+        pid_alive = self._pidfile_process_alive(pid_info)
+        lifecycle_state = str(info.get("lifecycle_state") or "running").strip() or "running"
         status: Dict[str, Any] = {
             "pid_file": str(pid_info.path),
             "pid": info.get("pid"),
             "port": info.get("port"),
             "started_at": info.get("started_at"),
+            "lifecycle_state": lifecycle_state if info else None,
+            "shutdown_diagnostics": self._shutdown_diagnostics_from_pid_info(info, pid_file=pid_info.path),
             "pid_alive": pid_alive,
             "reachable": False,
             "reachability_error": None,
@@ -955,6 +1003,9 @@ class EngineHostControlChannel:
             "auth_status_error": None,
         }
         if not pid_alive:
+            return self._finalize_daemon_status(status)
+        if lifecycle_state.lower() in {"shutting_down", "stopping"}:
+            status["reachability_error"] = "daemon_shutting_down"
             return self._finalize_daemon_status(status)
         try:
             port = int(info.get("port") or 0)
@@ -1001,16 +1052,25 @@ class EngineHostControlChannel:
         auto_recovery_attempted = False
         auto_recovery_policy: Optional[Dict[str, Any]] = None
         auto_recovery_stop: Optional[Dict[str, Any]] = None
-        if pid_info.is_alive():
+        pid_alive = self._pidfile_process_alive(pid_info)
+        if pid_alive:
             status = self.get_daemon_status()
             if bool(status.get("alive") or status.get("reachable")):
                 return {"already_running": True, **status}
+            if str(status.get("lifecycle_state") or "").strip().lower() in {"shutting_down", "stopping"}:
+                return {
+                    "already_running": False,
+                    "blocked_by_shutting_down_pid": True,
+                    "error": "existing daemon PID is still shutting down",
+                    **status,
+                }
             recovery_policy = self._should_auto_recover_unreachable_local_daemon()
             if bool(recovery_policy.get("auto_recover")) and bool(recover_unreachable):
                 auto_recovery_attempted = True
                 auto_recovery_policy = dict(recovery_policy)
                 auto_recovery_stop = self.force_stop_daemon(stop_workers=True, stop_orphan_workers=True)
-                if pid_info.is_alive():
+                pid_alive = self._pidfile_process_alive(pid_info)
+                if pid_alive:
                     return {
                         "already_running": False,
                         "blocked_by_unreachable_pid": True,
@@ -1086,7 +1146,7 @@ class EngineHostControlChannel:
             conn.close()
             with self._connection_lock:
                 self._connection = None
-            return {"status": "shutdown_sent"}
+            return {"status": "shutdown_sent", "daemon_status": self.get_daemon_status()}
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
@@ -1195,6 +1255,8 @@ class EngineHostControlChannel:
         pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
         pid_info = DaemonPidFile(pid_file_path)
         info = dict(pid_info.read() or {})
+        pre_force_status = self.get_daemon_status()
+        stuck_shutdown = dict(pre_force_status.get("shutdown_diagnostics") or {})
         worker_report: Dict[str, Any] = {
             "enabled": bool(stop_workers),
             "registered_attempted": 0,
@@ -1277,7 +1339,8 @@ class EngineHostControlChannel:
         )
         pid = int(info.get("pid") or 0)
         terminate_result: Dict[str, Any] = {"pid": pid, "attempted": False, "status": "not_needed"}
-        if pid > 0 and pid_info.is_alive():
+        daemon_process_alive = self._pidfile_process_alive(pid_info)
+        if pid > 0 and daemon_process_alive:
             terminate_result = {"pid": pid, "attempted": True, "status": "running"}
             self._write_local_daemon_report(
                 event="daemon_force_terminate_requested",
@@ -1285,6 +1348,8 @@ class EngineHostControlChannel:
                 details={
                     "pid": pid,
                     "pid_file": str(getattr(pid_info, "path", "") or ""),
+                    "daemon_status_before_force": dict(pre_force_status or {}),
+                    "stuck_shutdown": dict(stuck_shutdown or {}),
                     "graceful_stop": dict(graceful or {}),
                     "worker_shutdown": worker_report,
                 },
@@ -1293,18 +1358,22 @@ class EngineHostControlChannel:
                 os.kill(pid, getattr(signal, "SIGTERM", 15))
                 deadline = time.time() + max(0.1, float(wait_seconds))
                 while time.time() < deadline:
-                    if not pid_info.is_alive():
+                    daemon_process_alive = self._pidfile_process_alive(pid_info)
+                    if not daemon_process_alive:
                         break
                     time.sleep(0.1)
-                if pid_info.is_alive():
+                daemon_process_alive = self._pidfile_process_alive(pid_info)
+                if daemon_process_alive:
                     sigkill = getattr(signal, "SIGKILL", getattr(signal, "SIGTERM", 15))
                     os.kill(pid, sigkill)
                     time.sleep(0.2)
-                terminate_result["status"] = "terminated" if not pid_info.is_alive() else "terminate_failed"
+                daemon_process_alive = self._pidfile_process_alive(pid_info)
+                terminate_result["status"] = "terminated" if not daemon_process_alive else "terminate_failed"
             except Exception as exc:
                 terminate_result["status"] = "error"
                 terminate_result["error"] = str(exc)
-        if not pid_info.is_alive():
+        daemon_process_alive = self._pidfile_process_alive(pid_info)
+        if not daemon_process_alive:
             if pid > 0 and bool(terminate_result.get("attempted")):
                 self._write_local_daemon_report(
                     event="daemon_force_terminated",
@@ -1312,6 +1381,8 @@ class EngineHostControlChannel:
                     details={
                         "pid": pid,
                         "pid_file": str(getattr(pid_info, "path", "") or ""),
+                        "daemon_status_before_force": dict(pre_force_status or {}),
+                        "stuck_shutdown": dict(stuck_shutdown or {}),
                         "graceful_stop": dict(graceful or {}),
                         "daemon_terminate": dict(terminate_result or {}),
                     },
@@ -1327,6 +1398,8 @@ class EngineHostControlChannel:
         return {
             "status": "ok" if str(terminate_result.get("status") or "") != "terminate_failed" else "error",
             "local_helper_only": True,
+            "daemon_status_before_force": dict(pre_force_status or {}),
+            "stuck_shutdown": dict(stuck_shutdown or {}),
             "worker_shutdown": worker_report,
             "graceful_stop": graceful,
             "daemon_terminate": terminate_result,
@@ -1357,7 +1430,8 @@ class EngineHostControlChannel:
             requested_by="EngineHostControlChannel.reset_hosting_access",
         )
         pid = int(daemon_info.get("pid") or 0)
-        if pid > 0 and bool(pid_info.is_alive()):
+        pid_alive = self._pidfile_process_alive(pid_info)
+        if pid > 0 and pid_alive:
             self._write_local_daemon_report(
                 event="daemon_force_terminate_requested",
                 reason="reset_hosting_access_after_graceful_stop_failed",
@@ -1374,15 +1448,18 @@ class EngineHostControlChannel:
             else:
                 deadline = time.time() + 3.0
                 while time.time() < deadline:
-                    if not pid_info.is_alive():
+                    pid_alive = self._pidfile_process_alive(pid_info)
+                    if not pid_alive:
                         break
                     time.sleep(0.1)
+                pid_alive = self._pidfile_process_alive(pid_info)
                 stop_result = {
-                    "status": "terminated" if not pid_info.is_alive() else "terminate_timeout",
+                    "status": "terminated" if not pid_alive else "terminate_timeout",
                     "forced_kill_attempted": True,
                     "pid": pid,
                 }
-        if not pid_info.is_alive():
+        pid_alive = self._pidfile_process_alive(pid_info)
+        if not pid_alive:
             if pid > 0 and bool(dict(stop_result or {}).get("forced_kill_attempted")):
                 self._write_local_daemon_report(
                     event="daemon_force_terminated",

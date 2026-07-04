@@ -32,10 +32,39 @@ def start_daemon_background(
     """
     pid_info = DaemonPidFile(pid_file)
     existing_info = pid_info.read() or {}
+    process_alive = getattr(pid_info, "process_alive", None)
+    existing_pid_alive = bool(process_alive()) if callable(process_alive) else bool(pid_info.is_alive())
+    existing_state = str(existing_info.get("lifecycle_state") or "running").strip().lower()
+    if existing_pid_alive and existing_state in {"shutting_down", "stopping"}:
+        deadline = time.time() + max(1.0, float(wait_ready_seconds))
+        while time.time() < deadline:
+            time.sleep(0.15)
+            existing_info = pid_info.read() or {}
+            process_alive = getattr(pid_info, "process_alive", None)
+            existing_pid_alive = bool(process_alive()) if callable(process_alive) else bool(pid_info.is_alive())
+            existing_state = str(existing_info.get("lifecycle_state") or "running").strip().lower()
+            if not existing_pid_alive:
+                break
+            if existing_state not in {"shutting_down", "stopping"}:
+                break
+        if existing_pid_alive and existing_state in {"shutting_down", "stopping"}:
+            progress = dict(existing_info.get("shutdown_progress") or {}) if isinstance(existing_info.get("shutdown_progress"), dict) else {}
+            requested_at = float(existing_info.get("shutdown_requested_at") or progress.get("shutdown_requested_at") or 0.0)
+            age = max(0.0, time.time() - requested_at) if requested_at else None
+            stage = str(progress.get("stage") or "").strip() or "unknown"
+            reason = str(existing_info.get("shutdown_reason") or progress.get("shutdown_reason") or "").strip() or "unknown"
+            raise RuntimeError(
+                "Existing engine host daemon is still shutting down; "
+                "wait for it to exit before starting another daemon "
+                f"(pid={int(existing_info.get('pid') or 0)}, pid_file={pid_info.path}, "
+                f"shutdown_reason={reason}, shutdown_stage={stage}, shutdown_age_seconds={age})"
+            )
     # Only treat a live PID file as an existing hosting daemon when it has the
     # metadata written by DaemonPidFile.write(). This avoids mistaking minimal
     # test/stale PID-like records for a reusable daemon instance.
-    if pid_info.is_alive() and (existing_info.get("started_at") or existing_info.get("shutdown_token")):
+    process_alive = getattr(pid_info, "process_alive", None)
+    existing_pid_alive = bool(process_alive()) if callable(process_alive) else bool(pid_info.is_alive())
+    if existing_pid_alive and (existing_info.get("started_at") or existing_info.get("shutdown_token")):
         actual_port = int(existing_info.get("port") or 0)
         if actual_port:
             try:

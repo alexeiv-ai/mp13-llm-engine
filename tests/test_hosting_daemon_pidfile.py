@@ -206,6 +206,55 @@ def test_start_daemon_background_refuses_unreachable_live_pid(monkeypatch) -> No
     assert captured["popen_called"] is False
 
 
+def test_start_daemon_background_refuses_live_shutting_down_pid(monkeypatch) -> None:
+    captured: dict[str, object] = {"popen_called": False, "sleeps": 0}
+
+    class _FakePidFile:
+        path = Path("X:/tmp/daemon.pid")
+
+        def __init__(self, _path=None):
+            return
+
+        def is_alive(self) -> bool:
+            return False
+
+        def process_alive(self) -> bool:
+            return True
+
+        def read(self):
+            return {
+                "pid": 55555,
+                "port": 19876,
+                "started_at": 123.0,
+                "shutdown_token": "tok",
+                "transport": "local_ipc",
+                "lifecycle_state": "shutting_down",
+            }
+
+    def _fake_popen(*_args, **_kwargs):
+        captured["popen_called"] = True
+        raise AssertionError("should not spawn while previous daemon is shutting down")
+
+    def _fake_sleep(_sec: float) -> None:
+        captured["sleeps"] = int(captured.get("sleeps") or 0) + 1
+
+    times = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", _fake_sleep)
+    monkeypatch.setattr("hosting.daemon.background.time.time", lambda: next(times, 2.0))
+
+    try:
+        start_daemon_background(port=19876, wait_ready_seconds=1.0)
+    except RuntimeError as exc:
+        assert "still shutting down" in str(exc)
+    else:
+        raise AssertionError("start_daemon_background should refuse live shutting-down PID")
+
+    assert captured["popen_called"] is False
+    assert int(captured["sleeps"]) == 1
+
+
 def test_foreground_daemon_rejects_existing_reachable_pidfile(monkeypatch, tmp_path: Path) -> None:
     daemon = EngineHostDaemon(pid_file=tmp_path / "daemon.pid")
     started_listener = {"called": False}
@@ -287,6 +336,84 @@ def test_pidfile_write_persists_payload(tmp_path: Path) -> None:
     assert str(raw["shutdown_token"]) == "tok"
     assert str(raw["transport"]) == "local_ipc"
     assert str(raw["ipc_family"]) == "AF_UNIX"
+    assert str(raw["lifecycle_state"]) == "running"
+
+
+def test_pidfile_mark_shutting_down_hides_available_liveness_but_preserves_process_owner(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    pid = DaemonPidFile(tmp_path / "daemon.pid")
+    pid.write(
+        pid=1234,
+        port=19876,
+        shutdown_token="tok",
+        transport="local_ipc",
+        ipc_family="AF_UNIX",
+        ipc_address=str(tmp_path / "daemon.sock"),
+    )
+    monkeypatch.setattr(DaemonPidFile, "_pid_alive", staticmethod(lambda _pid: True))
+
+    pid.mark_shutting_down(reason="unit_test_shutdown", requested_by="unit-test")
+
+    info = pid.read() or {}
+    assert info["lifecycle_state"] == "shutting_down"
+    assert info["shutdown_token"] == "tok"
+    assert info["pid"] == 1234
+    assert pid.is_alive() is False
+    assert pid.process_alive() is True
+
+
+def test_pidfile_update_shutdown_progress_persists_client_diagnostics(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    pid = DaemonPidFile(tmp_path / "daemon.pid")
+    pid.write(pid=1234, port=19876, shutdown_token="tok")
+    pid.mark_shutting_down(reason="operator_stop", requested_by="unit-test")
+    monkeypatch.setattr("hosting.daemon.pidfile.time.time", lambda: 100.0)
+
+    pid.update_shutdown_progress(
+        {
+            "stage": "shutdown.operations_drain",
+            "status": "running",
+            "message": "Draining in-flight operations",
+            "operation_drain": {"pending_before": 2},
+        }
+    )
+
+    info = pid.read() or {}
+    assert info["lifecycle_state"] == "shutting_down"
+    assert info["shutdown_progress_updated_at"] == 100.0
+    progress = dict(info["shutdown_progress"] or {})
+    assert progress["stage"] == "shutdown.operations_drain"
+    assert progress["operation_drain"]["pending_before"] == 2
+
+
+def test_daemon_shutdown_progress_updates_pidfile_and_crash_report(tmp_path: Path) -> None:
+    daemon = EngineHostDaemon(
+        port=0,
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    daemon.pid_file.write(pid=1234, port=19876, shutdown_token=daemon.shutdown_token)
+    daemon.pid_file.mark_shutting_down(reason="unit_test_shutdown", requested_by="unit-test")
+
+    daemon._publish_shutdown_progress(  # noqa: SLF001
+        "shutdown.operations_drain",
+        "running",
+        "Draining in-flight operations",
+        operation_drain={"pending_before": 2, "pending_after": 1, "timed_out": True},
+    )
+
+    info = daemon.pid_file.read() or {}
+    progress = dict(info["shutdown_progress"] or {})
+    assert progress["stage"] == "shutdown.operations_drain"
+    assert progress["operation_drain"]["timed_out"] is True
+    report_text = (daemon.svc.hosting_root / "logs" / "daemon-crash.log").read_text(encoding="utf-8")
+    assert "daemon_shutdown_progress" in report_text
+    assert "shutdown.operations_drain" in report_text
 
 
 def test_daemon_local_ipc_endpoint_uses_unix_socket_on_posix(monkeypatch, tmp_path: Path) -> None:

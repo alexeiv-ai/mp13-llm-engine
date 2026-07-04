@@ -2001,6 +2001,59 @@ def test_daemon_status_marks_unreachable_when_ping_fails(monkeypatch) -> None:
     assert status["status_event"] is None
 
 
+def test_daemon_status_reports_shutting_down_diagnostics(monkeypatch, tmp_path: Path) -> None:
+    pid_file = tmp_path / "daemon.pid"
+
+    class _FakePidFile:
+        path = pid_file
+
+        def __init__(self, _path: Optional[str] = None):
+            return
+
+        def read(self) -> Dict[str, Any]:
+            return {
+                "pid": 9999,
+                "port": 19876,
+                "started_at": 123.0,
+                "lifecycle_state": "shutting_down",
+                "shutdown_requested_at": 100.0,
+                "shutdown_reason": "operator_stop",
+                "shutdown_requested_by": "unit-test",
+                "shutdown_progress_updated_at": 120.0,
+                "shutdown_progress": {
+                    "stage": "shutdown.operations_drain",
+                    "status": "running",
+                    "message": "Draining in-flight operations",
+                    "operation_drain": {"pending_before": 2, "pending_after": 1, "timed_out": True},
+                    "shutdown_stages": [{"stage": "shutdown.accepted"}],
+                },
+            }
+
+        def process_alive(self) -> bool:
+            return True
+
+    class _UnexpectedSocket:
+        def __init__(self, **_kwargs: Any):
+            raise AssertionError("shutting-down daemon should not be pinged")
+
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _UnexpectedSocket)
+    monkeypatch.setattr("hosting.engine_host_channel.time.time", lambda: 130.0)
+
+    ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(pid_file), "engine_host_daemon_auto_bootstrap": False})
+    status = ch.get_daemon_status()
+
+    assert status["pid_alive"] is True
+    assert status["reachable"] is False
+    assert status["reachability_error"] == "daemon_shutting_down"
+    diag = dict(status["shutdown_diagnostics"] or {})
+    assert diag["shutdown_age_seconds"] == 30.0
+    assert diag["shutdown_progress_age_seconds"] == 10.0
+    assert diag["shutdown_stage"] == "shutdown.operations_drain"
+    assert diag["operation_drain"]["timed_out"] is True
+    assert "daemon-crash.log" in str(diag["daemon_report_path"])
+
+
 def test_prepare_local_unconfigured_bootstrap_forces_no_auth_exclusive(monkeypatch) -> None:
     captured: Dict[str, Any] = {}
     control_state_path = Path("X:/tmp/access_control.json")
@@ -2251,7 +2304,8 @@ def test_stop_daemon_sends_shutdown_reason(monkeypatch, tmp_path: Path) -> None:
     ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(pid_file)})
     out = ch.stop_daemon(reason="operator_test", requested_by="unit-test")
 
-    assert out == {"status": "shutdown_sent"}
+    assert out["status"] == "shutdown_sent"
+    assert dict(out["daemon_status"] or {})["pid"] == 4444
     assert captured["cmd"] == "__shutdown__"
     assert captured["payload"]["shutdown_token"] == "tok"
     assert captured["payload"]["shutdown_reason"] == "operator_test"
