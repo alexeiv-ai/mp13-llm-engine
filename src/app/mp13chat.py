@@ -8997,12 +8997,6 @@ async def _handle_raw_command(args_str: str, cursor: ChatCursor) -> ChatCursor:
                         "mem_allocated": chunk_data.get("mem_allocated"),
                         "mem_reserved": chunk_data.get("mem_reserved"),
                     }
-                    agg_subset = {
-                        key: final_metrics.get(key)
-                        for key in ("cache_queued", "in_flight_req", "mem_allocated", "mem_reserved")
-                        if final_metrics.get(key) is not None
-                    }
-                    try_cursor.update_metrics(ChatCursor.update_response_metrics(metrics=agg_subset))
                     break
                 elif chunk_data.get("chunkType") == ChunkType.ERROR.value:
                     sys.stdout.write(f"\n{Colors.ERROR}Error during stream: {chunk_data.get('error')}{Colors.RESET}\n")
@@ -9015,8 +9009,6 @@ async def _handle_raw_command(args_str: str, cursor: ChatCursor) -> ChatCursor:
 
                         if chunk_data.get("is_final_chunk"):
                             final_chunk_for_item_metrics = chunk_data
-                            metrics_payload = ChatCursor.update_response_metrics(metrics=chunk_data)
-                            try_cursor.update_metrics(metrics_payload)
         else:
             print(f"\n{Colors.ERROR}Error: Expected a streaming response for /raw command but received a synchronous one.{Colors.RESET}")
 
@@ -9764,6 +9756,12 @@ async def _execute_inference_round(
                 if any(bool(item.was_truncated) for item in final_response_item_objects):
                     was_truncated = True
             responses_in_progress = stream_result.text_by_prompt
+            if len(final_response_item_objects) > 1:
+                raise RuntimeError(
+                    "Single-turn inference returned multiple final responses."
+                )
+
+            active_cursor = _require_current_cursor()
             primary_response_item = final_response_item_objects[0] if final_response_item_objects else None
             for response_item in final_response_item_objects:
                 if not error_response_item and response_item.chunkType == ChunkType.ERROR:
@@ -9778,7 +9776,7 @@ async def _execute_inference_round(
                     extra=extra_metrics or None,
                 )
                 if metrics_payload:
-                    cursor.update_metrics(metrics_payload)
+                    active_cursor.update_metrics(metrics_payload)
             if final_metrics:
                 accumulated_input_tokens = final_metrics.get("total_input_tokens", accumulated_input_tokens)
                 accumulated_output_tokens = final_metrics.get("total_output_tokens", accumulated_output_tokens)
@@ -9858,8 +9856,6 @@ async def _execute_inference_round(
         if was_truncated and any_tool_blocks:
             for block in all_tool_blocks:
                 block.action_block.extend([ToolCall.KeepRaw, ToolCall.Ignore])
-
-        active_cursor = _require_current_cursor()
 
         if error_response_item:
             content_text = responses_in_progress.get(0, "") or (getattr(error_response_item, "chunk_text", None) or "")

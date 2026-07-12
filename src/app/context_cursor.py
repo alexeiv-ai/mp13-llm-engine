@@ -1290,31 +1290,11 @@ class ChatCursor:
         *,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        tracked_fields = [
-            "input_tokens",
-            "output_tokens",
-            "generation_duration_sec",
-            "time_to_first_token_sec",
-            "tokens_per_second",
-            "cache_metric",
-            "cache_warming",
-            "was_truncated",
-            "tool_blocks_count",
-            "tool_blocks_tokens",
-            "total_input_tokens",
-            "total_output_tokens",
-            "total_generation_duration_sec",
-            "overall_tps",
-            "avg_time_to_first_token_sec",
-            "total_prompts_processed",
-            "total_tool_blocks",
-            "total_tool_blocks_tokens",
-            "cache_queued",
-            "in_flight_req",
-            "mem_allocated",
-            "mem_reserved",
-        ]
-        metrics = {field: chunk_data.get(field) for field in tracked_fields if field in chunk_data}
+        metrics = {
+            field: chunk_data.get(field)
+            for field in ChatCursor._KNOWN_METRIC_FIELDS
+            if field in chunk_data
+        }
         if extra:
             metrics.update(extra)
         return {k: v for k, v in metrics.items() if v is not None}

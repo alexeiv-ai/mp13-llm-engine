@@ -1353,6 +1353,7 @@ class EngineSession:
                 
         return scope_commands
 
+    @_with_write_lock
     def add_update_metrics(self, target_turn: Turn, metrics: Dict[str, Any]) -> None:
         """
         Adds or updates metrics for a given Turn object.
