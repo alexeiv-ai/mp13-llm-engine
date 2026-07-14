@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 import uuid
@@ -9,6 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 
 ControlDispatch = Callable[..., Dict[str, Any] | Awaitable[Dict[str, Any]]]
+TOOL_CONTEXT_CONTROL_CALLBACK = "tool_context_control_dispatch"
 
 
 def _clean(value: Any) -> str:
@@ -170,4 +172,83 @@ def make_tool_context_control_handlers(
     return {"toolbox_search_and_scope": toolbox_search_and_scope}
 
 
-__all__ = ["make_tool_context_control_handlers"]
+def make_tool_context_control_handlers_from_binding(
+    callback_binding: Mapping[str, Any],
+    *,
+    workspace_id: str = "",
+) -> Dict[str, Callable[..., Awaitable[Dict[str, Any]]]]:
+    """Build handlers whose canonical dispatcher lives in another process."""
+
+    binding = dict(callback_binding or {})
+    if not _clean(binding.get("address")) or not _clean(binding.get("session_token")):
+        raise ValueError("tool context callback binding is incomplete")
+
+    async def dispatch(*, method: str, arguments: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        from hosting.toolbox_executor_ipc import _invoke_callback_binding
+
+        response = await asyncio.to_thread(
+            _invoke_callback_binding,
+            binding,
+            callback_name=TOOL_CONTEXT_CONTROL_CALLBACK,
+            payload={
+                "method": _clean(method),
+                "arguments": dict(arguments or {}),
+                "context": dict(context or {}),
+            },
+            context=dict(context or {}),
+        )
+        result = response.get("result")
+        return _dict(result)
+
+    return make_tool_context_control_handlers(dispatch, workspace_id=workspace_id)
+
+
+class ToolContextControlCallbackTransport:
+    """Application-side authenticated callback binding for a remote chat round."""
+
+    def __init__(self, control_dispatch: ControlDispatch) -> None:
+        if not callable(control_dispatch):
+            raise TypeError("control_dispatch must be callable")
+        from hosting.toolbox.callbacks import _HostedToolCallbackRelay
+
+        self._relay = _HostedToolCallbackRelay()
+        self._binding = self._relay.bind_session(
+            processor=self._processor,
+            toolbox_id="application-tool-context",
+            tool_name="toolbox_search_and_scope",
+            tool_call_id="control-transport",
+            callback_signature={
+                "callbacks": [
+                    {
+                        "name": TOOL_CONTEXT_CONTROL_CALLBACK,
+                        "payload_type": "object",
+                    }
+                ]
+            },
+        )
+        self._control_dispatch = control_dispatch
+
+    @property
+    def binding(self) -> Dict[str, Any]:
+        return dict(self._binding)
+
+    def _processor(self, *, callback_name: str, payload: Any, context: Any) -> Any:
+        if _clean(callback_name) != TOOL_CONTEXT_CONTROL_CALLBACK:
+            return {"status": "error", "message": "unsupported_tool_context_callback"}
+        request = _dict(payload)
+        return self._control_dispatch(
+            method=_clean(request.get("method")),
+            arguments=_dict(request.get("arguments")),
+            context=_dict(request.get("context")),
+        )
+
+    def close(self) -> None:
+        self._relay.release_session(_clean(self._binding.get("session_token")))
+
+
+__all__ = [
+    "TOOL_CONTEXT_CONTROL_CALLBACK",
+    "ToolContextControlCallbackTransport",
+    "make_tool_context_control_handlers",
+    "make_tool_context_control_handlers_from_binding",
+]

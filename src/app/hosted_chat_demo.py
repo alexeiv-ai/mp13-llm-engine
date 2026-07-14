@@ -459,7 +459,17 @@ def setup_hosted_chat_demo(
     worker_profile_class: str = "generic",
     control_tool_handlers: Optional[Dict[str, Callable[..., Any]]] = None,
     control_callback_context: Optional[Dict[str, Any]] = None,
+    control_callback_binding: Optional[Dict[str, Any]] = None,
 ) -> HostedChatDemoRuntime:
+    if control_tool_handlers and control_callback_binding:
+        raise ValueError("provide control_tool_handlers or control_callback_binding, not both")
+    resolved_control_handlers = dict(control_tool_handlers or {})
+    if control_callback_binding:
+        from .tool_context_control_bridge import make_tool_context_control_handlers_from_binding
+
+        resolved_control_handlers = make_tool_context_control_handlers_from_binding(
+            control_callback_binding
+        )
     plan = build_hosted_chat_demo_plan(toolbox_id=toolbox_id, project_root=project_root)
     register_local_hosted_chat_demo_tools(toolbox, project_root=plan.project_root)
     root = Path(hosting_root).expanduser().resolve()
@@ -499,7 +509,7 @@ def setup_hosted_chat_demo(
         plan=plan,
         callback_processor=callback_processor,
         host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
-        control_tool_handlers=dict(control_tool_handlers or {}) if isinstance(control_tool_handlers, dict) else None,
+        control_tool_handlers=resolved_control_handlers or None,
         control_callback_context=dict(control_callback_context or {}) if isinstance(control_callback_context, dict) else None,
     )
 

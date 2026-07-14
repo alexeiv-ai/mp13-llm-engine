@@ -2,7 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.tool_context_control_bridge import make_tool_context_control_handlers
+from app.tool_context_control_bridge import (
+    ToolContextControlCallbackTransport,
+    make_tool_context_control_handlers,
+    make_tool_context_control_handlers_from_binding,
+)
 
 
 @pytest.mark.asyncio
@@ -85,3 +89,68 @@ async def test_toolsearch_bridge_denial_does_not_apply_and_missing_binding_fails
             tools_view=SimpleNamespace(view_digest="view-3"),
             callback_context={},
         )
+
+
+@pytest.mark.asyncio
+async def test_toolsearch_bridge_crosses_authenticated_callback_binding():
+    methods = []
+
+    async def application_dispatch(*, method, arguments, context):
+        methods.append((method, dict(arguments), dict(context)))
+        if method == "tools.catalog.search":
+            return {
+                "status": "ok",
+                "result": {
+                    "candidate_digest": "digest-remote",
+                    "items": [
+                        {
+                            "canonical_id": "local:project_files.search",
+                            "availability": "available",
+                        }
+                    ],
+                },
+            }
+        if method == "tools.scope.propose":
+            return {
+                "status": "ok",
+                "result": {
+                    "proposal": {
+                        "operation_id": arguments["operation_id"],
+                        "requested_member_ids": arguments["requested_member_ids"],
+                    }
+                },
+            }
+        if method == "tools.scope.apply":
+            return {
+                "status": "ok",
+                "result": {"receipt": {"status": "applied"}},
+            }
+        raise AssertionError(method)
+
+    transport = ToolContextControlCallbackTransport(application_dispatch)
+    try:
+        handler = make_tool_context_control_handlers_from_binding(
+            transport.binding,
+            workspace_id="workspace-remote",
+        )["toolbox_search_and_scope"]
+        result = await handler(
+            tool_call=SimpleNamespace(
+                id="call-remote",
+                arguments={"query": "project files", "reason": "Find source"},
+            ),
+            cursor=SimpleNamespace(context_id="engine-cursor"),
+            tools_view=SimpleNamespace(view_digest="view-remote"),
+            callback_processor=lambda **_kwargs: {"decision": "allow_once"},
+            callback_context={"context_id": "chat-remote", "cursor_id": "cursor-remote"},
+        )
+    finally:
+        transport.close()
+
+    assert result["status"] == "scope_applied"
+    assert [row[0] for row in methods] == [
+        "tools.catalog.search",
+        "tools.scope.propose",
+        "tools.scope.apply",
+    ]
+    assert all(row[2]["context_id"] == "chat-remote" for row in methods)
+    assert methods[1][1]["workspace_id"] == "workspace-remote"
