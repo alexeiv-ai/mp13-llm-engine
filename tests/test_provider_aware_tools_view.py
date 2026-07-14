@@ -31,6 +31,56 @@ def test_tools_view_round_trips_provider_tools_and_resolution_metadata():
     assert payload["profile_id"] == "research"
 
 
+def test_mp13_request_builder_consumes_each_application_resolved_provider_view():
+    session = EngineSession()
+    chat_session = session.add_conversation(
+        inference_defaults=InferenceParams(),
+        initial_params={},
+    )
+    context = ChatContext(session, chat_session=chat_session, toolbox=Toolbox())
+    cursor = context.active_cursor
+    cursor.add_user("research across the active provider")
+    provider_tools = {
+        "openai": {"type": "web_search"},
+        "grok": {"type": "x_search"},
+        "openai_compatible": {"type": "web_lookup"},
+    }
+
+    for index, (provider_id, server_tool) in enumerate(provider_tools.items(), 1):
+        inactive = [
+            {
+                "member_id": f"server:{other_provider}/{other_tool['type']}@default",
+                "state": "incompatible",
+            }
+            for other_provider, other_tool in provider_tools.items()
+            if other_provider != provider_id
+        ]
+        view = ToolsView(
+            view_id="context:ctx-portable",
+            mode="advertised",
+            allowed_tools=set(),
+            advertised_tools=set(),
+            hidden_allowed_tools=set(),
+            disabled_tools=set(),
+            server_tools=[server_tool],
+            view_digest="sha256:" + str(index) * 64,
+            profile_id="portable-research",
+            profile_revision=4,
+            unavailable_members=inactive,
+        )
+        cursor.set_tools_view(view)
+
+        request, _adapters, consumed_view = cursor.build_inference_request()
+
+        assert request["tools"] == [server_tool]
+        assert request["tool_view_digest"] == view.view_digest
+        assert consumed_view is view
+        assert consumed_view.profile_id == "portable-research"
+        assert consumed_view.unavailable_members == inactive
+
+    assert cursor.tools_view is view
+
+
 def test_tools_scope_round_trips_an_opaque_canonical_layer_for_cursor_replay():
     scope = ToolsScope(
         advertise_tools={"project_search"},
