@@ -250,6 +250,7 @@ class ToolsScope:
     gated_tools: Set[str] = field(default_factory=set)
     tool_constraints: Dict[str, Optional[Dict[str, Any]]] = field(default_factory=dict)
     label: Optional[str] = None
+    canonical_layer: Optional[Dict[str, Any]] = None
 
     DEFAULT_MODE = "*"
     VALID_MODES = {"advertised", "silent", "disabled", DEFAULT_MODE}
@@ -264,6 +265,11 @@ class ToolsScope:
         self.disabled_tools = _normalize(self.disabled_tools)
         self.gated_tools = _normalize(self.gated_tools)
         self.tool_constraints = _normalize_tool_constraints(self.tool_constraints, allow_clear=True)
+        self.canonical_layer = (
+            copy.deepcopy(dict(self.canonical_layer))
+            if isinstance(self.canonical_layer, dict)
+            else None
+        )
         if self.mode and self.mode not in self.VALID_MODES:
             raise ValueError(f"ToolsScope.mode '{self.mode}' is invalid. Allowed: {sorted(self.VALID_MODES)}")
         return self
@@ -277,6 +283,7 @@ class ToolsScope:
             "gated_tools": sorted(list(self.gated_tools)),
             "tool_constraints": copy.deepcopy(self.tool_constraints),
             "label": self.label,
+            "canonical_layer": copy.deepcopy(self.canonical_layer),
         }
 
     @classmethod
@@ -291,6 +298,11 @@ class ToolsScope:
             gated_tools=set(data.get("gated_tools", data.get("gated", [])) or []),
             tool_constraints=_normalize_tool_constraints(data.get("tool_constraints"), allow_clear=True),
             label=data.get("label"),
+            canonical_layer=(
+                copy.deepcopy(dict(data.get("canonical_layer")))
+                if isinstance(data.get("canonical_layer"), dict)
+                else None
+            ),
         ).clean()
 
     def describe(self) -> str:
@@ -308,10 +320,22 @@ class ToolsScope:
             bits.append(f"gated={','.join(sorted(self.gated_tools))}")
         if self.tool_constraints:
             bits.append(f"constraints={','.join(sorted(self.tool_constraints.keys()))}")
+        if self.canonical_layer:
+            bits.append(
+                f"canonical={str(self.canonical_layer.get('operation_id') or 'layer')}"
+            )
         return " | ".join(bits) if bits else "no-op scope"
 
     def is_noop(self) -> bool:
-        return not (self.mode or self.advertise_tools or self.silent_tools or self.disabled_tools or self.gated_tools or self.tool_constraints)
+        return not (
+            self.mode
+            or self.advertise_tools
+            or self.silent_tools
+            or self.disabled_tools
+            or self.gated_tools
+            or self.tool_constraints
+            or self.canonical_layer
+        )
 
 
 @dataclass
