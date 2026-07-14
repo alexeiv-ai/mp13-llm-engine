@@ -9909,7 +9909,9 @@ async def _execute_inference_round(
                 auto_anchor_prefix=_auto_anchor_name("auto_tool", active_cursor),
                 non_restartable_tool_names=hosted_tool_round_options.get("non_restartable_tool_names"),
                 callback_processor=hosted_tool_round_options.get("callback_processor"),
+                callback_context=hosted_tool_round_options.get("callback_context"),
                 host_api_approval=hosted_tool_round_options.get("host_api_approval"),
+                control_tool_handlers=hosted_tool_round_options.get("control_tool_handlers"),
             )
             if active_tool_executor is None:
                 print(f"{Colors.TOOL_WARNING}Tool execution skipped: toolbox unavailable.{Colors.RESET}")

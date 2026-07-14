@@ -118,6 +118,8 @@ class HostedChatDemoRuntime:
     plan: HostedChatDemoPlan
     callback_processor: Optional[Callable[..., Dict[str, Any]]] = None
     host_api_approval: Optional[Dict[str, Any]] = None
+    control_tool_handlers: Optional[Dict[str, Callable[..., Any]]] = None
+    control_callback_context: Optional[Dict[str, Any]] = None
 
 
 def hosted_demo_non_restartable_tool_names(
@@ -146,6 +148,10 @@ def hosted_demo_tool_round_options(
         out["callback_processor"] = runtime_or_plan.callback_processor
     if isinstance(runtime_or_plan, HostedChatDemoRuntime) and isinstance(runtime_or_plan.host_api_approval, dict):
         out["host_api_approval"] = dict(runtime_or_plan.host_api_approval or {})
+    if isinstance(runtime_or_plan, HostedChatDemoRuntime) and isinstance(runtime_or_plan.control_tool_handlers, dict):
+        out["control_tool_handlers"] = dict(runtime_or_plan.control_tool_handlers or {})
+    if isinstance(runtime_or_plan, HostedChatDemoRuntime) and isinstance(runtime_or_plan.control_callback_context, dict):
+        out["callback_context"] = dict(runtime_or_plan.control_callback_context or {})
     return out
 
 
@@ -451,6 +457,8 @@ def setup_hosted_chat_demo(
     host_api_approval: Optional[Dict[str, Any]] = None,
     python_executable: Optional[str] = None,
     worker_profile_class: str = "generic",
+    control_tool_handlers: Optional[Dict[str, Callable[..., Any]]] = None,
+    control_callback_context: Optional[Dict[str, Any]] = None,
 ) -> HostedChatDemoRuntime:
     plan = build_hosted_chat_demo_plan(toolbox_id=toolbox_id, project_root=project_root)
     register_local_hosted_chat_demo_tools(toolbox, project_root=plan.project_root)
@@ -491,6 +499,8 @@ def setup_hosted_chat_demo(
         plan=plan,
         callback_processor=callback_processor,
         host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
+        control_tool_handlers=dict(control_tool_handlers or {}) if isinstance(control_tool_handlers, dict) else None,
+        control_callback_context=dict(control_callback_context or {}) if isinstance(control_callback_context, dict) else None,
     )
 
 
