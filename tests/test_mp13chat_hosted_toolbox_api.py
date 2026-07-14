@@ -371,6 +371,85 @@ def test_execute_tool_round_on_cursor_allows_parallel_hosted_calls() -> None:
     assert events.count("call_finished") == 2
 
 
+def test_hosted_round_intercepts_control_tool_once_and_records_mixed_results() -> None:
+    local_effects: list[str] = []
+    control_effects: list[str] = []
+    approvals: list[str] = []
+
+    def local_echo(value: str) -> dict:
+        local_effects.append(value)
+        return {"echo": value}
+
+    async def control_handler(*, tool_call: ToolCall, callback_processor, **kwargs: Any) -> dict:
+        control_effects.append(str(tool_call.arguments.get("query") or ""))
+        decision = callback_processor(
+            callback_name="tool_requires_confirmation",
+            payload={"tool_name": tool_call.name, "arguments": dict(tool_call.arguments)},
+            context={"tool_call_id": tool_call.id},
+        )
+        return {"status": "scope_applied", "decision": decision["decision"]}
+
+    def approval_callback(*, callback_name: str, payload: Dict[str, Any], context: Any) -> dict:
+        approvals.append(callback_name)
+        return {"decision": "allow_once"}
+
+    async def action_handler(execute_stage: str, **kwargs: Any) -> None:
+        return None
+
+    toolbox = Toolbox()
+    ok, message = toolbox.add_tool_callable(local_echo, activate=True)
+    assert ok, message
+    session = EngineSession()
+    chat_session = session.add_conversation(inference_defaults=InferenceParams(), initial_params={})
+    context = ChatContext(session, chat_session=chat_session, toolbox=toolbox)
+    cursor = context.active_cursor
+    cursor.add_user("hello")
+    response = InferenceResponse(
+        chunkType="streaming_chunk",
+        prompt_index=0,
+        tool_blocks=[
+            ToolCallBlock(raw_block='<tool_call>{"name":"toolbox_search_and_scope","arguments":{"query":"docs"}}</tool_call>'),
+            ToolCallBlock(raw_block='<tool_call>{"name":"local_echo","arguments":{"value":"ok"}}</tool_call>'),
+        ],
+    )
+
+    result = __import__("asyncio").run(
+        execute_tool_round_on_cursor(
+            cursor=cursor,
+            final_response_items=[response],
+            responses_in_progress={0: ""},
+            parser_profile=DEFAULT_PROFILE,
+            tool_executor=toolbox,
+            action_handler=action_handler,
+            tools_view=ToolsView(
+                view_id="mixed-control-round",
+                mode="advertised",
+                allowed_tools={"toolbox_search_and_scope", "local_echo"},
+                advertised_tools={"toolbox_search_and_scope", "local_echo"},
+                hidden_allowed_tools=set(),
+                disabled_tools=set(),
+                gated_tools=set(),
+            ),
+            callback_processor=approval_callback,
+            control_tool_handlers={"toolbox_search_and_scope": control_handler},
+        )
+    )
+
+    assert result.scheduled_auto_iteration is True
+    assert control_effects == ["docs"]
+    assert approvals == ["tool_requires_confirmation"]
+    assert local_effects == ["ok"]
+    calls = [
+        call
+        for block in (context.active_cursor.current_turn.data or {})["tool_results"]
+        for call in block.calls
+    ]
+    assert [call.name for call in calls] == ["toolbox_search_and_scope", "local_echo"]
+    assert calls[0].result == {"status": "scope_applied", "decision": "allow_once"}
+    assert calls[0].error is None
+    assert calls[1].result is not None
+
+
 def test_execute_tool_round_on_cursor_forwards_callback_processor() -> None:
     class _FakeExecutor:
         def __init__(self) -> None:

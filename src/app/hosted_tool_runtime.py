@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+import inspect
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from app.context_cursor import ChatCursor
 from hosting.toolbox_harness import is_canceled_tool_error, should_resubmit_canceled_tool_call
@@ -117,6 +118,7 @@ async def execute_tool_round_on_cursor(
     callback_processor: Optional[Callable[..., Any]] = None,
     callback_context: Any = None,
     host_api_approval: Optional[Dict[str, Any]] = None,
+    control_tool_handlers: Optional[Mapping[str, Callable[..., Any]]] = None,
 ) -> ToolRoundResult:
     """
     Execute one hosted/native tool round for a chat cursor.
@@ -151,6 +153,9 @@ async def execute_tool_round_on_cursor(
     - `host_api_approval` is forwarded to hosted sandbox execution for
       per-IO approvals raised by `context.fs`, `context.http`, or
       `context.host.call(...)` inside hosted tools
+    - `control_tool_handlers` intercept engine-owned control tools after provider
+      parsing but before local execution; intercepted calls still use this
+      round's normal call/result persistence and auto-continue path
     """
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
@@ -197,10 +202,45 @@ async def execute_tool_round_on_cursor(
 
     async def _execute_calls(_blocks: Sequence[ToolCallBlock]) -> Sequence[ToolCallBlock]:
         nonlocal canceled_summary
+        normalized_control_handlers = {
+            str(name or "").strip(): handler
+            for name, handler in dict(control_tool_handlers or {}).items()
+            if str(name or "").strip() and callable(handler)
+        }
+
+        async def _action_with_control_tools(*, execute_stage: str, **action_kwargs: Any) -> Any:
+            if execute_stage == "calls_parsed" and normalized_control_handlers:
+                for response_item in list(final_response_items or []):
+                    for block in list(getattr(response_item, "tool_blocks", None) or []):
+                        for tool_call in list(getattr(block, "calls", None) or []):
+                            handler = normalized_control_handlers.get(str(getattr(tool_call, "name", "") or "").strip())
+                            if handler is None or ToolCall.Ignore in list(getattr(tool_call, "action", None) or []):
+                                continue
+                            try:
+                                handled = handler(
+                                    tool_call=tool_call,
+                                    cursor=cursor,
+                                    tools_view=tools_view,
+                                    callback_processor=callback_processor,
+                                    callback_context=_build_hosted_callback_context(
+                                        cursor=cursor,
+                                        callback_context=callback_context,
+                                    ),
+                                )
+                                if inspect.isawaitable(handled):
+                                    handled = await handled
+                                tool_call.result = handled
+                            except Exception as exc:
+                                tool_call.error = str(exc).strip() or "control_tool_failed"
+                            if ToolCall.Ignore not in tool_call.action:
+                                tool_call.action.append(ToolCall.Ignore)
+            handled_action = action_handler(execute_stage=execute_stage, **action_kwargs)
+            return await handled_action if inspect.isawaitable(handled_action) else handled_action
+
         execute_kwargs = {
             "parser_profile": parser_profile,
             "final_response_items": final_response_items,
-            "action_handler": action_handler,
+            "action_handler": _action_with_control_tools,
             "serial_execution": bool(serial_execution),
             "tools_view": tools_view,
             "pt_session": pt_session,
