@@ -7,6 +7,7 @@ from app.context_cursor import ChatCursor
 from hosting.toolbox_harness import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
 from mp13_engine.mp13_toolbox import ToolsView
+from mp13_engine.tool_round import coordinate_tool_round
 
 
 def _build_hosted_callback_context(*, cursor: ChatCursor, callback_context: Any) -> Any:
@@ -165,15 +166,13 @@ async def execute_tool_round_on_cursor(
             resubmittable_tool_names=[],
         )
 
-    final_text_response = responses_in_progress.get(0, "")
-    cursor.add_assistant(
-        content=final_text_response or "",
-        tool_blocks=all_tool_blocks,
-        archived=False,
-        do_continue=is_manual_continue,
-    )
-
     if tool_executor is None:
+        cursor.add_assistant(
+            content=responses_in_progress.get(0, "") or "",
+            tool_blocks=all_tool_blocks,
+            archived=False,
+            do_continue=is_manual_continue,
+        )
         return ToolRoundResult(
             had_tool_blocks=True,
             executed=False,
@@ -183,104 +182,116 @@ async def execute_tool_round_on_cursor(
             resubmittable_tool_names=[],
         )
 
-    execute_kwargs = {
-        "parser_profile": parser_profile,
-        "final_response_items": final_response_items,
-        "action_handler": action_handler,
-        "serial_execution": bool(serial_execution),
-        "tools_view": tools_view,
-        "pt_session": pt_session,
-        "context": cursor.current_turn,
-        "tool_retries_max": tool_retries_max,
-        "tool_retries_left": tool_retries_left,
-        "callback_processor": callback_processor,
-        "callback_context": _build_hosted_callback_context(cursor=cursor, callback_context=callback_context),
+    canceled_summary: Dict[str, List[str]] = {
+        "canceled_tool_names": [],
+        "resubmittable_tool_names": [],
     }
-    if isinstance(host_api_approval, dict):
-        execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
-    await tool_executor.execute_request_tools(**execute_kwargs)
-    canceled_summary = summarize_canceled_tool_calls(
-        all_tool_blocks,
-        non_restartable_tool_names=non_restartable_tool_names,
-    )
 
-    aborted = _tool_blocks_have_abort(all_tool_blocks)
-    if aborted:
-        return ToolRoundResult(
-            had_tool_blocks=True,
-            executed=True,
-            scheduled_auto_iteration=False,
-            aborted=True,
-            canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
-            resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),
+    def _record_calls(_blocks: Sequence[ToolCallBlock]) -> Any:
+        return cursor.add_assistant(
+            content=responses_in_progress.get(0, "") or "",
+            tool_blocks=all_tool_blocks,
+            archived=False,
+            do_continue=is_manual_continue,
         )
 
-    if not _tool_blocks_have_results(all_tool_blocks):
-        return ToolRoundResult(
-            had_tool_blocks=True,
-            executed=True,
-            scheduled_auto_iteration=False,
-            aborted=False,
-            canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
-            resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),
+    async def _execute_calls(_blocks: Sequence[ToolCallBlock]) -> Sequence[ToolCallBlock]:
+        nonlocal canceled_summary
+        execute_kwargs = {
+            "parser_profile": parser_profile,
+            "final_response_items": final_response_items,
+            "action_handler": action_handler,
+            "serial_execution": bool(serial_execution),
+            "tools_view": tools_view,
+            "pt_session": pt_session,
+            "context": cursor.current_turn,
+            "tool_retries_max": tool_retries_max,
+            "tool_retries_left": tool_retries_left,
+            "callback_processor": callback_processor,
+            "callback_context": _build_hosted_callback_context(cursor=cursor, callback_context=callback_context),
+        }
+        if isinstance(host_api_approval, dict):
+            execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
+        await tool_executor.execute_request_tools(**execute_kwargs)
+        canceled_summary = summarize_canceled_tool_calls(
+            all_tool_blocks,
+            non_restartable_tool_names=non_restartable_tool_names,
         )
+        return all_tool_blocks
 
-    anchor_name = f"{str(auto_anchor_prefix or 'auto_tool')}:{cursor.context_id or getattr(cursor.head, 'gen_id', '') or 'cursor'}"
-    scope = getattr(cursor, "scope", None)
-    if scope:
-        tool_anchor = scope.find_active_anchor("auto_tool", cursor)
-        if not tool_anchor:
-            tool_anchor = scope.start_try_out_anchor(
+    def _record_results(
+        _blocks: Sequence[ToolCallBlock],
+        _executed: Sequence[ToolCallBlock],
+    ) -> Any:
+        anchor_name = f"{str(auto_anchor_prefix or 'auto_tool')}:{cursor.context_id or getattr(cursor.head, 'gen_id', '') or 'cursor'}"
+        scope = getattr(cursor, "scope", None)
+        if scope:
+            tool_anchor = scope.find_active_anchor("auto_tool", cursor)
+            if not tool_anchor:
+                tool_anchor = scope.start_try_out_anchor(
+                    anchor_name,
+                    cursor.head,
+                    kind="auto_tool",
+                    retry_limit=int(auto_tool_retry_limit or 5),
+                    origin_cursor=cursor,
+                )
+        else:
+            tool_anchor = cursor.context.start_try_out_anchor(
                 anchor_name,
                 cursor.head,
                 kind="auto_tool",
                 retry_limit=int(auto_tool_retry_limit or 5),
                 origin_cursor=cursor,
             )
-    else:
-        tool_anchor = cursor.context.start_try_out_anchor(
-            anchor_name,
-            cursor.head,
-            kind="auto_tool",
-            retry_limit=int(auto_tool_retry_limit or 5),
-            origin_cursor=cursor,
+        if _tool_call_has_error(all_tool_blocks) and tool_anchor.retries_remaining > 0:
+            tool_anchor.retries_remaining -= 1
+        _, tryout_cursor = cursor.add_try_out(
+            anchor=tool_anchor,
+            anchor_turn=cursor.current_turn or tool_anchor.anchor_turn or cursor.head,
+            keep_in_main=True,
+            convert_existing=True,
         )
+        try:
+            tryout_cursor.set_main_thread(True)
+        except Exception:
+            if tryout_cursor.head:
+                tryout_cursor.head.main_thread = True
+        tool_results_cursor = tryout_cursor.add_tool_results(all_tool_blocks)
+        tool_results_cursor.set_auto(True)
+        try:
+            tool_results_cursor.set_main_thread(True)
+        except Exception:
+            if tool_results_cursor.head:
+                tool_results_cursor.head.main_thread = True
+        return tool_results_cursor
 
-    if _tool_call_has_error(all_tool_blocks) and tool_anchor.retries_remaining > 0:
-        tool_anchor.retries_remaining -= 1
+    def _schedule_continue(tool_results_cursor: Any) -> None:
+        scope = getattr(cursor, "scope", None)
+        if scope:
+            scope.set_active_cursor(tool_results_cursor)
+            scope.request_auto_iteration()
+        else:
+            cursor.context.set_active_cursor(tool_results_cursor)
+            cursor.context.request_auto_iteration()
 
-    _, tryout_cursor = cursor.add_try_out(
-        anchor=tool_anchor,
-        anchor_turn=cursor.current_turn or tool_anchor.anchor_turn or cursor.head,
-        keep_in_main=True,
-        convert_existing=True,
+    coordinated = await coordinate_tool_round(
+        all_tool_blocks,
+        record_calls=_record_calls,
+        execute_calls=_execute_calls,
+        has_results=lambda blocks: bool(blocks)
+        and not _tool_blocks_have_abort(blocks)
+        and _tool_blocks_have_results(blocks),
+        record_results=_record_results,
+        schedule_continue=_schedule_continue,
     )
-    try:
-        tryout_cursor.set_main_thread(True)
-    except Exception:
-        if tryout_cursor.head:
-            tryout_cursor.head.main_thread = True
-    tool_results_cursor = tryout_cursor.add_tool_results(all_tool_blocks)
-    tool_results_cursor.set_auto(True)
-    try:
-        tool_results_cursor.set_main_thread(True)
-    except Exception:
-        if tool_results_cursor.head:
-            tool_results_cursor.head.main_thread = True
-
-    if scope:
-        scope.set_active_cursor(tool_results_cursor)
-        scope.request_auto_iteration()
-    else:
-        cursor.context.set_active_cursor(tool_results_cursor)
-        cursor.context.request_auto_iteration()
-
+    aborted = _tool_blocks_have_abort(all_tool_blocks)
+    tool_results_cursor = coordinated.result_ref
     return ToolRoundResult(
         had_tool_blocks=True,
         executed=True,
-        scheduled_auto_iteration=True,
-        aborted=False,
-        tool_result_cursor_id=tool_results_cursor.context_id,
+        scheduled_auto_iteration=coordinated.scheduled_continue,
+        aborted=aborted,
+        tool_result_cursor_id=(tool_results_cursor.context_id if tool_results_cursor is not None else None),
         canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
         resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),
     )

@@ -1741,13 +1741,28 @@ class ChatCursor:
         tools_view: Optional[ToolsView] = None
         if include_tools:
             primary_cursor = cursors[0]
-            tools_view = primary_cursor.get_tools_view()
+            tools_view = primary_cursor.tools_view or primary_cursor.get_tools_view()
             if tools_view is None:
                 tools_view = primary_cursor.refresh_tools_view()
             active_tools = primary_cursor.get_active_tools(tools_view)
             filtered_tools = self._filter_tools_payload(active_tools, tools_view)
-            if filtered_tools:
+            view_digest = str(getattr(tools_view, "view_digest", "") or "").strip()
+            server_tools = copy.deepcopy(list(getattr(tools_view, "server_tools", []) or []))
+            if server_tools or view_digest:
+                local_tools = (
+                    list(filtered_tools.get("for_dump") or [])
+                    if isinstance(filtered_tools, dict)
+                    else list(filtered_tools or [])
+                )
+                request_tools = [*local_tools, *server_tools]
+                if request_tools:
+                    inference_payload["tools"] = request_tools
+            elif filtered_tools:
+                # Preserve the legacy engine-native serialized wrapper until a
+                # canonical provider-aware view is attached.
                 inference_payload["tools"] = filtered_tools
+            if view_digest:
+                inference_payload["tool_view_digest"] = view_digest
 
         if manual_continue or any(turn.do_continue for turn in turns if turn):
             inference_payload["do_continue"] = True

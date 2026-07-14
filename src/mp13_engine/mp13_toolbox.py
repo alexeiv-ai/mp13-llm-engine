@@ -325,6 +325,12 @@ class ToolsView:
     disabled_tools: Set[str]
     gated_tools: Set[str] = field(default_factory=set)
     tool_constraints: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    server_tools: List[Dict[str, Any]] = field(default_factory=list)
+    view_digest: str = ""
+    profile_id: str = ""
+    profile_revision: Optional[int] = None
+    scope_stack: List[Dict[str, Any]] = field(default_factory=list)
+    unavailable_members: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self):
         """Ensures that upon deserialization from a dict (where these might be lists),
@@ -335,6 +341,29 @@ class ToolsView:
         self.disabled_tools = set(self.disabled_tools)
         self.gated_tools = set(self.gated_tools)
         self.tool_constraints = _normalize_tool_constraints(self.tool_constraints)
+        self.server_tools = copy.deepcopy(list(self.server_tools or []))
+        self.view_digest = str(self.view_digest or "").strip()
+        self.profile_id = str(self.profile_id or "").strip()
+        self.scope_stack = copy.deepcopy(list(self.scope_stack or []))
+        self.unavailable_members = copy.deepcopy(list(self.unavailable_members or []))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "view_id": self.view_id,
+            "mode": self.mode,
+            "allowed_tools": sorted(self.allowed_tools),
+            "advertised_tools": sorted(self.advertised_tools),
+            "hidden_allowed_tools": sorted(self.hidden_allowed_tools),
+            "disabled_tools": sorted(self.disabled_tools),
+            "gated_tools": sorted(self.gated_tools),
+            "tool_constraints": copy.deepcopy(self.tool_constraints),
+            "server_tools": copy.deepcopy(self.server_tools),
+            "view_digest": self.view_digest,
+            "profile_id": self.profile_id,
+            "profile_revision": self.profile_revision,
+            "scope_stack": copy.deepcopy(self.scope_stack),
+            "unavailable_members": copy.deepcopy(self.unavailable_members),
+        }
 
     def should_advertise(self, tool_name: str) -> bool:
         return tool_name in self.advertised_tools
