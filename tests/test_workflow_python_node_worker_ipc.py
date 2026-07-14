@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from hosting.workflow_python_node_worker_ipc import HostApi
+from hosting.workflow_python_node_worker_ipc import HostApi, SandboxApi
 
 
 def test_python_node_host_grouped_aliases_call_canonical_methods() -> None:
@@ -47,3 +47,23 @@ def test_python_node_host_grouped_aliases_call_canonical_methods() -> None:
             },
         ),
     ]
+
+
+def test_python_node_discovery_surfaces_keep_distinct_canonical_methods() -> None:
+    host = HostApi(conn=object(), request_id="req-discovery")
+    sandbox = SandboxApi(host)
+    calls: list[tuple[str, dict]] = []
+
+    def _call(method: str, arguments: dict | None = None) -> dict:
+        calls.append((method, dict(arguments or {})))
+        if method == "host.describe":
+            return {"contract": "hosting.sandbox.host_capabilities.v1"}
+        if method == "sandbox.describe":
+            return {"contract": "hosting.sandbox.discovery.v1"}
+        raise AssertionError(method)
+
+    host.call = _call  # type: ignore[method-assign]
+
+    assert host.describe()["contract"] == "hosting.sandbox.host_capabilities.v1"
+    assert sandbox.describe()["contract"] == "hosting.sandbox.discovery.v1"
+    assert calls == [("host.describe", {}), ("sandbox.describe", {})]
