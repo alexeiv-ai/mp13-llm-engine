@@ -26,6 +26,7 @@ from collections import defaultdict
 from mp13_engine.mp13_config import ToolCallBlock, ToolCall, ParserProfile
 from mp13_engine.mp13_tools_parser import ToolsParserHelper
 from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsAccess, ToolsView
+from mp13_engine.tool_round import normalize_server_tool_events
 from mp13_engine.mp13_tools_parser import UnifiedToolIO
 
 def _rehydrate_tool_call_block(block: ToolCallBlock) -> ToolCallBlock:
@@ -2151,7 +2152,17 @@ class EngineSession:
         return batch_turn, all_chat_turns
 
     @_with_write_lock
-    def add_assistant(self, content: Optional[str], tool_blocks: Optional[List[ToolCallBlock]] = None, archived: bool = False, was_truncated: bool = False, was_canceled: bool = False, destination_turn: Optional[Turn] = None, **kwargs):
+    def add_assistant(
+        self,
+        content: Optional[str],
+        tool_blocks: Optional[List[ToolCallBlock]] = None,
+        server_tool_events: Optional[List[Dict[str, Any]]] = None,
+        archived: bool = False,
+        was_truncated: bool = False,
+        was_canceled: bool = False,
+        destination_turn: Optional[Turn] = None,
+        **kwargs,
+    ):
         message: Optional[Dict[str, Any]] = None
         if content:
             message = {"role": "assistant", "content": content}
@@ -2159,6 +2170,11 @@ class EngineSession:
         if tool_blocks:
             if message is None: message = {"role": "assistant"}
             message["tool_blocks"] = tool_blocks
+        normalized_server_events = normalize_server_tool_events(server_tool_events)
+        if normalized_server_events:
+            if message is None:
+                message = {"role": "assistant"}
+            message["server_tool_events"] = normalized_server_events
 
         target_turn = destination_turn
         if not target_turn:

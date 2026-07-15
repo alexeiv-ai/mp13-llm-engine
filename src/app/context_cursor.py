@@ -1099,6 +1099,7 @@ class ChatCursor:
         content: Optional[str],
         *,
         tool_blocks: Optional[Sequence[Any]] = None,
+        server_tool_events: Optional[Sequence[Dict[str, Any]]] = None,
         archived: bool = False,
         was_truncated: bool = False,
         was_canceled: bool = False,
@@ -1108,6 +1109,9 @@ class ChatCursor:
         self.session.add_assistant(
             content,
             tool_blocks=list(tool_blocks) if tool_blocks is not None else None,
+            server_tool_events=(
+                list(server_tool_events) if server_tool_events is not None else None
+            ),
             archived=archived,
             was_truncated=was_truncated,
             was_canceled=was_canceled,

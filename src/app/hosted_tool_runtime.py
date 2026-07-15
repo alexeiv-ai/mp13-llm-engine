@@ -8,7 +8,7 @@ from app.context_cursor import ChatCursor
 from hosting.toolbox_harness import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
 from mp13_engine.mp13_toolbox import ToolsView
-from mp13_engine.tool_round import coordinate_tool_round
+from mp13_engine.tool_round import coordinate_tool_round, normalize_server_tool_events
 
 
 def _build_hosted_callback_context(*, cursor: ChatCursor, callback_context: Any) -> Any:
@@ -93,6 +93,8 @@ class ToolRoundResult:
     executed: bool
     scheduled_auto_iteration: bool
     aborted: bool
+    had_server_tool_events: bool = False
+    server_events_recorded: bool = False
     tool_result_cursor_id: Optional[str] = None
     canceled_tool_names: List[str] = field(default_factory=list)
     resubmittable_tool_names: List[str] = field(default_factory=list)
@@ -119,6 +121,7 @@ async def execute_tool_round_on_cursor(
     callback_context: Any = None,
     host_api_approval: Optional[Dict[str, Any]] = None,
     control_tool_handlers: Optional[Mapping[str, Callable[..., Any]]] = None,
+    server_tool_events: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> ToolRoundResult:
     """
     Execute one hosted/native tool round for a chat cursor.
@@ -157,11 +160,12 @@ async def execute_tool_round_on_cursor(
       parsing but before local execution; intercepted calls still use this
       round's normal call/result persistence and auto-continue path
     """
+    normalized_server_events = normalize_server_tool_events(server_tool_events)
     all_tool_blocks: List[ToolCallBlock] = []
     for item in list(final_response_items or []):
         if item.tool_blocks:
             all_tool_blocks.extend(list(item.tool_blocks or []))
-    if not all_tool_blocks:
+    if not all_tool_blocks and not normalized_server_events:
         return ToolRoundResult(
             had_tool_blocks=False,
             executed=False,
@@ -171,10 +175,29 @@ async def execute_tool_round_on_cursor(
             resubmittable_tool_names=[],
         )
 
+    if not all_tool_blocks:
+        cursor.add_assistant(
+            content=responses_in_progress.get(0, "") or "",
+            server_tool_events=normalized_server_events,
+            archived=False,
+            do_continue=is_manual_continue,
+        )
+        return ToolRoundResult(
+            had_tool_blocks=False,
+            executed=False,
+            scheduled_auto_iteration=False,
+            aborted=False,
+            had_server_tool_events=True,
+            server_events_recorded=True,
+            canceled_tool_names=[],
+            resubmittable_tool_names=[],
+        )
+
     if tool_executor is None:
         cursor.add_assistant(
             content=responses_in_progress.get(0, "") or "",
             tool_blocks=all_tool_blocks,
+            server_tool_events=normalized_server_events,
             archived=False,
             do_continue=is_manual_continue,
         )
@@ -183,6 +206,8 @@ async def execute_tool_round_on_cursor(
             executed=False,
             scheduled_auto_iteration=False,
             aborted=False,
+            had_server_tool_events=bool(normalized_server_events),
+            server_events_recorded=bool(normalized_server_events),
             canceled_tool_names=[],
             resubmittable_tool_names=[],
         )
@@ -196,6 +221,7 @@ async def execute_tool_round_on_cursor(
         return cursor.add_assistant(
             content=responses_in_progress.get(0, "") or "",
             tool_blocks=all_tool_blocks,
+            server_tool_events=normalized_server_events,
             archived=False,
             do_continue=is_manual_continue,
         )
@@ -331,6 +357,8 @@ async def execute_tool_round_on_cursor(
         executed=True,
         scheduled_auto_iteration=coordinated.scheduled_continue,
         aborted=aborted,
+        had_server_tool_events=bool(normalized_server_events),
+        server_events_recorded=bool(normalized_server_events),
         tool_result_cursor_id=(tool_results_cursor.context_id if tool_results_cursor is not None else None),
         canceled_tool_names=list(canceled_summary.get("canceled_tool_names") or []),
         resubmittable_tool_names=list(canceled_summary.get("resubmittable_tool_names") or []),

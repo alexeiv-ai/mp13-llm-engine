@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -9,8 +10,7 @@ from app.tool_context_control_bridge import (
 )
 
 
-@pytest.mark.asyncio
-async def test_toolsearch_bridge_uses_canonical_propose_approval_apply_path():
+def test_toolsearch_bridge_uses_canonical_propose_approval_apply_path():
     calls = []
     approvals = []
 
@@ -40,12 +40,14 @@ async def test_toolsearch_bridge_uses_canonical_propose_approval_apply_path():
         return {"decision": "allow_once"}
 
     handler = make_tool_context_control_handlers(dispatch, workspace_id="workspace-1")["toolbox_search_and_scope"]
-    result = await handler(
-        tool_call=SimpleNamespace(id="call-1", arguments={"query": "docs", "reason": "Find docs", "max_tools": 2}),
-        cursor=SimpleNamespace(context_id="engine-cursor"),
-        tools_view=SimpleNamespace(view_digest="view-1"),
-        callback_processor=approve,
-        callback_context={"context_id": "chat-1", "cursor_id": "cursor-1", "source_turn_id": "turn-1"},
+    result = asyncio.run(
+        handler(
+            tool_call=SimpleNamespace(id="call-1", arguments={"query": "docs", "reason": "Find docs", "max_tools": 2}),
+            cursor=SimpleNamespace(context_id="engine-cursor"),
+            tools_view=SimpleNamespace(view_digest="view-1"),
+            callback_processor=approve,
+            callback_context={"context_id": "chat-1", "cursor_id": "cursor-1", "source_turn_id": "turn-1"},
+        )
     )
 
     assert [item[0] for item in calls] == ["tools.catalog.search", "tools.scope.propose", "tools.scope.apply"]
@@ -61,8 +63,7 @@ async def test_toolsearch_bridge_uses_canonical_propose_approval_apply_path():
     assert result["receipt"]["status"] == "applied"
 
 
-@pytest.mark.asyncio
-async def test_toolsearch_bridge_denial_does_not_apply_and_missing_binding_fails_closed():
+def test_toolsearch_bridge_denial_does_not_apply_and_missing_binding_fails_closed():
     methods = []
 
     def dispatch(*, method, arguments, context):
@@ -72,27 +73,30 @@ async def test_toolsearch_bridge_denial_does_not_apply_and_missing_binding_fails
         return {"status": "ok", "result": {"proposal": {"operation_id": "toolscope:search-call-2"}}}
 
     handler = make_tool_context_control_handlers(dispatch)["toolbox_search_and_scope"]
-    denied = await handler(
-        tool_call=SimpleNamespace(id="call-2", arguments={"query": "echo", "reason": "Need echo"}),
-        cursor=SimpleNamespace(context_id="engine-cursor"),
-        tools_view=SimpleNamespace(view_digest="view-2"),
-        callback_processor=lambda **_kwargs: {"decision": "deny"},
-        callback_context={"context_id": "chat-2", "cursor_id": "cursor-2"},
+    denied = asyncio.run(
+        handler(
+            tool_call=SimpleNamespace(id="call-2", arguments={"query": "echo", "reason": "Need echo"}),
+            cursor=SimpleNamespace(context_id="engine-cursor"),
+            tools_view=SimpleNamespace(view_digest="view-2"),
+            callback_processor=lambda **_kwargs: {"decision": "deny"},
+            callback_context={"context_id": "chat-2", "cursor_id": "cursor-2"},
+        )
     )
     assert denied["status"] == "proposal_denied"
     assert methods == ["tools.catalog.search", "tools.scope.propose"]
 
     with pytest.raises(RuntimeError, match="must bind context_id and cursor_id"):
-        await handler(
-            tool_call=SimpleNamespace(id="call-3", arguments={"query": "echo", "reason": "Need echo"}),
-            cursor=SimpleNamespace(context_id="engine-cursor"),
-            tools_view=SimpleNamespace(view_digest="view-3"),
-            callback_context={},
+        asyncio.run(
+            handler(
+                tool_call=SimpleNamespace(id="call-3", arguments={"query": "echo", "reason": "Need echo"}),
+                cursor=SimpleNamespace(context_id="engine-cursor"),
+                tools_view=SimpleNamespace(view_digest="view-3"),
+                callback_context={},
+            )
         )
 
 
-@pytest.mark.asyncio
-async def test_toolsearch_bridge_crosses_authenticated_callback_binding():
+def test_toolsearch_bridge_crosses_authenticated_callback_binding():
     methods = []
 
     async def application_dispatch(*, method, arguments, context):
@@ -133,15 +137,17 @@ async def test_toolsearch_bridge_crosses_authenticated_callback_binding():
             transport.binding,
             workspace_id="workspace-remote",
         )["toolbox_search_and_scope"]
-        result = await handler(
-            tool_call=SimpleNamespace(
-                id="call-remote",
-                arguments={"query": "project files", "reason": "Find source"},
-            ),
-            cursor=SimpleNamespace(context_id="engine-cursor"),
-            tools_view=SimpleNamespace(view_digest="view-remote"),
-            callback_processor=lambda **_kwargs: {"decision": "allow_once"},
-            callback_context={"context_id": "chat-remote", "cursor_id": "cursor-remote"},
+        result = asyncio.run(
+            handler(
+                tool_call=SimpleNamespace(
+                    id="call-remote",
+                    arguments={"query": "project files", "reason": "Find source"},
+                ),
+                cursor=SimpleNamespace(context_id="engine-cursor"),
+                tools_view=SimpleNamespace(view_digest="view-remote"),
+                callback_processor=lambda **_kwargs: {"decision": "allow_once"},
+                callback_context={"context_id": "chat-remote", "cursor_id": "cursor-remote"},
+            )
         )
     finally:
         transport.close()

@@ -371,7 +371,7 @@ def test_execute_tool_round_on_cursor_allows_parallel_hosted_calls() -> None:
     assert events.count("call_finished") == 2
 
 
-def test_hosted_round_intercepts_control_tool_once_and_records_mixed_results() -> None:
+def test_hosted_round_records_server_control_and_local_results_once() -> None:
     local_effects: list[str] = []
     control_effects: list[str] = []
     approvals: list[str] = []
@@ -404,6 +404,7 @@ def test_hosted_round_intercepts_control_tool_once_and_records_mixed_results() -
     context = ChatContext(session, chat_session=chat_session, toolbox=toolbox)
     cursor = context.active_cursor
     cursor.add_user("hello")
+    request_turn = cursor.current_turn
     response = InferenceResponse(
         chunkType="streaming_chunk",
         prompt_index=0,
@@ -432,10 +433,22 @@ def test_hosted_round_intercepts_control_tool_once_and_records_mixed_results() -
             ),
             callback_processor=approval_callback,
             control_tool_handlers={"toolbox_search_and_scope": control_handler},
+            server_tool_events=[
+                {
+                    "schema_version": "server_tool.event.v1",
+                    "kind": "server_tool_call",
+                    "provider_id": "openai",
+                    "tool_id": "web_search",
+                    "item_type": "web_search_call",
+                    "status": "completed",
+                }
+            ],
         )
     )
 
     assert result.scheduled_auto_iteration is True
+    assert result.had_server_tool_events is True
+    assert result.server_events_recorded is True
     assert control_effects == ["docs"]
     assert approvals == ["tool_requires_confirmation"]
     assert local_effects == ["ok"]
@@ -448,6 +461,62 @@ def test_hosted_round_intercepts_control_tool_once_and_records_mixed_results() -
     assert calls[0].result == {"status": "scope_applied", "decision": "allow_once"}
     assert calls[0].error is None
     assert calls[1].result is not None
+    assert request_turn.data["assistant"]["server_tool_events"] == [
+        {
+            "schema_version": "server_tool.event.v1",
+            "kind": "server_tool_call",
+            "provider_id": "openai",
+            "tool_id": "web_search",
+            "item_type": "web_search_call",
+            "status": "completed",
+        }
+    ]
+
+
+def test_hosted_round_records_server_event_without_local_execution() -> None:
+    session = EngineSession()
+    chat_session = session.add_conversation(
+        inference_defaults=InferenceParams(), initial_params={}
+    )
+    context = ChatContext(session, chat_session=chat_session, toolbox=Toolbox())
+    cursor = context.active_cursor
+    cursor.add_user("search remotely")
+    request_turn = cursor.current_turn
+
+    async def action_handler(execute_stage: str, **kwargs: Any) -> None:
+        raise AssertionError("event-only rounds must not execute local tools")
+
+    result = __import__("asyncio").run(
+        execute_tool_round_on_cursor(
+            cursor=cursor,
+            final_response_items=[],
+            responses_in_progress={0: "Found it"},
+            parser_profile=DEFAULT_PROFILE,
+            tool_executor=Toolbox(),
+            action_handler=action_handler,
+            server_tool_events=[
+                {
+                    "provider_id": "grok",
+                    "tool_id": "x_search",
+                    "item_type": "x_search_call",
+                    "status": "completed",
+                }
+            ],
+        )
+    )
+
+    assert result.had_tool_blocks is False
+    assert result.executed is False
+    assert result.server_events_recorded is True
+    assert request_turn.data["assistant"]["content"] == "Found it"
+    assert request_turn.data["assistant"]["server_tool_events"][0] == {
+        "schema_version": "server_tool.event.v1",
+        "kind": "server_tool_call",
+        "provider_id": "grok",
+        "tool_id": "x_search",
+        "item_type": "x_search_call",
+        "status": "completed",
+    }
 
 
 def test_execute_tool_round_on_cursor_forwards_callback_processor() -> None:
