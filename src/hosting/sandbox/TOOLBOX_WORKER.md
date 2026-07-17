@@ -259,7 +259,7 @@ Repair/reconcile rebuild from persisted logical toolbox state and serialize per 
 
 ## Current Limits
 
-1. Chat integration is intentionally serial even though hosted/non-chat execution can run multiple calls from one round in parallel.
+1. Chat integration supports parallel tool calls for a single response. Batch tool rounds currently invoke the executor serially; the underlying toolbox and hosted/non-chat harness support parallel calls, but cross-prompt batch tool parallelism is not enabled by the chat batch path.
 2. One worker process serves one staged profile; there is no sandbox worker pool or replica set.
 3. Rollout has no percentage cutover or soak window.
 4. Static sandbox policy is not mutated for per-request approvals; use scope constraints.
