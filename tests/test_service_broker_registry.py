@@ -32,6 +32,15 @@ def test_service_broker_registry_derives_descriptors_from_docstrings() -> None:
         "access": "read",
         "allow_empty_relative_path": False,
     }
+    assert read_text["metadata"]["concurrency"] == {
+        "mode": "parallel",
+        "group": "filesystem",
+        "max_concurrency": 32,
+        "queue_policy": "bounded",
+        "queue_depth": 64,
+        "queue_timeout_seconds": 30.0,
+        "thread_safe_required": True,
+    }
 
 
 def test_service_broker_discovery_returns_contract_descriptions() -> None:

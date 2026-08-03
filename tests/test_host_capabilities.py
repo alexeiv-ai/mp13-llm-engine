@@ -278,6 +278,161 @@ def test_host_capability_broker_cancels_inflight_async_provider_call() -> None:
     assert events[-1][1]["reason"] == "host_call_canceled"
 
 
+def test_host_capability_provider_serial_policy_admits_one_call_at_a_time() -> None:
+    active = 0
+    max_active = 0
+
+    async def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.03)
+        active -= 1
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"key": call.arguments["key"]}}
+
+    descriptor = HostCapabilityDescriptor(
+        **{
+            **_descriptor("crm.customer.mutate").__dict__,
+            "metadata": {
+                "concurrency": {
+                    "mode": "serial",
+                    "group": "crm-customer-mutations",
+                    "queue_depth": 2,
+                    "queue_timeout_seconds": 1,
+                }
+            },
+        }
+    )
+    broker = HostCapabilityBroker(workflow_id="wf-serial", provider_invoker=invoke_provider)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm-serial",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-serial"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    async def run_calls() -> list[dict]:
+        return await asyncio.gather(
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "a"}}),
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "b"}}),
+        )
+
+    results = asyncio.run(run_calls())
+
+    assert [row["key"] for row in results] == ["a", "b"]
+    assert max_active == 1
+    described = broker.describe()
+    policy = described["host_capabilities"]["methods"][0]["metadata"]["concurrency"]
+    assert policy["mode"] == "serial"
+    assert policy["max_concurrency"] == 1
+    assert policy["runtime"]["active_calls"] == 0
+
+
+def test_host_capability_keyed_policy_overlaps_different_resources_and_blocks_same_resource() -> None:
+    active_by_key: dict[str, int] = {}
+    max_active_by_key: dict[str, int] = {}
+
+    async def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        key = str(call.arguments["key"])
+        active_by_key[key] = active_by_key.get(key, 0) + 1
+        max_active_by_key[key] = max(max_active_by_key.get(key, 0), active_by_key[key])
+        await asyncio.sleep(0.03)
+        active_by_key[key] -= 1
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"key": key}}
+
+    descriptor = HostCapabilityDescriptor(
+        **{
+            **_descriptor("crm.customer.update").__dict__,
+            "metadata": {
+                "concurrency": {
+                    "mode": "keyed",
+                    "group": "crm-customer-records",
+                    "key_argument": "key",
+                    "queue_depth": 2,
+                    "queue_timeout_seconds": 1,
+                }
+            },
+        }
+    )
+    broker = HostCapabilityBroker(workflow_id="wf-keyed", provider_invoker=invoke_provider)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm-keyed",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-keyed"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    async def run_calls() -> list[dict]:
+        return await asyncio.gather(
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "a"}}),
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "a"}}),
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "b"}}),
+        )
+
+    results = asyncio.run(run_calls())
+
+    assert [row["key"] for row in results] == ["a", "a", "b"]
+    assert max_active_by_key == {"a": 1, "b": 1}
+
+
+def test_host_capability_queue_full_is_reported_without_blocking_the_admitted_call() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        started.set()
+        await release.wait()
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {}}
+
+    descriptor = HostCapabilityDescriptor(
+        **{
+            **_descriptor("crm.customer.delete").__dict__,
+            "metadata": {
+                "concurrency": {
+                    "mode": "serial",
+                    "group": "crm-customer-delete-queue-full",
+                    "queue_policy": "bounded",
+                    "queue_depth": 0,
+                    "queue_timeout_seconds": 1,
+                }
+            },
+        }
+    )
+    broker = HostCapabilityBroker(workflow_id="wf-queue-full", provider_invoker=invoke_provider)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm-queue-full",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-queue-full"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    async def run_calls() -> tuple[object, object]:
+        first = asyncio.create_task(broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "a"}}))
+        await started.wait()
+        second = asyncio.create_task(broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "b"}}))
+        await asyncio.sleep(0.02)
+        release.set()
+        return await asyncio.gather(first, second, return_exceptions=True)
+
+    first, second = asyncio.run(run_calls())
+
+    assert isinstance(first, dict)
+    assert isinstance(second, HostCapabilityProviderError)
+    assert second.reason == "host_call_queue_full"
+
+
 def test_host_capability_broker_hides_unrelated_request_session() -> None:
     descriptor = _descriptor()
     broker = HostCapabilityBroker(request_id="req-visible", provider_invoker=lambda _session, call: {})

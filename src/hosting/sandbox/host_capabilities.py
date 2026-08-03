@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
@@ -277,6 +279,150 @@ class HostCapabilityCanceled(HostCapabilityProviderError):
         super().__init__("host_call_canceled", message, detail)
 
 
+class HostCapabilityQueueFull(HostCapabilityProviderError):
+    def __init__(self, message: str = "host capability callback queue is full", detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__("host_call_queue_full", message, detail)
+
+
+class HostCapabilityQueueTimeout(HostCapabilityProviderError):
+    def __init__(self, message: str = "host capability callback queue timed out", detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__("host_call_queue_timeout", message, detail)
+
+
+@dataclass
+class _HostConcurrencyLease:
+    controller: "_HostConcurrencyController"
+    request_id: str
+    released: bool = False
+
+    def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        self.controller.release(self.request_id)
+
+
+class _HostConcurrencyController:
+    """Thread-safe admission shared by all callback sessions for one provider group."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition(threading.RLock())
+        self._active: Dict[str, Dict[str, Any]] = {}
+        self._queued: deque[tuple[str, Dict[str, Any]]] = deque()
+        self._canceled: set[str] = set()
+
+    @staticmethod
+    def _slot(policy: Dict[str, Any]) -> str:
+        mode = str(policy.get("mode") or "parallel")
+        group = str(policy.get("group") or "default")
+        if mode == "keyed":
+            return f"keyed:{group}:{str(policy.get('resource_key') or '__missing__')}"
+        if mode == "serial":
+            return f"serial:{group}"
+        if mode == "exclusive":
+            return f"exclusive:{group}"
+        return f"parallel:{group}"
+
+    def _can_admit_locked(self, policy: Dict[str, Any], max_active: int) -> bool:
+        if len(self._active) >= max(1, int(max_active or 1)):
+            return False
+        mode = str(policy.get("mode") or "parallel")
+        if mode == "exclusive" and self._active:
+            return False
+        candidate_slot = self._slot(policy)
+        for active in self._active.values():
+            if str(active.get("mode") or "parallel") == "exclusive":
+                return False
+            if candidate_slot == self._slot(active):
+                return False
+        return True
+
+    def acquire(
+        self,
+        *,
+        request_id: str,
+        policy: Dict[str, Any],
+        max_active: int,
+        queue_policy: str,
+        queue_depth: int,
+        timeout_seconds: float,
+        cancel_checker: Optional[CancelChecker] = None,
+    ) -> _HostConcurrencyLease:
+        rid = _clean(request_id) or f"host-call-{time.time_ns()}"
+        bounded = str(queue_policy or "bounded").strip().lower() == "bounded"
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds or 0.0)) if timeout_seconds else None
+        queued = False
+        with self._condition:
+            while True:
+                if rid in self._canceled:
+                    self._canceled.discard(rid)
+                    raise HostCapabilityCanceled()
+                if cancel_checker is not None:
+                    try:
+                        cancel_checker()
+                    except HostCapabilityCanceled:
+                        self._queued = deque(item for item in self._queued if item[0] != rid)
+                        self._condition.notify_all()
+                        raise
+                if self._can_admit_locked(policy, max_active) and (not self._queued or self._queued[0][0] == rid):
+                    self._queued = deque(item for item in self._queued if item[0] != rid)
+                    self._active[rid] = dict(policy)
+                    return _HostConcurrencyLease(self, rid)
+                if not bounded:
+                    raise HostCapabilityProviderError("host_call_capacity_exceeded", detail={"max_active": max_active})
+                if not queued:
+                    if len(self._queued) >= max(0, int(queue_depth or 0)):
+                        raise HostCapabilityQueueFull(detail={"queue_depth": max(0, int(queue_depth or 0))})
+                    self._queued.append((rid, dict(policy)))
+                    queued = True
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                if remaining is not None and remaining <= 0:
+                    self._queued = deque(item for item in self._queued if item[0] != rid)
+                    self._condition.notify_all()
+                    raise HostCapabilityQueueTimeout(detail={"queue_timeout_seconds": float(timeout_seconds or 0.0)})
+                self._condition.wait(timeout=0.05 if remaining is None else min(remaining, 0.05))
+
+    def release(self, request_id: str) -> None:
+        with self._condition:
+            self._active.pop(_clean(request_id), None)
+            self._condition.notify_all()
+
+    def cancel(self, request_id: str) -> None:
+        rid = _clean(request_id)
+        if not rid:
+            return
+        with self._condition:
+            self._canceled.add(rid)
+            self._queued = deque(item for item in self._queued if item[0] != rid)
+            self._active.pop(rid, None)
+            self._condition.notify_all()
+
+    def snapshot(self, *, max_active: int, queue_policy: str, queue_depth: int, queue_timeout_seconds: float) -> Dict[str, Any]:
+        with self._condition:
+            return {
+                "max_active": max(1, int(max_active or 1)),
+                "queue_policy": str(queue_policy or "bounded"),
+                "queue_depth": max(0, int(queue_depth or 0)),
+                "queue_timeout_seconds": max(0.0, float(queue_timeout_seconds or 0.0)),
+                "active_calls": len(self._active),
+                "queued_calls": len(self._queued),
+            }
+
+
+_HOST_CONCURRENCY_CONTROLLERS: Dict[str, _HostConcurrencyController] = {}
+_HOST_CONCURRENCY_CONTROLLERS_LOCK = threading.RLock()
+
+
+def _host_concurrency_controller(key: str) -> _HostConcurrencyController:
+    normalized = _clean(key) or "default"
+    with _HOST_CONCURRENCY_CONTROLLERS_LOCK:
+        controller = _HOST_CONCURRENCY_CONTROLLERS.get(normalized)
+        if controller is None:
+            controller = _HostConcurrencyController()
+            _HOST_CONCURRENCY_CONTROLLERS[normalized] = controller
+        return controller
+
+
 class HostCapabilityApprovalDenied(HostCapabilityProviderError):
     def __init__(self, message: str = "host capability call approval denied", detail: Optional[Dict[str, Any]] = None) -> None:
         super().__init__("host_call_approval_denied", message, detail)
@@ -480,6 +626,96 @@ class HostCapabilityBroker:
         if raw is None:
             return self.provider_timeout_seconds
         return max(0.001, float(raw or self.provider_timeout_seconds))
+
+    @staticmethod
+    def _concurrency_policy(
+        session: HostCapabilitySession,
+        method: HostCapabilityMethod,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        metadata = dict(method.descriptor.metadata or {})
+        raw = dict(metadata.get("concurrency") or metadata.get("concurrency_policy") or {})
+        mode = _clean(raw.get("mode")).lower() or "parallel"
+        if mode not in {"parallel", "serial", "keyed", "exclusive"}:
+            mode = "parallel"
+        group = _clean(raw.get("group")) or method.descriptor.name
+        if mode == "exclusive" and not _clean(raw.get("group")):
+            group = "provider"
+        args = dict(arguments or {})
+        resource_key = _clean(raw.get("resource_key"))
+        key_argument = _clean(raw.get("key_argument") or raw.get("resource_key_argument"))
+        if mode == "keyed" and not resource_key:
+            if key_argument:
+                current: Any = args
+                for part in key_argument.split("."):
+                    current = current.get(part) if isinstance(current, dict) else None
+                resource_key = str(current if current is not None else "__missing__")
+            else:
+                resource_key = str(args.get("resource_key", args.get("key", "__missing__")))
+        try:
+            max_raw = raw.get("max_concurrency")
+            max_active = int(max_raw) if max_raw is not None else 32
+        except Exception:
+            max_active = 32
+        if mode == "serial":
+            max_active = 1
+        try:
+            depth_raw = raw.get("queue_depth")
+            queue_depth = int(depth_raw) if depth_raw is not None else 64
+        except Exception:
+            queue_depth = 64
+        try:
+            timeout_raw = raw.get("queue_timeout_seconds")
+            queue_timeout = float(timeout_raw) if timeout_raw is not None else 30.0
+        except Exception:
+            queue_timeout = 30.0
+        queue_policy = _clean(raw.get("queue_policy")).lower() or "bounded"
+        if queue_policy not in {"bounded", "fail_fast"}:
+            queue_policy = "bounded"
+        return {
+            "mode": mode,
+            "group": group,
+            "resource_key": resource_key,
+            "max_concurrency": max(1, min(max_active, 1024)),
+            "queue_policy": queue_policy,
+            "queue_depth": max(0, min(queue_depth, 4096)),
+            "queue_timeout_seconds": max(0.0, min(queue_timeout, 3600.0)),
+            "thread_safe_required": mode == "parallel",
+            "provider_id": session.session_id,
+            "method": method.descriptor.name,
+        }
+
+    async def _acquire_concurrency(
+        self,
+        *,
+        session: HostCapabilitySession,
+        method: HostCapabilityMethod,
+        request_id: str,
+        arguments: Dict[str, Any],
+        timeout_seconds: float,
+    ) -> _HostConcurrencyLease:
+        policy = self._concurrency_policy(session, method, arguments)
+        controller = _host_concurrency_controller(f"{session.session_id}:{policy['group']}")
+        acquire_task = asyncio.create_task(
+            asyncio.to_thread(
+                controller.acquire,
+                request_id=request_id,
+                policy=policy,
+                max_active=int(policy["max_concurrency"]),
+                queue_policy=str(policy["queue_policy"]),
+                queue_depth=int(policy["queue_depth"]),
+                timeout_seconds=min(
+                    float(timeout_seconds or 30.0),
+                    float(policy["queue_timeout_seconds"] or timeout_seconds or 30.0),
+                ),
+                cancel_checker=self._check_canceled,
+            )
+        )
+        try:
+            return await acquire_task
+        except asyncio.CancelledError:
+            controller.cancel(request_id)
+            raise
 
     @staticmethod
     def _normalize_allowed_namespaces(raw: Optional[Any]) -> Optional[set[str]]:
@@ -853,8 +1089,25 @@ class HostCapabilityBroker:
         return out
 
     def describe_host_capabilities(self) -> Dict[str, Any]:
+        method_rows: list[Dict[str, Any]] = []
+        for session, method in sorted(self._resolved_methods().values(), key=lambda item: item[1].descriptor.name):
+            descriptor = method.descriptor.to_dict()
+            policy = self._concurrency_policy(session, method, {})
+            controller = _host_concurrency_controller(f"{session.session_id}:{policy['group']}")
+            metadata = dict(descriptor.get("metadata") or {})
+            metadata["concurrency"] = {
+                **policy,
+                "runtime": controller.snapshot(
+                    max_active=int(policy["max_concurrency"]),
+                    queue_policy=str(policy["queue_policy"]),
+                    queue_depth=int(policy["queue_depth"]),
+                    queue_timeout_seconds=float(policy["queue_timeout_seconds"]),
+                ),
+            }
+            descriptor["metadata"] = metadata
+            method_rows.append(descriptor)
         return {
-            "methods": [descriptor.to_dict() for descriptor in self.descriptors()],
+            "methods": method_rows,
             "groups": self.groups(),
             "providers": self.providers_for_discovery(),
             "transport": {
@@ -878,6 +1131,7 @@ class HostCapabilityBroker:
                 "async": False,
                 "group_path": list(descriptor.get("group_path") or []),
                 "provider": dict(descriptor.get("provider") or {}),
+                "metadata": dict(descriptor.get("metadata") or {}),
             }
             for descriptor in list(host_capabilities.get("methods") or [])
         ]
@@ -959,7 +1213,15 @@ class HostCapabilityBroker:
                             "instance_id": self.instance_id or None,
                         },
                     )
+                    lease: Optional[_HostConcurrencyLease] = None
                     try:
+                        lease = await self._acquire_concurrency(
+                            session=session,
+                            method=method,
+                            request_id=provider_call_id,
+                            arguments=dict(call.arguments or {}),
+                            timeout_seconds=timeout_seconds,
+                        )
                         await self._request_approval(session=session, method=method, provider_call=call, host_call_id=host_call_id)
                         response = self.provider_invoker(session, call)
                         if inspect.isawaitable(response):
@@ -1029,6 +1291,9 @@ class HostCapabilityBroker:
                         self._emit_event("provider_failure", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_failed", "error_type": type(exc).__name__})
                         self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_failed"})
                         raise
+                    finally:
+                        if lease is not None:
+                            lease.release()
                 host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
                 self._emit_event(
                     "host_call",
@@ -1043,7 +1308,15 @@ class HostCapabilityBroker:
                         "instance_id": self.instance_id or None,
                     },
                 )
+                lease: Optional[_HostConcurrencyLease] = None
                 try:
+                    lease = await self._acquire_concurrency(
+                        session=session,
+                        method=method,
+                        request_id=host_call_id or f"host-call-{uuid.uuid4().hex}",
+                        arguments=dict(row.get("arguments") or {}),
+                        timeout_seconds=self._provider_timeout_for_call(row),
+                    )
                     result = await method.dispatch_async(dict(row.get("arguments") or {}))
                     self._emit_event("host_response", {"status": "ok", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.session_id})
                     return result
@@ -1051,6 +1324,9 @@ class HostCapabilityBroker:
                     reason = str(getattr(exc, "reason", "") or "host_call_failed")
                     self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.session_id, "reason": reason})
                     raise
+                finally:
+                    if lease is not None:
+                        lease.release()
         raise RuntimeError(f"unsupported_host_method:{method_name}")
 
     def dispatch(self, call: Dict[str, Any]) -> Dict[str, Any]:
@@ -1092,6 +1368,8 @@ __all__ = [
     "HostCapabilityProviderError",
     "HostCapabilityProviderUnavailable",
     "HostCapabilityProviderRef",
+    "HostCapabilityQueueFull",
+    "HostCapabilityQueueTimeout",
     "HostCapabilitySession",
     "HostCapabilityTimeout",
     "ProviderInvoker",

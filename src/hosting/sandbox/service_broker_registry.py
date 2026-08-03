@@ -139,6 +139,37 @@ class ServiceBrokerMethodSpec:
         from .host_capabilities import HostCapabilityApproval
 
         ns = _clean(self.namespace) or self.name.split(".", 1)[0]
+        if self.name in {"fs.write_text", "fs.mkdir"}:
+            concurrency = {
+                "mode": "keyed",
+                "group": "filesystem",
+                "key_argument": "relative_path",
+                "max_concurrency": 1,
+                "queue_policy": "bounded",
+                "queue_depth": 32,
+                "queue_timeout_seconds": 30.0,
+                "thread_safe_required": False,
+            }
+        elif self.name.startswith("fs."):
+            concurrency = {
+                "mode": "parallel",
+                "group": "filesystem",
+                "max_concurrency": 32,
+                "queue_policy": "bounded",
+                "queue_depth": 64,
+                "queue_timeout_seconds": 30.0,
+                "thread_safe_required": True,
+            }
+        else:
+            concurrency = {
+                "mode": "parallel",
+                "group": "http",
+                "max_concurrency": 32,
+                "queue_policy": "bounded",
+                "queue_depth": 64,
+                "queue_timeout_seconds": 30.0,
+                "thread_safe_required": True,
+            }
         return HostCapabilityDescriptor(
             name=self.name,
             namespace=ns,
@@ -161,7 +192,8 @@ class ServiceBrokerMethodSpec:
                     "provider_id": self.provider_id,
                     "method": self.name,
                     "policy_hint": dict(self.policy_hint or {}),
-                }
+                },
+                "concurrency": concurrency,
             },
         )
 
