@@ -9,6 +9,34 @@ transports, daemon service calls are dispatched off the event loop, and the
 runtime pool now has atomic admission, bounded waiting, policy gates, request
 lifecycle diagnostics, and explicit cancellation outcomes.
 
+## Dependent-team follow-up: addressed
+
+The follow-up review is now covered by the implementation and regression tests:
+
+- Parallel groups now admit up to their declared `max_concurrency` in both the
+  hosted runtime pool and Host API broker. A parallel group no longer becomes
+  serial merely because calls share a group name.
+- `ToolboxExecutionHarness.execute_calls()` and hosted round execution enforce a
+  bounded client-side limit, preserve input order, and settle every call even
+  when a sibling has a transport failure.
+- Every hosted `ToolCall` now carries its service result and diagnostics in
+  `execution_envelope`; queue saturation, timeout, cancellation, transport,
+  and worker failures remain visible on the individual call.
+- Internal execution request identity is separate from the model's
+  `tool_call_id`. Duplicate model IDs from different batch items are allowed;
+  use the returned `request_id` for status and cancellation.
+- Queued cancellation returns `outcome: "canceled"` and an explicit
+  `canceled_request_ids` entry. Admission claims are fenced so a request
+  canceled before dispatch is not sent to the worker.
+- `toolbox.describe().parallel_execution` is complete before first execution,
+  including support, effective capacity, queue settings, active/queued counts,
+  worker count, and execution model.
+
+The regression matrix includes three parallel calls with `max_concurrency=2`,
+two-way Host API peak concurrency, harness `queue_full` propagation, a
+transport failure beside a successful sibling, duplicate model IDs, complete
+parallel-execution discovery, and queued cancellation.
+
 ## What to stop doing
 
 - Stop assuming that `asyncio.gather` alone guarantees overlap. Submit eligible
@@ -20,6 +48,16 @@ lifecycle diagnostics, and explicit cancellation outcomes.
 - Stop depending on response arrival order. Keep the original tool-call ID and
   restore the downstream batch-item/tool-call order at the all-settled round
   barrier.
+- Stop using the model `tool_call_id` as the hosted runtime lifecycle key. A
+  model may legally repeat an ID across batch items; use each result's
+  `execution_envelope.request_id` (or service `request_id`) with
+  `toolbox-request-status` and `toolbox-cancel`.
+- Stop dropping the service envelope when converting a hosted response back to a
+  `ToolCall`. The envelope contains the request lifecycle, admission,
+  concurrency policy, diagnostics, and normalized failure reason.
+- Stop treating `max_concurrency` as an advisory hint. Pass the intended limit
+  to the round/harness controller and clamp it against the complete
+  `parallel_execution` description.
 - Stop canceling a whole toolbox to remove one queued call. Cancel by stable
   `tool_call_id`; a queued request is removed independently. If a running call
   requires coarse worker termination, sibling requests are returned with the
@@ -43,6 +81,10 @@ lifecycle diagnostics, and explicit cancellation outcomes.
 - Start treating each returned call as a stable result object. Persist its
   `tool_call_id`, `status`/`outcome`, `reason` or `error`, `request` lifecycle,
   `diagnostics`, `worker_id`, `admission`, `concurrency`, and `retry_count`.
+- Start persisting `ToolCall.execution_envelope` when the dependent project
+  stores `ToolCall` objects. It is the per-call stable envelope for hosted
+  results and contains the internal `request_id` without changing the model's
+  `tool_call_id`.
 - Start checking `toolbox.describe().parallel_execution` before choosing a
   concurrency limit. The effective runtime reports logical capacity, bounded
   queue depth and timeout, active/queued calls, worker process count, and the
@@ -72,6 +114,9 @@ lifecycle diagnostics, and explicit cancellation outcomes.
 - Start treating `queue_full`, `queue_timeout`, `host_call_queue_full`,
   `host_call_queue_timeout`, `host_call_canceled`, and `sandbox_recycled` as
   explicit outcomes in telemetry and retry policy.
+- Start treating `outcome: "canceled"` as the expected result for a queued
+  cancellation. Running-call cancellation may additionally report recycled
+  sibling request IDs when worker termination is required.
 - Keep the dependent project’s existing serialized operations serialized:
   scope/search mutations, approval decisions, protected-resource calls, and
   successive inference rounds remain barriers unless explicitly allowed by the

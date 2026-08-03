@@ -21,6 +21,17 @@ calls.
 - [x] Reply to the dependent project in `HOSTING_CLIENT_BREAKING_CHANGES.md`
   with caller stop/start guidance.
 - [x] Create sliced commits for each completed implementation slice.
+- [x] Correct parallel-group admission so declared `max_concurrency` is
+  enforced rather than accidentally serializing parallel calls in both
+  controllers.
+- [x] Preserve a stable per-call execution envelope on `ToolCall` objects and
+  settle harness transport/queue failures independently.
+- [x] Separate internal execution request identity from model tool-call IDs,
+  including status/cancellation routing and duplicate-ID coverage.
+- [x] Fence cancellation before worker dispatch and report queued cancellation
+  as `outcome: "canceled"`.
+- [x] Make `toolbox.describe().parallel_execution` complete before execution
+  and add dependent-team regression coverage.
 
 ## Progress log
 
@@ -41,11 +52,23 @@ calls.
 - Added explicit `sandbox_recycled` sibling outcomes when coarse toolbox
   cancellation recycles a worker, plus public `toolbox-request-status` control
   access for responsive inspection.
+- Addressed dependent-team follow-up: parallel groups now honor declared
+  limits, hosted calls carry `ToolCall.execution_envelope`, harness execution
+  is all-settled per call, model IDs are separate from lifecycle IDs, queued
+  cancellation is fenced and reports `canceled`, and describe metadata is
+  complete before execution.
+- Added regression coverage for three calls at `max_concurrency=2`, Host API
+  peak concurrency two, queue-full propagation, one transport failure beside a
+  successful sibling, duplicate model IDs, complete describe metadata, and
+  queued-cancellation admission fencing.
 - Added focused pool, Host API, daemon-dispatch, toolbox error/cancellation,
   and real local control-path tests. The real-path test exercises actual
   toolbox functions through the daemon and request transport.
 - Completed the full validation matrix, checked the acceptance items below,
   and created the sliced commits listed at the end of this file.
+- Full dependent-team follow-up validation passed: 280 tests across the
+  sandbox process/runtime/pool, toolbox, daemon ACL, service-broker, Host API,
+  and hosted chat matrices; all hosting Python files compiled successfully.
 
 ## Acceptance coverage
 
@@ -61,10 +84,11 @@ calls.
   and execution model.
 - [x] Host API overlap, saturation, cancellation, provider identity, and
   thread-safety metadata are covered by focused tests/docs.
-- [x] Validation complete: 213 tests passed across the focused sandbox,
-  daemon, toolbox, Host API, and service-broker matrix; all hosting Python
-  files compiled successfully.
+- [x] Validation complete: 280 tests passed across the sandbox process,
+  runtime/pool, daemon, toolbox, Host API, service-broker, and hosted chat
+  matrix; all hosting Python files compiled successfully.
 - [x] Sliced commits created: `9c5663d` (pool admission), `68048f8`
   (control transport/daemon), `4023710` (toolbox policy/results), and
-  `a4844ca` (Host API concurrency). The final documentation commit contains
-  this status record and the client reply.
+  `a4844ca` (Host API concurrency), `79a7d54` (parallel admission gates), and
+  `db2a6bf` (stable hosted batch execution). The final documentation commit
+  contains this status record and the client reply.
