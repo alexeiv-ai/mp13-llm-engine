@@ -369,20 +369,46 @@ class ToolboxRuntimeMixin:
                 return max(1, min(value, 1024))
         return 256
 
+    @classmethod
+    def _toolbox_registration_described_capacity(cls, reg: Dict[str, Any]) -> int:
+        """Return configured capacity for discovery before a runtime pool exists."""
+        caps = dict(dict(reg or {}).get("capabilities") or {})
+        for key in ("capacity", "max_concurrency", "max_parallel_calls"):
+            if key not in caps or caps.get(key) is None:
+                continue
+            try:
+                value = int(caps.get(key))
+            except Exception:
+                return cls._toolbox_registration_capacity(reg)
+            return max(0, min(value, 1024))
+        return cls._toolbox_registration_capacity(reg)
+
     @staticmethod
     def _toolbox_registration_queue_config(reg: Dict[str, Any]) -> Dict[str, Any]:
         caps = dict(dict(reg or {}).get("capabilities") or {})
         policy = str(caps.get("queue_policy") or caps.get("concurrency_queue_policy") or "bounded").strip().lower()
         if policy not in {"bounded", "fail_fast"}:
             policy = "bounded"
-        try:
-            depth = int(caps.get("queue_depth") or caps.get("max_queue_depth") or 32)
-        except Exception:
-            depth = 32
-        try:
-            timeout = float(caps.get("queue_timeout_seconds") or caps.get("queue_wait_timeout_seconds") or 30.0)
-        except Exception:
-            timeout = 30.0
+
+        depth = 32
+        for key in ("queue_depth", "max_queue_depth"):
+            if key not in caps or caps.get(key) is None:
+                continue
+            try:
+                depth = int(caps.get(key))
+            except Exception:
+                depth = 32
+            break
+
+        timeout = 30.0
+        for key in ("queue_timeout_seconds", "queue_wait_timeout_seconds"):
+            if key not in caps or caps.get(key) is None:
+                continue
+            try:
+                timeout = float(caps.get(key))
+            except Exception:
+                timeout = 30.0
+            break
         return {
             "queue_policy": policy,
             "queue_depth": max(0, min(depth, 4096)),
@@ -517,12 +543,35 @@ class ToolboxRuntimeMixin:
             sandbox_profile_ids: set[str] = set()
             engine_ids: List[str] = []
             hosted_pools: Dict[str, Any] = {}
+            parallel_rows: List[Dict[str, Any]] = []
             for reg in regs:
                 reg_engine_id = str(reg.get("engine_id") or "")
                 engine_ids.append(reg_engine_id)
                 pool = self._toolbox_pool_resources(reg)
                 if pool is not None and reg_engine_id:
                     hosted_pools[reg_engine_id] = pool
+                registration_queue = self._toolbox_registration_queue_config(reg)
+                registration_capacity = self._toolbox_registration_described_capacity(reg)
+                metrics = dict(pool.get("metrics") or {}) if pool is not None else {}
+                parallel_rows.append(
+                    {
+                        "effective_max_concurrency": int(metrics["desired_capacity"])
+                        if pool is not None and "desired_capacity" in metrics
+                        else registration_capacity,
+                        "queue_policy": str(metrics["queue_policy"])
+                        if pool is not None and "queue_policy" in metrics
+                        else registration_queue["queue_policy"],
+                        "queue_depth": int(metrics["queue_depth"])
+                        if pool is not None and "queue_depth" in metrics
+                        else registration_queue["queue_depth"],
+                        "queue_timeout_seconds": float(metrics["queue_timeout_seconds"])
+                        if pool is not None and "queue_timeout_seconds" in metrics
+                        else registration_queue["queue_timeout_seconds"],
+                        "active_calls": int(metrics.get("active_calls") or 0),
+                        "queued_calls": int(metrics.get("queued_calls") or 0),
+                        "worker_process_count": int(metrics.get("worker_count") or 0),
+                    }
+                )
                 for name in list(self._registration_allowed_tool_names(reg) or set()):
                     tool_names.add(name)
                 for name in list(self._registration_advertised_tool_names(reg) or set()):
@@ -547,26 +596,25 @@ class ToolboxRuntimeMixin:
                     "sandbox_pool": len(engine_ids) > 1,
                     "supported": True,
                     "effective_max_concurrency": max(
-                        [int(dict(dict(pool or {}).get("metrics") or {}).get("desired_capacity") or 0) for pool in hosted_pools.values()]
-                        or [0]
+                        [int(row["effective_max_concurrency"]) for row in parallel_rows] or [0]
                     ),
-                    "queue_policy": "bounded",
+                    "queue_policy": "bounded"
+                    if any(row["queue_policy"] == "bounded" for row in parallel_rows)
+                    else "fail_fast",
                     "queue_depth": max(
-                        [int(dict(dict(pool or {}).get("metrics") or {}).get("queue_depth") or 0) for pool in hosted_pools.values()]
-                        or [0]
+                        [int(row["queue_depth"]) for row in parallel_rows] or [0]
                     ),
                     "queue_timeout_seconds": max(
-                        [float(dict(dict(pool or {}).get("metrics") or {}).get("queue_timeout_seconds") or 0.0) for pool in hosted_pools.values()]
-                        or [0.0]
+                        [float(row["queue_timeout_seconds"]) for row in parallel_rows] or [0.0]
                     ),
                     "active_calls": sum(
-                        [int(dict(dict(pool or {}).get("metrics") or {}).get("active_calls") or 0) for pool in hosted_pools.values()]
+                        [int(row["active_calls"]) for row in parallel_rows]
                     ),
                     "queued_calls": sum(
-                        [int(dict(dict(pool or {}).get("metrics") or {}).get("queued_calls") or 0) for pool in hosted_pools.values()]
+                        [int(row["queued_calls"]) for row in parallel_rows]
                     ),
                     "worker_process_count": sum(
-                        [int(dict(dict(pool or {}).get("metrics") or {}).get("worker_count") or 0) for pool in hosted_pools.values()]
+                        [int(row["worker_process_count"]) for row in parallel_rows]
                     ),
                     "execution_model": "threaded_worker",
                 },
@@ -594,16 +642,33 @@ class ToolboxRuntimeMixin:
             result.setdefault("hosted_pool", pool)
             result.setdefault("toolbox_pool", pool)
         metrics = dict(pool.get("metrics") or {}) if pool is not None else {}
+        registration_capacity = self._toolbox_registration_described_capacity(reg)
+        registration_queue = self._toolbox_registration_queue_config(reg)
         parallel = dict(result.get("parallel_execution") or {})
+        effective_max = (
+            int(metrics["desired_capacity"])
+            if pool is not None and "desired_capacity" in metrics
+            else int(parallel.get("effective_max_concurrency") or 0) or registration_capacity
+        )
+        queue_depth = (
+            int(metrics["queue_depth"])
+            if pool is not None and "queue_depth" in metrics
+            else int(parallel.get("queue_depth") or 0) or registration_queue["queue_depth"]
+        )
+        queue_timeout = (
+            float(metrics["queue_timeout_seconds"])
+            if pool is not None and "queue_timeout_seconds" in metrics
+            else float(parallel.get("queue_timeout_seconds") or 0.0) or registration_queue["queue_timeout_seconds"]
+        )
         parallel.update(
             {
                 "supported": bool(parallel.get("supported", True)),
                 "async_within_executor": bool(parallel.get("async_within_executor", True)),
                 "sandbox_pool": bool(parallel.get("sandbox_pool", False)),
-                "effective_max_concurrency": int(parallel.get("effective_max_concurrency") or metrics.get("desired_capacity") or 0),
-                "queue_policy": str(parallel.get("queue_policy") or metrics.get("queue_policy") or "bounded"),
-                "queue_depth": int(parallel.get("queue_depth") or metrics.get("queue_depth") or 0),
-                "queue_timeout_seconds": float(parallel.get("queue_timeout_seconds") or metrics.get("queue_timeout_seconds") or 0.0),
+                "effective_max_concurrency": effective_max,
+                "queue_policy": str(parallel.get("queue_policy") or metrics.get("queue_policy") or registration_queue["queue_policy"]),
+                "queue_depth": queue_depth,
+                "queue_timeout_seconds": queue_timeout,
                 "active_calls": int(parallel.get("active_calls") or metrics.get("active_calls") or 0),
                 "queued_calls": int(parallel.get("queued_calls") or metrics.get("queued_calls") or 0),
                 "worker_process_count": int(parallel.get("worker_process_count") or metrics.get("worker_count") or 0),

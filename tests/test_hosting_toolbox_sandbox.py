@@ -6918,6 +6918,55 @@ def test_toolbox_gc_reconciles_stale_registrations_and_artifacts() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_toolbox_describe_uses_registration_limits_before_runtime_pool_exists() -> None:
+    root = _scratch_dir("service-describe-prewarm-")
+    try:
+        svc = EngineHostService(
+            engines_state_file=root / "managed_engines.json",
+            control_state_file=root / "access_control.json",
+        )
+        svc.register_spawned(
+            engine_id="toolbox-prewarm",
+            pid=1234,
+            command=["python", "-m", "hosting.toolbox_executor_ipc"],
+            worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
+            worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-prewarm",
+            executor_kind="toolbox_executor",
+            bundle={"toolbox_id": "prewarm-box", "sandbox_profile_id": "default"},
+            capabilities={
+                "capacity": 2,
+                "queue_depth": 7,
+                "queue_timeout_seconds": 4.0,
+            },
+            tool_access={"allowed_tool_names": ["hello_tool"]},
+        )
+
+        desc = svc.toolbox_describe(toolbox_id="prewarm-box")
+
+        assert desc["hosted_pools"] == {}
+        assert desc["parallel_execution"]["effective_max_concurrency"] == 2
+        assert desc["parallel_execution"]["queue_depth"] == 7
+        assert desc["parallel_execution"]["queue_timeout_seconds"] == 4.0
+
+        svc.register_spawned(
+            engine_id="toolbox-prewarm-zero",
+            pid=1235,
+            command=["python", "-m", "hosting.toolbox_executor_ipc"],
+            worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
+            worker_ipc_address=str(root / "missing-zero.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-prewarm-zero",
+            executor_kind="toolbox_executor",
+            bundle={"toolbox_id": "prewarm-zero-box", "sandbox_profile_id": "default"},
+            capabilities={"capacity": 2, "queue_depth": 0, "queue_timeout_seconds": 0.0},
+            tool_access={"allowed_tool_names": ["hello_tool"]},
+        )
+        zero_desc = svc.toolbox_describe(toolbox_id="prewarm-zero-box")
+
+        assert zero_desc["parallel_execution"]["queue_depth"] == 0
+        assert zero_desc["parallel_execution"]["queue_timeout_seconds"] == 0.0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_toolbox_gc_preserves_referenced_runtime_envs_and_removes_stale_runtime_envs() -> None:
     root = Path(".tmp_runtime_env_gc").resolve()
     shutil.rmtree(root, ignore_errors=True)
