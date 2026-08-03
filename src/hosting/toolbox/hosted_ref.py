@@ -125,6 +125,7 @@ class HostedToolBoxRef:
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
         callback_signature: Optional[Dict[str, Any]] = None,
+        concurrency: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request = {
             "files": [
@@ -147,6 +148,8 @@ class HostedToolBoxRef:
             "guide_description": str(guide_description or "").strip() or None,
             "callback_signature": dict(callback_signature or {}) or None,
         }
+        if isinstance(concurrency, dict) and concurrency:
+            request["concurrency"] = dict(concurrency)
         return dict(
             self.host.toolbox_register_auto(
                 toolbox_id=self.toolbox_id,
@@ -173,6 +176,7 @@ class HostedToolBoxRef:
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
         callback_signature: Optional[Dict[str, Any]] = None,
+        concurrency: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -201,6 +205,7 @@ class HostedToolBoxRef:
             guide_content=guide_content,
             guide_description=guide_description,
             callback_signature=callback_signature,
+            concurrency=concurrency,
         )
 
     def add_python_callable(self, implementation: Any, **kwargs: Any) -> Dict[str, Any]:
@@ -759,6 +764,7 @@ class PendingHostedToolboxRef:
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
         callback_signature: Optional[Dict[str, Any]] = None,
+        concurrency: Optional[Dict[str, Any]] = None,
     ) -> "PendingHostedToolboxRef":
         request = {
             "files": [
@@ -781,6 +787,8 @@ class PendingHostedToolboxRef:
             "guide_description": str(guide_description or "").strip() or None,
             "callback_signature": dict(callback_signature or {}) or None,
         }
+        if isinstance(concurrency, dict) and concurrency:
+            request["concurrency"] = dict(concurrency)
         self._pending_auto_requests.append(request)
         return self
 
@@ -800,6 +808,7 @@ class PendingHostedToolboxRef:
         guide_content: Optional[Dict[str, List[str]]] = None,
         guide_description: Optional[str] = None,
         callback_signature: Optional[Dict[str, Any]] = None,
+        concurrency: Optional[Dict[str, Any]] = None,
     ) -> "PendingHostedToolboxRef":
         module = inspect.getmodule(implementation)
         module_name = str(getattr(implementation, "__module__", "") or getattr(module, "__name__", "") or "").strip()
@@ -828,6 +837,7 @@ class PendingHostedToolboxRef:
             guide_content=guide_content,
             guide_description=guide_description,
             callback_signature=callback_signature,
+            concurrency=concurrency,
         )
 
     def add_python_callable(self, implementation: Any, **kwargs: Any) -> "PendingHostedToolboxRef":

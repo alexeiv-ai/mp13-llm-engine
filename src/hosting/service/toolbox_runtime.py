@@ -368,6 +368,83 @@ class ToolboxRuntimeMixin:
                 return max(1, min(value, 1024))
         return 256
 
+    @staticmethod
+    def _toolbox_registration_queue_config(reg: Dict[str, Any]) -> Dict[str, Any]:
+        caps = dict(dict(reg or {}).get("capabilities") or {})
+        policy = str(caps.get("queue_policy") or caps.get("concurrency_queue_policy") or "bounded").strip().lower()
+        if policy not in {"bounded", "fail_fast"}:
+            policy = "bounded"
+        try:
+            depth = int(caps.get("queue_depth") or caps.get("max_queue_depth") or 32)
+        except Exception:
+            depth = 32
+        try:
+            timeout = float(caps.get("queue_timeout_seconds") or caps.get("queue_wait_timeout_seconds") or 30.0)
+        except Exception:
+            timeout = 30.0
+        return {
+            "queue_policy": policy,
+            "queue_depth": max(0, min(depth, 4096)),
+            "queue_timeout_seconds": max(0.0, min(timeout, 3600.0)),
+        }
+
+    def _toolbox_tool_concurrency_policy(
+        self,
+        *,
+        toolbox_id: str,
+        tool_name: str,
+        call: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        tid = str(toolbox_id or "").strip()
+        name = str(tool_name or "").strip()
+        state = self._read_toolboxes() if tid else {}
+        row = dict(dict(state.get("toolboxes") or {}).get(tid) or {})
+        metadata = dict(self._toolbox_tool_metadata(row).get(name) or {})
+        raw = dict(metadata.get("concurrency") or {})
+        mode = str(raw.get("mode") or "parallel").strip().lower()
+        if mode not in {"parallel", "serial", "keyed", "exclusive"}:
+            mode = "parallel"
+        group = str(raw.get("group") or "").strip()
+        if mode in {"serial", "keyed"} and not group:
+            group = name or "tool"
+        if mode == "exclusive" and not group:
+            group = "toolbox"
+        arguments = dict(call.get("arguments") or {}) if isinstance(call.get("arguments"), dict) else {}
+        resource_key = str(raw.get("resource_key") or "").strip()
+        key_arguments = raw.get("key_arguments") or raw.get("resource_key_arguments")
+        if not resource_key:
+            key_argument = str(raw.get("key_argument") or raw.get("resource_key_argument") or "").strip()
+            if key_argument:
+                key_arguments = [key_argument]
+            if isinstance(key_arguments, str):
+                key_arguments = [key_arguments]
+            if mode == "keyed":
+                values: List[Any] = []
+                for key in list(key_arguments or []):
+                    current: Any = arguments
+                    for part in str(key or "").split("."):
+                        if isinstance(current, dict):
+                            current = current.get(part)
+                        else:
+                            current = None
+                    values.append(current)
+                if not values:
+                    values = [arguments.get("resource_key", arguments.get("key", "__missing__"))]
+                resource_key = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        try:
+            max_concurrency = int(raw.get("max_concurrency") or 0)
+        except Exception:
+            max_concurrency = 0
+        if mode == "serial":
+            max_concurrency = 1
+        return {
+            "mode": mode,
+            "group": group,
+            "resource_key": resource_key,
+            "max_concurrency": max(0, max_concurrency),
+            "decision": "compatibility_default" if not raw else "declared",
+        }
+
     def _toolbox_worker_slot(self, *, reg: Dict[str, Any], environment_key: str, capacity: int) -> Any:
         from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 
@@ -465,6 +542,24 @@ class ToolboxRuntimeMixin:
                 "parallel_execution": {
                     "async_within_executor": True,
                     "sandbox_pool": len(engine_ids) > 1,
+                    "supported": True,
+                    "effective_max_concurrency": max(
+                        [int(dict(dict(pool or {}).get("metrics") or {}).get("desired_capacity") or 0) for pool in hosted_pools.values()]
+                        or [0]
+                    ),
+                    "queue_policy": "bounded",
+                    "queue_depth": max(
+                        [int(dict(dict(pool or {}).get("metrics") or {}).get("queue_depth") or 0) for pool in hosted_pools.values()]
+                        or [0]
+                    ),
+                    "queue_timeout_seconds": max(
+                        [float(dict(dict(pool or {}).get("metrics") or {}).get("queue_timeout_seconds") or 0.0) for pool in hosted_pools.values()]
+                        or [0.0]
+                    ),
+                    "worker_process_count": sum(
+                        [int(dict(dict(pool or {}).get("metrics") or {}).get("worker_count") or 0) for pool in hosted_pools.values()]
+                    ),
+                    "execution_model": "threaded_worker",
                 },
                 "hosted_pools": hosted_pools,
             }
@@ -489,6 +584,21 @@ class ToolboxRuntimeMixin:
         if pool is not None:
             result.setdefault("hosted_pool", pool)
             result.setdefault("toolbox_pool", pool)
+            metrics = dict(pool.get("metrics") or {})
+            result.setdefault(
+                "parallel_execution",
+                {
+                    "supported": True,
+                    "effective_max_concurrency": int(metrics.get("desired_capacity") or 0),
+                    "queue_policy": str(metrics.get("queue_policy") or "bounded"),
+                    "queue_depth": int(metrics.get("queue_depth") or 0),
+                    "queue_timeout_seconds": float(metrics.get("queue_timeout_seconds") or 0.0),
+                    "active_calls": int(metrics.get("active_calls") or 0),
+                    "queued_calls": int(metrics.get("queued_calls") or 0),
+                    "worker_process_count": int(metrics.get("worker_count") or 0),
+                    "execution_model": "threaded_worker",
+                },
+            )
         result.pop("tool_names", None)
         return result
 
@@ -648,6 +758,13 @@ class ToolboxRuntimeMixin:
                 raise PermissionError(f"blocked_in_scope:{tool_name}")
         environment_key = self._toolbox_registration_environment_key(reg)
         capacity = self._toolbox_registration_capacity(reg)
+        toolbox_identity = tid or self._registration_toolbox_id(reg)
+        concurrency = self._toolbox_tool_concurrency_policy(
+            toolbox_id=toolbox_identity,
+            tool_name=tool_name,
+            call=call,
+        )
+        queue_config = self._toolbox_registration_queue_config(reg)
         request_id = str(call.get("id") or call.get("tool_call_id") or "").strip() or f"toolbox-{tool_name}-{int(time.time() * 1000)}"
         base = self._toolbox_runtime_base()
         scheduled = base.submit_request(
@@ -658,17 +775,36 @@ class ToolboxRuntimeMixin:
             desired_capacity=capacity,
             operation_id=tool_name,
             input_bytes=len(json.dumps(call, ensure_ascii=False).encode("utf-8", errors="replace")),
+            queue_policy=str(queue_config.get("queue_policy") or "bounded"),
+            queue_depth=int(queue_config.get("queue_depth") or 0),
+            queue_timeout_seconds=float(queue_config.get("queue_timeout_seconds") or 0.0),
+            concurrency=concurrency,
         )
         if str(scheduled.get("status") or "") != "ok":
+            pool_snapshot = base.resources(environment_key)
+            request_snapshot = dict(scheduled.get("request") or {})
+            failure_reason = str(scheduled.get("reason") or "capacity_exceeded")
             return {
                 "status": "error",
-                "reason": str(scheduled.get("reason") or "capacity_exceeded"),
+                "outcome": "error",
+                "reason": failure_reason,
+                "error": failure_reason,
                 "engine_id": eid,
                 "toolbox_id": tid or self._registration_toolbox_id(reg),
                 "tool_name": tool_name,
                 "tool_call_id": request_id,
                 "environment_key": environment_key,
-                "hosted_pool": base.resources(environment_key),
+                "worker_id": request_snapshot.get("worker_id"),
+                "retry_count": 0,
+                "admission": request_snapshot.get("admission") or "rejected",
+                "concurrency": dict(concurrency),
+                "request": request_snapshot,
+                "diagnostics": {
+                    "request": request_snapshot,
+                    "concurrency": dict(concurrency),
+                    "pool": pool_snapshot,
+                },
+                "hosted_pool": pool_snapshot,
             }
         finished = False
         dispatch_relay: Optional[_HostedToolCallbackRelay] = None
@@ -700,25 +836,96 @@ class ToolboxRuntimeMixin:
             )
             if str(out.get("status") or "").strip().lower() == "error":
                 reason = str(out.get("message") or "toolbox_execute_failed")
-                base.finish_request(environment_key=environment_key, request_id=request_id, status="error", reason=reason)
+                finish_out = base.finish_request(environment_key=environment_key, request_id=request_id, status="error", reason=reason)
                 finished = True
-                raise RuntimeError(reason)
+                request_snapshot = dict(finish_out.get("request") or {})
+                pool_snapshot = base.resources(environment_key)
+                return {
+                    "status": "error",
+                    "outcome": "error",
+                    "reason": reason,
+                    "error": str(out.get("message") or reason),
+                    "engine_id": eid,
+                    "toolbox_id": tid or self._registration_toolbox_id(reg),
+                    "tool_name": tool_name,
+                    "tool_call_id": request_id,
+                    "environment_key": environment_key,
+                    "worker_id": request_snapshot.get("worker_id"),
+                    "retry_count": 0,
+                    "admission": request_snapshot.get("admission") or "admitted",
+                    "concurrency": dict(concurrency),
+                    "request": request_snapshot,
+                    "diagnostics": {
+                        "request": request_snapshot,
+                        "concurrency": dict(concurrency),
+                        "pool": pool_snapshot,
+                    },
+                    "hosted_pool": pool_snapshot,
+                }
             result = dict(out or {})
             output_bytes = len(json.dumps(result, ensure_ascii=False, default=str).encode("utf-8", errors="replace"))
-            base.finish_request(environment_key=environment_key, request_id=request_id, status="ok", output_bytes=output_bytes)
+            finish_out = base.finish_request(environment_key=environment_key, request_id=request_id, status="ok", output_bytes=output_bytes)
             finished = True
+            request_snapshot = dict(finish_out.get("request") or {})
+            pool_snapshot = base.resources(environment_key)
             result.setdefault("engine_id", eid)
             result.setdefault("toolbox_id", tid or self._registration_toolbox_id(reg))
             result.setdefault("tool_name", tool_name)
             result.setdefault("tool_call_id", request_id)
             result.setdefault("environment_key", environment_key)
-            result.setdefault("hosted_pool", base.resources(environment_key))
+            result.setdefault("worker_id", request_snapshot.get("worker_id"))
+            result.setdefault("retry_count", 0)
+            result.setdefault("admission", request_snapshot.get("admission") or "admitted")
+            result.setdefault("concurrency", dict(concurrency))
+            result.setdefault("request", request_snapshot)
+            result.setdefault(
+                "diagnostics",
+                {
+                    "request": request_snapshot,
+                    "concurrency": dict(concurrency),
+                    "pool": pool_snapshot,
+                },
+            )
+            result.setdefault("hosted_pool", pool_snapshot)
             result.setdefault("toolbox_pool", result["hosted_pool"])
             return result
         except Exception as exc:
+            reason = "toolbox_execute_timeout" if isinstance(exc, TimeoutError) else str(exc) or "toolbox_execute_failed"
+            finish_status = "timeout" if isinstance(exc, TimeoutError) else "error"
             if not finished:
-                base.finish_request(environment_key=environment_key, request_id=request_id, status="error", reason=str(exc) or "toolbox_execute_failed")
-            raise
+                finish_out = base.finish_request(
+                    environment_key=environment_key,
+                    request_id=request_id,
+                    status=finish_status,
+                    reason=reason,
+                )
+            else:
+                finish_out = base.request_status(environment_key=environment_key, request_id=request_id)
+            request_snapshot = dict(finish_out.get("request") or {})
+            pool_snapshot = base.resources(environment_key)
+            return {
+                "status": "timeout" if isinstance(exc, TimeoutError) else "error",
+                "outcome": "timeout" if isinstance(exc, TimeoutError) else "error",
+                "reason": reason,
+                "error": str(exc) or reason,
+                "error_type": type(exc).__name__,
+                "engine_id": eid,
+                "toolbox_id": tid or self._registration_toolbox_id(reg),
+                "tool_name": tool_name,
+                "tool_call_id": request_id,
+                "environment_key": environment_key,
+                "worker_id": request_snapshot.get("worker_id"),
+                "retry_count": 0,
+                "admission": request_snapshot.get("admission") or "admitted",
+                "concurrency": dict(concurrency),
+                "request": request_snapshot,
+                "diagnostics": {
+                    "request": request_snapshot,
+                    "concurrency": dict(concurrency),
+                    "pool": pool_snapshot,
+                },
+                "hosted_pool": pool_snapshot,
+            }
         finally:
             if dispatch_relay is not None and dispatch_binding:
                 dispatch_relay.release_session(str(dispatch_binding.get("session_token") or ""))
@@ -787,6 +994,8 @@ class ToolboxRuntimeMixin:
         failed_engine_ids: List[str] = []
         shutdown_results: Dict[str, Dict[str, Any]] = {}
         hosted_pool_cancels: Dict[str, Dict[str, Any]] = {}
+        sandbox_recycled_request_ids: Dict[str, List[str]] = {}
+        canceled_request_ids: Dict[str, List[str]] = {}
         target_toolbox_ids: set[str] = set()
         base = self._toolbox_runtime_base()
         for reg in target_regs:
@@ -794,10 +1003,27 @@ class ToolboxRuntimeMixin:
             if not target_engine_id:
                 continue
             environment_key = self._toolbox_registration_environment_key(dict(reg or {}))
+            pool = base.pool_registry.get(base.pool_key(environment_key)) if environment_key else None
+            sibling_request_ids: List[str] = []
+            target_request_status: Dict[str, Any] = {}
+            if pool is not None and call_id:
+                target_request_status = dict(pool.request_status(call_id).get("request") or {})
+                for worker in list(pool.workers or []):
+                    if str(worker.engine_id or "").strip() != target_engine_id:
+                        continue
+                    sibling_request_ids.extend(
+                        [
+                            str(active_request_id or "").strip()
+                            for active_request_id in list(worker.active_request_ids or [])
+                            if str(active_request_id or "").strip() and str(active_request_id or "").strip() != call_id
+                        ]
+                    )
+            sibling_request_ids = sorted(set(sibling_request_ids))
             if environment_key and call_id:
                 hosted_pool_cancels[target_engine_id] = dict(base.cancel_request(environment_key=environment_key, request_id=call_id))
+                if str(hosted_pool_cancels[target_engine_id].get("status") or "") == "ok":
+                    canceled_request_ids[target_engine_id] = [call_id]
             elif environment_key:
-                pool = base.pool_registry.get(base.pool_key(environment_key))
                 canceled_requests: List[str] = []
                 if pool is not None:
                     for worker in list(pool.workers or []):
@@ -812,15 +1038,44 @@ class ToolboxRuntimeMixin:
                     "environment_key": environment_key,
                     "canceled_request_ids": canceled_requests,
                 }
+                if canceled_requests:
+                    canceled_request_ids[target_engine_id] = sorted(set(canceled_requests))
             reg_toolbox_id = self._registration_toolbox_id(dict(reg or {}))
             if reg_toolbox_id:
                 target_toolbox_ids.add(reg_toolbox_id)
-            shutdown_out = dict(self.shutdown(target_engine_id, timeout_seconds=float(timeout_seconds or 8.0)) or {})
+            queued_call_canceled = bool(
+                call_id
+                and str(target_request_status.get("status") or "") == "queued"
+                and str(hosted_pool_cancels.get(target_engine_id, {}).get("status") or "") == "ok"
+            )
+            if queued_call_canceled:
+                shutdown_out = {
+                    "status": "ok",
+                    "alive": False,
+                    "skipped": True,
+                    "reason": "queued_request_canceled",
+                }
+            else:
+                shutdown_out = dict(self.shutdown(target_engine_id, timeout_seconds=float(timeout_seconds or 8.0)) or {})
             shutdown_results[target_engine_id] = shutdown_out
             if bool(shutdown_out.get("alive")) or str(shutdown_out.get("status") or "").strip() == "stop_failed":
                 failed_engine_ids.append(target_engine_id)
             else:
-                canceled_engine_ids.append(target_engine_id)
+                if not queued_call_canceled:
+                    canceled_engine_ids.append(target_engine_id)
+            if not queued_call_canceled and sibling_request_ids:
+                recycled: List[str] = []
+                for sibling_request_id in sibling_request_ids:
+                    finished = base.finish_request(
+                        environment_key=environment_key,
+                        request_id=sibling_request_id,
+                        status="error",
+                        reason="sandbox_recycled",
+                    )
+                    if str(finished.get("status") or "") == "ok":
+                        recycled.append(sibling_request_id)
+                if recycled:
+                    sandbox_recycled_request_ids[target_engine_id] = recycled
 
         repair_out: Dict[str, Any] = {}
         repaired_toolbox_ids: List[str] = []
@@ -887,6 +1142,10 @@ class ToolboxRuntimeMixin:
             ),
             "canceled_engine_ids": sorted(canceled_engine_ids),
             "failed_engine_ids": sorted(failed_engine_ids),
+            "canceled_request_ids": {key: sorted(value) for key, value in sorted(canceled_request_ids.items())},
+            "sandbox_recycled_request_ids": {
+                key: sorted(value) for key, value in sorted(sandbox_recycled_request_ids.items())
+            },
             "repaired_toolbox_ids": sorted(repaired_toolbox_ids),
             "shutdown_results": shutdown_results,
             "hosted_pool_cancels": hosted_pool_cancels,

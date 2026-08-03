@@ -358,6 +358,8 @@ class ToolboxEnvironmentMixin:
                 "non_restartable": bool(request.get("non_restartable", False)),
                 "hidden": False,
             }
+            if isinstance(request.get("concurrency"), dict) and request.get("concurrency"):
+                metadata[tool_name]["concurrency"] = dict(request["concurrency"])
         for req in list(row.get("manual_requests") or []):
             request = dict(req or {})
             fn = dict(dict(request.get("tool_definition") or {}).get("function") or {})
@@ -369,6 +371,14 @@ class ToolboxEnvironmentMixin:
                 "non_restartable": bool(request.get("non_restartable", False)),
                 "hidden": bool(request.get("hidden", False)),
             }
+            concurrency = (
+                request.get("concurrency")
+                or dict(dict(request.get("tool_definition") or {}).get("function") or {}).get("concurrency")
+                or dict(request.get("tool_definition") or {}).get("concurrency")
+                or {}
+            )
+            if isinstance(concurrency, dict) and concurrency:
+                metadata[tool_name]["concurrency"] = dict(concurrency)
         for tool_name in list(intrinsics.get("names") or row.get("intrinsic_tool_names") or []):
             name = str(tool_name or "").strip()
             if not name:

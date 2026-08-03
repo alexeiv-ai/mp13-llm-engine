@@ -78,6 +78,7 @@ class ToolboxBundleAutoTool:
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
     callback_signature: Optional[Dict[str, Any]] = None
+    concurrency: Optional[Dict[str, Any]] = None
 
     def normalized_module_name(self) -> str:
         raw = str(self.module_name or "").strip()
@@ -95,7 +96,7 @@ class ToolboxBundleAutoTool:
         return self.normalized_callable_name()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        row = {
             "name": self.tool_name(),
             "module_name": self.normalized_module_name(),
             "callable_name": self.normalized_callable_name(),
@@ -106,6 +107,9 @@ class ToolboxBundleAutoTool:
             "guide_description": str(self.guide_description or "").strip() or None,
             "callback_signature": dict(self.callback_signature or {}) or None,
         }
+        if isinstance(self.concurrency, dict) and self.concurrency:
+            row["concurrency"] = dict(self.concurrency)
+        return row
 
 
 @dataclass
@@ -190,6 +194,7 @@ class ToolboxAutoAssignmentRequest:
     guide_content: Optional[Dict[str, List[str]]] = None
     guide_description: Optional[str] = None
     callback_signature: Optional[Dict[str, Any]] = None
+    concurrency: Optional[Dict[str, Any]] = None
 
     def to_auto_tool(self) -> ToolboxBundleAutoTool:
         return ToolboxBundleAutoTool(
@@ -201,13 +206,14 @@ class ToolboxAutoAssignmentRequest:
             guide_content=dict(self.guide_content or {}) or None,
             guide_description=str(self.guide_description or "").strip() or None,
             callback_signature=dict(self.callback_signature or {}) or None,
+            concurrency=dict(self.concurrency or {}) or None,
         )
 
     def stable_key(self) -> str:
         return f"{str(self.module_name or '').strip()}:{str(self.callable_name or '').strip()}"
 
     def to_runtime_dict(self) -> Dict[str, Any]:
-        return {
+        row = {
             "files": [item.to_runtime_dict() for item in list(self.files or [])],
             "module_name": str(self.module_name or "").strip(),
             "callable_name": str(self.callable_name or "").strip(),
@@ -219,6 +225,9 @@ class ToolboxAutoAssignmentRequest:
             "guide_description": str(self.guide_description or "").strip() or None,
             "callback_signature": dict(self.callback_signature or {}) or None,
         }
+        if isinstance(self.concurrency, dict) and self.concurrency:
+            row["concurrency"] = dict(self.concurrency)
+        return row
 
     @classmethod
     def from_runtime_dict(cls, payload: Dict[str, Any]) -> "ToolboxAutoAssignmentRequest":
@@ -234,6 +243,7 @@ class ToolboxAutoAssignmentRequest:
             guide_content=dict(row.get("guide_content") or {}) or None,
             guide_description=str(row.get("guide_description") or "").strip() or None,
             callback_signature=dict(row.get("callback_signature") or {}) or None,
+            concurrency=dict(row.get("concurrency") or {}) or None,
         )
 
 

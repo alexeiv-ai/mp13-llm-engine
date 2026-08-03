@@ -15,6 +15,8 @@ import pytest
 
 from hosting.service.host_service import EngineHostService, ToolboxRolloutError
 from hosting.sandbox.toolbox_runtime import HostedToolboxRuntimeBase
+from hosting.daemon import EngineHostDaemon
+from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import toolbox_executor_ipc
 from hosting.toolbox_harness import (
     HostedToolBoxRef,
@@ -1853,6 +1855,205 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     assert status["status"] == "ok"
     assert status["request"]["status"] == "ok"
     assert status["source"] in {"active", "recent"}
+
+
+def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _scratch_dir("toolbox-all-settled-error-")
+    try:
+        svc = EngineHostService(
+            engines_state_file=root / "managed_engines.json",
+            control_state_file=root / "access_control.json",
+        )
+        svc.register_spawned(
+            engine_id="toolbox-all-settled-error",
+            pid=1234,
+            command=[sys.executable, "-m", "hosting.toolbox_executor_ipc"],
+            worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
+            worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-all-settled-error",
+            executor_kind="toolbox_executor",
+            bundle={"toolbox_id": "toolbox-all-settled", "sandbox_profile_id": "default"},
+            environment={"environment_key": "toolbox-all-settled-env"},
+            tool_access={"allowed_tool_names": ["demo_tool"]},
+        )
+
+        def fail_ipc(**_kwargs):
+            raise RuntimeError("worker failed after admission")
+
+        monkeypatch.setattr(svc, "_ipc_call", fail_ipc)
+        out = svc.toolbox_execute(
+            engine_id="toolbox-all-settled-error",
+            tool_call={"id": "call-all-settled-error", "name": "demo_tool", "arguments": {}},
+        )
+
+        assert out["status"] == "error"
+        assert out["reason"] == "worker failed after admission"
+        assert out["tool_call_id"] == "call-all-settled-error"
+        assert out["request"]["request_id"] == "call-all-settled-error"
+        assert out["request"]["status"] == "error"
+        assert out["diagnostics"]["request"]["reason"] == "worker failed after admission"
+        assert out["diagnostics"]["pool"]["metrics"]["recent_requests"][-1]["status"] == "error"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_toolbox_cancel_marks_recycled_sibling_requests_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _scratch_dir("toolbox-sandbox-recycled-")
+    try:
+        svc = EngineHostService(
+            engines_state_file=root / "managed_engines.json",
+            control_state_file=root / "access_control.json",
+        )
+        svc.register_spawned(
+            engine_id="toolbox-sandbox-recycled",
+            pid=1234,
+            command=[sys.executable, "-m", "hosting.toolbox_executor_ipc"],
+            worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
+            worker_ipc_address=str(root / "missing.sock") if sys.platform != "win32" else r"\\.\pipe\mp13-sandbox-recycled",
+            executor_kind="toolbox_executor",
+            bundle={"toolbox_id": "toolbox-recycled", "sandbox_profile_id": "default"},
+            environment={"environment_key": "toolbox-recycled-env"},
+            tool_access={"allowed_tool_names": ["demo_tool"]},
+            capabilities={"capacity": 2},
+        )
+        base = svc._toolbox_runtime_base()
+        for request_id in ["call-recycled-target", "call-recycled-sibling"]:
+            base.submit_request(
+                environment_key="toolbox-recycled-env",
+                request_id=request_id,
+                profile="default",
+                factory=lambda _key, cap: HostedToolboxRuntimeBase.worker_slot(
+                    engine_id="toolbox-sandbox-recycled",
+                    environment_key="toolbox-recycled-env",
+                    capacity=cap,
+                    status="registered",
+                ),
+                desired_capacity=2,
+                operation_id="demo_tool",
+            )
+
+        monkeypatch.setattr(svc, "shutdown", lambda *_args, **_kwargs: {"status": "ok", "alive": False})
+        out = svc.toolbox_cancel(
+            engine_id="toolbox-sandbox-recycled",
+            tool_name="demo_tool",
+            tool_call_id="call-recycled-target",
+            respawn=False,
+        )
+
+        sibling = base.request_status(environment_key="toolbox-recycled-env", request_id="call-recycled-sibling")
+        assert out["sandbox_recycled_request_ids"]["toolbox-sandbox-recycled"] == ["call-recycled-sibling"]
+        assert sibling["request"]["status"] == "error"
+        assert sibling["request"]["reason"] == "sandbox_recycled"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("hosting.daemon.security._tighten_windows_acl", lambda *_args, **_kwargs: None)
+    root = _scratch_dir("toolbox-real-control-concurrency-")
+    pid_file = root / "daemon.pid"
+    daemon = EngineHostDaemon(
+        pid_file=pid_file,
+        engines_state_file=root / "managed_engines.json",
+        control_state_file=root / "access_control.json",
+    )
+    daemon._execute_startup_worker_recovery = lambda: {"status": "ok"}  # type: ignore[method-assign]
+    daemon_errors: list[BaseException] = []
+
+    def run_daemon() -> None:
+        try:
+            asyncio.run(daemon.run())
+        except BaseException as exc:  # pragma: no cover - startup diagnostics
+            daemon_errors.append(exc)
+
+    daemon_thread = threading.Thread(target=run_daemon, daemon=True)
+    daemon_thread.start()
+    channel = EngineHostControlChannel(
+        {
+            "engine_host_daemon_pid_file": str(pid_file),
+            "engine_host_daemon_auto_bootstrap": False,
+        }
+    )
+    ref = HostedToolBoxRef(
+        toolbox_id="toolbox-real-control-concurrency",
+        host=channel,
+        python_executable=sys.executable,
+    )
+    try:
+        last_error = None
+        for _ in range(400):
+            try:
+                if pid_file.exists() and channel.discover_running() is not None:
+                    break
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.05)
+        else:
+            raise AssertionError(
+                f"daemon did not become reachable: {last_error}; errors={daemon_errors}; alive={daemon_thread.is_alive()}; "
+                f"ready={daemon._local_listener_ready.is_set()}; listener_error={daemon._local_listener_error}; pid={daemon.pid_file.read()}"
+            )
+
+        registration = ref.register_auto_callable(
+            relative_path="real_parallel_tools.py",
+            content=(
+                "import time\n"
+                "def sleep_tool(delay=0.2, label=''):\n"
+                "    time.sleep(float(delay))\n"
+                "    return {'label': label, 'delay': delay}\n"
+            ),
+            module_name="real_parallel_tools",
+            callable_name="sleep_tool",
+            concurrency={"mode": "parallel", "max_concurrency": 2},
+        )
+        engine_id = str(list(registration.get("ready_engine_ids") or [""])[0] or "")
+        assert engine_id
+
+        async def run_calls() -> list[dict]:
+            first = asyncio.create_task(
+                asyncio.to_thread(
+                    ref.execute,
+                    tool_name="sleep_tool",
+                    arguments={"delay": 0.2, "label": "a"},
+                    tool_call_id="real-call-a",
+                )
+            )
+            await asyncio.sleep(0.05)
+            status_started = time.perf_counter()
+            status = await asyncio.to_thread(
+                channel.toolbox_request_status,
+                engine_id=engine_id,
+                request_id="real-call-a",
+            )
+            status_elapsed = time.perf_counter() - status_started
+            assert status["status"] == "ok"
+            assert status["request"]["request_id"] == "real-call-a"
+            assert status_elapsed < 0.25
+            second = asyncio.create_task(
+                asyncio.to_thread(
+                    ref.execute,
+                    tool_name="sleep_tool",
+                    arguments={"delay": 0.2, "label": "b"},
+                    tool_call_id="real-call-b",
+                )
+            )
+            return await asyncio.gather(first, second)
+
+        started = time.perf_counter()
+        results = asyncio.run(run_calls())
+        elapsed = time.perf_counter() - started
+
+        assert all(result["status"] == "ok" for result in results)
+        assert {dict(result["tool_call"]).get("id") for result in results} == {"real-call-a", "real-call-b"}
+        assert elapsed < 0.38
+    finally:
+        try:
+            channel.stop_daemon(reason="test_complete", requested_by="test_real_local_control_path_overlaps_actual_tool_calls")
+        except Exception:
+            pass
+        if daemon_thread.is_alive() and daemon._loop is not None and daemon._stop_event is not None:
+            daemon._loop.call_soon_threadsafe(daemon._stop_event.set)
+        daemon_thread.join(timeout=10.0)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_toolbox_execute_forwards_host_api_approval_to_worker_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
