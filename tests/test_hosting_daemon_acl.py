@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +27,47 @@ def _dispatch(daemon: EngineHostDaemon, *, seq: int, cmd: str, payload: dict, pe
 async def _dispatch_async(daemon: EngineHostDaemon, *, seq: int, cmd: str, payload: dict, peer_host: str = "127.0.0.1") -> dict:
     raw = json.dumps({"seq": int(seq), "cmd": str(cmd), "payload": dict(payload)})
     return await daemon._dispatch(raw, peer_host=peer_host)
+
+
+def test_daemon_dispatch_offloads_concurrent_toolbox_calls(tmp_path: Path, monkeypatch) -> None:
+    daemon = _make_daemon(tmp_path)
+    state = {"active": 0, "max_active": 0}
+    lock = threading.Lock()
+
+    def fake_toolbox_execute(**payload: object) -> dict:
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+        try:
+            time.sleep(0.05)
+            return {"status": "ok", "tool_call_id": dict(payload.get("tool_call") or {}).get("id")}
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    monkeypatch.setattr(daemon.svc, "toolbox_execute", fake_toolbox_execute)
+
+    async def run_calls() -> list[dict]:
+        return await asyncio.gather(
+            _dispatch_async(
+                daemon,
+                seq=1,
+                cmd="toolbox-execute",
+                payload={"engine_id": "toolbox-1", "tool_call": {"id": "call-1", "name": "demo"}},
+            ),
+            _dispatch_async(
+                daemon,
+                seq=2,
+                cmd="toolbox-execute",
+                payload={"engine_id": "toolbox-1", "tool_call": {"id": "call-2", "name": "demo"}},
+            ),
+        )
+
+    results = asyncio.run(run_calls())
+
+    assert [row["ok"] for row in results] == [True, True]
+    assert [dict(row["result"]) ["tool_call_id"] for row in results] == ["call-1", "call-2"]
+    assert state["max_active"] == 2
 
 
 def _issue_mgmt_session(daemon: EngineHostDaemon, key_id: str, key_secret: str) -> str:

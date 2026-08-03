@@ -580,6 +580,48 @@ class EngineHostControlChannel:
 
             return None
 
+    def _get_ephemeral_connection(self) -> Optional[Any]:
+        """Create a dedicated request/response transport for toolbox calls."""
+        from .engine_host_connection import LocalSocketConnection, SSHRelayConnection
+
+        target = self.get_target()
+        mode = str(target.get("mode") or "local")
+        if mode == "ssh":
+            ssh_target = str(target.get("target") or "")
+            if not ssh_target:
+                return None
+            raw_remote = str(self.control_settings.get("engine_host_remote_cmd") or "").strip()
+            if not raw_remote or "--relay" not in raw_remote:
+                raw_remote = "python -m hosting.engine_host_cli --relay-wrapper"
+            return SSHRelayConnection(
+                ssh_target=ssh_target,
+                ssh_key=str(self.control_settings.get("control_ssh_key") or "").strip() or None,
+                remote_cmd=raw_remote,
+                timeout=self._timeout,
+                known_hosts_line=str(self.control_settings.get("ssh_known_hosts_line") or "").strip() or None,
+            )
+
+        with self._connection_lock:
+            existing = self._connection
+        if existing is None:
+            existing = self._get_connection()
+        if existing is None:
+            return None
+        if not isinstance(existing, LocalSocketConnection):
+            # Preserve test doubles and custom connection implementations that
+            # intentionally replace the channel's connection factory.
+            return existing
+        from .daemon import DaemonPidFile
+
+        pid_file_path = self.control_settings.get("engine_host_daemon_pid_file")
+        pid_info = DaemonPidFile(pid_file_path)
+        pid_path = _resolved_pid_path(pid_info, pid_file_path)
+        return LocalSocketConnection(
+            port=self._daemon_port_override or pid_info.get_port(),
+            pid_file=pid_path,
+            timeout=self._timeout,
+        )
+
     def _invoke_subprocess(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         """Restricted per-command subprocess path for explicit diagnostics only."""
         if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
@@ -629,6 +671,7 @@ class EngineHostControlChannel:
         *,
         allow_auto_session: bool = True,
         _retry_on_auth_error: bool = True,
+        _use_ephemeral_connection: bool = False,
     ) -> Any:
         """
         Send a command and return the result.
@@ -684,13 +727,14 @@ class EngineHostControlChannel:
         if self._session_token and command not in {"auth-issue-session", "auth-begin-challenge", "auth-complete-challenge"}:
             effective_payload.setdefault("session_token", self._session_token)
 
-        conn = self._get_connection()
+        conn = self._get_ephemeral_connection() if _use_ephemeral_connection else self._get_connection()
         if conn is not None:
             try:
                 return conn.invoke(command, effective_payload)
             except Exception as exc:
-                with self._connection_lock:
-                    self._connection = None
+                if not _use_ephemeral_connection:
+                    with self._connection_lock:
+                        self._connection = None
                 _no_retry_cmds = {"auth-issue-session", "auth-status", "auth-begin-challenge", "auth-complete-challenge"}
                 if _exception_is_session_auth_error(exc):
                     if (
@@ -707,7 +751,13 @@ class EngineHostControlChannel:
                         self.control_settings["engine_host_session_token"] = None
                         self._session_token_meta = {}
                         self._clear_cached_auto_session()
-                        return self._invoke(command, payload, allow_auto_session=True, _retry_on_auth_error=False)
+                        return self._invoke(
+                            command,
+                            payload,
+                            allow_auto_session=True,
+                            _retry_on_auth_error=False,
+                            _use_ephemeral_connection=_use_ephemeral_connection,
+                        )
                     raise RuntimeError(_command_error_message(command, exc)) from exc
                 if str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
                     raise RuntimeError(_command_error_message(command, exc)) from exc
@@ -716,6 +766,12 @@ class EngineHostControlChannel:
                     command,
                     exc,
                 )
+            finally:
+                if _use_ephemeral_connection:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
         elif str(command or "").strip() not in _SUBPROCESS_FALLBACK_COMMANDS:
             raise RuntimeError(
                 f"engine host command '{command}' requires a running persistent daemon control channel"
@@ -3253,6 +3309,7 @@ class EngineHostControlChannel:
                 "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
                 "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
             },
+            _use_ephemeral_connection=True,
         )
         return dict(res or {})
 
@@ -3275,6 +3332,25 @@ class EngineHostControlChannel:
                 "tool_call_id": str(tool_call_id or "").strip(),
                 "timeout_seconds": float(timeout_seconds or 8.0),
                 "respawn": bool(respawn),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_request_status(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str = "",
+        request_id: str,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-request-status",
+            {
+                "engine_id": str(engine_id or "").strip(),
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "tool_name": str(tool_name or "").strip(),
+                "request_id": str(request_id or "").strip(),
             },
         )
         return dict(res or {})

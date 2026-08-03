@@ -2931,6 +2931,13 @@ class EngineHostDaemon:
                 tool_name=str(payload.get("tool_name") or ""),
                 tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
             )
+        if cmd == "toolbox-request-status":
+            return svc.toolbox_request_status(
+                engine_id=str(payload.get("engine_id") or ""),
+                toolbox_id=str(payload.get("toolbox_id") or ""),
+                tool_name=str(payload.get("tool_name") or ""),
+                request_id=str(payload.get("request_id") or ""),
+            )
         if cmd == "toolbox-execute":
             return svc.toolbox_execute(
                 engine_id=str(payload.get("engine_id") or ""),
