@@ -3297,6 +3297,7 @@ class EngineHostControlChannel:
         tools_view: Optional[Dict[str, Any]] = None,
         callback_binding: Optional[Dict[str, Any]] = None,
         host_api_approval: Optional[Dict[str, Any]] = None,
+        execution_request_id: str = "",
     ) -> Dict[str, Any]:
         res = self._invoke(
             "toolbox-execute",
@@ -3308,6 +3309,7 @@ class EngineHostControlChannel:
                 "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
                 "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
                 "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
+                "execution_request_id": str(execution_request_id or "").strip() or None,
             },
             _use_ephemeral_connection=True,
         )
@@ -3320,6 +3322,7 @@ class EngineHostControlChannel:
         toolbox_id: str = "",
         tool_name: str = "",
         tool_call_id: str = "",
+        request_id: str = "",
         timeout_seconds: float = 8.0,
         respawn: bool = True,
     ) -> Dict[str, Any]:
@@ -3330,6 +3333,7 @@ class EngineHostControlChannel:
                 "toolbox_id": str(toolbox_id or "").strip(),
                 "tool_name": str(tool_name or "").strip(),
                 "tool_call_id": str(tool_call_id or "").strip(),
+                "request_id": str(request_id or "").strip(),
                 "timeout_seconds": float(timeout_seconds or 8.0),
                 "respawn": bool(respawn),
             },

@@ -116,6 +116,7 @@ async def execute_tool_round_on_cursor(
     auto_tool_retry_limit: int = 5,
     auto_anchor_prefix: str = "auto_tool",
     serial_execution: bool = False,
+    max_concurrency: Optional[int] = None,
     non_restartable_tool_names: Optional[Sequence[str]] = None,
     callback_processor: Optional[Callable[..., Any]] = None,
     callback_context: Any = None,
@@ -278,6 +279,8 @@ async def execute_tool_round_on_cursor(
         }
         if isinstance(host_api_approval, dict):
             execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
+        if max_concurrency is not None:
+            execute_kwargs["max_concurrency"] = int(max_concurrency)
         await tool_executor.execute_request_tools(**execute_kwargs)
         canceled_summary = summarize_canceled_tool_calls(
             all_tool_blocks,

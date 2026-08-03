@@ -1838,7 +1838,7 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
         )
         status = svc.toolbox_request_status(
             engine_id="toolbox-hosted-pool",
-            request_id="call-demo-1",
+            request_id=str(out["request_id"]),
         )
     finally:
         svc.shutdown("toolbox-hosted-pool", timeout_seconds=2.0)
@@ -1849,7 +1849,8 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     assert out["status"] == "ok"
     assert out["environment_key"] == "toolbox-env-key"
     assert out["hosted_pool"]["metrics"]["desired_capacity"] == 2
-    assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["request_id"] == "call-demo-1"
+    assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["request_id"] == out["request_id"]
+    assert out["request_id"] != out["tool_call_id"]
     assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["operation_id"] == "demo_tool"
     assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["status"] == "ok"
     assert status["status"] == "ok"
@@ -1888,7 +1889,8 @@ def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pyte
         assert out["status"] == "error"
         assert out["reason"] == "worker failed after admission"
         assert out["tool_call_id"] == "call-all-settled-error"
-        assert out["request"]["request_id"] == "call-all-settled-error"
+        assert out["request"]["request_id"] == out["request_id"]
+        assert out["request_id"] != out["tool_call_id"]
         assert out["request"]["status"] == "error"
         assert out["diagnostics"]["request"]["reason"] == "worker failed after admission"
         assert out["diagnostics"]["pool"]["metrics"]["recent_requests"][-1]["status"] == "error"
@@ -2015,6 +2017,7 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
                     tool_name="sleep_tool",
                     arguments={"delay": 0.2, "label": "a"},
                     tool_call_id="real-call-a",
+                    execution_request_id="exec-real-call-a",
                 )
             )
             await asyncio.sleep(0.05)
@@ -2022,11 +2025,11 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
             status = await asyncio.to_thread(
                 channel.toolbox_request_status,
                 engine_id=engine_id,
-                request_id="real-call-a",
+                request_id="exec-real-call-a",
             )
             status_elapsed = time.perf_counter() - status_started
             assert status["status"] == "ok"
-            assert status["request"]["request_id"] == "real-call-a"
+            assert status["request"]["request_id"] == "exec-real-call-a"
             assert status_elapsed < 0.25
             second = asyncio.create_task(
                 asyncio.to_thread(
@@ -2034,6 +2037,7 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
                     tool_name="sleep_tool",
                     arguments={"delay": 0.2, "label": "b"},
                     tool_call_id="real-call-b",
+                    execution_request_id="exec-real-call-b",
                 )
             )
             return await asyncio.gather(first, second)
@@ -2705,11 +2709,12 @@ def test_native_toolbox_harness_executes_calls_in_parallel() -> None:
     calls = [
         ToolCall(name="sleep_tool", arguments={"name": "a", "delay": 0.05}),
         ToolCall(name="sleep_tool", arguments={"name": "b", "delay": 0.05}),
+        ToolCall(name="sleep_tool", arguments={"name": "c", "delay": 0.05}),
     ]
-    out = asyncio.run(harness.execute_calls(calls, parallel=True))
+    out = asyncio.run(harness.execute_calls(calls, parallel=True, max_concurrency=2))
 
-    assert state["max_active"] >= 2
-    assert [json.loads(str(item.result or "{}"))["name"] for item in out] == ["a", "b"]
+    assert state["max_active"] == 2
+    assert [json.loads(str(item.result or "{}"))["name"] for item in out] == ["a", "b", "c"]
 
 
 def test_sandbox_harness_round_robins_pool_members() -> None:
@@ -2824,6 +2829,113 @@ def test_sandbox_harness_normalizes_missing_executor_into_canceled_tool_error() 
     assert is_canceled_tool_error(out[0]) is True
     assert should_resubmit_canceled_tool_call(out[0], non_restartable=False) is True
     assert should_resubmit_canceled_tool_call(out[0], non_restartable=True) is False
+
+
+def test_sandbox_harness_passes_queue_full_as_per_call_error_with_envelope() -> None:
+    class _FakeChannel:
+        def toolbox_execute(self, **_kwargs):
+            return {
+                "status": "error",
+                "outcome": "error",
+                "reason": "queue_full",
+                "request_id": "exec-queue-full",
+                "diagnostics": {"pool": {"metrics": {"queue_depth": 0}}},
+            }
+
+    harness = ToolboxExecutionHarness(
+        config=ToolboxHarnessConfig(mode="sandbox", sandbox_toolbox_id="toolbox-queue-full"),
+        control_channel=_FakeChannel(),
+    )
+
+    out = asyncio.run(harness.execute_calls([ToolCall(id="model-1", name="hello_tool")], parallel=True))
+
+    assert len(out) == 1
+    assert out[0].error == "Execution failed: queue_full"
+    assert out[0].execution_envelope["reason"] == "queue_full"
+    assert out[0].execution_envelope["diagnostics"]["pool"]["metrics"]["queue_depth"] == 0
+
+
+def test_sandbox_harness_all_settles_transport_failure_with_successful_sibling() -> None:
+    class _FakeChannel:
+        def toolbox_execute(self, **kwargs):
+            tool_call = dict(kwargs.get("tool_call") or {})
+            if tool_call.get("name") == "fail_tool":
+                raise ConnectionError("connection reset by peer")
+            return {"status": "ok", "tool_call": {**tool_call, "result": "ok"}}
+
+    harness = ToolboxExecutionHarness(
+        config=ToolboxHarnessConfig(mode="sandbox", sandbox_engine_ids=["toolbox-a"]),
+        control_channel=_FakeChannel(),
+    )
+
+    out = asyncio.run(
+        harness.execute_calls(
+            [ToolCall(id="fail", name="fail_tool"), ToolCall(id="ok", name="ok_tool")],
+            parallel=True,
+            max_concurrency=2,
+        )
+    )
+
+    assert len(out) == 2
+    assert out[0].error
+    assert out[0].execution_envelope["reason"] in {"transport_error", "sandbox_recycled"}
+    assert out[1].error is None
+    assert out[1].result == "ok"
+
+
+def test_sandbox_harness_separates_duplicate_model_ids_from_execution_request_ids() -> None:
+    execution_ids: list[str] = []
+
+    class _FakeChannel:
+        def toolbox_execute(self, **kwargs):
+            execution_ids.append(str(kwargs.get("execution_request_id") or ""))
+            tool_call = dict(kwargs.get("tool_call") or {})
+            return {"status": "ok", "tool_call": {**tool_call, "result": "ok"}}
+
+    harness = ToolboxExecutionHarness(
+        config=ToolboxHarnessConfig(mode="sandbox", sandbox_engine_ids=["toolbox-a"]),
+        control_channel=_FakeChannel(),
+    )
+
+    out = asyncio.run(
+        harness.execute_calls(
+            [ToolCall(id="duplicate", name="first"), ToolCall(id="duplicate", name="second")],
+            parallel=True,
+            max_concurrency=2,
+        )
+    )
+
+    assert len(set(execution_ids)) == 2
+    assert len({str(item.execution_envelope["request_id"]) for item in out}) == 2
+    assert [item.id for item in out] == ["duplicate", "duplicate"]
+
+
+def test_sandbox_harness_describe_normalizes_parallel_execution_before_execution() -> None:
+    class _FakeChannel:
+        def toolbox_describe(self, **_kwargs):
+            return {"status": "ok", "parallel_execution": {"supported": True, "effective_max_concurrency": 2}}
+
+    harness = ToolboxExecutionHarness(
+        config=ToolboxHarnessConfig(mode="sandbox", sandbox_engine_ids=["toolbox-a"]),
+        control_channel=_FakeChannel(),
+    )
+
+    described = asyncio.run(harness.describe())
+    parallel = described["parallel_execution"]
+
+    assert parallel == {
+        "supported": True,
+        "async_within_executor": True,
+        "sandbox_pool": False,
+        "effective_max_concurrency": 2,
+        "queue_policy": "bounded",
+        "queue_depth": 0,
+        "queue_timeout_seconds": 0.0,
+        "active_calls": 0,
+        "queued_calls": 0,
+        "worker_process_count": 0,
+        "execution_model": "threaded_worker",
+    }
 
 
 def test_sandboxed_toolbox_facade_shapes_requests_for_host_api() -> None:

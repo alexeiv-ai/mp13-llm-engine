@@ -584,6 +584,7 @@ class HostedToolBoxRef:
         callback_context: Any = None,
         scope_ref: Optional[ToolBoxRef] = None,
         tool_call_id: str = "",
+        execution_request_id: str = "",
         host_api_approval: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -709,6 +710,8 @@ class HostedToolBoxRef:
                 "tools_view": tools_view_payload,
                 "callback_binding": dict(callback_binding or {}) or None,
             }
+            if str(execution_request_id or "").strip():
+                execute_kwargs["execution_request_id"] = str(execution_request_id).strip()
             if isinstance(host_api_approval, dict):
                 execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
             return dict(
@@ -728,17 +731,18 @@ class HostedToolBoxRef:
         tool_call_id: str = "",
         timeout_seconds: float = 8.0,
         respawn: bool = True,
+        request_id: str = "",
     ) -> Dict[str, Any]:
-        return dict(
-            self.host.toolbox_cancel(
-                toolbox_id=self.toolbox_id,
-                tool_name=str(tool_name or "").strip(),
-                tool_call_id=str(tool_call_id or "").strip(),
-                timeout_seconds=float(timeout_seconds or 8.0),
-                respawn=bool(respawn),
-            )
-            or {}
-        )
+        cancel_kwargs = {
+            "toolbox_id": self.toolbox_id,
+            "tool_name": str(tool_name or "").strip(),
+            "tool_call_id": str(tool_call_id or "").strip(),
+            "timeout_seconds": float(timeout_seconds or 8.0),
+            "respawn": bool(respawn),
+        }
+        if str(request_id or "").strip():
+            cancel_kwargs["request_id"] = str(request_id).strip()
+        return dict(self.host.toolbox_cancel(**cancel_kwargs) or {})
 
 
 

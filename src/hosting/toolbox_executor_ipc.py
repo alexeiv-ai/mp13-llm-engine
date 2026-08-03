@@ -607,8 +607,17 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "tool_metadata": tool_metadata,
             "host_capabilities": _toolbox_host_capability_broker(engine_id=_worker_engine_id()).describe().get("host_capabilities"),
             "parallel_execution": {
+                "supported": True,
                 "async_within_executor": True,
                 "sandbox_pool": False,
+                "effective_max_concurrency": 0,
+                "queue_policy": "bounded",
+                "queue_depth": 0,
+                "queue_timeout_seconds": 0.0,
+                "active_calls": 0,
+                "queued_calls": 0,
+                "worker_process_count": 1,
+                "execution_model": "threaded_worker",
             },
         }
     if meth == "toolbox.execute":

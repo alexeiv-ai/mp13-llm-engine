@@ -662,6 +662,7 @@ class ToolCall:
     model_format: Optional[str] = None
     parse_errors: List[str] = field(default_factory=list)
     action: List[str] = field(default_factory=list)
+    execution_envelope: Optional[Dict[str, Any]] = None
 
     def normalize_error(self, error: Union[str, Exception]) -> str:
         """
@@ -688,6 +689,7 @@ class ToolCall:
             "model_format": self.model_format,
             "parse_errors": list(self.parse_errors) if self.parse_errors else [],
             "action": list(self.action) if self.action else [],
+            "execution_envelope": dict(self.execution_envelope or {}) or None,
         }
 
     @classmethod
@@ -704,6 +706,7 @@ class ToolCall:
             model_format=data.get("model_format"),
             parse_errors=list(data.get("parse_errors", []) or []),
             action=list(data.get("action", []) or []),
+            execution_envelope=dict(data.get("execution_envelope") or {}) or None,
         )
 
 

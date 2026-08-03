@@ -528,3 +528,4 @@ class ToolboxHarnessConfig:
     sandbox_toolbox_id: Optional[str] = None
     sandbox_engine_ids: List[str] = field(default_factory=list)
     sandbox_selection: str = "round_robin"
+    max_concurrency: Optional[int] = None

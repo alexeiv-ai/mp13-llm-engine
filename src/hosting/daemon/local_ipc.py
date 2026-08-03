@@ -2947,6 +2947,7 @@ class EngineHostDaemon:
                 tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
                 callback_binding=dict(payload.get("callback_binding") or {}) if isinstance(payload.get("callback_binding"), dict) else None,
                 host_api_approval=dict(payload.get("host_api_approval") or {}) if isinstance(payload.get("host_api_approval"), dict) else None,
+                execution_request_id=str(payload.get("execution_request_id") or ""),
             )
         if cmd == "toolbox-cancel":
             return svc.toolbox_cancel(
@@ -2954,6 +2955,7 @@ class EngineHostDaemon:
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 tool_name=str(payload.get("tool_name") or ""),
                 tool_call_id=str(payload.get("tool_call_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
                 timeout_seconds=float(payload.get("timeout_seconds") or 8.0),
                 respawn=bool(payload.get("respawn", True)),
             )
