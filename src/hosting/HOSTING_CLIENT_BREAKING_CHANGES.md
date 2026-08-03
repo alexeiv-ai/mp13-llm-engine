@@ -30,7 +30,10 @@ The follow-up review is now covered by the implementation and regression tests:
   canceled before dispatch is not sent to the worker.
 - `toolbox.describe().parallel_execution` is complete before first execution,
   including support, effective capacity, queue settings, active/queued counts,
-  worker count, and execution model.
+  worker count, and execution model. Before a runtime pool exists, capacity and
+  queue limits come from executor registration; once a pool exists, live
+  metrics refine those values. Explicit zero queue depth or timeout remains
+  zero.
 
 The regression matrix includes three parallel calls with `max_concurrency=2`,
 two-way Host API peak concurrency, harness `queue_full` propagation, a

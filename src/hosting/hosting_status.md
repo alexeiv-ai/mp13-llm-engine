@@ -32,6 +32,8 @@ calls.
   as `outcome: "canceled"`.
 - [x] Make `toolbox.describe().parallel_execution` complete before execution
   and add dependent-team regression coverage.
+- [x] Make pre-warm toolbox discovery fall back to registered executor
+  capacity/queue settings while preserving explicitly configured zero values.
 
 ## Progress log
 
@@ -66,9 +68,19 @@ calls.
   toolbox functions through the daemon and request transport.
 - Completed the full validation matrix, checked the acceptance items below,
   and created the sliced commits listed at the end of this file.
-- Full dependent-team follow-up validation passed: 280 tests across the
+- Full dependent-team follow-up validation passed: 281 tests across the
   sandbox process/runtime/pool, toolbox, daemon ACL, service-broker, Host API,
   and hosted chat matrices; all hosting Python files compiled successfully.
+
+### 2026-08-03
+
+- Fixed toolbox-level pre-warm discovery: `parallel_execution` now reports
+  registration-configured capacity, queue depth, and queue timeout before a
+  runtime pool exists, then uses live pool metrics when available.
+- Preserved explicit zero queue depth and timeout as disabled values rather
+  than treating missing runtime metrics as zero.
+- Added a real `EngineHostService.toolbox_describe(toolbox_id=...)` regression
+  covering configured `2 / 7 / 4.0` limits and explicit zero queue settings.
 
 ## Acceptance coverage
 
@@ -84,11 +96,12 @@ calls.
   and execution model.
 - [x] Host API overlap, saturation, cancellation, provider identity, and
   thread-safety metadata are covered by focused tests/docs.
-- [x] Validation complete: 280 tests passed across the sandbox process,
+- [x] Validation complete: 281 tests passed across the sandbox process,
   runtime/pool, daemon, toolbox, Host API, service-broker, and hosted chat
   matrix; all hosting Python files compiled successfully.
 - [x] Sliced commits created: `9c5663d` (pool admission), `68048f8`
   (control transport/daemon), `4023710` (toolbox policy/results), and
   `a4844ca` (Host API concurrency), `79a7d54` (parallel admission gates), and
-  `db2a6bf` (stable hosted batch execution). The final documentation commit
-  contains this status record and the client reply.
+  `db2a6bf` (stable hosted batch execution), and `6ebfe38` (pre-warm
+  concurrency discovery). The final documentation commit contains this status
+  record and the client reply.
