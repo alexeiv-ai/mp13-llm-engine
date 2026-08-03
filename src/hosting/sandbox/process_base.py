@@ -369,8 +369,18 @@ class HostedProcessSandboxBase:
         desired_capacity: int = 1,
         operation_id: Optional[str] = None,
         input_bytes: Optional[int] = None,
+        queue_policy: str = "fail_fast",
+        queue_depth: int = 0,
+        queue_timeout_seconds: float = 0.0,
+        concurrency: Optional[Dict[str, object]] = None,
     ) -> Dict[str, object]:
-        pool = self.get_or_create_pool(environment_key, desired_capacity=desired_capacity)
+        pool = self.pool_registry.get_or_create(
+            self.pool_key(environment_key),
+            desired_capacity=desired_capacity,
+            queue_policy=queue_policy,
+            queue_depth=queue_depth,
+            queue_timeout_seconds=queue_timeout_seconds,
+        )
         lifecycle = HostedRequestLifecycle(
             request_id=str(request_id or "").strip(),
             environment_key=str(environment_key or "").strip(),
@@ -380,7 +390,14 @@ class HostedProcessSandboxBase:
             input_bytes=input_bytes,
             submitted_at=time.time(),
         )
-        return pool.submit_request(lifecycle, factory=factory)
+        return pool.submit_request(
+            lifecycle,
+            factory=factory,
+            queue_policy=queue_policy,
+            queue_depth=queue_depth,
+            queue_timeout_seconds=queue_timeout_seconds,
+            concurrency=concurrency,
+        )
 
     def finish_request(
         self,

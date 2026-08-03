@@ -285,12 +285,18 @@ class HostedRequestLifecycle:
     output_bytes: Optional[int] = None
     latest_progress: Optional[Dict[str, Any]] = None
     stream_event_count: int = 0
+    admission: str = "submitted"
+    concurrency_mode: str = "parallel"
+    concurrency_group: Optional[str] = None
+    resource_key: Optional[str] = None
+    cancellation_requested: bool = False
 
     def mark_started(self, *, timestamp: Optional[float] = None, engine_id: Optional[str] = None) -> None:
         self.started_at = float(timestamp if timestamp is not None else time.time())
         if engine_id is not None:
             self.engine_id = _clean(engine_id) or None
         self.status = "running"
+        self.admission = "admitted"
 
     def mark_finished(self, status: str, *, reason: Optional[str] = None, timestamp: Optional[float] = None) -> None:
         self.finished_at = float(timestamp if timestamp is not None else time.time())
@@ -353,6 +359,11 @@ class HostedRequestLifecycle:
             "output_bytes": int(self.output_bytes) if self.output_bytes is not None else None,
             "latest_progress": dict(self.latest_progress or {}) or None,
             "stream_event_count": max(0, int(self.stream_event_count or 0)),
+            "admission": _clean(self.admission) or "submitted",
+            "concurrency_mode": _clean(self.concurrency_mode) or "parallel",
+            "concurrency_group": _clean(self.concurrency_group) or None,
+            "resource_key": _clean(self.resource_key) or None,
+            "cancellation_requested": bool(self.cancellation_requested),
         }
 
 
@@ -783,6 +794,10 @@ class HostedPoolMetrics:
     cancellation_count: int = 0
     error_count: int = 0
     errors_by_reason: Dict[str, int] = field(default_factory=dict)
+    queue_policy: str = "fail_fast"
+    queue_depth: int = 0
+    queue_timeout_seconds: float = 0.0
+    queued_calls: int = 0
 
     def active_calls(self) -> int:
         return sum(len(_unique_strings(worker.active_request_ids)) for worker in self.workers)
@@ -796,6 +811,13 @@ class HostedPoolMetrics:
             "worker_count": len(self.workers),
             "active_calls": self.active_calls(),
             "available_slots": self.available_slots(),
+            "queued_calls": max(0, int(self.queued_calls or 0)),
+            "queue_policy": _clean(self.queue_policy) or "fail_fast",
+            "queue_depth": max(0, int(self.queue_depth or 0)),
+            "queue_timeout_seconds": max(0.0, float(self.queue_timeout_seconds or 0.0)),
+            "logical_call_capacity": max(0, int(self.desired_capacity or 0)),
+            "worker_process_count": len(self.workers),
+            "execution_model": "threaded_worker",
             "saturation_count": max(0, int(self.saturation_count or 0)),
             "timeout_count": max(0, int(self.timeout_count or 0)),
             "cancellation_count": max(0, int(self.cancellation_count or 0)),

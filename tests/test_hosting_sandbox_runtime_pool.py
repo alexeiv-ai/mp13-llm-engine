@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from hosting.sandbox.runtime_base import (
@@ -172,3 +175,99 @@ def test_registry_resources_roll_up_pools() -> None:
     assert out["status"] == "ok"
     assert out["pool_count"] == 2
     assert sorted(out["pools"].keys()) == ["workflow_js/env-b", "workflow_python/env-a"]
+
+
+def test_bounded_queue_waits_then_admits_atomically() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="toolbox_executor", environment_key="env-a")
+    pool = registry.get_or_create(key, desired_capacity=1, queue_policy="bounded", queue_depth=1, queue_timeout_seconds=1.0)
+    assert pool.submit_request(_request("req-1"), factory=_factory)["status"] == "ok"
+    result: dict[str, object] = {}
+
+    def _submit() -> None:
+        result.update(
+            pool.submit_request(
+                _request("req-2"),
+                factory=_factory,
+                queue_policy="bounded",
+                queue_depth=1,
+                queue_timeout_seconds=1.0,
+            )
+        )
+
+    thread = threading.Thread(target=_submit)
+    thread.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and pool.resources()["metrics"]["queued_calls"] != 1:
+        time.sleep(0.01)
+    assert pool.resources()["metrics"]["queued_calls"] == 1
+    pool.finish_request("req-1", status="ok")
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    assert result["status"] == "ok"
+    assert result["request"]["admission"] == "admitted"
+    assert result["request"]["queue_wait_ms"] is not None
+
+
+def test_bounded_queue_reports_full_and_timeout() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="toolbox_executor", environment_key="env-a")
+    pool = registry.get_or_create(key, desired_capacity=1, queue_policy="bounded", queue_depth=1, queue_timeout_seconds=0.03)
+    assert pool.submit_request(_request("req-1"), factory=_factory)["status"] == "ok"
+    queued_result: dict[str, object] = {}
+    thread = threading.Thread(
+        target=lambda: queued_result.update(
+            pool.submit_request(_request("req-2"), factory=_factory, queue_policy="bounded", queue_depth=1, queue_timeout_seconds=0.03)
+        )
+    )
+    thread.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and pool.resources()["metrics"]["queued_calls"] != 1:
+        time.sleep(0.01)
+    full = pool.submit_request(_request("req-3"), factory=_factory, queue_policy="bounded", queue_depth=1, queue_timeout_seconds=0.0)
+    assert full["reason"] == "queue_full"
+    thread.join(timeout=1.0)
+    assert queued_result["reason"] == "queue_timeout"
+
+
+def test_concurrency_policy_serial_and_keyed_gates_are_independent() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="toolbox_executor", environment_key="env-a")
+    pool = registry.get_or_create(key, desired_capacity=3, queue_policy="fail_fast")
+    assert pool.submit_request(_request("serial-1"), factory=_factory, concurrency={"mode": "serial", "group": "mutate"})["status"] == "ok"
+    serial = pool.submit_request(_request("serial-2"), factory=_factory, concurrency={"mode": "serial", "group": "mutate"})
+    assert serial["reason"] == "capacity_exceeded"
+    pool.finish_request("serial-1")
+
+    assert pool.submit_request(
+        _request("key-a"), factory=_factory, concurrency={"mode": "keyed", "group": "file", "resource_key": "a"}
+    )["status"] == "ok"
+    assert pool.submit_request(
+        _request("key-b"), factory=_factory, concurrency={"mode": "keyed", "group": "file", "resource_key": "b"}
+    )["status"] == "ok"
+    same_key = pool.submit_request(
+        _request("key-a-2"), factory=_factory, concurrency={"mode": "keyed", "group": "file", "resource_key": "a"}
+    )
+    assert same_key["reason"] == "capacity_exceeded"
+
+
+def test_canceling_queued_request_wakes_submitter_without_touching_sibling() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="toolbox_executor", environment_key="env-a")
+    pool = registry.get_or_create(key, desired_capacity=1, queue_policy="bounded", queue_depth=1, queue_timeout_seconds=1.0)
+    assert pool.submit_request(_request("req-1"), factory=_factory)["status"] == "ok"
+    result: dict[str, object] = {}
+
+    def _submit() -> None:
+        result.update(pool.submit_request(_request("req-2"), factory=_factory, queue_policy="bounded", queue_depth=1, queue_timeout_seconds=1.0))
+
+    thread = threading.Thread(target=_submit)
+    thread.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and pool.resources()["metrics"]["queued_calls"] != 1:
+        time.sleep(0.01)
+    canceled = pool.cancel_request("req-2")
+    thread.join(timeout=1.0)
+    assert canceled["request"]["status"] == "canceled"
+    assert result["reason"] == "canceled"
+    assert pool.resources()["metrics"]["active_calls"] == 1
