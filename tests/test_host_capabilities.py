@@ -332,6 +332,59 @@ def test_host_capability_provider_serial_policy_admits_one_call_at_a_time() -> N
     assert policy["runtime"]["active_calls"] == 0
 
 
+def test_host_capability_parallel_policy_honors_max_concurrency_two() -> None:
+    active = 0
+    peak = 0
+
+    async def invoke_provider(_session: HostCapabilitySession, call: HostCapabilityProviderCall) -> dict:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.03)
+        active -= 1
+        return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"key": call.arguments["key"]}}
+
+    descriptor = HostCapabilityDescriptor(
+        **{
+            **_descriptor("crm.customer.lookup_parallel").__dict__,
+            "metadata": {
+                "concurrency": {
+                    "mode": "parallel",
+                    "group": "crm-customer-lookups",
+                    "max_concurrency": 2,
+                    "queue_depth": 2,
+                    "queue_timeout_seconds": 1,
+                }
+            },
+        }
+    )
+    broker = HostCapabilityBroker(workflow_id="wf-parallel", provider_invoker=invoke_provider)
+    broker.register_session(
+        HostCapabilitySession(
+            session_id="client-crm-parallel",
+            owner="client-a",
+            provider_kind="client_session",
+            visibility="workflow",
+            scope={"workflow_id": "wf-parallel"},
+            methods={descriptor.name: HostCapabilityMethod(descriptor=descriptor)},
+        )
+    )
+
+    async def run_calls() -> list[dict]:
+        return await asyncio.gather(
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "a"}}),
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "b"}}),
+            broker.dispatch_async({"method": descriptor.name, "arguments": {"key": "c"}}),
+        )
+
+    results = asyncio.run(run_calls())
+
+    assert [row["key"] for row in results] == ["a", "b", "c"]
+    assert peak == 2
+    policy = broker.describe()["host_capabilities"]["methods"][0]["metadata"]["concurrency"]
+    assert policy["max_concurrency"] == 2
+
+
 def test_host_capability_keyed_policy_overlaps_different_resources_and_blocks_same_resource() -> None:
     active_by_key: dict[str, int] = {}
     max_active_by_key: dict[str, int] = {}

@@ -290,6 +290,7 @@ class HostedRequestLifecycle:
     concurrency_group: Optional[str] = None
     resource_key: Optional[str] = None
     cancellation_requested: bool = False
+    dispatch_started: bool = False
 
     def mark_started(self, *, timestamp: Optional[float] = None, engine_id: Optional[str] = None) -> None:
         self.started_at = float(timestamp if timestamp is not None else time.time())
@@ -364,6 +365,7 @@ class HostedRequestLifecycle:
             "concurrency_group": _clean(self.concurrency_group) or None,
             "resource_key": _clean(self.resource_key) or None,
             "cancellation_requested": bool(self.cancellation_requested),
+            "dispatch_started": bool(self.dispatch_started),
         }
 
 

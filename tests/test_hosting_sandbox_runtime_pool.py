@@ -70,6 +70,41 @@ def test_pool_reports_capacity_exceeded_and_records_saturation() -> None:
     assert resources["recent_requests"][0]["reason"] == "capacity_exceeded"
 
 
+def test_pool_parallel_group_honors_max_concurrency_two() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="toolbox_executor", environment_key="env-parallel")
+    pool = registry.get_or_create(key, desired_capacity=3, queue_policy="fail_fast")
+    policy = {"mode": "parallel", "group": "demo-tools", "max_concurrency": 2}
+
+    first = pool.submit_request(_request("req-a"), factory=_factory, concurrency=policy)
+    second = pool.submit_request(_request("req-b"), factory=_factory, concurrency=policy)
+    third = pool.submit_request(_request("req-c"), factory=_factory, concurrency=policy)
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert third["status"] == "error"
+    assert third["reason"] == "capacity_exceeded"
+    assert pool.resources()["metrics"]["active_calls"] == 2
+
+    pool.finish_request("req-a")
+    admitted = pool.submit_request(_request("req-c"), factory=_factory, concurrency=policy)
+    assert admitted["status"] == "ok"
+
+
+def test_pool_claim_dispatch_rejects_request_canceled_before_worker_dispatch() -> None:
+    registry = HostedProcessPoolRegistry()
+    key = HostedPoolKey(sandbox_kind="toolbox_executor", environment_key="env-race")
+    pool = registry.get_or_create(key, desired_capacity=1)
+
+    pool.submit_request(_request("req-race"), factory=_factory)
+    pool.cancel_request("req-race")
+    claimed = pool.claim_dispatch("req-race")
+
+    assert claimed["status"] == "canceled"
+    assert claimed["request"]["status"] == "canceled"
+    assert claimed["request"]["dispatch_started"] is False
+
+
 def test_finish_and_cancel_update_worker_and_metrics() -> None:
     registry = HostedProcessPoolRegistry()
     key = HostedPoolKey(sandbox_kind="workflow_python", environment_key="env-a")

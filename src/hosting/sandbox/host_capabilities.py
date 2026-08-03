@@ -331,9 +331,13 @@ class _HostConcurrencyController:
             return False
         candidate_slot = self._slot(policy)
         for active in self._active.values():
-            if str(active.get("mode") or "parallel") == "exclusive":
+            active_mode = str(active.get("mode") or "parallel")
+            if active_mode == "exclusive":
                 return False
-            if candidate_slot == self._slot(active):
+            if (
+                candidate_slot == self._slot(active)
+                and (mode in {"serial", "keyed"} or active_mode in {"serial", "keyed"})
+            ):
                 return False
         return True
 
@@ -1295,6 +1299,7 @@ class HostCapabilityBroker:
                         if lease is not None:
                             lease.release()
                 host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
+                execution_request_id = f"cap_call_{uuid.uuid4().hex}"
                 self._emit_event(
                     "host_call",
                     {
@@ -1313,7 +1318,7 @@ class HostCapabilityBroker:
                     lease = await self._acquire_concurrency(
                         session=session,
                         method=method,
-                        request_id=host_call_id or f"host-call-{uuid.uuid4().hex}",
+                        request_id=execution_request_id,
                         arguments=dict(row.get("arguments") or {}),
                         timeout_seconds=self._provider_timeout_for_call(row),
                     )

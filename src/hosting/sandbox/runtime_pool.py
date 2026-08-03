@@ -110,7 +110,12 @@ class HostedProcessPool:
             active_mode = str(active.get("mode") or "parallel")
             if active_mode == "exclusive":
                 return False
-            if candidate_slot and candidate_slot == self._policy_slot(active):
+            active_slot = self._policy_slot(active)
+            if (
+                candidate_slot
+                and candidate_slot == active_slot
+                and (mode in {"serial", "keyed"} or active_mode in {"serial", "keyed"})
+            ):
                 return False
             max_concurrency = int(policy.get("max_concurrency") or 0)
             group = str(policy.get("group") or "")
@@ -308,6 +313,19 @@ class HostedProcessPool:
                 self.errors_by_reason[key] = int(self.errors_by_reason.get(key, 0)) + 1
             self._remember_request(request)
             self._condition.notify_all()
+            return {"status": "ok", "request": request.to_dict()}
+
+    def claim_dispatch(self, request_id: str) -> Dict[str, object]:
+        """Atomically claim an admitted request before dispatching it to a worker."""
+        rid = str(request_id or "").strip()
+        with self._condition:
+            request = self.requests.get(rid)
+            if request is None:
+                return {"status": "not_found", "request_id": rid}
+            if request.finished_at is not None or request.cancellation_requested:
+                return {"status": "canceled", "request": request.to_dict()}
+            request.dispatch_started = True
+            request.admission = "dispatching"
             return {"status": "ok", "request": request.to_dict()}
 
     def cancel_request(self, request_id: str, *, timestamp: Optional[float] = None) -> Dict[str, object]:

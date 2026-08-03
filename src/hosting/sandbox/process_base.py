@@ -419,6 +419,12 @@ class HostedProcessSandboxBase:
             return {"status": "not_found", "environment_key": str(environment_key or "").strip(), "request_id": str(request_id or "").strip()}
         return pool.cancel_request(request_id)
 
+    def claim_dispatch(self, *, environment_key: str, request_id: str) -> Dict[str, object]:
+        pool = self.pool_registry.get(self.pool_key(environment_key))
+        if pool is None:
+            return {"status": "not_found", "environment_key": str(environment_key or "").strip(), "request_id": str(request_id or "").strip()}
+        return pool.claim_dispatch(request_id)
+
     def request_status(self, *, environment_key: str, request_id: str) -> Dict[str, object]:
         return self.pool_registry.request_status(self.pool_key(environment_key), request_id)
 
