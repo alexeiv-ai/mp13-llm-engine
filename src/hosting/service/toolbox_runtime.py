@@ -15,9 +15,69 @@ from ..sandbox.host_capabilities import HostCapabilityBroker
 from ..sandbox.service_broker_registry import service_broker_host_capability_session
 from ..toolbox.callbacks import _HostedToolCallbackRelay
 from .errors import ToolboxRolloutError
+from .execution_receipts import TERMINAL_STATES, execution_fingerprint
 
 
 class ToolboxRuntimeMixin:
+    @staticmethod
+    def _toolbox_receipt_namespace(*, engine_id: str = "", toolbox_id: str = "") -> str:
+        tid = str(toolbox_id or "").strip()
+        eid = str(engine_id or "").strip()
+        if tid:
+            return f"toolbox:{tid}"
+        if eid:
+            return f"engine:{eid}"
+        raise ValueError("engine_id or toolbox_id is required")
+
+    @staticmethod
+    def _toolbox_receipt_status_payload(receipt: Dict[str, Any], **identity: Any) -> Dict[str, Any]:
+        row = dict(receipt or {})
+        state = str(row.get("state") or "unknown_outside_retention")
+        request_status = {
+            "queued": "queued",
+            "running": "running",
+            "terminal_success": "ok",
+            "terminal_failure": "error",
+            "terminal_cancellation": "canceled",
+            "interrupted_before_dispatch": "interrupted_before_dispatch",
+            "interrupted_after_dispatch_unknown": "interrupted_after_dispatch_unknown",
+            "forgotten": "forgotten",
+            "unknown_outside_retention": "unknown_outside_retention",
+        }.get(state, state)
+        result = {
+            "status": "unknown" if state == "unknown_outside_retention" else "ok",
+            "outcome": state,
+            "lifecycle_state": state,
+            "source": "durable_receipt_ledger",
+            "request": {
+                "request_id": row.get("request_id"),
+                "status": request_status,
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+                "dispatch_claimed_at": row.get("dispatch_claimed_at"),
+                "terminal_at": row.get("terminal_at"),
+            },
+            "receipt": row,
+            **identity,
+        }
+        return result
+
+    @staticmethod
+    def _toolbox_receipt_replay(receipt: Dict[str, Any]) -> Dict[str, Any]:
+        envelope = receipt.get("terminal_envelope")
+        if isinstance(envelope, dict):
+            out = dict(envelope)
+            out["idempotent_replay"] = True
+            out["lifecycle_state"] = str(receipt.get("state") or "")
+            return out
+        return {
+            "status": "error",
+            "outcome": str(receipt.get("state") or "receipt_result_unavailable"),
+            "reason": "receipt_result_unavailable",
+            "request_id": receipt.get("request_id"),
+            "idempotent_replay": True,
+        }
+
     @staticmethod
     def _registration_allowed_tool_names(reg: Dict[str, Any]) -> Optional[set[str]]:
         tool_access = dict(reg.get("tool_access") or {})
@@ -505,20 +565,15 @@ class ToolboxRuntimeMixin:
             raise ValueError("request_id is required")
         eid = str(engine_id or "").strip()
         tid = str(toolbox_id or "").strip()
-        if tid and not eid:
-            reg = self._route_toolbox_registration(toolbox_id=tid, tool_name=tool_name, command_label="toolbox-request-status")
-            eid = str(reg.get("engine_id") or "").strip()
-        else:
-            reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-request-status")
-        environment_key = self._toolbox_registration_environment_key(reg)
-        out = dict(self._toolbox_runtime_base().request_status(environment_key=environment_key, request_id=rid))
-        return {
-            **out,
-            "engine_id": eid or None,
-            "toolbox_id": tid or self._registration_toolbox_id(reg) or None,
-            "tool_name": str(tool_name or "").strip() or None,
-            "environment_key": environment_key or None,
-        }
+        namespace = self._toolbox_receipt_namespace(engine_id=eid, toolbox_id=tid)
+        receipt = self._toolbox_execution_receipts.status(namespace=namespace, request_id=rid)
+        return self._toolbox_receipt_status_payload(
+            receipt,
+            engine_id=eid or None,
+            toolbox_id=tid or None,
+            tool_name=str(tool_name or "").strip() or None,
+            receipt_namespace=namespace,
+        )
 
     def toolbox_describe(
         self,
@@ -785,7 +840,7 @@ class ToolboxRuntimeMixin:
                     "requires_confirmation": False,
                     "backend": "sandbox",
                 }
-        return {
+        result = {
             "status": "ok",
             "engine_id": eid,
             "toolbox_id": tid or self._registration_toolbox_id(reg),
@@ -796,6 +851,7 @@ class ToolboxRuntimeMixin:
             "requires_confirmation": False,
             "backend": "sandbox",
         }
+        return result
 
     def toolbox_execute(
         self,
@@ -844,8 +900,103 @@ class ToolboxRuntimeMixin:
         )
         queue_config = self._toolbox_registration_queue_config(reg)
         model_tool_call_id = str(call.get("id") or call.get("tool_call_id") or "").strip() or f"tool-call-{uuid.uuid4().hex}"
-        request_id = str(execution_request_id or "").strip() or f"exec_{uuid.uuid4().hex}"
+        request_id = str(execution_request_id or "").strip()
+        if not request_id:
+            raise ValueError("execution_request_id is required for durable hosted execution")
+        receipt_namespace = self._toolbox_receipt_namespace(
+            engine_id=eid if not tid else "",
+            toolbox_id=tid,
+        )
+        fingerprint = execution_fingerprint(
+            {
+                "tool_name": tool_name,
+                "arguments": call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                "policy": {
+                    "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
+                    "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
+                    "sandbox_policy": dict(reg.get("sandbox_policy") or {}),
+                    "sandbox_profile_id": self._registration_sandbox_profile_id(reg),
+                    "concurrency": dict(concurrency),
+                },
+            }
+        )
+        prepared = self._toolbox_execution_receipts.prepare(
+            namespace=receipt_namespace,
+            request_id=request_id,
+            fingerprint=fingerprint,
+            metadata={
+                "engine_id": eid,
+                "toolbox_id": toolbox_identity,
+                "tool_name": tool_name,
+                "tool_call_id": model_tool_call_id,
+                "environment_key": environment_key,
+            },
+        )
+        receipt_action = str(prepared.get("action") or "")
+        prepared_receipt = dict(prepared.get("receipt") or {})
+        if receipt_action == "conflict":
+            return {
+                "status": "error",
+                "outcome": "idempotency_conflict",
+                "reason": "idempotency_conflict",
+                "request_id": request_id,
+                "engine_id": eid,
+                "toolbox_id": toolbox_identity,
+                "tool_name": tool_name,
+                "receipt_namespace": receipt_namespace,
+            }
+        if receipt_action == "forgotten":
+            return {
+                "status": "error",
+                "outcome": "forgotten",
+                "reason": "receipt_forgotten_within_replay_window",
+                "request_id": request_id,
+                "engine_id": eid,
+                "toolbox_id": toolbox_identity,
+                "tool_name": tool_name,
+                "receipt_namespace": receipt_namespace,
+            }
+        if receipt_action == "capacity":
+            return {
+                "status": "error",
+                "outcome": "receipt_capacity_exceeded",
+                "reason": "receipt_capacity_exceeded",
+                "request_id": request_id,
+                "engine_id": eid,
+                "toolbox_id": toolbox_identity,
+                "tool_name": tool_name,
+                "receipt_namespace": receipt_namespace,
+            }
+        if receipt_action == "replay":
+            return self._toolbox_receipt_replay(prepared_receipt)
+        if receipt_action == "attach":
+            attached = self._toolbox_execution_receipts.wait_for_terminal(
+                namespace=receipt_namespace,
+                request_id=request_id,
+                timeout_seconds=float(timeout_seconds or 30.0),
+            )
+            if str(attached.get("state") or "") in TERMINAL_STATES:
+                return self._toolbox_receipt_replay(attached)
+            return self._toolbox_receipt_status_payload(
+                attached,
+                engine_id=eid,
+                toolbox_id=toolbox_identity,
+                tool_name=tool_name,
+                receipt_namespace=receipt_namespace,
+            )
         base = self._toolbox_runtime_base()
+
+        def _persist_terminal(envelope: Dict[str, Any], state: str) -> Dict[str, Any]:
+            persisted = self._toolbox_execution_receipts.finish(
+                namespace=receipt_namespace,
+                request_id=request_id,
+                state=state,
+                envelope=envelope,
+            )
+            if str(persisted.get("state") or "") != state:
+                return self._toolbox_receipt_replay(persisted)
+            return envelope
+
         scheduled = base.submit_request(
             environment_key=environment_key,
             request_id=request_id,
@@ -863,7 +1014,7 @@ class ToolboxRuntimeMixin:
             pool_snapshot = base.resources(environment_key)
             request_snapshot = dict(scheduled.get("request") or {})
             failure_reason = str(scheduled.get("reason") or "capacity_exceeded")
-            return {
+            return _persist_terminal({
                 "status": "error",
                 "outcome": "error",
                 "reason": failure_reason,
@@ -885,12 +1036,12 @@ class ToolboxRuntimeMixin:
                     "pool": pool_snapshot,
                 },
                 "hosted_pool": pool_snapshot,
-            }
+            }, "terminal_failure")
         dispatch_claim = base.claim_dispatch(environment_key=environment_key, request_id=request_id)
         if str(dispatch_claim.get("status") or "") != "ok":
             request_snapshot = dict(dispatch_claim.get("request") or {})
             pool_snapshot = base.resources(environment_key)
-            return {
+            return _persist_terminal({
                 "status": "error",
                 "outcome": "canceled",
                 "reason": str(request_snapshot.get("reason") or "canceled"),
@@ -912,7 +1063,7 @@ class ToolboxRuntimeMixin:
                     "pool": pool_snapshot,
                 },
                 "hosted_pool": pool_snapshot,
-            }
+            }, "terminal_cancellation")
         finished = False
         dispatch_relay: Optional[_HostedToolCallbackRelay] = None
         dispatch_binding: Optional[Dict[str, Any]] = None
@@ -927,6 +1078,21 @@ class ToolboxRuntimeMixin:
                 callback_binding=dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
                 host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
             )
+            durable_dispatch = self._toolbox_execution_receipts.mark_dispatch_claimed(
+                namespace=receipt_namespace,
+                request_id=request_id,
+            )
+            if str(durable_dispatch.get("state") or "") != "running":
+                base.cancel_request(environment_key=environment_key, request_id=request_id)
+                if str(durable_dispatch.get("state") or "") in TERMINAL_STATES:
+                    return self._toolbox_receipt_replay(durable_dispatch)
+                return self._toolbox_receipt_status_payload(
+                    durable_dispatch,
+                    engine_id=eid,
+                    toolbox_id=toolbox_identity,
+                    tool_name=tool_name,
+                    receipt_namespace=receipt_namespace,
+                )
             out = self._ipc_call(
                 reg=reg,
                 payload={
@@ -947,7 +1113,7 @@ class ToolboxRuntimeMixin:
                 finished = True
                 request_snapshot = dict(finish_out.get("request") or {})
                 pool_snapshot = base.resources(environment_key)
-                return {
+                return _persist_terminal({
                     "status": "error",
                     "outcome": "error",
                     "reason": reason,
@@ -969,7 +1135,7 @@ class ToolboxRuntimeMixin:
                         "pool": pool_snapshot,
                     },
                     "hosted_pool": pool_snapshot,
-                }
+                }, "terminal_failure")
             result = dict(out or {})
             output_bytes = len(json.dumps(result, ensure_ascii=False, default=str).encode("utf-8", errors="replace"))
             finish_out = base.finish_request(environment_key=environment_key, request_id=request_id, status="ok", output_bytes=output_bytes)
@@ -997,7 +1163,7 @@ class ToolboxRuntimeMixin:
             )
             result.setdefault("hosted_pool", pool_snapshot)
             result.setdefault("toolbox_pool", result["hosted_pool"])
-            return result
+            return _persist_terminal(result, "terminal_success")
         except Exception as exc:
             reason = "toolbox_execute_timeout" if isinstance(exc, TimeoutError) else str(exc) or "toolbox_execute_failed"
             finish_status = "timeout" if isinstance(exc, TimeoutError) else "error"
@@ -1012,7 +1178,7 @@ class ToolboxRuntimeMixin:
                 finish_out = base.request_status(environment_key=environment_key, request_id=request_id)
             request_snapshot = dict(finish_out.get("request") or {})
             pool_snapshot = base.resources(environment_key)
-            return {
+            return _persist_terminal({
                 "status": "timeout" if isinstance(exc, TimeoutError) else "error",
                 "outcome": "timeout" if isinstance(exc, TimeoutError) else "error",
                 "reason": reason,
@@ -1035,7 +1201,7 @@ class ToolboxRuntimeMixin:
                     "pool": pool_snapshot,
                 },
                 "hosted_pool": pool_snapshot,
-            }
+            }, "terminal_failure")
         finally:
             if dispatch_relay is not None and dispatch_binding:
                 dispatch_relay.release_session(str(dispatch_binding.get("session_token") or ""))
@@ -1055,9 +1221,62 @@ class ToolboxRuntimeMixin:
         tid = str(toolbox_id or "").strip()
         name = str(tool_name or "").strip()
         model_tool_call_id = str(tool_call_id or "").strip()
-        call_id = str(request_id or tool_call_id or "").strip()
+        call_id = str(request_id or "").strip()
         if not eid and not tid:
             raise ValueError("engine_id or toolbox_id is required")
+
+        receipt_namespace = self._toolbox_receipt_namespace(engine_id=eid, toolbox_id=tid)
+        if call_id:
+            durable = self._toolbox_execution_receipts.status(
+                namespace=receipt_namespace,
+                request_id=call_id,
+            )
+            durable_state = str(durable.get("state") or "unknown_outside_retention")
+            if durable_state in {"queued", "interrupted_before_dispatch"}:
+                canceled_envelope = {
+                    "status": "ok",
+                    "outcome": "canceled",
+                    "reason": "canceled_before_dispatch",
+                    "engine_id": eid or None,
+                    "toolbox_id": tid or None,
+                    "tool_name": name or None,
+                    "tool_call_id": model_tool_call_id or None,
+                    "request_id": call_id,
+                    "respawn": bool(respawn),
+                    "canceled_engine_ids": [],
+                    "failed_engine_ids": [],
+                    "repaired_toolbox_ids": [],
+                }
+                self._toolbox_execution_receipts.cancel_before_dispatch(
+                    namespace=receipt_namespace,
+                    request_id=call_id,
+                    envelope=canceled_envelope,
+                )
+                return canceled_envelope
+            if durable_state == "terminal_cancellation":
+                return self._toolbox_receipt_replay(durable)
+            if durable_state in {"terminal_success", "terminal_failure"}:
+                return {
+                    "status": "ok",
+                    "outcome": "already_terminal",
+                    "reason": durable_state,
+                    "request_id": call_id,
+                    "engine_id": eid or None,
+                    "toolbox_id": tid or None,
+                }
+            if durable_state in {
+                "interrupted_after_dispatch_unknown",
+                "forgotten",
+                "unknown_outside_retention",
+            }:
+                return {
+                    "status": "error",
+                    "outcome": durable_state,
+                    "reason": durable_state,
+                    "request_id": call_id,
+                    "engine_id": eid or None,
+                    "toolbox_id": tid or None,
+                }
 
         target_regs: List[Dict[str, Any]] = []
         if tid:
@@ -1236,7 +1455,7 @@ class ToolboxRuntimeMixin:
                                 }
                             )
 
-        return {
+        result = {
             "status": "ok",
             "engine_id": eid or None,
             "toolbox_id": tid or None,
@@ -1264,6 +1483,14 @@ class ToolboxRuntimeMixin:
             "hosted_pool_cancels": hosted_pool_cancels,
             "repair": repair_out,
         }
+        if call_id and (canceled_engine_ids or canceled_request_ids):
+            self._toolbox_execution_receipts.finish(
+                namespace=receipt_namespace,
+                request_id=call_id,
+                state="terminal_cancellation",
+                envelope=result,
+            )
+        return result
 
     def _wait_for_toolbox_executor_ready(
         self,

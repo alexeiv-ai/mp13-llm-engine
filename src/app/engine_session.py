@@ -522,6 +522,7 @@ class ChatSession:
                  parser_profile: Optional[ParserProfile] = None,
                  inference_defaults: Optional[InferenceParams] = None,
                  initial_params: Optional[Dict[str, Any]] = None,
+                 try_out_anchor_descriptors: Optional[List[Dict[str, Any]]] = None,
                  root_turn: Optional[Turn] = None,
                  title: Optional[str] = None,
                  last_active_turn: Optional[Turn] = None):
@@ -534,6 +535,11 @@ class ChatSession:
         self.inference_defaults: InferenceParams = inference_defaults or InferenceParams()
         self.engine_warnings: List[str] = engine_warnings or []
         self.initial_params: Dict[str, Any] = initial_params or {}
+        self.try_out_anchor_descriptors: List[Dict[str, Any]] = [
+            copy.deepcopy(item)
+            for item in list(try_out_anchor_descriptors or [])
+            if isinstance(item, dict)
+        ]
         profile_value = copy.deepcopy(parser_profile) if parser_profile is not None else None
         if isinstance(profile_value, dict):
             try:
@@ -573,6 +579,7 @@ class ChatSession:
             "ancestor": self.ancestor,
             "engine_config": self.engine_config,
             "initial_params": serialized_initial_params,
+            "try_out_anchor_descriptors": copy.deepcopy(self.try_out_anchor_descriptors),
             "parser_profile": self.parser_profile,
             "inference_defaults": self.inference_defaults.serialize(),
             "engine_warnings": self.engine_warnings,
@@ -850,7 +857,7 @@ class EngineSession:
             data = {
                 "id": self.id,
                 "name": self.name,
-                "schema_version": "4.5", # New schema version for stack_id support
+                "schema_version": "4.6", # Compact try-out anchor recovery descriptors
                 "conversation_roots": [node_to_temp_id.get(c.root_turn) for c in self.conversations if c.root_turn in node_to_temp_id], # type: ignore
                 "nodes": serialized_nodes,
                 "tool_block_lists": tool_block_lists,
@@ -918,12 +925,12 @@ class EngineSession:
         schema_version = data.get("schema_version")
 
         # Handle malformed 4.3 files that are missing the 'nodes' key.
-        if schema_version in ["4.3", "4.4", "4.5"] and "nodes" not in data:
+        if schema_version in ["4.3", "4.4", "4.5", "4.6"] and "nodes" not in data:
             #print(f"Warning: Session file '{session.name}' has schema {schema_version} but is missing the 'nodes' dictionary. Loading as an empty session.")
             return session
 
-        if schema_version not in ["4.2", "4.3", "4.4", "4.5"] or "nodes" not in data:
-            raise ValueError("Session file is not in a supported schema version (4.2, 4.3, 4.4, 4.5) or is corrupted.")
+        if schema_version not in ["4.2", "4.3", "4.4", "4.5", "4.6"] or "nodes" not in data:
+            raise ValueError("Session file is not in a supported schema version (4.2 through 4.6) or is corrupted.")
 
         # 1. Create all Turn and Command objects from the flat dictionary
         nodes_by_temp_id: Dict[str, Union[Turn, Command]] = {}

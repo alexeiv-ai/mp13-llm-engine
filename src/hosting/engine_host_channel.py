@@ -3299,6 +3299,9 @@ class EngineHostControlChannel:
         host_api_approval: Optional[Dict[str, Any]] = None,
         execution_request_id: str = "",
     ) -> Dict[str, Any]:
+        request_id = str(execution_request_id or "").strip()
+        if not request_id:
+            raise ValueError("execution_request_id is required for durable hosted execution")
         res = self._invoke(
             "toolbox-execute",
             {
@@ -3309,7 +3312,7 @@ class EngineHostControlChannel:
                 "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
                 "callback_binding": dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
                 "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
-                "execution_request_id": str(execution_request_id or "").strip() or None,
+                "execution_request_id": request_id,
             },
             _use_ephemeral_connection=True,
         )

@@ -305,6 +305,7 @@ class WorkflowHelperMixin:
         out = self.toolbox_execute(
             engine_id=str(binding.get("engine_id") or "").strip(),
             toolbox_id=str(binding.get("toolbox_id") or "").strip(),
+            execution_request_id=f"hostcap:{call.provider_call_id}",
             tool_call={
                 "id": call.provider_call_id,
                 "name": tool_name,

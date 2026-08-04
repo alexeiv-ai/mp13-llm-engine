@@ -5,6 +5,53 @@ The consuming project needs two narrow additions. The goal is to remove replay
 ambiguity after daemon or backend restart without turning the parent into a
 workflow database and without copying the serialized session tree.
 
+## Completion checklist
+
+### Durable hosted-execution receipts
+
+- [x] Require caller-supplied execution ids and scope them to the exact toolbox/engine host namespace.
+- [x] Persist canonical tool/arguments/policy fingerprints and bounded lifecycle timestamps before dispatch.
+- [x] Persist the dispatch claim immediately before tool invocation.
+- [x] Attach/replay same-fingerprint duplicates without a second dispatch in queued, running, and terminal states.
+- [x] Reject different-fingerprint duplicates with stable `idempotency_conflict`.
+- [x] Persist terminal success, failure, and cancellation before acknowledging the client.
+- [x] Recover pre-dispatch receipts as resumable once and post-dispatch receipts as fail-closed unknown.
+- [x] Expose queued/running, terminal, interrupted, forgotten, and outside-retention status values.
+- [x] Preserve execution-envelope fields, targeted cancellation, pool lifecycle, and separate coarse cancellation.
+- [x] Use a host-owned atomic ledger without persisted worker, queue, callback, credential, argument, or stream state.
+- [x] Bound/redact terminal envelopes and emit a digest/result reference for oversized results.
+- [x] Configure receipt/tombstone age, receipt/tombstone count, and safe-result size.
+- [x] Compact deterministically through bounded forgotten tombstones to `unknown_outside_retention`.
+- [x] Load receipts in proportion to retained records without starting a sandbox or worker.
+- [x] Test one-dispatch duplicates while queued, running, and terminal.
+- [x] Test fingerprint conflicts, restart-safe queued cancellation, and terminal recreation.
+- [x] Test both crash windows, retention compaction, credential redaction, and result bounds.
+- [x] Keep restart coverage to one local-IPC daemon smoke test; use in-process unit tests for the state matrix.
+
+### Compact try-out anchor recovery
+
+- [x] Persist a versioned bounded descriptor for every unresolved anchor with identifiers and lifecycle facts only.
+- [x] Reconcile descriptors against stable turn ids after deserialization and rebuild cursors lazily.
+- [x] List unresolved anchors together with their latest reconciliation result.
+- [x] Make repeated reconciliation and close/disposition idempotent.
+- [x] Report missing, duplicate, or structurally ambiguous references as interrupted without guessing or copying turns.
+- [x] Preserve explicit manual historical resurrection while removing automatic historical-marker fallback.
+- [x] Test active serialize/load/reconcile/close and repeated reconciliation/close.
+- [x] Test multiple branches/scopes without cross-binding.
+- [x] Test missing/ambiguous ids and prove closed anchors are not reopened.
+- [x] Test metadata size independence from message bytes and tree depth.
+- [x] Preserve existing session serialization and manual resurrection behavior.
+
+### Contract handoff and boundaries
+
+- [x] Document public hosting/session APIs, namespaces, configuration, and status values.
+- [x] Pass focused receipt, session, hosting, channel, and dependent app tests.
+- [x] Run the complete parent suite and rerun the sole process-startup timeout successfully in isolation.
+- [x] Document the intentional no-fallback migration for hosts/sessions that lack the new durable contracts.
+- [x] Keep workflow replay policy, journals, workspace lifecycle, tree projection, and user interaction resume in the dependent project.
+- [x] Avoid duplicate cursor/session trees, worker memory, callback authority, exactly-once claims for non-idempotent external tools, bulk cancellation, and distributed queues.
+- [x] Provide the dependent project with a parent commit for pinning and an explicit breaking-change handoff.
+
 ## 1. Durable hosted-execution receipts
 
 Apply this first to the hosted toolbox request path used by

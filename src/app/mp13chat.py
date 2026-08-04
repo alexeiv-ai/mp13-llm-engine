@@ -5558,7 +5558,10 @@ async def _apply_batch_results_to_children(
                     _drain_and_close_auto_tryouts(cursor=child_cursor, close_anchors=False)
                 elif anchor:
                     if decrement_retry:
-                        anchor.retries_remaining -= 1
+                        child_cursor.context.decrement_try_out_anchor_retry(
+                            anchor.anchor_name,
+                            scope=anchor.owner_scope,
+                        )
                     anchor_turn_for_retry = child_cursor.current_turn or anchor.anchor_turn or child_cursor.head
                     main_cursor_for_try, tryout_cursor = child_cursor.add_try_out(
                         anchor=anchor,
@@ -9486,7 +9489,10 @@ async def _handle_auto_continuation(cursor: ChatCursor) -> Tuple[ChatCursor, boo
     if existing_anchor:
         if existing_anchor.retries_remaining > 0:
             # We are in a retry loop, just add a continuation turn to the current branch
-            existing_anchor.retries_remaining -= 1
+            cursor.context.decrement_try_out_anchor_retry(
+                existing_anchor.anchor_name,
+                scope=existing_anchor.owner_scope,
+            )
             new_cursor = cursor.add_continuation_turn()
             new_cursor.set_auto(True)
             cursor.set_main_thread(True)
@@ -9524,7 +9530,7 @@ async def _handle_auto_continuation(cursor: ChatCursor) -> Tuple[ChatCursor, boo
                     retry_limit=limit,
                     origin_cursor=cursor,
                 )
-                cont_anchor.retries_remaining -= 1
+                scope.decrement_try_out_anchor_retry(cont_anchor.anchor_name)
                 _, tryout_cursor = cursor.add_try_out(anchor=cont_anchor, convert_existing=True)
                 cursor = tryout_cursor
                 new_cursor = cursor.add_continuation_turn()

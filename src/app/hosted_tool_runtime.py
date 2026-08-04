@@ -313,7 +313,10 @@ async def execute_tool_round_on_cursor(
                 origin_cursor=cursor,
             )
         if _tool_call_has_error(all_tool_blocks) and tool_anchor.retries_remaining > 0:
-            tool_anchor.retries_remaining -= 1
+            cursor.context.decrement_try_out_anchor_retry(
+                tool_anchor.anchor_name,
+                scope=tool_anchor.owner_scope,
+            )
         _, tryout_cursor = cursor.add_try_out(
             anchor=tool_anchor,
             anchor_turn=cursor.current_turn or tool_anchor.anchor_turn or cursor.head,

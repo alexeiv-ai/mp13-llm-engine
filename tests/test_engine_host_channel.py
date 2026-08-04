@@ -1073,9 +1073,10 @@ def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
             {
                 "engine_id": "",
                 "toolbox_id": "toolbox-demo",
-                "tool_name": "demo_tool",
-                "tool_call_id": "call-demo-1",
-                "timeout_seconds": 3.0,
+                    "tool_name": "demo_tool",
+                    "tool_call_id": "call-demo-1",
+                    "request_id": "",
+                    "timeout_seconds": 3.0,
                 "respawn": True,
                 "session_token": "tok-123",
             },
@@ -1428,6 +1429,7 @@ def test_toolbox_execute_forwards_host_api_approval() -> None:
 
     ch.toolbox_execute(
         toolbox_id="toolbox-1",
+        execution_request_id="exec-call-1",
         tool_call={"id": "call-1", "name": "tool"},
         host_api_approval=approval,
     )
@@ -1442,10 +1444,22 @@ def test_toolbox_execute_forwards_host_api_approval() -> None:
                 "timeout_seconds": 30.0,
                 "tools_view": None,
                 "callback_binding": None,
-                "host_api_approval": approval,
-            },
+                    "host_api_approval": approval,
+                    "execution_request_id": "exec-call-1",
+                },
         )
     ]
+
+
+def test_toolbox_execute_rejects_missing_durable_request_id_before_transport() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="execution_request_id is required"):
+        ch.toolbox_execute(toolbox_id="toolbox-1", tool_call={"id": "call-1", "name": "tool"})
+
+    assert fake.calls == []
 
 
 def test_workflow_artifact_recovery_channel_facade_forwards_expected_payloads() -> None:

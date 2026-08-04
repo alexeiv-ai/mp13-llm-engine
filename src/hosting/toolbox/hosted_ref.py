@@ -604,6 +604,9 @@ class HostedToolBoxRef:
         name = str(tool_name or "").strip()
         if not name:
             raise ValueError("tool_name_required")
+        durable_request_id = str(execution_request_id or "").strip()
+        if not durable_request_id:
+            raise ValueError("execution_request_id is required for durable hosted execution")
         callback_context = _merge_scope_ref_into_callback_context(callback_context, scope_ref)
         call_id = str(tool_call_id or "").strip() or secrets.token_hex(12)
         requested_tools_view = tools_view
@@ -710,8 +713,7 @@ class HostedToolBoxRef:
                 "tools_view": tools_view_payload,
                 "callback_binding": dict(callback_binding or {}) or None,
             }
-            if str(execution_request_id or "").strip():
-                execute_kwargs["execution_request_id"] = str(execution_request_id).strip()
+            execute_kwargs["execution_request_id"] = durable_request_id
             if isinstance(host_api_approval, dict):
                 execute_kwargs["host_api_approval"] = dict(host_api_approval or {})
             return dict(

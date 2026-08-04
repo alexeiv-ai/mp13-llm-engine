@@ -1389,6 +1389,7 @@ def test_hosted_toolbox_ref_execute_scope_ref_convenience_persists_add_to_scope(
 
     out = ref.execute(
         tool_name="dangerous_remote",
+        execution_request_id="exec-dangerous-remote",
         arguments={},
         tools_view=view,
         callback_processor=_processor,
@@ -1833,6 +1834,7 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     try:
         out = svc.toolbox_execute(
             engine_id="toolbox-hosted-pool",
+            execution_request_id="exec-call-demo-1",
             tool_call={"id": "call-demo-1", "name": "demo_tool", "arguments": {}},
             timeout_seconds=2.0,
         )
@@ -1855,7 +1857,8 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["status"] == "ok"
     assert status["status"] == "ok"
     assert status["request"]["status"] == "ok"
-    assert status["source"] in {"active", "recent"}
+    assert status["source"] == "durable_receipt_ledger"
+    assert status["lifecycle_state"] == "terminal_success"
 
 
 def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1883,6 +1886,7 @@ def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pyte
         monkeypatch.setattr(svc, "_ipc_call", fail_ipc)
         out = svc.toolbox_execute(
             engine_id="toolbox-all-settled-error",
+            execution_request_id="exec-call-all-settled-error",
             tool_call={"id": "call-all-settled-error", "name": "demo_tool", "arguments": {}},
         )
 
@@ -1932,12 +1936,22 @@ def test_toolbox_cancel_marks_recycled_sibling_requests_explicitly(monkeypatch: 
                 desired_capacity=2,
                 operation_id="demo_tool",
             )
+        svc._toolbox_execution_receipts.prepare(
+            namespace="engine:toolbox-sandbox-recycled",
+            request_id="call-recycled-target",
+            fingerprint="0" * 64,
+        )
+        svc._toolbox_execution_receipts.mark_dispatch_claimed(
+            namespace="engine:toolbox-sandbox-recycled",
+            request_id="call-recycled-target",
+        )
 
         monkeypatch.setattr(svc, "shutdown", lambda *_args, **_kwargs: {"status": "ok", "alive": False})
         out = svc.toolbox_cancel(
             engine_id="toolbox-sandbox-recycled",
             tool_name="demo_tool",
             tool_call_id="call-recycled-target",
+            request_id="call-recycled-target",
             respawn=False,
         )
 
@@ -2024,7 +2038,7 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
             status_started = time.perf_counter()
             status = await asyncio.to_thread(
                 channel.toolbox_request_status,
-                engine_id=engine_id,
+                toolbox_id="toolbox-real-control-concurrency",
                 request_id="exec-real-call-a",
             )
             status_elapsed = time.perf_counter() - status_started
@@ -2085,6 +2099,7 @@ def test_toolbox_execute_forwards_host_api_approval_to_worker_rpc(monkeypatch: p
     try:
         svc.toolbox_execute(
             engine_id="toolbox-host-api-approval-forward",
+            execution_request_id="exec-call-demo-approval",
             tool_call={"id": "call-demo-approval", "name": "demo_tool", "arguments": {}},
             host_api_approval={"mode": "always"},
         )
@@ -2802,6 +2817,7 @@ def test_hosted_toolbox_ref_execute_forwards_host_api_approval() -> None:
 
     out = ref.execute(
         tool_name="hello_tool",
+        execution_request_id="exec-hello-tool-approval",
         arguments={"name": "Sam"},
         host_api_approval={"mode": "always"},
     )
@@ -3039,7 +3055,7 @@ def test_sandboxed_toolbox_facade_shapes_requests_for_host_api() -> None:
         sandbox_policy={"sandbox": {"enabled": True}},
     )
     _ = facade.describe(timeout_seconds=3.0)
-    _ = facade.execute(tool_name="hello_auto", arguments={"name": "Sam"}, timeout_seconds=4.0)
+    _ = facade.execute(tool_name="hello_auto", arguments={"name": "Sam"}, timeout_seconds=4.0, execution_request_id="exec-facade-shape")
     _ = facade.register_intrinsic_tools(["symbolic_algebra"], include_guides=True, sandbox_policy={"sandbox": {"enabled": True}})
     _ = facade.unregister_intrinsic_tools(["symbolic_algebra"], include_guides=True)
     _ = facade.register_manual_tool(
@@ -3285,6 +3301,8 @@ def test_hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests() -> No
         disabled_tools={"blocked_tool"},
     )
     assert ref.ref_name == "hosted-ref"
+    with pytest.raises(ValueError, match="execution_request_id is required"):
+        ref.execute(tool_name="hello_auto")
     _ = ref.add_auto_callable(
         relative_path="facade_tools.py",
         content="def hello_auto(name='world'):\n    return {'greeting': f'hi {name}'}\n",
@@ -3297,8 +3315,8 @@ def test_hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests() -> No
     _ = ref.remove_intrinsic_tools(["symbolic_algebra"])
     _ = ref.list_tools()
     _ = ref.gate(tool_name="hello_auto", tools_view=tools_view)
-    _ = ref.execute(tool_name="hello_auto", tools_view=tools_view)
-    _ = ref.cancel(tool_name="hello_auto", tool_call_id="call-1", timeout_seconds=4.0, respawn=False)
+    _ = ref.execute(tool_name="hello_auto", tools_view=tools_view, execution_request_id="exec-hosted-ref")
+    _ = ref.cancel(tool_name="hello_auto", tool_call_id="call-1", request_id="exec-hosted-ref", timeout_seconds=4.0, respawn=False)
     _ = ref.list_environment_descriptions()
 
     calls = ref.host.calls
@@ -3356,12 +3374,14 @@ def test_hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests() -> No
     }
     assert calls[7][1]["callback_binding"] is None
     assert calls[7][1]["tool_call"]["id"]
+    assert calls[7][1]["execution_request_id"] == "exec-hosted-ref"
     assert calls[8] == (
         "toolbox_cancel",
         {
             "toolbox_id": "hosted-ref",
             "tool_name": "hello_auto",
             "tool_call_id": "call-1",
+            "request_id": "exec-hosted-ref",
             "timeout_seconds": 4.0,
             "respawn": False,
         },
@@ -3429,6 +3449,7 @@ def test_hosted_toolbox_ref_execute_approval_add_to_scope_updates_scope_and_view
 
     out = ref.execute(
         tool_name="dangerous_auto",
+        execution_request_id="exec-dangerous-auto",
         arguments={"name": "Sam"},
         tools_view=view,
         callback_processor=_processor,
@@ -3715,6 +3736,7 @@ def test_toolbox_execute_dispatches_host_capability_in_parent_and_audits(monkeyp
 
         out = svc.toolbox_execute(
             engine_id="toolbox-parent-host-api",
+            execution_request_id="exec-call-parent-host-api",
             tool_call={"id": "call-parent-host-api", "name": "peek", "arguments": {}},
             callback_binding=caller_binding,
             host_api_approval={"mode": "always"},
@@ -3752,6 +3774,7 @@ def test_sandboxed_toolbox_facade_execute_does_not_serialize_callback_user_conte
 
     out = facade.execute(
         tool_name="hello_auto",
+        execution_request_id="exec-callback-user-context",
         arguments={"name": "Sam"},
         callback_processor=lambda **kwargs: {"decision": "deny"},
         callback_context=callback_context,
@@ -4051,6 +4074,7 @@ def test_toolbox_executor_ipc_end_to_end() -> None:
         assert "hello_tool" in list(desc.get("all_registered_tool_names") or [])
         exec_out = svc.toolbox_execute(
             engine_id="toolbox-live",
+            execution_request_id="exec-toolbox-live",
             tool_call={"name": "hello_tool", "arguments": {"name": "Sam"}},
             timeout_seconds=5.0,
         )
@@ -4162,6 +4186,7 @@ def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
 
         exec_out = svc.toolbox_execute(
             engine_id="toolbox-live-callback",
+            execution_request_id="exec-call-live-fs-1",
             tool_call={"id": "call-live-fs-1", "name": "read_name_tool", "arguments": {}},
             timeout_seconds=5.0,
         )
@@ -4258,6 +4283,7 @@ def test_hosted_toolbox_execute_routes_generic_callback_with_context() -> None:
 
         out = facade.execute(
             tool_name="callback_context_tool",
+            execution_request_id="exec-call-ctx-1",
             arguments={"name": "Sam"},
             callback_processor=_processor,
             callback_context={"origin": "test"},
@@ -4404,6 +4430,7 @@ def test_hosted_toolbox_callbacks_run_concurrently() -> None:
         started = time.monotonic()
         out = facade.execute(
             tool_name="callback_parallel_tool",
+            execution_request_id="exec-call-par-1",
             arguments={},
             callback_processor=_processor,
             tool_call_id="call-par-1",
@@ -4473,6 +4500,7 @@ def test_toolbox_executor_ipc_end_to_end_with_intrinsic_tools_only() -> None:
 
         exec_out = svc.toolbox_execute(
             engine_id="toolbox-live-intrinsic",
+            execution_request_id="exec-toolbox-live-intrinsic",
             tool_call={
                 "name": "symbolic_algebra",
                 "arguments": {"expr": "2 + 2", "variables": [], "operation": "simplify"},
@@ -4546,6 +4574,7 @@ def test_toolbox_executor_ipc_end_to_end_with_auto_callable_discovery() -> None:
         assert "hello_auto" in list(desc.get("all_registered_tool_names") or [])
         exec_out = svc.toolbox_execute(
             engine_id="toolbox-live-auto",
+            execution_request_id="exec-toolbox-live-auto",
             tool_call={"name": "hello_auto", "arguments": {"name": "Sam"}},
             timeout_seconds=5.0,
         )
@@ -4655,6 +4684,7 @@ def test_toolbox_service_routes_calls_across_multiple_sandbox_profiles() -> None
 
         out_alpha = svc.toolbox_execute(
             toolbox_id="toolbox-routed",
+            execution_request_id="exec-toolbox-routed-alpha",
             tool_call={"name": "alpha_tool", "arguments": {"name": "A"}},
             timeout_seconds=5.0,
         )
@@ -4664,6 +4694,7 @@ def test_toolbox_service_routes_calls_across_multiple_sandbox_profiles() -> None
 
         out_beta = svc.toolbox_execute(
             toolbox_id="toolbox-routed",
+            execution_request_id="exec-toolbox-routed-beta",
             tool_call={"name": "beta_tool", "arguments": {"name": "B"}},
             timeout_seconds=5.0,
         )
@@ -4761,6 +4792,7 @@ def test_toolbox_sandbox_orchestrator_spawns_and_routes_multi_profile_toolbox() 
 
         out_alpha = svc.toolbox_execute(
             toolbox_id="toolbox-assigned",
+            execution_request_id="exec-toolbox-assigned-alpha",
             tool_call={"name": "alpha_assign", "arguments": {"name": "A"}},
             timeout_seconds=5.0,
         )
@@ -4768,6 +4800,7 @@ def test_toolbox_sandbox_orchestrator_spawns_and_routes_multi_profile_toolbox() 
 
         out_beta = svc.toolbox_execute(
             toolbox_id="toolbox-assigned",
+            execution_request_id="exec-toolbox-assigned-beta",
             tool_call={"name": "beta_assign", "arguments": {"name": "B"}},
             timeout_seconds=5.0,
         )
@@ -4875,6 +4908,7 @@ def test_toolbox_register_auto_persists_membership_and_replaces_profile_executor
 
         out_alpha = svc.toolbox_execute(
             toolbox_id="toolbox-persist",
+            execution_request_id="exec-toolbox-persist-alpha",
             tool_call={"name": "persist_alpha", "arguments": {"name": "A"}},
             timeout_seconds=5.0,
         )
@@ -4882,6 +4916,7 @@ def test_toolbox_register_auto_persists_membership_and_replaces_profile_executor
 
         out_beta = svc.toolbox_execute(
             toolbox_id="toolbox-persist",
+            execution_request_id="exec-toolbox-persist-beta",
             tool_call={"name": "persist_beta", "arguments": {"name": "B"}},
             timeout_seconds=5.0,
         )
@@ -4953,7 +4988,7 @@ def test_sandboxed_toolbox_facade_runs_end_to_end_against_host_service() -> None
         desc = facade.describe(timeout_seconds=5.0)
         assert list(desc.get("all_registered_tool_names") or []) == ["facade_live"]
 
-        out = facade.execute(tool_name="facade_live", arguments={"name": "Z"}, timeout_seconds=5.0)
+        out = facade.execute(tool_name="facade_live", arguments={"name": "Z"}, timeout_seconds=5.0, execution_request_id="exec-facade-live")
         assert '"tool": "facade_live"' in str(dict(out.get("tool_call") or {}).get("result") or "")
 
         removed = facade.unregister_auto_callable(module_name="facade_live", callable_name="facade_live")
@@ -5011,7 +5046,7 @@ def test_sandboxed_toolbox_facade_register_python_callable_runs_end_to_end() -> 
         desc = facade.describe(timeout_seconds=5.0)
         assert list(desc.get("all_registered_tool_names") or []) == ["facade_pycall"]
 
-        out = facade.execute(tool_name="facade_pycall", arguments={"name": "Q"}, timeout_seconds=5.0)
+        out = facade.execute(tool_name="facade_pycall", arguments={"name": "Q"}, timeout_seconds=5.0, execution_request_id="exec-facade-pycall")
         assert '"tool": "facade_pycall"' in str(dict(out.get("tool_call") or {}).get("result") or "")
     finally:
         removed = facade.unregister_auto_callable(module_name="facade_pycall_mod", callable_name="facade_pycall")
@@ -5051,6 +5086,7 @@ def test_sandboxed_toolbox_facade_register_intrinsic_tools_runs_end_to_end() -> 
 
         out = facade.execute(
             tool_name="symbolic_algebra",
+            execution_request_id="exec-facade-intrinsic",
             arguments={"expr": "2 + 3", "variables": [], "operation": "simplify"},
             timeout_seconds=5.0,
         )
@@ -5107,7 +5143,7 @@ def test_sandboxed_toolbox_facade_register_manual_tool_runs_end_to_end() -> None
         desc = facade.describe(timeout_seconds=5.0)
         assert list(desc.get("all_registered_tool_names") or []) == ["facade_manual_tool"]
 
-        out = facade.execute(tool_name="facade_manual_tool", arguments={"name": "M"}, timeout_seconds=5.0)
+        out = facade.execute(tool_name="facade_manual_tool", arguments={"name": "M"}, timeout_seconds=5.0, execution_request_id="exec-facade-manual")
         assert '"tool": "facade_manual"' in str(dict(out.get("tool_call") or {}).get("result") or "")
 
         removed = facade.unregister_manual_tool(module_name="facade_manual_mod", callable_name="facade_manual_impl")
@@ -6654,6 +6690,7 @@ def test_toolbox_unregister_auto_rebuilds_profile_and_removes_tool() -> None:
 
         out_keep = svc.toolbox_execute(
             toolbox_id="toolbox-unregister",
+            execution_request_id="exec-toolbox-unregister-keep",
             tool_call={"name": "keep_tool", "arguments": {"name": "K"}},
             timeout_seconds=5.0,
         )

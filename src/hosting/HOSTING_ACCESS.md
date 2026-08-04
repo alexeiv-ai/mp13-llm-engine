@@ -778,6 +778,52 @@ This section is the authoritative integration contract for hosting consumers.
    - OpenSSH passphrase-protected vs unprotected private key
 9. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
+### 11.6 Durable toolbox execution receipts
+
+Hosted toolbox execution is idempotent within the exact endpoint namespace used by the caller:
+
+1. `toolbox_execute(..., execution_request_id=...)` requires a non-empty caller-generated `execution_request_id`; the host no longer generates one.
+2. The namespace is `toolbox:<toolbox_id>` when execution uses `toolbox_id`, or `engine:<engine_id>` when it uses `engine_id`. Status and cancellation must use the same selector and request id.
+3. The durable fingerprint covers canonical tool name, arguments, and effective execution policy. Reusing an id with a different fingerprint returns `outcome=idempotency_conflict` and never dispatches.
+4. A matching duplicate attaches to queued/running work or replays the persisted terminal envelope. An oversized terminal envelope is replaced by `result_reference` containing its SHA-256 digest and byte size.
+5. `toolbox_request_status(...)` is ledger-authoritative and does not fall back to the in-memory sandbox pool. Its `lifecycle_state`/`outcome` values are:
+   - `queued`
+   - `running`
+   - `terminal_success`
+   - `terminal_failure`
+   - `terminal_cancellation`
+   - `interrupted_before_dispatch`
+   - `interrupted_after_dispatch_unknown`
+   - `forgotten`
+   - `unknown_outside_retention`
+6. `interrupted_before_dispatch` may resume exactly once through another matching `toolbox_execute` call. `interrupted_after_dispatch_unknown` is fail-closed and never grants another dispatch.
+7. Targeted `toolbox_cancel` uses `request_id=execution_request_id`. `tool_call_id` remains model-call metadata and is not a request-id fallback. Calling cancel without `request_id` remains the separate coarse executor cancellation operation.
+8. Receipts are stored at `<hosting_root>/state/toolbox_execution_receipts.json`. They contain digests and bounded scalar metadata, not raw arguments, callback/session tokens, worker state, queues, or stream histories. Credential-shaped terminal fields are redacted before persistence.
+
+Retention defaults and daemon environment overrides:
+
+- retained receipts: 7 days, `MP13_TOOLBOX_RECEIPT_RETENTION_SECONDS`
+- forgotten tombstones: 14 additional days, `MP13_TOOLBOX_RECEIPT_TOMBSTONE_SECONDS`
+- receipt count: 10,000, `MP13_TOOLBOX_RECEIPT_MAX_COUNT`
+- tombstone count: 20,000, `MP13_TOOLBOX_RECEIPT_MAX_TOMBSTONES`
+- terminal envelope: 64 KiB, `MP13_TOOLBOX_RECEIPT_MAX_RESULT_BYTES`
+
+In-process construction may override the corresponding `EngineHostService(...)` keyword arguments. Compaction is deterministic by timestamp and receipt key. Loading the ledger does not route a toolbox or start a worker.
+
+### 11.7 Compact try-out anchor recovery
+
+Session schema `4.6` adds `ChatSession.try_out_anchor_descriptors`, a bounded index into the canonical turn tree. Each unresolved descriptor contains version, anchor/kind, stable turn ids, scope/origin identity, retry counters, lifecycle/disposition/reason, and revision only. It never contains messages, prompts, tool payloads, execution envelopes, cursor caches, ancestry paths, or nested turns.
+
+Public recovery methods:
+
+- `ChatContext.list_unresolved_try_out_anchors(...)` (and the scoped wrapper) lists descriptors plus their latest reconciliation result.
+- `ChatContext.reconcile_try_out_anchors(...)` validates referenced ids and direct-child shape. It restores runtime anchors without eagerly rebuilding branch cursors.
+- `ChatContext.decrement_try_out_anchor_retry(...)` durably updates retry state; application code must not mutate `retries_remaining` directly.
+- `close_try_out_anchor(...)` is idempotent. Repeating a completed close returns `None` and does not repeat promotion, placeholder closure, budget decrement, or cursor rebinding.
+- `resurrect_try_out_anchor(...)` remains the explicit historical-marker scan for manual recovery.
+
+Sessions without descriptors yield an empty unresolved list and are not automatically scanned. Missing, duplicate, or structurally ambiguous turn ids produce an explicit `interrupted` reconciliation result. Closed descriptors are not reopened. Consumers remain responsible for replay eligibility, workflow pause/resume, user-facing recovery, and tree projection.
+
 ## 12. Advanced Hardening and Risk Assessment
 
 These are intentionally secondary to functional/usability baseline:

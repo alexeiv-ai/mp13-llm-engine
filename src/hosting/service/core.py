@@ -34,6 +34,7 @@ class CoreMixin:
             "auth_audit_list": True,
             "hosting_setup_status_v1": True,
             "secure_state_status_v1": True,
+            "durable_toolbox_execution_receipts_v1": True,
         }
 
     @staticmethod

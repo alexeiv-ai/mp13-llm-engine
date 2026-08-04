@@ -131,7 +131,13 @@ class TryOutAnchor:
     retries_remaining: int = 5
     retry_limit: int = 5
     origin_cursor_id: Optional[str] = None
+    origin_turn_id: Optional[str] = None
     owner_scope: Optional["ChatContextScope"] = None
+    lifecycle: str = "active"
+    disposition: Optional[str] = None
+    close_reason: Optional[str] = None
+    revision: int = 1
+    reconciliation_state: str = "live"
 
 
 @dataclass
@@ -290,6 +296,15 @@ class ChatContextScope:
 
     def try_out_anchors_snapshot(self) -> List[TryOutAnchor]:
         return self.context.try_out_anchors_snapshot(scope=self)
+
+    def list_unresolved_try_out_anchors(self) -> List[Dict[str, Any]]:
+        return self.context.list_unresolved_try_out_anchors(scope=self)
+
+    def reconcile_try_out_anchors(self) -> List[Dict[str, Any]]:
+        return self.context.reconcile_try_out_anchors(scope=self)
+
+    def decrement_try_out_anchor_retry(self, anchor_name: str, count: int = 1) -> int:
+        return self.context.decrement_try_out_anchor_retry(anchor_name, count=count, scope=self)
 
     def cursors_snapshot(self) -> List[Tuple[str, "ChatCursor"]]:
         """Snapshot of registered cursors limited to this scope."""
@@ -1202,6 +1217,8 @@ class ChatCursor:
                 anchor.try_out_turns.append(try_turn)
                 if trial_cursor.context_id:
                     anchor.try_out_cursor_ids.append(trial_cursor.context_id)
+                anchor.revision += 1
+                context_for_branch._persist_anchor_descriptor(anchor)
         return main_cursor, trial_cursor
 
     def close_branch(
@@ -2095,6 +2112,8 @@ class ChatContext:
         self._cursors: Dict[str, ChatCursor] = {}
         self._active_cursor_id: Optional[str] = None
         self._try_out_anchors: Dict[str, TryOutAnchor] = {}
+        self._closed_try_out_anchors: Set[str] = set()
+        self._try_out_reconciliation: Dict[str, Dict[str, Any]] = {}
         self._default_scope: ChatContextScope = ChatContextScope(
             context=self,
             scope_id="default",
@@ -2742,6 +2761,22 @@ class ChatContext:
                 cursor = self._cursors.get(handle)
                 if cursor:
                     return cursor
+        turns = list(anchor.try_out_turns or [])
+        if prefer_latest:
+            turns.reverse()
+        for turn in turns:
+            try:
+                cursor = self.find_cursor_for_turn(turn) or self.register_cursor_for_turn(
+                    turn,
+                    make_active=False,
+                    scope=anchor.owner_scope,
+                )
+            except Exception:
+                cursor = None
+            if cursor:
+                if cursor.context_id and cursor.context_id not in anchor.try_out_cursor_ids:
+                    anchor.try_out_cursor_ids.append(cursor.context_id)
+                return cursor
         return None
 
     def get_cursor(self, handle: str) -> Optional[ChatCursor]:
@@ -3007,6 +3042,208 @@ class ChatContext:
         with self._rw_lock.read_lock():
             return list(self._cursors.items())
 
+    @staticmethod
+    def _bounded_anchor_text(value: Any, limit: int) -> Optional[str]:
+        text = str(value or "").strip()
+        return text[:limit] if text else None
+
+    def _anchor_descriptor(self, anchor: TryOutAnchor) -> Dict[str, Any]:
+        self.session._ensure_turn_has_gen_id(anchor.anchor_turn)
+        turn_ids: List[str] = []
+        for turn in list(anchor.try_out_turns or [])[:64]:
+            self.session._ensure_turn_has_gen_id(turn)
+            if turn.gen_id:
+                turn_ids.append(str(turn.gen_id)[:128])
+        if len(list(anchor.try_out_turns or [])) > 64:
+            anchor.lifecycle = "interrupted"
+            anchor.close_reason = "too_many_direct_try_out_turns"
+        return {
+            "version": 1,
+            "anchor_name": str(anchor.anchor_name)[:128],
+            "kind": str(anchor.kind or "try_out")[:64],
+            "anchor_turn_id": str(anchor.anchor_turn.gen_id or "")[:128],
+            "try_out_turn_ids": turn_ids,
+            "scope_id": str(getattr(anchor.owner_scope, "scope_id", None) or "default")[:128],
+            "origin_turn_id": self._bounded_anchor_text(anchor.origin_turn_id, 128),
+            "origin_cursor_id": self._bounded_anchor_text(anchor.origin_cursor_id, 128),
+            "retry_limit": max(0, min(int(anchor.retry_limit), 10_000)),
+            "retries_remaining": max(0, min(int(anchor.retries_remaining), 10_000)),
+            "lifecycle": anchor.lifecycle if anchor.lifecycle in {"active", "closed", "interrupted"} else "interrupted",
+            "disposition": self._bounded_anchor_text(anchor.disposition, 64),
+            "reason": self._bounded_anchor_text(anchor.close_reason, 256),
+            "revision": max(1, min(int(anchor.revision), 2_147_483_647)),
+        }
+
+    def _persist_anchor_descriptor(self, anchor: TryOutAnchor) -> Dict[str, Any]:
+        descriptor = self._anchor_descriptor(anchor)
+        rows = [
+            copy.deepcopy(item)
+            for item in list(getattr(self.chat_session, "try_out_anchor_descriptors", []) or [])
+            if isinstance(item, dict) and str(item.get("anchor_name") or "") != anchor.anchor_name
+        ]
+        if len(rows) >= 256:
+            raise RuntimeError("try_out_anchor_descriptor_limit_exceeded")
+        rows.append(descriptor)
+        rows.sort(key=lambda item: str(item.get("anchor_name") or ""))
+        self.chat_session.try_out_anchor_descriptors = rows
+        return copy.deepcopy(descriptor)
+
+    def _remove_anchor_descriptor(self, anchor_name: str) -> None:
+        name = str(anchor_name or "").strip()
+        self.chat_session.try_out_anchor_descriptors = [
+            copy.deepcopy(item)
+            for item in list(getattr(self.chat_session, "try_out_anchor_descriptors", []) or [])
+            if isinstance(item, dict) and str(item.get("anchor_name") or "") != name
+        ]
+
+    def _scope_for_recovered_anchor(self, scope_id: str) -> ChatContextScope:
+        sid = str(scope_id or "default").strip()[:128] or "default"
+        with self._rw_lock.read_lock():
+            existing = self._scopes.get(sid)
+        if existing is not None:
+            return existing
+        scope = ChatContextScope(
+            context=self,
+            scope_id=sid,
+            label=f"recovered:{sid}",
+            auto_mark_active=True,
+        )
+        with self._rw_lock.write_lock():
+            existing = self._scopes.get(sid)
+            if existing is not None:
+                return existing
+            self._scopes[sid] = scope
+            if sid.startswith("scope_") and sid[6:].isdigit():
+                self._scope_seq = max(self._scope_seq, int(sid[6:]))
+        return scope
+
+    def list_unresolved_try_out_anchors(
+        self,
+        *,
+        scope: Optional[ChatContextScope] = None,
+    ) -> List[Dict[str, Any]]:
+        scope_id = str(scope.scope_id) if scope is not None else None
+        out: List[Dict[str, Any]] = []
+        for raw in list(getattr(self.chat_session, "try_out_anchor_descriptors", []) or []):
+            if not isinstance(raw, dict):
+                continue
+            row = copy.deepcopy(raw)
+            if scope_id is not None and str(row.get("scope_id") or "default") != scope_id:
+                continue
+            name = str(row.get("anchor_name") or "")
+            result = dict(self._try_out_reconciliation.get(name) or {})
+            row["reconciliation"] = result or {"status": "not_reconciled"}
+            out.append(row)
+        return out
+
+    def reconcile_try_out_anchors(
+        self,
+        *,
+        scope: Optional[ChatContextScope] = None,
+    ) -> List[Dict[str, Any]]:
+        all_turns = list(self.session._get_all_turns(self.chat_session))
+        turns_by_id: Dict[str, List[Turn]] = {}
+        for turn in all_turns:
+            turn_id = str(getattr(turn, "gen_id", None) or "")
+            if turn_id:
+                turns_by_id.setdefault(turn_id, []).append(turn)
+        scope_id_filter = str(scope.scope_id) if scope is not None else None
+        results: List[Dict[str, Any]] = []
+        descriptors = list(getattr(self.chat_session, "try_out_anchor_descriptors", []) or [])
+        for raw in descriptors:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("anchor_name") or "").strip()
+            descriptor_scope_id = str(raw.get("scope_id") or "default")[:128] or "default"
+            if scope_id_filter is not None and descriptor_scope_id != scope_id_filter:
+                continue
+            result: Dict[str, Any] = {"anchor_name": name, "status": "interrupted", "reason": None}
+            if int(raw.get("version") or 0) != 1 or not name:
+                result["reason"] = "invalid_descriptor"
+                results.append(result)
+                continue
+            lifecycle = str(raw.get("lifecycle") or "interrupted")
+            if lifecycle == "closed":
+                self._closed_try_out_anchors.add(name)
+                self._remove_anchor_descriptor(name)
+                result.update({"status": "closed", "reason": str(raw.get("reason") or "closed")})
+                self._try_out_reconciliation[name] = dict(result)
+                results.append(result)
+                continue
+            if lifecycle != "active":
+                result["reason"] = str(raw.get("reason") or "descriptor_interrupted")
+                self._try_out_reconciliation[name] = dict(result)
+                results.append(result)
+                continue
+            anchor_matches = turns_by_id.get(str(raw.get("anchor_turn_id") or ""), [])
+            if len(anchor_matches) != 1:
+                result["reason"] = "anchor_turn_missing" if not anchor_matches else "anchor_turn_ambiguous"
+            else:
+                try_turns: List[Turn] = []
+                for turn_id in list(raw.get("try_out_turn_ids") or []):
+                    matches = turns_by_id.get(str(turn_id or ""), [])
+                    if len(matches) != 1:
+                        result["reason"] = "try_out_turn_missing" if not matches else "try_out_turn_ambiguous"
+                        break
+                    if matches[0].parent is not anchor_matches[0]:
+                        result["reason"] = "try_out_shape_ambiguous"
+                        break
+                    try_turns.append(matches[0])
+                if result.get("reason") is None:
+                    origin_turn_id = str(raw.get("origin_turn_id") or "")
+                    if origin_turn_id and len(turns_by_id.get(origin_turn_id, [])) != 1:
+                        result["reason"] = "origin_turn_missing_or_ambiguous"
+                    else:
+                        target_scope = scope or self._scope_for_recovered_anchor(descriptor_scope_id)
+                        with self._rw_lock.read_lock():
+                            existing = self._try_out_anchors.get(name)
+                        if existing is None:
+                            existing = TryOutAnchor(
+                                anchor_name=name,
+                                anchor_turn=anchor_matches[0],
+                                kind=str(raw.get("kind") or "try_out")[:64],
+                                try_out_turns=try_turns,
+                                retries_remaining=max(0, int(raw.get("retries_remaining") or 0)),
+                                retry_limit=max(0, int(raw.get("retry_limit") or 0)),
+                                origin_cursor_id=self._bounded_anchor_text(raw.get("origin_cursor_id"), 128),
+                                origin_turn_id=self._bounded_anchor_text(raw.get("origin_turn_id"), 128),
+                                owner_scope=target_scope,
+                                lifecycle="active",
+                                disposition=self._bounded_anchor_text(raw.get("disposition"), 64),
+                                close_reason=self._bounded_anchor_text(raw.get("reason"), 256),
+                                revision=max(1, int(raw.get("revision") or 1)),
+                                reconciliation_state="reconciled",
+                            )
+                            with self._rw_lock.write_lock():
+                                existing = self._try_out_anchors.setdefault(name, existing)
+                        result.update({"status": "reconciled", "reason": None, "revision": existing.revision})
+            if result.get("status") != "reconciled":
+                raw["lifecycle"] = "interrupted"
+                raw["reason"] = str(result.get("reason") or "unresolved")[:256]
+                self.chat_session.try_out_anchor_descriptors = [
+                    copy.deepcopy(raw) if isinstance(item, dict) and str(item.get("anchor_name") or "") == name else item
+                    for item in list(getattr(self.chat_session, "try_out_anchor_descriptors", []) or [])
+                ]
+            self._try_out_reconciliation[name] = dict(result)
+            results.append(result)
+        return results
+
+    def decrement_try_out_anchor_retry(
+        self,
+        anchor_name: str,
+        *,
+        count: int = 1,
+        scope: Optional[ChatContextScope] = None,
+    ) -> int:
+        anchor = self.get_try_out_anchor(anchor_name, scope=scope)
+        if anchor is None:
+            raise ValueError(f"Anchor with name '{anchor_name}' does not exist.")
+        amount = max(0, int(count))
+        anchor.retries_remaining = max(0, int(anchor.retries_remaining) - amount)
+        anchor.revision += 1
+        self._persist_anchor_descriptor(anchor)
+        return anchor.retries_remaining
+
     def try_out_anchors_snapshot(self, *, scope: Optional[ChatContextScope] = None) -> List[TryOutAnchor]:
         """Snapshot of tracked try-out anchors."""
         with self._rw_lock.read_lock():
@@ -3025,21 +3262,36 @@ class ChatContext:
         scope: Optional[ChatContextScope] = None,
     ) -> TryOutAnchor:
         """Creates a new try-out anchor."""
+        anchor_name = str(anchor_name or "").strip()
+        if not anchor_name or len(anchor_name) > 128:
+            raise ValueError("anchor_name is required and limited to 128 characters")
+        if not anchor_turn or not self.owns_turn(anchor_turn):
+            raise ValueError("anchor_turn must belong to this ChatContext")
+        self.session._ensure_turn_has_gen_id(anchor_turn)
         with self._rw_lock.read_lock():
             if anchor_name in self._try_out_anchors:
                 raise ValueError(f"Anchor with name '{anchor_name}' already exists.")
 
         origin_cursor_id = None
         if origin_cursor and origin_cursor.context is self:
+            if origin_cursor.head:
+                self.session._ensure_turn_has_gen_id(origin_cursor.head)
             if not origin_cursor.context_id:
                 try:
                     self.register_cursor_if_needed(origin_cursor, make_active=False, scope=scope)
                 except Exception:
                     pass
             origin_cursor_id = origin_cursor.context_id
+        origin_turn_id = str(origin_cursor.head.gen_id) if origin_cursor and origin_cursor.head and origin_cursor.head.gen_id else None
         target_scope = self.get_scope(scope)
         if not origin_cursor_id:
             origin_cursor_id = target_scope.active_cursor_id or self._active_cursor_id
+        if not origin_turn_id and origin_cursor_id:
+            with self._rw_lock.read_lock():
+                origin_registered = self._cursors.get(origin_cursor_id)
+            if origin_registered and origin_registered.head:
+                self.session._ensure_turn_has_gen_id(origin_registered.head)
+                origin_turn_id = str(origin_registered.head.gen_id or "") or None
         anchor = TryOutAnchor(
             anchor_name=anchor_name,
             anchor_turn=anchor_turn,
@@ -3047,12 +3299,20 @@ class ChatContext:
             retries_remaining=retry_limit,
             retry_limit=retry_limit,
             origin_cursor_id=origin_cursor_id,
+            origin_turn_id=origin_turn_id,
             owner_scope=target_scope,
         )
         with self._rw_lock.write_lock():
             if anchor_name in self._try_out_anchors:
                 raise ValueError(f"Anchor with name '{anchor_name}' already exists.")
             self._try_out_anchors[anchor_name] = anchor
+        try:
+            self._persist_anchor_descriptor(anchor)
+        except Exception:
+            with self._rw_lock.write_lock():
+                if self._try_out_anchors.get(anchor_name) is anchor:
+                    self._try_out_anchors.pop(anchor_name, None)
+            raise
         return anchor
 
     def close_try_out_anchor(
@@ -3070,14 +3330,23 @@ class ChatContext:
         with self._rw_lock.read_lock():
             anchor = self._try_out_anchors.get(anchor_name)
         if not anchor:
-            raise ValueError(f"Anchor with name '{anchor_name}' does not exist.")
+            return None
         if scope and anchor.owner_scope is not scope:
             raise ValueError(f"Anchor '{anchor_name}' is not owned by the active scope.")
 
         branches: List[Turn] = list(anchor.try_out_turns or [])
         if not branches:
             with self._rw_lock.write_lock():
+                if anchor.lifecycle != "active" or self._try_out_anchors.get(anchor_name) is not anchor:
+                    return None
+                anchor.lifecycle = "closed"
+                anchor.disposition = (dist_mode or "keep") if dist_mode is not None else None
+                anchor.revision += 1
+            self._persist_anchor_descriptor(anchor)
+            with self._rw_lock.write_lock():
                 self._try_out_anchors.pop(anchor_name, None)
+                self._closed_try_out_anchors.add(anchor_name)
+            self._remove_anchor_descriptor(anchor_name)
             return None
 
         origin_cursor: Optional[ChatCursor] = None
@@ -3085,7 +3354,16 @@ class ChatContext:
             with self._rw_lock.read_lock():
                 origin_cursor = self._cursors.get(anchor.origin_cursor_id)
         if not origin_cursor:
-            origin_cursor = self.resolve_try_out_cursor(anchor, prefer_latest=False)
+            if anchor.origin_turn_id:
+                origin_turn = self.session.get_turn_by_gen_id(anchor.origin_turn_id, self.chat_session)
+                if origin_turn and self.owns_turn(origin_turn):
+                    origin_cursor = self.find_cursor_for_turn(origin_turn) or self.register_cursor_for_turn(
+                        origin_turn,
+                        make_active=False,
+                        scope=anchor.owner_scope,
+                    )
+            if not origin_cursor:
+                origin_cursor = self.resolve_try_out_cursor(anchor, prefer_latest=False)
         mode = (dist_mode or "").lower() if dist_mode is not None else None
         promote_targets: Optional[List[Turn]] = None
         if mode:
@@ -3104,13 +3382,21 @@ class ChatContext:
             elif mode == "none":
                 promote_targets = []
 
-            parent_for_promotion: Optional[Turn] = branches[0].parent if branches else None
-            if promote_targets is not None and parent_for_promotion:
-                try:
-                    self.session.promote_tryouts_to_main(parent_for_promotion, promote_targets)
-                except Exception:
-                    # Promotion failure should not block branch closure.
-                    pass
+        with self._rw_lock.write_lock():
+            if anchor.lifecycle != "active" or self._try_out_anchors.get(anchor_name) is not anchor:
+                return None
+            anchor.lifecycle = "closed"
+            anchor.disposition = mode
+            anchor.revision += 1
+        self._persist_anchor_descriptor(anchor)
+
+        parent_for_promotion: Optional[Turn] = branches[0].parent if branches else None
+        if promote_targets is not None and parent_for_promotion:
+            try:
+                self.session.promote_tryouts_to_main(parent_for_promotion, promote_targets)
+            except Exception:
+                # Promotion failure should not block branch closure.
+                pass
 
         placeholder_turn: Optional[Turn] = None
         for branch_turn in branches:
@@ -3133,6 +3419,8 @@ class ChatContext:
 
         with self._rw_lock.write_lock():
             self._try_out_anchors.pop(anchor_name, None)
+            self._closed_try_out_anchors.add(anchor_name)
+        self._remove_anchor_descriptor(anchor_name)
         target_cursor = origin_cursor
         if placeholder_turn:
             try:
@@ -3247,6 +3535,7 @@ class ChatContext:
             if anchor_name in self._try_out_anchors:
                 return self._try_out_anchors[anchor_name]
             self._try_out_anchors[anchor_name] = resurrected_anchor
+        self._persist_anchor_descriptor(resurrected_anchor)
         return resurrected_anchor
 
     def close_try_out_anchors_by_kind(
