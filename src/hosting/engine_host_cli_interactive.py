@@ -2247,12 +2247,6 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                 "r": ("Refresh", ""),
                 "e": ("Ensure workflow runtime", f"Use {runtime_profile} profile"),
             }
-            if active_request_ids:
-                action_opts["c"] = ("Cancel request", "Kill the child process currently running a request")
-            status_prefix = "workflow-python" if is_python else "workflow-js"
-            can_use_runtime_status = bool(environment_key)
-            if can_use_runtime_status:
-                action_opts["i"] = ("Inspect request", "Show request lifetime/progress by environment key")
             action_opts["v"] = ("Receive stream events", f"Read {command_prefix} stream events by stream id")
             action = _prompt_menu("Workflow Runtime Action", action_opts, "b", allow_back=True, allow_changes=False)
             if action in ("b", "back"):
@@ -2296,55 +2290,6 @@ def _manage_workflow_runtimes(args: argparse.Namespace, session_token: Optional[
                 session_token = _active_session_token(args, session_token)
                 result = dict(out or {})
                 print(_c("good", f"{helper_label} capacity is now {result.get('capacity', capacity)}."))
-                continue
-            if action == "c":
-                default_request = active_request_ids[0] if active_request_ids else ""
-                prompt = f"Request id to cancel [{default_request}]: " if default_request else "Request id to cancel: "
-                request_id = input(prompt).strip() or default_request
-                if not request_id:
-                    print(_c("bad", "Request id is required."))
-                    continue
-                out = _api_invoke(
-                    args,
-                    f"{command_prefix}-cancel-request",
-                    {
-                        "engine_id": choice,
-                        "profile": runtime_profile,
-                        **({"environment_key": environment_key} if environment_key else {}),
-                        "request_id": request_id,
-                    },
-                    session_token=session_token,
-                )
-                session_token = _active_session_token(args, session_token)
-                result = dict(out or {})
-                if bool(result.get("canceled")):
-                    print(_c("good", f"Canceled workflow runtime request {request_id}."))
-                else:
-                    print(_c("warn", f"Request was not active: {request_id} ({result.get('reason') or 'not_found'})."))
-                continue
-            if action == "i":
-                if not can_use_runtime_status:
-                    print(_c("bad", "Request status requires an environment key."))
-                    continue
-                default_request = active_request_ids[0] if active_request_ids else ""
-                prompt = f"Request id [{default_request}]: " if default_request else "Request id: "
-                request_id = input(prompt).strip() or default_request
-                if not request_id:
-                    print(_c("bad", "Request id is required."))
-                    continue
-                out = _api_invoke(
-                    args,
-                    f"{status_prefix}-request-status",
-                    {
-                        "engine_id": choice,
-                        "profile": runtime_profile,
-                        "environment_key": environment_key,
-                        "request_id": request_id,
-                    },
-                    session_token=session_token,
-                )
-                session_token = _active_session_token(args, session_token)
-                _print_workflow_request_status(dict(out or {}))
                 continue
             if action == "v":
                 stream_id = input("Stream id: ").strip()

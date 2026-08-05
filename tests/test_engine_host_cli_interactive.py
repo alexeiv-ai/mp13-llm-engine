@@ -384,7 +384,7 @@ def test_manage_workflow_helpers_can_ensure_python_runtime(
     assert "runtime ensured" in capsys.readouterr().out
 
 
-def test_manage_workflow_helpers_can_inspect_request_status(
+def test_manage_workflow_helpers_show_resources_without_legacy_request_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -417,20 +417,9 @@ def test_manage_workflow_helpers_can_inspect_request_status(
                     },
                 },
             }
-        if cmd == "workflow-python-request-status":
-            return {
-                "status": "ok",
-                "environment_key": "env-demo",
-                "request": {
-                    "request_id": "req-1",
-                    "status": "running",
-                    "stream_event_count": 3,
-                    "latest_progress": {"message": "halfway"},
-                },
-            }
         raise AssertionError(cmd)
 
-    choices = iter(["wf-py", "i", "b"])
+    choices = iter(["wf-py", "b"])
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(interactive, "_api_invoke", fake_api)
     monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
@@ -439,13 +428,9 @@ def test_manage_workflow_helpers_can_inspect_request_status(
 
     interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
-    assert (
-        "workflow-python-request-status",
-        {"engine_id": "wf-py", "profile": "helper", "environment_key": "env-demo", "request_id": "req-1"},
-    ) in invocations
+    assert not any(command.endswith("request-status") for command, _payload in invocations)
     out = capsys.readouterr().out
-    assert "Request Status" in out
-    assert "halfway" in out
+    assert "workflow_python/env-demo" in out
 
 
 def test_manage_workflow_helpers_can_receive_python_stream_events(
@@ -505,7 +490,7 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
     assert "workflow_python_node_profile_not_implemented" in out
 
 
-def test_manage_workflow_runtimes_supports_js_node_status(
+def test_manage_workflow_runtimes_show_js_resources_without_legacy_request_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -539,20 +524,9 @@ def test_manage_workflow_runtimes_supports_js_node_status(
                 },
                 "node_runtime": {"active_count": 1, "processes": [{"request_id": "req-js-1", "pid": 123, "alive": True}]},
             }
-        if cmd == "workflow-js-request-status":
-            return {
-                "status": "ok",
-                "environment_key": "env-js",
-                "request": {
-                    "request_id": "req-js-1",
-                    "status": "running",
-                    "stream_event_count": 2,
-                    "latest_progress": {"message": "js halfway"},
-                },
-            }
         raise AssertionError(cmd)
 
-    choices = iter(["wf-js", "i", "b"])
+    choices = iter(["wf-js", "b"])
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(interactive, "_api_invoke", fake_api)
     monkeypatch.setattr(interactive, "_active_session_token", lambda _args, token: token)
@@ -562,13 +536,9 @@ def test_manage_workflow_runtimes_supports_js_node_status(
     interactive._manage_workflow_runtimes(args, session_token="tok-1")
 
     assert ("workflow-js-resources", {"engine_id": "wf-js", "profile": "node", "environment_key": "env-js"}) in invocations
-    assert (
-        "workflow-js-request-status",
-        {"engine_id": "wf-js", "profile": "node", "environment_key": "env-js", "request_id": "req-js-1"},
-    ) in invocations
+    assert not any(command.endswith("request-status") for command, _payload in invocations)
     out = capsys.readouterr().out
     assert "workflow_js/env-js" in out
-    assert "js halfway" in out
 
 
 def test_manage_workflow_runtimes_can_receive_js_stream_events(

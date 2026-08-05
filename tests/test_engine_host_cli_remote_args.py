@@ -148,7 +148,7 @@ def test_cli_local_workflow_python_resources_uses_facade_payload(
     assert '"environment_key": "env-demo"' in capsys.readouterr().out
 
 
-def test_cli_local_workflow_python_capacity_and_cancel_use_facade(
+def test_cli_local_workflow_python_capacity_uses_facade(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -165,14 +165,6 @@ def test_cli_local_workflow_python_capacity_and_cancel_use_facade(
             calls.append(("capacity", dict(kwargs)))
             return {"status": "ok", "capacity": kwargs.get("capacity")}
 
-        def cancel_workflow_python_request(self, **kwargs: Any) -> Dict[str, Any]:
-            calls.append(("cancel", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs.get("request_id")}
-
-        def workflow_python_request_status(self, **kwargs: Any) -> Dict[str, Any]:
-            calls.append(("status", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs.get("request_id")}
-
     monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
 
@@ -183,30 +175,10 @@ def test_cli_local_workflow_python_capacity_and_cancel_use_facade(
             "workflow-python-set-capacity",
         ]
     )
-    cancel_rc = engine_host_cli.main(
-        [
-            "--payload-json",
-            json.dumps({"environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}),
-            "workflow-python-cancel-request",
-        ]
-    )
-    status_rc = engine_host_cli.main(
-        [
-            "--payload-json",
-            json.dumps({"environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}),
-            "workflow-python-request-status",
-        ]
-    )
-
     assert resize_rc == 0
-    assert cancel_rc == 0
-    assert status_rc == 0
     assert ("capacity", {"profile": "helper", "environment_key": "env-demo", "engine_id": "wf-py", "capacity": 7}) in calls
-    assert ("cancel", {"profile": "helper", "environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}) in calls
-    assert ("status", {"profile": "helper", "environment_key": "env-demo", "engine_id": "wf-py", "request_id": "req-1"}) in calls
     out = capsys.readouterr().out
     assert '"capacity": 7' in out
-    assert '"request_id": "req-1"' in out
 
 
 def test_cli_local_workflow_js_facade_commands(
@@ -241,14 +213,6 @@ def test_cli_local_workflow_js_facade_commands(
         def set_workflow_js_capacity(self, **kwargs: Any) -> Dict[str, Any]:
             calls.append(("capacity", dict(kwargs)))
             return {"status": "ok", "capacity": kwargs.get("capacity")}
-
-        def cancel_workflow_js_request(self, **kwargs: Any) -> Dict[str, Any]:
-            calls.append(("cancel", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs.get("request_id")}
-
-        def workflow_js_request_status(self, **kwargs: Any) -> Dict[str, Any]:
-            calls.append(("status", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs.get("request_id")}
 
         def workflow_js_stream_open(self, **kwargs: Any) -> Dict[str, Any]:
             calls.append(("stream_open", dict(kwargs)))
@@ -304,20 +268,6 @@ def test_cli_local_workflow_js_facade_commands(
             "workflow-js-set-capacity",
         ]
     )
-    cancel_rc = engine_host_cli.main(
-        [
-            "--payload-json",
-            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}),
-            "workflow-js-cancel-request",
-        ]
-    )
-    status_rc = engine_host_cli.main(
-        [
-            "--payload-json",
-            json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}),
-            "workflow-js-request-status",
-        ]
-    )
     stream_open_rc = engine_host_cli.main(
         [
             "--payload-json",
@@ -361,8 +311,6 @@ def test_cli_local_workflow_js_facade_commands(
     assert resources_rc == 0
     assert execute_rc == 0
     assert resize_rc == 0
-    assert cancel_rc == 0
-    assert status_rc == 0
     assert stream_open_rc == 0
     assert event_subscribe_rc == 0
     assert stream_send_rc == 0
@@ -418,8 +366,6 @@ def test_cli_local_workflow_js_facade_commands(
         },
     ) in calls
     assert ("capacity", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}) in calls
-    assert ("cancel", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
-    assert ("status", {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js", "request_id": "req-1"}) in calls
     assert (
         "stream_open",
         {
@@ -439,4 +385,4 @@ def test_cli_local_workflow_js_facade_commands(
     assert ("stream_close", {"stream_id": "js-stream-1"}) in calls
     out = capsys.readouterr().out
     assert '"environment_key": "env-js"' in out
-    assert '"request_id": "req-1"' in out
+    assert '"request_id": "req-js"' in out

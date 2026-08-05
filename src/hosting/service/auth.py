@@ -604,6 +604,8 @@ class AuthMixin:
                 "toolbox-consistency",
                 "toolbox-review-snapshot",
                 "toolbox-environment-list",
+                "hosted-operation-status",
+                "hosted-operation-result",
                 "host-metrics",
                 "get-control-config",
                 "get-lifecycle-policy-effective",
