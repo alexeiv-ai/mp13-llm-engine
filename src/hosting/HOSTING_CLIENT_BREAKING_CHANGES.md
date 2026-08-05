@@ -13,7 +13,7 @@ Prepared against parent: `9895a98b8b7af7e4b248951d61b622c0c9c1caa3`
 
 First parent commit containing break: `f4e4ec021e0e62485415ca376953fae9388f6e73`
 
-Implementation release commit: `312e87f62fc12706b704f417c63eea7cf4ff8b29`
+Implementation release commit: `31a5b123fe4a7e554b1cf55cbb1f4ad8956bb85b`
 
 Dependent project: `O:/repos/mp13-docs`
 
