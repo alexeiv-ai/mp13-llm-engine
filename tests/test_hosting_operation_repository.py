@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -45,6 +46,52 @@ def test_prepare_mints_stable_ref_and_enforces_one_dispatch(tmp_path: Path) -> N
         owner_actor_id="actor:a", namespace="toolbox:demo", request_id="request-1"
     )["operation"] == ref
     assert repository.get_by_operation_id(ref["operation_id"])["operation"] == ref
+
+
+def test_concurrent_prepare_grants_exactly_one_dispatch(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "operations.json")
+    barrier = threading.Barrier(12)
+    actions: list[str] = []
+
+    def prepare() -> None:
+        barrier.wait()
+        actions.append(_prepare(repository)["action"])
+
+    threads = [threading.Thread(target=prepare) for _ in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert actions.count("dispatch") == 1
+    assert actions.count("attach") == 11
+
+
+def test_interrupted_atomic_replace_preserves_last_valid_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "operations.json"
+    repository = _repository(path)
+    first = _prepare(repository, request_id="preserved")
+    before = path.read_bytes()
+
+    def fail_replace(_source, _target) -> None:
+        raise OSError("simulated interrupted replace")
+
+    monkeypatch.setattr("hosting.service.operation_repository.os.replace", fail_replace)
+    with pytest.raises(OSError, match="simulated interrupted replace"):
+        _prepare(repository, request_id="not-persisted")
+
+    assert path.read_bytes() == before
+    temporary_files = list(path.parent.glob(f".{path.name}.{os.getpid()}.*.tmp"))
+    assert temporary_files == []
+    monkeypatch.undo()
+    recreated = _repository(path)
+    assert recreated.get_by_operation_id(first["status"]["operation"]["operation_id"]) is not None
+    assert recreated.get_by_request(
+        owner_actor_id="actor:a", namespace="toolbox:demo", request_id="not-persisted"
+    ) is None
 
 
 def test_conflict_never_receives_dispatch_and_preserves_existing_ref(tmp_path: Path) -> None:
@@ -141,6 +188,93 @@ def test_restart_recovers_before_dispatch_once_and_fails_closed_after_dispatch(t
     status = failed_closed.status(ref=after["status"]["operation"], owner_actor_id="actor:a")
     assert status["lifecycle"] == "interrupted_after_dispatch_unknown"
     assert _prepare(failed_closed)["action"] == "attach"
+
+
+@pytest.mark.parametrize("execution_kind", ["toolbox", "workflow_python", "workflow_js"])
+def test_execution_families_share_every_lifecycle_shape(tmp_path: Path, execution_kind: str) -> None:
+    selector = {
+        "kind": "toolbox_id" if execution_kind == "toolbox" else "engine_id",
+        "id": f"{execution_kind}-target",
+    }
+    namespace = f"{execution_kind}:target"
+    expected_fields = {
+        "contract", "api_status", "operation", "lifecycle", "request_id",
+        "created_at_ms", "updated_at_ms", "dispatch_claimed_at_ms", "terminal_at_ms",
+        "reason", "result", "result_ref", "result_omission",
+    }
+
+    def prepare(repository, request_id: str, fingerprint_payload=None):
+        return _prepare(
+            repository,
+            request_id=request_id,
+            execution_kind=execution_kind,
+            selector=selector,
+            namespace=namespace,
+            fingerprint=hosted_execution_fingerprint(fingerprint_payload or {"request_id": request_id}),
+        )
+
+    repository = _repository(tmp_path / f"{execution_kind}.json")
+    observed: list[dict] = []
+    queued = prepare(repository, "queued")
+    observed.append(queued["status"])
+    observed.append(repository.mark_dispatch_claimed(operation_id=queued["status"]["operation"]["operation_id"]))
+
+    for lifecycle in ("terminal_success", "terminal_failure", "terminal_cancellation"):
+        item = prepare(repository, lifecycle)
+        repository.mark_dispatch_claimed(operation_id=item["status"]["operation"]["operation_id"])
+        observed.append(
+            repository.finish(
+                operation_id=item["status"]["operation"]["operation_id"],
+                lifecycle=lifecycle,
+                envelope={"status": "ok" if lifecycle == "terminal_success" else "error"},
+                reason="test_terminal" if lifecycle != "terminal_success" else "",
+            )
+        )
+
+    conflict = prepare(repository, "terminal_success", {"changed": True})
+    observed.append(conflict["status"])
+
+    before_path = tmp_path / f"{execution_kind}-before.json"
+    before_repository = _repository(before_path)
+    before = prepare(before_repository, "before")
+    observed.append(
+        _repository(before_path).status(ref=before["status"]["operation"], owner_actor_id="actor:a")
+    )
+
+    after_path = tmp_path / f"{execution_kind}-after.json"
+    after_repository = _repository(after_path)
+    after = prepare(after_repository, "after")
+    after_repository.mark_dispatch_claimed(operation_id=after["status"]["operation"]["operation_id"])
+    observed.append(
+        _repository(after_path).status(ref=after["status"]["operation"], owner_actor_id="actor:a")
+    )
+
+    now = [100.0]
+    retained = _repository(
+        tmp_path / f"{execution_kind}-retention.json",
+        receipt_retention_seconds=1,
+        tombstone_retention_seconds=1,
+        clock=lambda: now[0],
+    )
+    expiring = prepare(retained, "expiring")
+    retained.finish(
+        operation_id=expiring["status"]["operation"]["operation_id"],
+        lifecycle="terminal_success",
+        envelope={"status": "ok"},
+    )
+    now[0] = 102.0
+    retained.prune()
+    observed.append(retained.status(ref=expiring["status"]["operation"], owner_actor_id="actor:a"))
+    now[0] = 104.0
+    retained.prune()
+    observed.append(retained.status(ref=expiring["status"]["operation"], owner_actor_id="actor:a"))
+
+    assert {row["lifecycle"] for row in observed} == {
+        "queued", "running", "terminal_success", "terminal_failure", "terminal_cancellation",
+        "interrupted_before_dispatch", "interrupted_after_dispatch_unknown", "forgotten",
+        "unknown_outside_retention", "idempotency_conflict",
+    }
+    assert all(set(row) == expected_fields for row in observed)
 
 
 def test_cancel_before_dispatch_is_atomic_and_replayed(tmp_path: Path) -> None:

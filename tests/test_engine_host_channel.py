@@ -635,6 +635,44 @@ def test_host_capability_session_filtered_helpers_use_public_session_shapes() ->
     assert fake.calls[-1] == ("host-capability-session-close", {"session_id": "crm-provider", "force": False})
 
 
+def test_host_capability_authority_renew_and_revoke_forward_lease_token() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.host_capability_session_renew(
+        session_id="crm-provider",
+        authority_lease_token="lease-secret",
+        expires_at_ms=4_102_444_800_000,
+    )
+    ch.host_capability_session_revoke(
+        session_id="crm-provider",
+        authority_lease_token="lease-secret",
+    )
+
+    assert fake.calls == [
+        (
+            "host-capability-session-renew",
+            {
+                "session_id": "crm-provider",
+                "authority_lease_token": "lease-secret",
+                "expires_at_ms": 4_102_444_800_000,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "host-capability-session-revoke",
+            {
+                "session_id": "crm-provider",
+                "authority_lease_token": "lease-secret",
+                "force": False,
+                "session_token": "tok-123",
+            },
+        ),
+    ]
+
+
 def test_host_capability_session_upsert_closes_matching_session_before_register() -> None:
     class FakeUpsertConn(_FakeConn):
         def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:

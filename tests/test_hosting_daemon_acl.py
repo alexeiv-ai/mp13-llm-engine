@@ -1690,3 +1690,110 @@ def test_capability_authority_lease_rejects_unsafe_retention_and_legacy_boolean(
     )
     assert unsafe["ok"] is False
     assert legacy["ok"] is False
+
+
+def test_capability_authority_expiry_unauthorized_revoke_and_close_race(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    owner_token = _issue_mgmt_session(daemon, "authority-race-owner", "authority-race-owner-secret")
+    other_token = _issue_mgmt_session(daemon, "authority-race-other", "authority-race-other-secret")
+    owner_id = daemon.svc.resolve_actor_id_from_session_token(owner_token)
+
+    transport = _dispatch(
+        daemon,
+        seq=0,
+        cmd="host-capability-session-register",
+        payload={
+            "session_token": owner_token,
+            "session_id": "transport-session",
+            "provider_id": "authority.provider.transport",
+            "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
+            "methods": [{"name": "authority.transport", "group_path": ["Authority"], "args_schema": {}, "result_schema": {}}],
+        },
+    )
+    assert transport["ok"] is True
+    daemon._track_actor_connected(owner_id)  # noqa: SLF001
+    daemon._track_actor_connected(owner_id)  # noqa: SLF001
+    daemon._apply_owner_disconnect_policy({owner_id})  # noqa: SLF001
+    assert "transport-session" in daemon._host_capability_sessions  # noqa: SLF001
+    daemon._apply_owner_disconnect_policy({owner_id})  # noqa: SLF001
+    assert "transport-session" not in daemon._host_capability_sessions  # noqa: SLF001
+
+    def register(session_id: str, request_id: str) -> dict:
+        return _dispatch(
+            daemon,
+            seq=1,
+            cmd="host-capability-session-register",
+            payload={
+                "session_token": owner_token,
+                "session_id": session_id,
+                "provider_id": f"authority.provider.{session_id}",
+                "scope": {"request_id": request_id},
+                "authority_lease": {
+                    "expires_at_ms": int(time.time() * 1000) + 60_000,
+                    "on_transport_loss": "retain_until_expiry",
+                    "on_authority_revoked": "close",
+                    "on_request_terminal": "close",
+                },
+                "methods": [{"name": f"authority.{session_id.replace('-', '_')}", "group_path": ["Authority"], "args_schema": {}, "result_schema": {}}],
+            },
+        )
+
+    expiring = register("expiry-session", "expiry-request")
+    assert expiring["ok"] is True
+    daemon._host_capability_sessions["expiry-session"].authority_lease.expires_at_ms = 1  # noqa: SLF001
+    listed = daemon._list_host_capability_sessions({"_claim_actor_id": owner_id})  # noqa: SLF001
+    assert listed["sessions"] == []
+
+    racing = register("race-session", "race-request")
+    lease_token = racing["result"]["authority_lease_token"]
+    denied = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-revoke",
+        payload={
+            "session_token": other_token,
+            "session_id": "race-session",
+            "authority_lease_token": lease_token,
+        },
+    )
+    assert denied["ok"] is False
+
+    barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+
+    def attempt(action) -> None:
+        try:
+            barrier.wait()
+            action()
+        except BaseException as exc:  # pragma: no cover - diagnostic collection
+            errors.append(exc)
+
+    actions = [
+        lambda: daemon._revoke_host_capability_session(  # noqa: SLF001
+            {
+                "_claim_actor_id": owner_id,
+                "session_id": "race-session",
+                "authority_lease_token": lease_token,
+            }
+        ),
+        lambda: daemon._apply_request_terminal_session_policy(  # noqa: SLF001
+            {"request_id": "race-request", "lifecycle": "terminal_cancellation"}
+        ),
+        lambda: daemon._close_host_capability_sessions_for_actor(owner_id, reason="transport_loss"),  # noqa: SLF001
+    ]
+    threads = [threading.Thread(target=attempt, args=(action,)) for action in actions]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert errors == []
+    assert "race-session" not in daemon._host_capability_sessions  # noqa: SLF001
+    close_events = daemon.svc.host_capability_audit_list(limit=1000)["events"]
+    matching_closes = [
+        event
+        for event in close_events
+        if event["event_type"] == "host_capability_session_close" and event["session_id"] == "race-session"
+    ]
+    assert len(matching_closes) == 1

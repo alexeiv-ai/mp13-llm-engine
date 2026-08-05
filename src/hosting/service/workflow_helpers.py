@@ -107,6 +107,7 @@ class WorkflowHelperMixin:
                 "call_id": str(row.get("call_id") or "") or None,
                 "host_call_id": str(row.get("host_call_id") or "") or None,
                 "provider_call_id": str(row.get("provider_call_id") or "") or None,
+                "session_id": str(row.get("session_id") or "") or None,
                 "method": str(row.get("method") or "") or None,
                 "request_id": str(context.get("request_id") or row.get("request_id") or "") or None,
                 "workflow_id": str(context.get("workflow_id") or row.get("workflow_id") or "") or None,

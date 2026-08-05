@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.operation_contract import HostedOperationLifecycle, hosted_execution_fingerprint
@@ -128,6 +130,65 @@ def test_service_queued_cancel_race_never_invokes_tool_and_cleans_pool_request(t
     assert results[0]["lifecycle"] == "terminal_cancellation"
     assert canceled == ["queued-cancel"]
     assert ipc_calls == []
+
+
+@pytest.mark.parametrize("execution_kind", ["workflow_python", "workflow_js"])
+def test_workflow_service_recreation_replays_and_recovers_without_worker_startup(
+    tmp_path: Path, execution_kind: str
+) -> None:
+    def prepare(service: EngineHostService, request_id: str) -> dict:
+        return service._hosted_operations.prepare(
+            owner_actor_id="service:local",
+            execution_kind=execution_kind,
+            selector={"kind": "engine_id", "id": f"{execution_kind}-runtime"},
+            namespace=f"{execution_kind}:runtime",
+            request_id=request_id,
+            fingerprint=hosted_execution_fingerprint({"execution_kind": execution_kind, "request_id": request_id}),
+            metadata={"engine_id": f"{execution_kind}-runtime", "environment_key": f"{execution_kind}-environment"},
+        )
+
+    def recreate(root: Path, service: EngineHostService) -> EngineHostService:
+        repository_key = str(service._hosted_operations.path.resolve())
+        EngineHostService._operation_repositories.pop(repository_key, None)
+        return _service(root)
+
+    terminal_root = tmp_path / "terminal"
+    terminal_service = _service(terminal_root)
+    terminal = prepare(terminal_service, "terminal")
+    terminal_id = terminal["status"]["operation"]["operation_id"]
+    terminal_service._hosted_operations.mark_dispatch_claimed(operation_id=terminal_id)
+    terminal_service._hosted_operations.finish(
+        operation_id=terminal_id,
+        lifecycle="terminal_success",
+        envelope={"status": "ok", "answer": execution_kind},
+    )
+    terminal_recreated = recreate(terminal_root, terminal_service)
+    replay = terminal_recreated.hosted_operation_status(ref=terminal["status"]["operation"])
+    assert replay["lifecycle"] == "terminal_success"
+    assert replay["result"]["answer"] == execution_kind
+
+    before_root = tmp_path / "before"
+    before_service = _service(before_root)
+    before = prepare(before_service, "before")
+    before_recreated = recreate(before_root, before_service)
+    interrupted_before = before_recreated.hosted_operation_status(ref=before["status"]["operation"])
+    assert interrupted_before["lifecycle"] == "interrupted_before_dispatch"
+    canceled = before_recreated.hosted_operation_cancel(ref=before["status"]["operation"])
+    assert canceled["lifecycle"] == "terminal_cancellation"
+
+    after_root = tmp_path / "after"
+    after_service = _service(after_root)
+    after = prepare(after_service, "after")
+    after_service._hosted_operations.mark_dispatch_claimed(
+        operation_id=after["status"]["operation"]["operation_id"]
+    )
+    after_recreated = recreate(after_root, after_service)
+    interrupted_after = after_recreated.hosted_operation_status(ref=after["status"]["operation"])
+    assert interrupted_after["lifecycle"] == "interrupted_after_dispatch_unknown"
+
+    assert terminal_recreated.discover_running(prune_stale=False, include_reachability=False) == []
+    assert before_recreated.discover_running(prune_stale=False, include_reachability=False) == []
+    assert after_recreated.discover_running(prune_stale=False, include_reachability=False) == []
 
 
 def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(tmp_path: Path, monkeypatch) -> None:

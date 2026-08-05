@@ -192,10 +192,10 @@ land with or before the first breaking implementation commit.
 - [x] **P1-05** Make generic lookup resolve the stored selector and owner. Reject
   altered refs, cross-owner access, execution-kind mismatch, and unknown
   operation IDs without probing workers.
-- [ ] **P1-06** Add toolbox facade tests for new, attach, replay, conflict,
+- [x] **P1-06** Add toolbox facade tests for new, attach, replay, conflict,
   pre-dispatch cancel, post-dispatch cancel, forgotten, unknown, and interrupted
   states.
-- [ ] **P1-07** Remove the superseded toolbox status/cancel signatures and update
+- [x] **P1-07** Remove the superseded toolbox status/cancel signatures and update
   all parent call sites and tests in the same change. Do not retain aliases or
   `TypeError` fallbacks.
 
@@ -219,9 +219,9 @@ and the corresponding breaking-change entry is complete.
   the existing fail-closed `interrupted_after_dispatch_unknown` behavior.
 - [x] **P2-06** Ensure attach/replay never starts an environment, worker, or
   sandbox. Preserve the existing local application-journal boundary.
-- [ ] **P2-07** Add parameterized parity tests across toolbox, workflow Python,
+- [x] **P2-07** Add parameterized parity tests across toolbox, workflow Python,
   and workflow JavaScript for every lifecycle branch and fingerprint conflict.
-- [ ] **P2-08** Add service-recreation tests proving workflow terminal replay,
+- [x] **P2-08** Add service-recreation tests proving workflow terminal replay,
   pre-dispatch recovery, post-dispatch uncertainty, and cancel correctness
   without worker startup.
 
@@ -275,7 +275,7 @@ its authorized owner or explicitly marked digest-only.
   the legacy file.
 - [x] **P4-08** Fail closed on invalid schema, interrupted cutover, or unreadable
   checkpoint. Ledger initialization must not start workers or sandboxes.
-- [ ] **P4-09** Add concurrency, interrupted-write, deterministic pruning,
+- [x] **P4-09** Add concurrency, interrupted-write, deterministic pruning,
   legacy-schema rejection, cutover archival, corrupt JSON, and index-rebuild
   tests. Keep one daemon restart smoke test; use repository fixtures for the
   rest.
@@ -350,7 +350,7 @@ including for streams, and leak/double-release tests pass.
   report them closed on daemon loss and do not promise survival; if persistence
   is required later, make it a separate capability because callback bindings
   may not be recoverable.
-- [ ] **P7-06** Test transport loss with remaining actor connections, final
+- [x] **P7-06** Test transport loss with remaining actor connections, final
   transport loss, retain-until-expiry, explicit renewal, expiry, authority
   revocation, request terminal, races among close causes, and unauthorized
   renew/revoke.
