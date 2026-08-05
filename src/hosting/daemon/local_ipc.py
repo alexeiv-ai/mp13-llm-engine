@@ -3043,6 +3043,13 @@ class EngineHostDaemon:
                 ref=dict(payload.get("ref") or {}),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
+        if cmd == "hosted-operation-resolve-request":
+            return svc.hosted_operation_resolve_request(
+                execution_kind=str(payload.get("execution_kind") or ""),
+                selector=dict(payload.get("selector") or {}),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "hosted-operation-result":
             return svc.hosted_operation_result(
                 ref=dict(payload.get("ref") or {}),

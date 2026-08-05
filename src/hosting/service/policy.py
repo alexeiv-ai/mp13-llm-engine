@@ -152,6 +152,7 @@ class PolicyMixin:
             "toolbox-gate",
             "toolbox-execute",
             "hosted-operation-status",
+            "hosted-operation-resolve-request",
             "hosted-operation-result",
             "hosted-operation-cancel",
             "toolbox-gc",

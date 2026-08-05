@@ -3419,6 +3419,19 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def hosted_operation_resolve_request(
+        self, *, execution_kind: str, selector: Dict[str, Any], request_id: str
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "hosted-operation-resolve-request",
+            {
+                "execution_kind": str(execution_kind or "").strip(),
+                "selector": dict(selector or {}),
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def hosted_operation_result(self, *, ref: Dict[str, Any]) -> Dict[str, Any]:
         res = self._invoke(
             "hosted-operation-result",

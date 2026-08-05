@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from ..operation_contract import HostedExecutionKind, HostedOperationRef
+from ..operation_contract import HostedExecutionKind, HostedOperationRef, HostedOperationSelector
 from .operation_repository import AtomicJsonHostedOperationRepository
 
 
@@ -24,6 +24,34 @@ class HostedOperationsMixin:
             ref=operation,
             owner_actor_id=self._operation_owner(owner_actor_id),
         )
+
+    def hosted_operation_resolve_request(
+        self,
+        *,
+        execution_kind: HostedExecutionKind | str,
+        selector: HostedOperationSelector | Mapping[str, Any],
+        request_id: str,
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        """Recover a canonical ref when the original execute response was lost."""
+
+        kind = execution_kind if isinstance(execution_kind, HostedExecutionKind) else HostedExecutionKind(str(execution_kind))
+        target = selector if isinstance(selector, HostedOperationSelector) else HostedOperationSelector.from_dict(selector)
+        if kind == HostedExecutionKind.TOOLBOX:
+            namespace = f"toolbox:{target.id}" if target.kind == "toolbox_id" else f"engine:{target.id}"
+        else:
+            if target.kind != "engine_id":
+                raise ValueError("workflow_operation_selector_must_be_engine_id")
+            namespace = f"{kind.value}:{target.id}"
+        owner = self._operation_owner(owner_actor_id)
+        record = self._hosted_operations.get_by_request(
+            owner_actor_id=owner,
+            namespace=namespace,
+            request_id=str(request_id or "").strip(),
+        )
+        if record is None or str(dict(record.get("operation") or {}).get("execution_kind") or "") != kind.value:
+            return {"status": "not_found", "reason": "operation_not_found"}
+        return self._hosted_operations.status(ref=dict(record["operation"]), owner_actor_id=owner)
 
     def hosted_operation_result(
         self,

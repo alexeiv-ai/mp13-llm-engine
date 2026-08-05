@@ -673,6 +673,31 @@ def test_host_capability_authority_renew_and_revoke_forward_lease_token() -> Non
     ]
 
 
+def test_hosted_operation_request_resolution_forwards_recovery_identity() -> None:
+    fake = _FakeConn()
+    ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    ch._get_connection = lambda: fake  # type: ignore[method-assign]
+    ch.set_session_token("tok-123")
+
+    ch.hosted_operation_resolve_request(
+        execution_kind="workflow_python",
+        selector={"kind": "engine_id", "id": "workflow-python-a"},
+        request_id="request-a",
+    )
+
+    assert fake.calls == [
+        (
+            "hosted-operation-resolve-request",
+            {
+                "execution_kind": "workflow_python",
+                "selector": {"kind": "engine_id", "id": "workflow-python-a"},
+                "request_id": "request-a",
+                "session_token": "tok-123",
+            },
+        )
+    ]
+
+
 def test_host_capability_session_upsert_closes_matching_session_before_register() -> None:
     class FakeUpsertConn(_FakeConn):
         def invoke(self, cmd: str, payload: Optional[Dict[str, Any]] = None) -> Any:

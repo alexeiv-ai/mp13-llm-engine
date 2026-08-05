@@ -91,6 +91,35 @@ def test_service_ref_authorization_hides_operation_from_different_actor(tmp_path
     assert hidden_status["reason"] == hidden_cancel["reason"] == "operation_not_found"
 
 
+def test_request_identity_recovers_ref_after_execute_response_loss(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _register_executor(service)
+    service._ipc_call = lambda **_kwargs: {"status": "ok", "result": 7}  # type: ignore[method-assign]
+    terminal = service.toolbox_execute(
+        engine_id="executor-a",
+        execution_request_id="lost-response-1",
+        tool_call={"id": "call-1", "name": "write", "arguments": {}},
+        owner_actor_id="actor:a",
+    )
+
+    recovered = service.hosted_operation_resolve_request(
+        execution_kind="toolbox",
+        selector={"kind": "engine_id", "id": "executor-a"},
+        request_id="lost-response-1",
+        owner_actor_id="actor:a",
+    )
+    hidden = service.hosted_operation_resolve_request(
+        execution_kind="toolbox",
+        selector={"kind": "engine_id", "id": "executor-a"},
+        request_id="lost-response-1",
+        owner_actor_id="actor:b",
+    )
+
+    assert recovered == terminal
+    assert recovered["operation"]["operation_id"]
+    assert hidden == {"status": "not_found", "reason": "operation_not_found"}
+
+
 def test_service_queued_cancel_race_never_invokes_tool_and_cleans_pool_request(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _register_executor(service)
