@@ -32,6 +32,16 @@ def _register_executor(service: EngineHostService) -> None:
     )
 
 
+def test_daemon_capabilities_advertise_complete_hosting_replacement_contract(tmp_path: Path) -> None:
+    capabilities = _service(tmp_path).daemon_capabilities()
+
+    assert capabilities["hosted_operations_v1"] is True
+    assert capabilities["hosted_result_artifacts_v1"] is True
+    assert capabilities["approval_callback_leases_v1"] is True
+    assert capabilities["explicit_capability_provider_identity_v1"] is True
+    assert capabilities["capability_authority_leases_v1"] is True
+
+
 def test_service_duplicate_replays_canonical_terminal_status_without_second_dispatch(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _register_executor(service)

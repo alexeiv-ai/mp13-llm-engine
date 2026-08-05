@@ -34,6 +34,11 @@ class CoreMixin:
             "auth_audit_list": True,
             "hosting_setup_status_v1": True,
             "secure_state_status_v1": True,
+            "hosted_operations_v1": True,
+            "hosted_result_artifacts_v1": True,
+            "approval_callback_leases_v1": True,
+            "explicit_capability_provider_identity_v1": True,
+            "capability_authority_leases_v1": True,
         }
 
     @staticmethod
