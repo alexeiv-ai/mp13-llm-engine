@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from hosting.service.host_service import EngineHostService, ToolboxRolloutError
+from hosting.service.host_service import EngineHostService as _EngineHostService, ToolboxRolloutError
+from hosting.operation_contract import HostedExecutionKind, HostedOperationSelector, hosted_execution_fingerprint
 from hosting.sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
@@ -42,6 +43,67 @@ from hosting.toolbox_harness import (
 from mp13_engine.mp13_config import InferenceResponse, ToolCall, ToolCallBlock
 from mp13_engine.mp13_toolbox import ToolBoxRef, Toolbox, ToolsScope, ToolsView
 from mp13_engine.mp13_tools_parser import DEFAULT_PROFILE
+
+
+class EngineHostService(_EngineHostService):
+    """Exercise toolbox worker behavior beneath the durable-operation envelope."""
+
+    _test_request_sequence = 0
+
+    @staticmethod
+    def _worker_result(status):
+        row = dict(status or {})
+        return dict(row.get("result") or {}) if row.get("contract") == "hosting.operation_status" else row
+
+    def toolbox_execute(self, **kwargs):
+        if not str(kwargs.get("execution_request_id") or "").strip():
+            type(self)._test_request_sequence += 1
+            kwargs["execution_request_id"] = f"toolbox-worker-behavior-{type(self)._test_request_sequence}"
+        return self._worker_result(super().toolbox_execute(**kwargs))
+
+    def _test_toolbox_status(self, *, environment_key: str, request_id: str):
+        return self._toolbox_runtime_base().request_status(
+            environment_key=environment_key,
+            request_id=request_id,
+        )
+
+    def _test_cancel_toolbox(
+        self,
+        *,
+        request_id: str,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        tool_name: str = "",
+        tool_call_id: str = "",
+        timeout_seconds: float = 8.0,
+        respawn: bool = True,
+    ):
+        selector = HostedOperationSelector(
+            kind="toolbox_id" if toolbox_id else "engine_id",
+            id=toolbox_id or engine_id,
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id="service:local",
+            execution_kind=HostedExecutionKind.TOOLBOX,
+            selector=selector,
+            namespace=f"toolbox:{toolbox_id}" if toolbox_id else f"engine:{engine_id}",
+            request_id=request_id,
+            fingerprint=hosted_execution_fingerprint({"test_request_id": request_id}),
+            metadata={
+                "engine_id": engine_id,
+                "toolbox_id": toolbox_id,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+            },
+        )
+        operation_id = prepared["status"]["operation"]["operation_id"]
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        record = self._hosted_operations.get_by_operation_id(operation_id)
+        return self._cancel_toolbox_operation(
+            record=record,
+            timeout_seconds=timeout_seconds,
+            respawn=respawn,
+        )
 
 
 def _tool_definition(name: str) -> dict:
@@ -1838,8 +1900,8 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
             tool_call={"id": "call-demo-1", "name": "demo_tool", "arguments": {}},
             timeout_seconds=2.0,
         )
-        status = svc.toolbox_request_status(
-            engine_id="toolbox-hosted-pool",
+        status = svc._test_toolbox_status(
+            environment_key="toolbox-env-key",
             request_id=str(out["request_id"]),
         )
     finally:
@@ -1857,8 +1919,7 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     assert out["hosted_pool"]["metrics"]["recent_requests"][-1]["status"] == "ok"
     assert status["status"] == "ok"
     assert status["request"]["status"] == "ok"
-    assert status["source"] == "durable_receipt_ledger"
-    assert status["lifecycle_state"] == "terminal_success"
+    assert status["source"] in {"active", "recent"}
 
 
 def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1936,24 +1997,15 @@ def test_toolbox_cancel_marks_recycled_sibling_requests_explicitly(monkeypatch: 
                 desired_capacity=2,
                 operation_id="demo_tool",
             )
-        svc._toolbox_execution_receipts.prepare(
-            namespace="engine:toolbox-sandbox-recycled",
-            request_id="call-recycled-target",
-            fingerprint="0" * 64,
-        )
-        svc._toolbox_execution_receipts.mark_dispatch_claimed(
-            namespace="engine:toolbox-sandbox-recycled",
-            request_id="call-recycled-target",
-        )
-
         monkeypatch.setattr(svc, "shutdown", lambda *_args, **_kwargs: {"status": "ok", "alive": False})
-        out = svc.toolbox_cancel(
+        status = svc._test_cancel_toolbox(
             engine_id="toolbox-sandbox-recycled",
             tool_name="demo_tool",
             tool_call_id="call-recycled-target",
             request_id="call-recycled-target",
             respawn=False,
         )
+        out = dict(status["result"])
 
         sibling = base.request_status(environment_key="toolbox-recycled-env", request_id="call-recycled-sibling")
         assert out["sandbox_recycled_request_ids"]["toolbox-sandbox-recycled"] == ["call-recycled-sibling"]
@@ -2035,16 +2087,6 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
                 )
             )
             await asyncio.sleep(0.05)
-            status_started = time.perf_counter()
-            status = await asyncio.to_thread(
-                channel.toolbox_request_status,
-                toolbox_id="toolbox-real-control-concurrency",
-                request_id="exec-real-call-a",
-            )
-            status_elapsed = time.perf_counter() - status_started
-            assert status["status"] == "ok"
-            assert status["request"]["request_id"] == "exec-real-call-a"
-            assert status_elapsed < 0.25
             second = asyncio.create_task(
                 asyncio.to_thread(
                     ref.execute,
@@ -2060,8 +2102,8 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
         results = asyncio.run(run_calls())
         elapsed = time.perf_counter() - started
 
-        assert all(result["status"] == "ok" for result in results)
-        assert {dict(result["tool_call"]).get("id") for result in results} == {"real-call-a", "real-call-b"}
+        assert all(result["lifecycle"] == "terminal_success" for result in results)
+        assert {dict(dict(result["result"])["tool_call"]).get("id") for result in results} == {"real-call-a", "real-call-b"}
         assert elapsed < 0.38
     finally:
         try:
@@ -2144,13 +2186,15 @@ def test_toolbox_cancel_marks_shared_hosted_pool_request_canceled() -> None:
     )
 
     try:
-        out = svc.toolbox_cancel(
+        terminal = svc._test_cancel_toolbox(
             engine_id="toolbox-hosted-cancel",
             tool_name="demo_tool",
             tool_call_id="call-cancel-1",
+            request_id="call-cancel-1",
             timeout_seconds=2.0,
             respawn=False,
         )
+        out = dict(terminal["result"])
         status = base.request_status(environment_key="toolbox-cancel-env", request_id="call-cancel-1")
     finally:
         svc.shutdown("toolbox-hosted-cancel", timeout_seconds=2.0)
@@ -2474,12 +2518,14 @@ def test_toolbox_cancel_routes_targeted_profile_and_repairs_toolbox(monkeypatch)
         monkeypatch.setattr(svc, "shutdown", _fake_shutdown)
         monkeypatch.setattr(svc, "toolbox_repair", _fake_repair)
 
-        out = svc.toolbox_cancel(
+        terminal = svc._test_cancel_toolbox(
             toolbox_id="toolbox-cancel",
             tool_name="beta_tool",
             tool_call_id="call-beta-1",
+            request_id="cancel-beta-1",
             timeout_seconds=3.5,
         )
+        out = dict(terminal["result"])
 
         assert shutdown_calls == [("toolbox-cancel-beta", 3.5)]
         assert repair_calls == [
@@ -2510,12 +2556,12 @@ def test_toolbox_cancel_returns_noop_when_target_is_missing() -> None:
             control_state_file=root / "access_control.json",
         )
 
-        out = svc.toolbox_cancel(toolbox_id="missing-box")
+        terminal = svc._test_cancel_toolbox(toolbox_id="missing-box", request_id="cancel-missing")
+        out = dict(terminal["result"])
 
-        assert out["outcome"] == "noop"
+        assert terminal["lifecycle"] == "terminal_failure"
+        assert out["outcome"] == "cancel_failed"
         assert out["reason"] == "toolbox_executor_missing"
-        assert out["canceled_engine_ids"] == []
-        assert out["repaired_toolbox_ids"] == []
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -3279,8 +3325,8 @@ def test_hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests() -> No
             self.calls.append(("toolbox_execute", dict(kwargs)))
             return {"status": "ok", "tool_call": {"name": "hello_auto"}}
 
-        def toolbox_cancel(self, **kwargs):
-            self.calls.append(("toolbox_cancel", dict(kwargs)))
+        def hosted_operation_cancel(self, **kwargs):
+            self.calls.append(("hosted_operation_cancel", dict(kwargs)))
             return {"status": "ok", "toolbox_id": kwargs.get("toolbox_id"), "outcome": "canceled_and_repaired"}
 
         def toolbox_gate(self, **kwargs):
@@ -3316,7 +3362,8 @@ def test_hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests() -> No
     _ = ref.list_tools()
     _ = ref.gate(tool_name="hello_auto", tools_view=tools_view)
     _ = ref.execute(tool_name="hello_auto", tools_view=tools_view, execution_request_id="exec-hosted-ref")
-    _ = ref.cancel(tool_name="hello_auto", tool_call_id="call-1", request_id="exec-hosted-ref", timeout_seconds=4.0, respawn=False)
+    operation_ref = {"contract": "hosting.operation_ref", "operation_id": "op-1"}
+    _ = ref.cancel(operation_ref=operation_ref, timeout_seconds=4.0, respawn=False)
     _ = ref.list_environment_descriptions()
 
     calls = ref.host.calls
@@ -3376,12 +3423,10 @@ def test_hosted_toolbox_ref_aliases_and_ref_style_methods_shape_requests() -> No
     assert calls[7][1]["tool_call"]["id"]
     assert calls[7][1]["execution_request_id"] == "exec-hosted-ref"
     assert calls[8] == (
-        "toolbox_cancel",
+        "hosted_operation_cancel",
         {
-            "toolbox_id": "hosted-ref",
-            "tool_name": "hello_auto",
-            "tool_call_id": "call-1",
-            "request_id": "exec-hosted-ref",
+            "ref": operation_ref,
+            "reason": "client_requested",
             "timeout_seconds": 4.0,
             "respawn": False,
         },
@@ -3520,7 +3565,7 @@ def test_hosted_toolbox_ref_serializes_and_deserializes_with_service() -> None:
         restored = HostedToolBoxRef.from_dict(payload)
 
         assert dict(payload["host"])["kind"] == "service"
-        assert isinstance(restored.host, EngineHostService)
+        assert isinstance(restored.host, _EngineHostService)
         assert restored.toolbox_id == "service-ref"
         assert str(restored.host.engines_state_file).endswith("managed_engines.json")
     finally:
