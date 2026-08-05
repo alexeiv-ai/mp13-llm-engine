@@ -2063,44 +2063,6 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def cancel_workflow_python_request(
-        self,
-        *,
-        profile: str = "helper",
-        environment_key: Optional[str] = None,
-        engine_id: Optional[str] = None,
-        request_id: str,
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-python-cancel-request",
-            {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request_id": str(request_id or "").strip(),
-            },
-        )
-        return dict(res or {})
-
-    def workflow_python_request_status(
-        self,
-        *,
-        profile: str = "helper",
-        environment_key: Optional[str] = None,
-        engine_id: Optional[str] = None,
-        request_id: str,
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-python-request-status",
-            {
-                "profile": str(profile or "helper").strip() or "helper",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request_id": str(request_id or "").strip(),
-            },
-        )
-        return dict(res or {})
-
     def workflow_python_stream_open(
         self,
         *,
@@ -2424,44 +2386,6 @@ class EngineHostControlChannel:
                 "environment_key": str(environment_key or "").strip() or None,
                 "engine_id": str(engine_id or "").strip() or None,
                 "capacity": max(1, min(int(capacity or 1), 256)),
-            },
-        )
-        return dict(res or {})
-
-    def cancel_workflow_js_request(
-        self,
-        *,
-        profile: str = "node",
-        environment_key: Optional[str] = None,
-        engine_id: Optional[str] = None,
-        request_id: str,
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-js-cancel-request",
-            {
-                "profile": str(profile or "node").strip() or "node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request_id": str(request_id or "").strip(),
-            },
-        )
-        return dict(res or {})
-
-    def workflow_js_request_status(
-        self,
-        *,
-        profile: str = "node",
-        environment_key: Optional[str] = None,
-        engine_id: Optional[str] = None,
-        request_id: str,
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "workflow-js-request-status",
-            {
-                "profile": str(profile or "node").strip() or "node",
-                "environment_key": str(environment_key or "").strip() or None,
-                "engine_id": str(engine_id or "").strip() or None,
-                "request_id": str(request_id or "").strip(),
             },
         )
         return dict(res or {})
@@ -3318,46 +3242,28 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_cancel(
+    def hosted_operation_status(self, *, ref: Dict[str, Any]) -> Dict[str, Any]:
+        res = self._invoke(
+            "hosted-operation-status",
+            {"ref": dict(ref or {})},
+        )
+        return dict(res or {})
+
+    def hosted_operation_cancel(
         self,
         *,
-        engine_id: str = "",
-        toolbox_id: str = "",
-        tool_name: str = "",
-        tool_call_id: str = "",
-        request_id: str = "",
+        ref: Dict[str, Any],
+        reason: str = "client_requested",
         timeout_seconds: float = 8.0,
         respawn: bool = True,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-cancel",
+            "hosted-operation-cancel",
             {
-                "engine_id": str(engine_id or "").strip(),
-                "toolbox_id": str(toolbox_id or "").strip(),
-                "tool_name": str(tool_name or "").strip(),
-                "tool_call_id": str(tool_call_id or "").strip(),
-                "request_id": str(request_id or "").strip(),
+                "ref": dict(ref or {}),
+                "reason": str(reason or "client_requested").strip() or "client_requested",
                 "timeout_seconds": float(timeout_seconds or 8.0),
                 "respawn": bool(respawn),
-            },
-        )
-        return dict(res or {})
-
-    def toolbox_request_status(
-        self,
-        *,
-        engine_id: str = "",
-        toolbox_id: str = "",
-        tool_name: str = "",
-        request_id: str,
-    ) -> Dict[str, Any]:
-        res = self._invoke(
-            "toolbox-request-status",
-            {
-                "engine_id": str(engine_id or "").strip(),
-                "toolbox_id": str(toolbox_id or "").strip(),
-                "tool_name": str(tool_name or "").strip(),
-                "request_id": str(request_id or "").strip(),
             },
         )
         return dict(res or {})

@@ -9,6 +9,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from ..operation_contract import (
+    HostedExecutionKind,
+    HostedOperationLifecycle,
+    HostedOperationSelector,
+    hosted_execution_fingerprint,
+)
 from ..sandbox.python_runtime import HostedPythonRuntimeBase, HostedPythonRuntimeManager
 from ..sandbox.js_runtime import HostedJsRuntimeBase
 from ..sandbox.artifacts import HostedArtifactManager, artifact_safe_name
@@ -190,6 +196,15 @@ class WorkflowHelperMixin:
     @staticmethod
     def _toolbox_provider_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         row = dict(payload or {})
+        if str(row.get("contract") or "") == "hosting.operation_status":
+            if str(row.get("lifecycle") or "") != "terminal_success":
+                raise HostCapabilityProviderUnavailable(
+                    detail={
+                        "reason": str(row.get("reason") or row.get("lifecycle") or "toolbox_operation_failed"),
+                        "operation": dict(row.get("operation") or {}),
+                    }
+                )
+            row = dict(row.get("result") or {})
         tool_call = dict(row.get("tool_call") or {})
         if "result" in tool_call:
             raw = tool_call.get("result")
@@ -810,6 +825,22 @@ class WorkflowHelperMixin:
             },
         }
 
+    @staticmethod
+    def _workflow_operation_result(status: Dict[str, Any]) -> Dict[str, Any]:
+        row = dict(status or {})
+        if str(row.get("contract") or "") != "hosting.operation_status":
+            return row
+        result = row.get("result")
+        if isinstance(result, dict):
+            return dict(result)
+        return {
+            "status": "error",
+            "reason": str(row.get("reason") or row.get("lifecycle") or "workflow_result_unavailable"),
+            "operation": dict(row.get("operation") or {}),
+            "result_ref": dict(row.get("result_ref") or {}) or None,
+            "result_omission": dict(row.get("result_omission") or {}) or None,
+        }
+
     def workflow_python_action_describe(
         self,
         *,
@@ -857,7 +888,7 @@ class WorkflowHelperMixin:
                 approval_requester=approval_requester,
             )
         return self._workflow_action_manifest_from_discovery_response(
-            response,
+            self._workflow_operation_result(response),
             request=discovery_req,
             runtime="python",
             include_hidden=include_hidden,
@@ -916,7 +947,7 @@ class WorkflowHelperMixin:
                 approval_requester=approval_requester,
             )
         return self._workflow_action_manifest_from_discovery_response(
-            response,
+            self._workflow_operation_result(response),
             request=discovery_req,
             runtime="javascript",
             include_hidden=include_hidden,
@@ -1848,7 +1879,7 @@ class WorkflowHelperMixin:
             self._workflow_python_pool_registry().get_or_create(self._workflow_js_pool_key(effective_key), desired_capacity=capacity).set_capacity(actual_capacity)
         return {"status": "ok", "profile": prof, "engine_id": eid, "environment_key": effective_key or None, "capacity": actual_capacity, "workflow_pool": pool.resources()}
 
-    def cancel_workflow_js_request(
+    def _cancel_workflow_js_runtime(
         self,
         *,
         profile: str = "node",
@@ -1873,22 +1904,123 @@ class WorkflowHelperMixin:
             "workflow_pool_cancel": dict(pool_cancel or {}) if pool_cancel is not None else None,
         }
 
-    def workflow_js_request_status(
+    def execute_workflow_js(
         self,
         *,
         profile: str = "node",
+        environment_name: str = "workflow-js-node",
         environment_key: Optional[str] = None,
         engine_id: Optional[str] = None,
-        request_id: str,
+        request: Optional[Dict[str, Any]] = None,
+        node: Optional[Dict[str, Any]] = None,
+        javascript: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        owner_actor_id: str = "service:local",
     ) -> Dict[str, Any]:
         prof = self._workflow_js_profile(profile)
-        effective_key = str(environment_key or "").strip() or self._workflow_js_registration_environment_key(engine_id)
-        if not effective_key:
-            return {"status": "not_found", "request_id": str(request_id or "").strip(), "profile": prof, "environment_key": None}
-        out = self._workflow_python_pool_registry().request_status(self._workflow_js_pool_key(effective_key), request_id)
-        return {**dict(out or {}), "profile": prof, "environment_key": effective_key}
+        req = dict(request or {})
+        request_id = str(req.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required for durable hosted execution")
+        normalized = self._workflow_request_with_action(req, runtime="javascript")
+        js_policy = {
+            **dict(node or {}),
+            **dict(javascript or {}),
+            **dict(normalized.get("javascript") or {}),
+        }
+        environment = self.workflow_js_environment_spec(
+            profile=prof,
+            environment_name=environment_name,
+            node=dict(node or {}),
+            javascript=js_policy,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(environment.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        effective_key = requested_key or derived_key
+        eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=effective_key)
+        selector = HostedOperationSelector(kind="engine_id", id=eid)
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.WORKFLOW_JS.value,
+                "selector": selector.to_dict(),
+                "profile": prof,
+                "environment_name": str(environment_name or "workflow-js-node"),
+                "environment_key": effective_key,
+                "environment": dict(environment.get("environment") or {}),
+                "request": normalized,
+                "node": dict(node or {}),
+                "javascript": js_policy,
+                "sandbox_policy": dict(sandbox_policy or {}),
+                "capacity": max(1, int(capacity or 1)),
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=str(owner_actor_id or "service:local").strip() or "service:local",
+            execution_kind=HostedExecutionKind.WORKFLOW_JS,
+            selector=selector,
+            namespace=f"workflow_js:{eid}",
+            request_id=request_id,
+            fingerprint=fingerprint,
+            metadata={
+                "engine_id": eid,
+                "environment_key": effective_key,
+                "profile": prof,
+                "request_id": request_id,
+                "runtime": "javascript",
+            },
+        )
+        action = str(prepared.get("action") or "")
+        status = dict(prepared.get("status") or {})
+        if action in {"conflict", "forgotten", "replay"}:
+            return status
+        if action == "capacity":
+            raise RuntimeError("hosted_operation_capacity_exceeded")
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        if action == "attach":
+            return self._hosted_operations.wait_for_terminal(
+                operation_id=operation_id,
+                timeout_seconds=float(dict(normalized.get("limits") or {}).get("timeout_ms") or 30_000) / 1000.0,
+            )
+        claimed = self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        if str(claimed.get("lifecycle") or "") != HostedOperationLifecycle.RUNNING.value:
+            return claimed
+        try:
+            result = self._execute_workflow_js_runtime(
+                profile=prof,
+                environment_name=environment_name,
+                environment_key=environment_key,
+                engine_id=engine_id,
+                request=req,
+                node=node,
+                javascript=javascript,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
+            )
+        except Exception as exc:
+            result = {"status": "error", "reason": str(exc) or "workflow_js_execute_failed", "error_type": type(exc).__name__}
+        result_status = str(dict(result or {}).get("status") or "").strip().lower()
+        reason = str(dict(result or {}).get("reason") or "").strip()
+        lifecycle = (
+            HostedOperationLifecycle.TERMINAL_CANCELLATION
+            if result_status == "canceled" or reason == "workflow_sandbox_canceled"
+            else HostedOperationLifecycle.TERMINAL_SUCCESS
+            if result_status == "ok" and dict(result or {}).get("ok", True) is not False
+            else HostedOperationLifecycle.TERMINAL_FAILURE
+        )
+        return self._hosted_operations.finish(
+            operation_id=operation_id,
+            lifecycle=lifecycle,
+            envelope=dict(result or {}),
+            reason=reason,
+        )
 
-    def execute_workflow_js(
+    def _execute_workflow_js_runtime(
         self,
         *,
         profile: str = "node",
@@ -2133,6 +2265,7 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
         approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        owner_actor_id: str = "service:local",
     ) -> Dict[str, Any]:
         iid = str(instance_id or "").strip()
         if not iid:
@@ -2152,6 +2285,7 @@ class WorkflowHelperMixin:
             sandbox_policy=sandbox_policy,
             host_capability_sessions=host_capability_sessions,
             approval_requester=approval_requester,
+            owner_actor_id=owner_actor_id,
         )
 
     def workflow_js_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
@@ -2422,7 +2556,7 @@ class WorkflowHelperMixin:
         if bool(out.get("accepted")) and str(msg.get("action") or "").strip() == "cancel":
             session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
             if session is not None:
-                out["worker_cancel"] = self.cancel_workflow_js_request(
+                out["worker_cancel"] = self._cancel_workflow_js_runtime(
                     profile=str(getattr(session, "profile", "") or "node"),
                     environment_key=str(getattr(session, "environment_key", "") or ""),
                     request_id=str(getattr(session, "request_id", "") or ""),
@@ -2519,6 +2653,117 @@ class WorkflowHelperMixin:
         }
 
     def execute_workflow_python(
+        self,
+        *,
+        profile: str = "helper",
+        environment_name: str = "workflow-python-helper",
+        environment_key: Optional[str] = None,
+        engine_id: Optional[str] = None,
+        request: Optional[Dict[str, Any]] = None,
+        capacity: int = 1,
+        sandbox_policy: Optional[Dict[str, Any]] = None,
+        host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
+        approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        prof = self._workflow_python_profile(profile)
+        req = dict(request or {})
+        request_id = str(req.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required for durable hosted execution")
+        normalized = self._workflow_request_with_action(req, runtime="python")
+        py_policy = dict(normalized.get("python") or {})
+        effective_environment_name = str(
+            py_policy.get("environment_name")
+            or ("workflow-python-node" if prof == "node" and environment_name == "workflow-python-helper" else environment_name)
+            or "workflow-python-helper"
+        )
+        environment = self.workflow_python_environment_spec(
+            profile=prof,
+            environment_name=effective_environment_name,
+            python=py_policy,
+            sandbox_policy=sandbox_policy,
+        )
+        derived_key = str(environment.get("environment_key") or "").strip()
+        requested_key = str(environment_key or "").strip()
+        effective_key = requested_key or derived_key
+        eid = str(engine_id or "").strip() or self.workflow_python_default_engine_id(environment_key=effective_key)
+        selector = HostedOperationSelector(kind="engine_id", id=eid)
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.WORKFLOW_PYTHON.value,
+                "selector": selector.to_dict(),
+                "profile": prof,
+                "environment_name": effective_environment_name,
+                "environment_key": effective_key,
+                "environment": dict(environment.get("environment") or {}),
+                "request": normalized,
+                "python": py_policy,
+                "sandbox_policy": dict(sandbox_policy or {}),
+                "capacity": max(1, int(capacity or 1)),
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=str(owner_actor_id or "service:local").strip() or "service:local",
+            execution_kind=HostedExecutionKind.WORKFLOW_PYTHON,
+            selector=selector,
+            namespace=f"workflow_python:{eid}",
+            request_id=request_id,
+            fingerprint=fingerprint,
+            metadata={
+                "engine_id": eid,
+                "environment_key": effective_key,
+                "profile": prof,
+                "request_id": request_id,
+                "runtime": "python",
+            },
+        )
+        action = str(prepared.get("action") or "")
+        status = dict(prepared.get("status") or {})
+        if action in {"conflict", "forgotten", "replay"}:
+            return status
+        if action == "capacity":
+            raise RuntimeError("hosted_operation_capacity_exceeded")
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        if action == "attach":
+            return self._hosted_operations.wait_for_terminal(
+                operation_id=operation_id,
+                timeout_seconds=float(dict(normalized.get("limits") or {}).get("timeout_ms") or 30_000) / 1000.0,
+            )
+        claimed = self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        if str(claimed.get("lifecycle") or "") != HostedOperationLifecycle.RUNNING.value:
+            return claimed
+        try:
+            result = self._execute_workflow_python_runtime(
+                profile=prof,
+                environment_name=environment_name,
+                environment_key=environment_key,
+                engine_id=engine_id,
+                request=req,
+                capacity=capacity,
+                sandbox_policy=sandbox_policy,
+                host_capability_sessions=host_capability_sessions,
+                approval_requester=approval_requester,
+            )
+        except Exception as exc:
+            result = {"status": "error", "reason": str(exc) or "workflow_python_execute_failed", "error_type": type(exc).__name__}
+        result_status = str(dict(result or {}).get("status") or "").strip().lower()
+        reason = str(dict(result or {}).get("reason") or "").strip()
+        lifecycle = (
+            HostedOperationLifecycle.TERMINAL_CANCELLATION
+            if result_status == "canceled" or reason == "workflow_sandbox_canceled"
+            else HostedOperationLifecycle.TERMINAL_SUCCESS
+            if result_status == "ok" and dict(result or {}).get("ok", True) is not False
+            else HostedOperationLifecycle.TERMINAL_FAILURE
+        )
+        return self._hosted_operations.finish(
+            operation_id=operation_id,
+            lifecycle=lifecycle,
+            envelope=dict(result or {}),
+            reason=reason,
+        )
+
+    def _execute_workflow_python_runtime(
         self,
         *,
         profile: str = "helper",
@@ -2933,6 +3178,7 @@ class WorkflowHelperMixin:
         sandbox_policy: Optional[Dict[str, Any]] = None,
         host_capability_sessions: Optional[list[HostCapabilitySession]] = None,
         approval_requester: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        owner_actor_id: str = "service:local",
     ) -> Dict[str, Any]:
         iid = str(instance_id or "").strip()
         if not iid:
@@ -2950,6 +3196,7 @@ class WorkflowHelperMixin:
             sandbox_policy=sandbox_policy,
             host_capability_sessions=host_capability_sessions,
             approval_requester=approval_requester,
+            owner_actor_id=owner_actor_id,
         )
 
     def workflow_python_instance_close(self, *, instance_id: str, reason: str = "client_requested") -> Dict[str, Any]:
@@ -3116,7 +3363,7 @@ class WorkflowHelperMixin:
             ).set_capacity(capacity)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
-    def cancel_workflow_python_request(
+    def _cancel_workflow_python_runtime(
         self,
         *,
         profile: str = "helper",
@@ -3147,20 +3394,66 @@ class WorkflowHelperMixin:
             out["workflow_pool_cancel"] = pool.cancel_request(request_id)
         return {**dict(out or {}), "profile": prof, "environment_key": effective_key or None}
 
-    def workflow_python_request_status(
-        self,
-        *,
-        profile: str = "helper",
-        environment_key: Optional[str] = None,
-        engine_id: Optional[str] = None,
-        request_id: str,
-    ) -> Dict[str, Any]:
-        prof = self._workflow_python_profile(profile)
-        effective_key = str(environment_key or "").strip() or self._workflow_python_registration_environment_key(engine_id)
-        if not effective_key:
-            return {"status": "not_found", "request_id": str(request_id or "").strip(), "profile": prof, "environment_key": None}
-        out = self._workflow_python_pool_registry().request_status(self._workflow_python_pool_key(effective_key), request_id)
-        return {**dict(out or {}), "profile": prof, "environment_key": effective_key}
+    def _cancel_workflow_operation(self, *, record: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        row = dict(record or {})
+        operation = dict(row.get("operation") or {})
+        metadata = dict(row.get("metadata") or {})
+        operation_id = str(operation.get("operation_id") or "").strip()
+        owner_actor_id = str(row.get("owner_actor_id") or "").strip()
+        lifecycle = HostedOperationLifecycle(str(row.get("lifecycle") or ""))
+        if lifecycle in {
+            HostedOperationLifecycle.QUEUED,
+            HostedOperationLifecycle.INTERRUPTED_BEFORE_DISPATCH,
+        }:
+            canceled = self._hosted_operations.cancel_before_dispatch(
+                operation_id=operation_id,
+                reason=str(reason or "canceled_before_dispatch"),
+            )
+            if canceled is not None:
+                return canceled
+        if lifecycle in {
+            HostedOperationLifecycle.TERMINAL_SUCCESS,
+            HostedOperationLifecycle.TERMINAL_FAILURE,
+            HostedOperationLifecycle.TERMINAL_CANCELLATION,
+            HostedOperationLifecycle.FORGOTTEN,
+        }:
+            return self._hosted_operations.status(ref=operation, owner_actor_id=owner_actor_id)
+        runtime = str(metadata.get("runtime") or "").strip()
+        kwargs = {
+            "profile": str(metadata.get("profile") or ("node" if runtime == "javascript" else "helper")),
+            "environment_key": str(metadata.get("environment_key") or "") or None,
+            "engine_id": str(metadata.get("engine_id") or "") or None,
+            "request_id": str(operation.get("request_id") or ""),
+        }
+        try:
+            if runtime == "javascript":
+                canceled_runtime = self._cancel_workflow_js_runtime(**kwargs)
+            elif runtime == "python":
+                canceled_runtime = self._cancel_workflow_python_runtime(**kwargs)
+            else:
+                raise ValueError("stored workflow operation runtime is invalid")
+        except Exception as exc:
+            canceled_runtime = {
+                "status": "error",
+                "canceled": False,
+                "reason": str(exc) or "workflow_cancel_failed",
+                "error_type": type(exc).__name__,
+            }
+        canceled = bool(dict(canceled_runtime or {}).get("canceled"))
+        terminal_lifecycle = (
+            HostedOperationLifecycle.TERMINAL_CANCELLATION
+            if canceled
+            else HostedOperationLifecycle.TERMINAL_FAILURE
+        )
+        terminal_reason = str(reason or "client_requested") if canceled else str(
+            dict(canceled_runtime or {}).get("reason") or "workflow_cancel_target_not_active"
+        )
+        return self._hosted_operations.finish(
+            operation_id=operation_id,
+            lifecycle=terminal_lifecycle,
+            envelope=dict(canceled_runtime or {}),
+            reason=terminal_reason,
+        )
 
     def workflow_python_stream_open(
         self,
@@ -3469,7 +3762,7 @@ class WorkflowHelperMixin:
         if bool(out.get("accepted")) and str(msg.get("action") or "").strip() == "cancel":
             session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
             if session is not None:
-                out["worker_cancel"] = self.cancel_workflow_python_request(
+                out["worker_cancel"] = self._cancel_workflow_python_runtime(
                     profile=str(getattr(session, "profile", "") or "node"),
                     environment_key=str(getattr(session, "environment_key", "") or ""),
                     request_id=str(getattr(session, "request_id", "") or ""),

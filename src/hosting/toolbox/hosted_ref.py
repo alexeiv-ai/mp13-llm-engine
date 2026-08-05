@@ -729,22 +729,17 @@ class HostedToolBoxRef:
     def cancel(
         self,
         *,
-        tool_name: str = "",
-        tool_call_id: str = "",
+        operation_ref: Dict[str, Any],
+        reason: str = "client_requested",
         timeout_seconds: float = 8.0,
         respawn: bool = True,
-        request_id: str = "",
     ) -> Dict[str, Any]:
-        cancel_kwargs = {
-            "toolbox_id": self.toolbox_id,
-            "tool_name": str(tool_name or "").strip(),
-            "tool_call_id": str(tool_call_id or "").strip(),
-            "timeout_seconds": float(timeout_seconds or 8.0),
-            "respawn": bool(respawn),
-        }
-        if str(request_id or "").strip():
-            cancel_kwargs["request_id"] = str(request_id).strip()
-        return dict(self.host.toolbox_cancel(**cancel_kwargs) or {})
+        return dict(self.host.hosted_operation_cancel(
+            ref=dict(operation_ref or {}),
+            reason=str(reason or "client_requested").strip() or "client_requested",
+            timeout_seconds=float(timeout_seconds or 8.0),
+            respawn=bool(respawn),
+        ) or {})
 
 
 

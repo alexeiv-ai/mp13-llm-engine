@@ -90,11 +90,16 @@ EXAMPLES_BY_COMMAND = {
         "'{\"toolbox_id\":\"toolbox-demo\",\"tool_name\":\"hello_tool\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-gate",
     ],
     "toolbox-execute": [
-        "'{\"engine_id\":\"toolbox1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}' | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
+        "'{\"engine_id\":\"toolbox1\",\"execution_request_id\":\"request-1\",\"tool_call\":{\"name\":\"hello_tool\",\"arguments\":{\"name\":\"Sam\"}}}' | python -m hosting.engine_host_cli --payload-stdin toolbox-execute",
     ],
-    "toolbox-cancel": [
-        "'{\"toolbox_id\":\"toolbox-demo\",\"tool_name\":\"hello_tool\",\"tool_call_id\":\"call-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-cancel",
-        "'{\"engine_id\":\"toolbox1\",\"respawn\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-cancel",
+    "hosted-operation-status": [
+        "Get-Content operation-ref.json | python -m hosting.engine_host_cli --payload-stdin hosted-operation-status",
+    ],
+    "hosted-operation-cancel": [
+        "'{\"ref\":{...},\"reason\":\"workspace_unload\"}' | python -m hosting.engine_host_cli --payload-stdin hosted-operation-cancel",
+    ],
+    "hosting-receipt-ledger-cutover": [
+        "'{\"acknowledge_replay_window_clear\":true}' | python -m hosting.engine_host_cli --payload-stdin hosting-receipt-ledger-cutover",
     ],
     "toolbox-gc": [
         "python -m hosting.engine_host_cli toolbox-gc",
@@ -773,8 +778,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-js-instance-list",
         "workflow-js-resources",
         "workflow-js-set-capacity",
-        "workflow-js-cancel-request",
-        "workflow-js-request-status",
         "workflow-js-stream-open",
         "workflow-js-event-subscribe",
         "workflow-js-stream-send",
@@ -800,8 +803,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "workflow-python-instance-list",
         "workflow-python-resources",
         "workflow-python-set-capacity",
-        "workflow-python-cancel-request",
-        "workflow-python-request-status",
         "workflow-python-stream-open",
         "workflow-python-event-subscribe",
         "workflow-python-stream-send",
@@ -836,7 +837,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-describe",
         "toolbox-gate",
         "toolbox-execute",
-        "toolbox-cancel",
+        "hosted-operation-status",
+        "hosted-operation-cancel",
+        "hosting-receipt-ledger-cutover",
         "toolbox-gc",
         "toolbox-references",
         "toolbox-consistency",
@@ -1276,26 +1279,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "workflow-js-cancel-request":
-            _print_ok(
-                svc.cancel_workflow_js_request(
-                    profile=str(payload.get("profile") or "node"),
-                    environment_key=str(payload.get("environment_key") or "").strip() or None,
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
-                    request_id=str(payload.get("request_id") or ""),
-                )
-            )
-            return 0
-        if cmd == "workflow-js-request-status":
-            _print_ok(
-                svc.workflow_js_request_status(
-                    profile=str(payload.get("profile") or "node"),
-                    environment_key=str(payload.get("environment_key") or "").strip() or None,
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
-                    request_id=str(payload.get("request_id") or ""),
-                )
-            )
-            return 0
         if cmd == "workflow-js-stream-open":
             _print_ok(
                 svc.workflow_js_stream_open(
@@ -1535,26 +1518,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     environment_key=str(payload.get("environment_key") or "").strip() or None,
                     engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
                     capacity=int(payload.get("capacity") or 1),
-                )
-            )
-            return 0
-        if cmd == "workflow-python-cancel-request":
-            _print_ok(
-                svc.cancel_workflow_python_request(
-                    profile=str(payload.get("profile") or "helper"),
-                    environment_key=str(payload.get("environment_key") or "").strip() or None,
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
-                    request_id=str(payload.get("request_id") or ""),
-                )
-            )
-            return 0
-        if cmd == "workflow-python-request-status":
-            _print_ok(
-                svc.workflow_python_request_status(
-                    profile=str(payload.get("profile") or "helper"),
-                    environment_key=str(payload.get("environment_key") or "").strip() or None,
-                    engine_id=str(payload.get("engine_id") or args.engine_id or "").strip() or None,
-                    request_id=str(payload.get("request_id") or ""),
                 )
             )
             return 0
@@ -1853,16 +1816,27 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "toolbox-cancel":
+        if cmd == "hosted-operation-status":
             _print_ok(
-                svc.toolbox_cancel(
-                    engine_id=str(payload.get("engine_id") or args.engine_id),
-                    toolbox_id=str(payload.get("toolbox_id") or ""),
-                    tool_name=str(payload.get("tool_name") or ""),
-                    tool_call_id=str(payload.get("tool_call_id") or ""),
-                    request_id=str(payload.get("request_id") or ""),
+                svc.hosted_operation_status(
+                    ref=dict(payload.get("ref") or payload),
+                )
+            )
+            return 0
+        if cmd == "hosted-operation-cancel":
+            _print_ok(
+                svc.hosted_operation_cancel(
+                    ref=dict(payload.get("ref") or {}),
+                    reason=str(payload.get("reason") or "client_requested"),
                     timeout_seconds=float(payload.get("timeout_seconds") or 8.0),
                     respawn=bool(payload.get("respawn", True)),
+                )
+            )
+            return 0
+        if cmd == "hosting-receipt-ledger-cutover":
+            _print_ok(
+                svc.hosting_receipt_ledger_cutover(
+                    acknowledge_replay_window_clear=bool(payload.get("acknowledge_replay_window_clear", False)),
                 )
             )
             return 0

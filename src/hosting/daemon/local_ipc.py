@@ -2433,6 +2433,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "workflow-js-action-describe":
             return svc.workflow_js_action_describe(
@@ -2465,6 +2466,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "workflow-js-instance-create":
             return svc.workflow_js_instance_create(
@@ -2493,6 +2495,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "workflow-js-instance-close":
             return svc.workflow_js_instance_close(
@@ -2507,20 +2510,6 @@ class EngineHostDaemon:
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 capacity=int(payload.get("capacity") or 1),
-            )
-        if cmd == "workflow-js-cancel-request":
-            return svc.cancel_workflow_js_request(
-                profile=str(payload.get("profile") or "node"),
-                environment_key=str(payload.get("environment_key") or "").strip() or None,
-                engine_id=str(payload.get("engine_id") or "").strip() or None,
-                request_id=str(payload.get("request_id") or ""),
-            )
-        if cmd == "workflow-js-request-status":
-            return svc.workflow_js_request_status(
-                profile=str(payload.get("profile") or "node"),
-                environment_key=str(payload.get("environment_key") or "").strip() or None,
-                engine_id=str(payload.get("engine_id") or "").strip() or None,
-                request_id=str(payload.get("request_id") or ""),
             )
         if cmd == "workflow-js-stream-open":
             return svc.workflow_js_stream_open(
@@ -2633,6 +2622,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "workflow-python-action-describe":
             return svc.workflow_python_action_describe(
@@ -2661,6 +2651,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "workflow-python-instance-create":
             return svc.workflow_python_instance_create(
@@ -2685,6 +2676,7 @@ class EngineHostDaemon:
                 sandbox_policy=dict(payload.get("sandbox_policy") or {}) or None,
                 host_capability_sessions=self._host_capability_sessions_snapshot(),
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "workflow-python-instance-close":
             return svc.workflow_python_instance_close(
@@ -2708,20 +2700,6 @@ class EngineHostDaemon:
                 environment_key=str(payload.get("environment_key") or "").strip() or None,
                 engine_id=str(payload.get("engine_id") or "").strip() or None,
                 capacity=int(payload.get("capacity") or 1),
-            )
-        if cmd == "workflow-python-cancel-request":
-            return svc.cancel_workflow_python_request(
-                profile=str(payload.get("profile") or "helper"),
-                environment_key=str(payload.get("environment_key") or "").strip() or None,
-                engine_id=str(payload.get("engine_id") or "").strip() or None,
-                request_id=str(payload.get("request_id") or ""),
-            )
-        if cmd == "workflow-python-request-status":
-            return svc.workflow_python_request_status(
-                profile=str(payload.get("profile") or "helper"),
-                environment_key=str(payload.get("environment_key") or "").strip() or None,
-                engine_id=str(payload.get("engine_id") or "").strip() or None,
-                request_id=str(payload.get("request_id") or ""),
             )
         if cmd == "workflow-python-stream-open":
             return svc.workflow_python_stream_open(
@@ -2931,12 +2909,18 @@ class EngineHostDaemon:
                 tool_name=str(payload.get("tool_name") or ""),
                 tools_view=dict(payload.get("tools_view") or {}) if isinstance(payload.get("tools_view"), dict) else None,
             )
-        if cmd == "toolbox-request-status":
-            return svc.toolbox_request_status(
-                engine_id=str(payload.get("engine_id") or ""),
-                toolbox_id=str(payload.get("toolbox_id") or ""),
-                tool_name=str(payload.get("tool_name") or ""),
-                request_id=str(payload.get("request_id") or ""),
+        if cmd == "hosted-operation-status":
+            return svc.hosted_operation_status(
+                ref=dict(payload.get("ref") or {}),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "hosted-operation-cancel":
+            return svc.hosted_operation_cancel(
+                ref=dict(payload.get("ref") or {}),
+                reason=str(payload.get("reason") or "client_requested"),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+                timeout_seconds=float(payload.get("timeout_seconds") or 8.0),
+                respawn=bool(payload.get("respawn", True)),
             )
         if cmd == "toolbox-execute":
             return svc.toolbox_execute(
@@ -2948,16 +2932,7 @@ class EngineHostDaemon:
                 callback_binding=dict(payload.get("callback_binding") or {}) if isinstance(payload.get("callback_binding"), dict) else None,
                 host_api_approval=dict(payload.get("host_api_approval") or {}) if isinstance(payload.get("host_api_approval"), dict) else None,
                 execution_request_id=str(payload.get("execution_request_id") or ""),
-            )
-        if cmd == "toolbox-cancel":
-            return svc.toolbox_cancel(
-                engine_id=str(payload.get("engine_id") or ""),
-                toolbox_id=str(payload.get("toolbox_id") or ""),
-                tool_name=str(payload.get("tool_name") or ""),
-                tool_call_id=str(payload.get("tool_call_id") or ""),
-                request_id=str(payload.get("request_id") or ""),
-                timeout_seconds=float(payload.get("timeout_seconds") or 8.0),
-                respawn=bool(payload.get("respawn", True)),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "toolbox-gc":
             return svc.toolbox_gc()

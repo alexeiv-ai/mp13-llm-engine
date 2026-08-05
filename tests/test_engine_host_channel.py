@@ -861,10 +861,16 @@ def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
         toolbox_id="toolbox-demo",
         tool_name="demo_tool",
     )
-    ch.toolbox_cancel(
-        toolbox_id="toolbox-demo",
-        tool_name="demo_tool",
-        tool_call_id="call-demo-1",
+    toolbox_operation = {
+        "contract": "hosting.operation_ref",
+        "operation_id": "op-toolbox-1",
+        "execution_kind": "toolbox",
+        "receipt_namespace": "toolbox:toolbox-demo",
+        "request_id": "call-demo-1",
+        "selector": {"toolbox_id": "toolbox-demo", "tool_name": "demo_tool"},
+    }
+    ch.hosted_operation_cancel(
+        ref=toolbox_operation,
         timeout_seconds=3.0,
     )
     ch.toolbox_gc()
@@ -1069,14 +1075,11 @@ def test_toolbox_lifecycle_channel_methods_forward_expected_payloads() -> None:
             },
         ),
         (
-            "toolbox-cancel",
+            "hosted-operation-cancel",
             {
-                "engine_id": "",
-                "toolbox_id": "toolbox-demo",
-                    "tool_name": "demo_tool",
-                    "tool_call_id": "call-demo-1",
-                    "request_id": "",
-                    "timeout_seconds": 3.0,
+                "ref": toolbox_operation,
+                "reason": "client_requested",
+                "timeout_seconds": 3.0,
                 "respawn": True,
                 "session_token": "tok-123",
             },
@@ -1181,8 +1184,16 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     )
     ch.workflow_python_resources(profile="helper", environment_key="env-key", engine_id="wf-py")
     ch.set_workflow_python_capacity(profile="helper", environment_key="env-key", engine_id="wf-py", capacity=6)
-    ch.cancel_workflow_python_request(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
-    ch.workflow_python_request_status(profile="helper", environment_key="env-key", engine_id="wf-py", request_id="req-1")
+    workflow_operation = {
+        "contract": "hosting.operation_ref",
+        "operation_id": "op-python-1",
+        "execution_kind": "workflow_python",
+        "receipt_namespace": "workflow-python:helper:env-key:wf-py",
+        "request_id": "req-1",
+        "selector": {"profile": "helper", "environment_key": "env-key", "engine_id": "wf-py"},
+    }
+    ch.hosted_operation_cancel(ref=workflow_operation)
+    ch.hosted_operation_status(ref=workflow_operation)
     ch.workflow_python_stream_open(
         profile="node",
         environment_key="env-key",
@@ -1338,22 +1349,19 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
             },
         ),
         (
-            "workflow-python-cancel-request",
+            "hosted-operation-cancel",
             {
-                "profile": "helper",
-                "environment_key": "env-key",
-                "engine_id": "wf-py",
-                "request_id": "req-1",
+                "ref": workflow_operation,
+                "reason": "client_requested",
+                "timeout_seconds": 8.0,
+                "respawn": True,
                 "session_token": "tok-123",
             },
         ),
         (
-            "workflow-python-request-status",
+            "hosted-operation-status",
             {
-                "profile": "helper",
-                "environment_key": "env-key",
-                "engine_id": "wf-py",
-                "request_id": "req-1",
+                "ref": workflow_operation,
                 "session_token": "tok-123",
             },
         ),
@@ -1559,8 +1567,16 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
         capacity=2,
     )
     ch.set_workflow_js_capacity(profile="node", environment_key="env-js", engine_id="wf-js", capacity=6)
-    ch.cancel_workflow_js_request(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
-    ch.workflow_js_request_status(profile="node", environment_key="env-js", engine_id="wf-js", request_id="req-1")
+    workflow_operation = {
+        "contract": "hosting.operation_ref",
+        "operation_id": "op-js-1",
+        "execution_kind": "workflow_javascript",
+        "receipt_namespace": "workflow-js:node:env-js:wf-js",
+        "request_id": "req-1",
+        "selector": {"profile": "node", "environment_key": "env-js", "engine_id": "wf-js"},
+    }
+    ch.hosted_operation_cancel(ref=workflow_operation)
+    ch.hosted_operation_status(ref=workflow_operation)
     ch.workflow_js_stream_open(
         profile="node",
         environment_key="env-js",
@@ -1680,22 +1696,19 @@ def test_workflow_js_channel_facade_forwards_expected_payloads() -> None:
             },
         ),
         (
-            "workflow-js-cancel-request",
+            "hosted-operation-cancel",
             {
-                "profile": "node",
-                "environment_key": "env-js",
-                "engine_id": "wf-js",
-                "request_id": "req-1",
+                "ref": workflow_operation,
+                "reason": "client_requested",
+                "timeout_seconds": 8.0,
+                "respawn": True,
                 "session_token": "tok-123",
             },
         ),
         (
-            "workflow-js-request-status",
+            "hosted-operation-status",
             {
-                "profile": "node",
-                "environment_key": "env-js",
-                "engine_id": "wf-js",
-                "request_id": "req-1",
+                "ref": workflow_operation,
                 "session_token": "tok-123",
             },
         ),

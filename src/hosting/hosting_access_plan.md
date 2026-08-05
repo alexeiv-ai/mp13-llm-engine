@@ -176,20 +176,20 @@ land with or before the first breaking implementation commit.
 
 ### Phase 1 - Generic operation repository and read facade
 
-- [ ] **P1-01** Generalize `ToolboxExecutionReceiptLedger` behind a repository
+- [x] **P1-01** Generalize `ToolboxExecutionReceiptLedger` behind a repository
   interface supporting prepare, dispatch claim, terminal transition,
   pre-dispatch cancel, lookup by `(owner_actor_id, namespace, request_id)`, lookup by
   `operation_id`, wait, and prune.
-- [ ] **P1-02** Mint and persist `operation_id` during the first prepare; return
+- [x] **P1-02** Mint and persist `operation_id` during the first prepare; return
   the same reference for attach, replay, conflict, and tombstone responses.
-- [ ] **P1-03** Add one status normalizer that emits
+- [x] **P1-03** Add one status normalizer that emits
   `hosting.operation_status`; replace the existing toolbox status and receipt
   payload shape rather than preserving two representations.
-- [ ] **P1-04** Add daemon commands and channel methods
+- [x] **P1-04** Add daemon commands and channel methods
   `hosted_operation_status(ref=...)` and
   `hosted_operation_cancel(ref=..., reason=...)`, including auth/policy/CLI
   routing where appropriate.
-- [ ] **P1-05** Make generic lookup resolve the stored selector and owner. Reject
+- [x] **P1-05** Make generic lookup resolve the stored selector and owner. Reject
   altered refs, cross-owner access, execution-kind mismatch, and unknown
   operation IDs without probing workers.
 - [ ] **P1-06** Add toolbox facade tests for new, attach, replay, conflict,
@@ -204,20 +204,20 @@ and the corresponding breaking-change entry is complete.
 
 ### Phase 2 - Durable workflow Python and JavaScript integration
 
-- [ ] **P2-01** Define stable workflow namespaces/selectors from the resolved
+- [x] **P2-01** Define stable workflow namespaces/selectors from the resolved
   runtime registration. Do not require a caller to reconstruct
   `environment_key`, profile, or engine ID for later status/cancel.
-- [ ] **P2-02** Wrap workflow Python execute with repository prepare before pool
+- [x] **P2-02** Wrap workflow Python execute with repository prepare before pool
   submission, dispatch claim immediately before worker dispatch, and terminal
   persistence on every return/error/cancel path.
-- [ ] **P2-03** Apply the same wrapper to workflow JavaScript execute.
-- [ ] **P2-04** Include runtime, action, pinned-instance, request body, effective
+- [x] **P2-03** Apply the same wrapper to workflow JavaScript execute.
+- [x] **P2-04** Include runtime, action, pinned-instance, request body, effective
   sandbox policy, and other dispatch-affecting inputs in family-specific
   fingerprints. Exclude callback bindings and secrets.
-- [ ] **P2-05** Route generic status and cancel from stored operation identity to
+- [x] **P2-05** Route generic status and cancel from stored operation identity to
   the correct pool/runtime. Persist cancellation races atomically and preserve
   the existing fail-closed `interrupted_after_dispatch_unknown` behavior.
-- [ ] **P2-06** Ensure attach/replay never starts an environment, worker, or
+- [x] **P2-06** Ensure attach/replay never starts an environment, worker, or
   sandbox. Preserve the existing local application-journal boundary.
 - [ ] **P2-07** Add parameterized parity tests across toolbox, workflow Python,
   and workflow JavaScript for every lifecycle branch and fingerprint conflict.
@@ -252,28 +252,28 @@ its authorized owner or explicitly marked digest-only.
 
 ### Phase 4 - Existing JSON repository evolution
 
-- [ ] **P4-01** Keep the atomic JSON checkpoint as the production backend and
+- [x] **P4-01** Keep the atomic JSON checkpoint as the production backend and
   implement the Phase 1 repository interface over it.
-- [ ] **P4-02** Evolve the bounded JSON schema to store `operation_id`, execution
+- [x] **P4-02** Evolve the bounded JSON schema to store `operation_id`, execution
   kind, owner identity, selector, lifecycle timestamps, terminal
   payload/ref/omission, and tombstones.
-- [ ] **P4-03** Maintain in-memory indexes for
+- [x] **P4-03** Maintain in-memory indexes for
   `(owner_actor_id, namespace, request_id)` and
   `operation_id`, rebuilt and validated during ledger load, so generic lookup
   does not require worker discovery or repeated full scans.
-- [ ] **P4-04** Preserve the existing lock plus write-temp/fsync/atomic-replace
+- [x] **P4-04** Preserve the existing lock plus write-temp/fsync/atomic-replace
   transition model so concurrent callers cannot obtain two dispatch
   permissions.
-- [ ] **P4-05** Implement deterministic age/count pruning ordered by timestamp
+- [x] **P4-05** Implement deterministic age/count pruning ordered by timestamp
   then stable ID. Keep tombstones long enough to prevent unsafe re-dispatch.
-- [ ] **P4-06** Reject a legacy schema without reading, translating, deleting,
+- [x] **P4-06** Reject a legacy schema without reading, translating, deleting,
   or overwriting it. Emit a bounded diagnostic pointing to the documented
   archival/cutover procedure.
-- [ ] **P4-07** Provide an explicit operator cutover command that first verifies
+- [x] **P4-07** Provide an explicit operator cutover command that first verifies
   the resolved ledger path and requires acknowledgement that no protected
   operation remains inside its replay window, then archives rather than deletes
   the legacy file.
-- [ ] **P4-08** Fail closed on invalid schema, interrupted cutover, or unreadable
+- [x] **P4-08** Fail closed on invalid schema, interrupted cutover, or unreadable
   checkpoint. Ledger initialization must not start workers or sandboxes.
 - [ ] **P4-09** Add concurrency, interrupted-write, deterministic pruning,
   legacy-schema rejection, cutover archival, corrupt JSON, and index-rebuild

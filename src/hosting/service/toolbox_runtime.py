@@ -11,16 +11,21 @@ from typing import Any, Dict, List, Optional, Tuple
 from mp13_engine.mp13_toolbox import ToolsView
 
 from ..callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPABILITY_DISPATCH_CALLBACK_NAME, host_capability_approval_request
+from ..operation_contract import (
+    HostedExecutionKind,
+    HostedOperationLifecycle,
+    HostedOperationSelector,
+    hosted_execution_fingerprint,
+)
 from ..sandbox.host_capabilities import HostCapabilityBroker
 from ..sandbox.service_broker_registry import service_broker_host_capability_session
 from ..toolbox.callbacks import _HostedToolCallbackRelay
 from .errors import ToolboxRolloutError
-from .execution_receipts import TERMINAL_STATES, execution_fingerprint
 
 
 class ToolboxRuntimeMixin:
     @staticmethod
-    def _toolbox_receipt_namespace(*, engine_id: str = "", toolbox_id: str = "") -> str:
+    def _toolbox_operation_namespace(*, engine_id: str = "", toolbox_id: str = "") -> str:
         tid = str(toolbox_id or "").strip()
         eid = str(engine_id or "").strip()
         if tid:
@@ -28,55 +33,6 @@ class ToolboxRuntimeMixin:
         if eid:
             return f"engine:{eid}"
         raise ValueError("engine_id or toolbox_id is required")
-
-    @staticmethod
-    def _toolbox_receipt_status_payload(receipt: Dict[str, Any], **identity: Any) -> Dict[str, Any]:
-        row = dict(receipt or {})
-        state = str(row.get("state") or "unknown_outside_retention")
-        request_status = {
-            "queued": "queued",
-            "running": "running",
-            "terminal_success": "ok",
-            "terminal_failure": "error",
-            "terminal_cancellation": "canceled",
-            "interrupted_before_dispatch": "interrupted_before_dispatch",
-            "interrupted_after_dispatch_unknown": "interrupted_after_dispatch_unknown",
-            "forgotten": "forgotten",
-            "unknown_outside_retention": "unknown_outside_retention",
-        }.get(state, state)
-        result = {
-            "status": "unknown" if state == "unknown_outside_retention" else "ok",
-            "outcome": state,
-            "lifecycle_state": state,
-            "source": "durable_receipt_ledger",
-            "request": {
-                "request_id": row.get("request_id"),
-                "status": request_status,
-                "created_at": row.get("created_at"),
-                "updated_at": row.get("updated_at"),
-                "dispatch_claimed_at": row.get("dispatch_claimed_at"),
-                "terminal_at": row.get("terminal_at"),
-            },
-            "receipt": row,
-            **identity,
-        }
-        return result
-
-    @staticmethod
-    def _toolbox_receipt_replay(receipt: Dict[str, Any]) -> Dict[str, Any]:
-        envelope = receipt.get("terminal_envelope")
-        if isinstance(envelope, dict):
-            out = dict(envelope)
-            out["idempotent_replay"] = True
-            out["lifecycle_state"] = str(receipt.get("state") or "")
-            return out
-        return {
-            "status": "error",
-            "outcome": str(receipt.get("state") or "receipt_result_unavailable"),
-            "reason": "receipt_result_unavailable",
-            "request_id": receipt.get("request_id"),
-            "idempotent_replay": True,
-        }
 
     @staticmethod
     def _registration_allowed_tool_names(reg: Dict[str, Any]) -> Optional[set[str]]:
@@ -552,29 +508,6 @@ class ToolboxRuntimeMixin:
         resources = self._toolbox_runtime_base().resources(environment_key)
         return dict(resources or {}) if str(dict(resources or {}).get("status") or "") != "not_found" else None
 
-    def toolbox_request_status(
-        self,
-        *,
-        engine_id: str = "",
-        toolbox_id: str = "",
-        tool_name: str = "",
-        request_id: str,
-    ) -> Dict[str, Any]:
-        rid = str(request_id or "").strip()
-        if not rid:
-            raise ValueError("request_id is required")
-        eid = str(engine_id or "").strip()
-        tid = str(toolbox_id or "").strip()
-        namespace = self._toolbox_receipt_namespace(engine_id=eid, toolbox_id=tid)
-        receipt = self._toolbox_execution_receipts.status(namespace=namespace, request_id=rid)
-        return self._toolbox_receipt_status_payload(
-            receipt,
-            engine_id=eid or None,
-            toolbox_id=tid or None,
-            tool_name=str(tool_name or "").strip() or None,
-            receipt_namespace=namespace,
-        )
-
     def toolbox_describe(
         self,
         *,
@@ -864,6 +797,7 @@ class ToolboxRuntimeMixin:
         callback_binding: Optional[Dict[str, Any]] = None,
         host_api_approval: Optional[Dict[str, Any]] = None,
         execution_request_id: str = "",
+        owner_actor_id: str = "service:local",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         call = dict(tool_call or {})
@@ -903,14 +837,22 @@ class ToolboxRuntimeMixin:
         request_id = str(execution_request_id or "").strip()
         if not request_id:
             raise ValueError("execution_request_id is required for durable hosted execution")
-        receipt_namespace = self._toolbox_receipt_namespace(
+        receipt_namespace = self._toolbox_operation_namespace(
             engine_id=eid if not tid else "",
             toolbox_id=tid,
         )
-        fingerprint = execution_fingerprint(
+        selector = HostedOperationSelector(
+            kind="toolbox_id" if tid else "engine_id",
+            id=toolbox_identity if tid else eid,
+        )
+        fingerprint = hosted_execution_fingerprint(
             {
-                "tool_name": tool_name,
-                "arguments": call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                "execution_kind": HostedExecutionKind.TOOLBOX.value,
+                "selector": selector.to_dict(),
+                "tool": {
+                    "name": tool_name,
+                    "arguments": call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                },
                 "policy": {
                     "tools_view": dict(tools_view or {}) if isinstance(tools_view, dict) else None,
                     "host_api_approval": dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
@@ -920,7 +862,10 @@ class ToolboxRuntimeMixin:
                 },
             }
         )
-        prepared = self._toolbox_execution_receipts.prepare(
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=str(owner_actor_id or "service:local").strip() or "service:local",
+            execution_kind=HostedExecutionKind.TOOLBOX,
+            selector=selector,
             namespace=receipt_namespace,
             request_id=request_id,
             fingerprint=fingerprint,
@@ -932,70 +877,27 @@ class ToolboxRuntimeMixin:
                 "environment_key": environment_key,
             },
         )
-        receipt_action = str(prepared.get("action") or "")
-        prepared_receipt = dict(prepared.get("receipt") or {})
-        if receipt_action == "conflict":
-            return {
-                "status": "error",
-                "outcome": "idempotency_conflict",
-                "reason": "idempotency_conflict",
-                "request_id": request_id,
-                "engine_id": eid,
-                "toolbox_id": toolbox_identity,
-                "tool_name": tool_name,
-                "receipt_namespace": receipt_namespace,
-            }
-        if receipt_action == "forgotten":
-            return {
-                "status": "error",
-                "outcome": "forgotten",
-                "reason": "receipt_forgotten_within_replay_window",
-                "request_id": request_id,
-                "engine_id": eid,
-                "toolbox_id": toolbox_identity,
-                "tool_name": tool_name,
-                "receipt_namespace": receipt_namespace,
-            }
-        if receipt_action == "capacity":
-            return {
-                "status": "error",
-                "outcome": "receipt_capacity_exceeded",
-                "reason": "receipt_capacity_exceeded",
-                "request_id": request_id,
-                "engine_id": eid,
-                "toolbox_id": toolbox_identity,
-                "tool_name": tool_name,
-                "receipt_namespace": receipt_namespace,
-            }
-        if receipt_action == "replay":
-            return self._toolbox_receipt_replay(prepared_receipt)
-        if receipt_action == "attach":
-            attached = self._toolbox_execution_receipts.wait_for_terminal(
-                namespace=receipt_namespace,
-                request_id=request_id,
+        operation_action = str(prepared.get("action") or "")
+        prepared_status = dict(prepared.get("status") or {})
+        if operation_action in {"conflict", "forgotten", "replay"}:
+            return prepared_status
+        if operation_action == "capacity":
+            raise RuntimeError("hosted_operation_capacity_exceeded")
+        operation_id = str(dict(prepared_status.get("operation") or {}).get("operation_id") or "")
+        if operation_action == "attach":
+            return self._hosted_operations.wait_for_terminal(
+                operation_id=operation_id,
                 timeout_seconds=float(timeout_seconds or 30.0),
-            )
-            if str(attached.get("state") or "") in TERMINAL_STATES:
-                return self._toolbox_receipt_replay(attached)
-            return self._toolbox_receipt_status_payload(
-                attached,
-                engine_id=eid,
-                toolbox_id=toolbox_identity,
-                tool_name=tool_name,
-                receipt_namespace=receipt_namespace,
             )
         base = self._toolbox_runtime_base()
 
-        def _persist_terminal(envelope: Dict[str, Any], state: str) -> Dict[str, Any]:
-            persisted = self._toolbox_execution_receipts.finish(
-                namespace=receipt_namespace,
-                request_id=request_id,
-                state=state,
+        def _persist_terminal(envelope: Dict[str, Any], lifecycle: str) -> Dict[str, Any]:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=lifecycle,
                 envelope=envelope,
+                reason=str(envelope.get("reason") or "").strip(),
             )
-            if str(persisted.get("state") or "") != state:
-                return self._toolbox_receipt_replay(persisted)
-            return envelope
 
         scheduled = base.submit_request(
             environment_key=environment_key,
@@ -1078,21 +980,10 @@ class ToolboxRuntimeMixin:
                 callback_binding=dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
                 host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
             )
-            durable_dispatch = self._toolbox_execution_receipts.mark_dispatch_claimed(
-                namespace=receipt_namespace,
-                request_id=request_id,
-            )
-            if str(durable_dispatch.get("state") or "") != "running":
+            durable_dispatch = self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+            if str(durable_dispatch.get("lifecycle") or "") != HostedOperationLifecycle.RUNNING.value:
                 base.cancel_request(environment_key=environment_key, request_id=request_id)
-                if str(durable_dispatch.get("state") or "") in TERMINAL_STATES:
-                    return self._toolbox_receipt_replay(durable_dispatch)
-                return self._toolbox_receipt_status_payload(
-                    durable_dispatch,
-                    engine_id=eid,
-                    toolbox_id=toolbox_identity,
-                    tool_name=tool_name,
-                    receipt_namespace=receipt_namespace,
-                )
+                return durable_dispatch
             out = self._ipc_call(
                 reg=reg,
                 payload={
@@ -1206,119 +1097,77 @@ class ToolboxRuntimeMixin:
             if dispatch_relay is not None and dispatch_binding:
                 dispatch_relay.release_session(str(dispatch_binding.get("session_token") or ""))
 
-    def toolbox_cancel(
+    def _cancel_toolbox_operation(
         self,
         *,
-        engine_id: str = "",
-        toolbox_id: str = "",
-        tool_name: str = "",
-        tool_call_id: str = "",
-        request_id: str = "",
+        record: Dict[str, Any],
+        reason: str = "client_requested",
         timeout_seconds: float = 8.0,
         respawn: bool = True,
     ) -> Dict[str, Any]:
-        eid = str(engine_id or "").strip()
-        tid = str(toolbox_id or "").strip()
-        name = str(tool_name or "").strip()
-        model_tool_call_id = str(tool_call_id or "").strip()
-        call_id = str(request_id or "").strip()
+        row = dict(record or {})
+        operation = dict(row.get("operation") or {})
+        metadata = dict(row.get("metadata") or {})
+        operation_id = str(operation.get("operation_id") or "").strip()
+        owner_actor_id = str(row.get("owner_actor_id") or "").strip()
+        eid = str(metadata.get("engine_id") or "").strip()
+        tid = str(metadata.get("toolbox_id") or "").strip()
+        name = str(metadata.get("tool_name") or "").strip()
+        model_tool_call_id = str(metadata.get("tool_call_id") or "").strip()
+        call_id = str(operation.get("request_id") or "").strip()
         if not eid and not tid:
-            raise ValueError("engine_id or toolbox_id is required")
-
-        receipt_namespace = self._toolbox_receipt_namespace(engine_id=eid, toolbox_id=tid)
-        if call_id:
-            durable = self._toolbox_execution_receipts.status(
-                namespace=receipt_namespace,
-                request_id=call_id,
+            raise ValueError("stored toolbox operation selector is invalid")
+        lifecycle = HostedOperationLifecycle(str(row.get("lifecycle") or ""))
+        if lifecycle in {
+            HostedOperationLifecycle.QUEUED,
+            HostedOperationLifecycle.INTERRUPTED_BEFORE_DISPATCH,
+        }:
+            canceled = self._hosted_operations.cancel_before_dispatch(
+                operation_id=operation_id,
+                reason=str(reason or "canceled_before_dispatch"),
             )
-            durable_state = str(durable.get("state") or "unknown_outside_retention")
-            if durable_state in {"queued", "interrupted_before_dispatch"}:
-                canceled_envelope = {
-                    "status": "ok",
-                    "outcome": "canceled",
-                    "reason": "canceled_before_dispatch",
+            if canceled is not None:
+                return canceled
+        if lifecycle in {
+            HostedOperationLifecycle.TERMINAL_SUCCESS,
+            HostedOperationLifecycle.TERMINAL_FAILURE,
+            HostedOperationLifecycle.TERMINAL_CANCELLATION,
+            HostedOperationLifecycle.INTERRUPTED_AFTER_DISPATCH_UNKNOWN,
+            HostedOperationLifecycle.FORGOTTEN,
+        }:
+            return self._hosted_operations.status(ref=operation, owner_actor_id=owner_actor_id)
+
+        def _cancel_failure(failure_reason: str) -> Dict[str, Any]:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "outcome": "cancel_failed",
+                    "reason": failure_reason,
                     "engine_id": eid or None,
                     "toolbox_id": tid or None,
                     "tool_name": name or None,
-                    "tool_call_id": model_tool_call_id or None,
                     "request_id": call_id,
-                    "respawn": bool(respawn),
-                    "canceled_engine_ids": [],
-                    "failed_engine_ids": [],
-                    "repaired_toolbox_ids": [],
-                }
-                self._toolbox_execution_receipts.cancel_before_dispatch(
-                    namespace=receipt_namespace,
-                    request_id=call_id,
-                    envelope=canceled_envelope,
-                )
-                return canceled_envelope
-            if durable_state == "terminal_cancellation":
-                return self._toolbox_receipt_replay(durable)
-            if durable_state in {"terminal_success", "terminal_failure"}:
-                return {
-                    "status": "ok",
-                    "outcome": "already_terminal",
-                    "reason": durable_state,
-                    "request_id": call_id,
-                    "engine_id": eid or None,
-                    "toolbox_id": tid or None,
-                }
-            if durable_state in {
-                "interrupted_after_dispatch_unknown",
-                "forgotten",
-                "unknown_outside_retention",
-            }:
-                return {
-                    "status": "error",
-                    "outcome": durable_state,
-                    "reason": durable_state,
-                    "request_id": call_id,
-                    "engine_id": eid or None,
-                    "toolbox_id": tid or None,
-                }
+                },
+                reason=failure_reason,
+            )
 
         target_regs: List[Dict[str, Any]] = []
         if tid:
             if name:
                 try:
-                    target_regs = [self._route_toolbox_registration(toolbox_id=tid, tool_name=name, command_label="toolbox-cancel")]
+                    target_regs = [self._route_toolbox_registration(toolbox_id=tid, tool_name=name, command_label="hosted-operation-cancel")]
                 except PermissionError:
-                    return {
-                        "status": "ok",
-                        "toolbox_id": tid,
-                        "tool_name": name,
-                        "outcome": "noop",
-                        "reason": "tool_not_allowed",
-                        "canceled_engine_ids": [],
-                        "failed_engine_ids": [],
-                        "repaired_toolbox_ids": [],
-                    }
+                    return _cancel_failure("tool_not_allowed")
             else:
                 target_regs = list(self._toolbox_executor_registrations(tid))
             if not target_regs:
-                return {
-                    "status": "ok",
-                    "toolbox_id": tid,
-                    "tool_name": name or None,
-                    "outcome": "noop",
-                    "reason": "toolbox_executor_missing",
-                    "canceled_engine_ids": [],
-                    "failed_engine_ids": [],
-                    "repaired_toolbox_ids": [],
-                }
+                return _cancel_failure("toolbox_executor_missing")
         else:
             reg = dict(self._find_registration(eid) or {})
             if not reg:
-                return {
-                    "status": "ok",
-                    "engine_id": eid,
-                    "outcome": "noop",
-                    "reason": "engine_not_found",
-                    "canceled_engine_ids": [],
-                    "failed_engine_ids": [],
-                    "repaired_toolbox_ids": [],
-                }
+                return _cancel_failure("engine_not_found")
             target_regs = [reg]
 
         canceled_engine_ids: List[str] = []
@@ -1483,14 +1332,20 @@ class ToolboxRuntimeMixin:
             "hosted_pool_cancels": hosted_pool_cancels,
             "repair": repair_out,
         }
-        if call_id and (canceled_engine_ids or canceled_request_ids):
-            self._toolbox_execution_receipts.finish(
-                namespace=receipt_namespace,
-                request_id=call_id,
-                state="terminal_cancellation",
+        if canceled_engine_ids or canceled_request_ids:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_CANCELLATION,
                 envelope=result,
+                reason=str(reason or "client_requested"),
             )
-        return result
+        failure_reason = "cancel_partial_failure" if failed_engine_ids else "cancel_target_not_active"
+        return self._hosted_operations.finish(
+            operation_id=operation_id,
+            lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+            envelope=result,
+            reason=failure_reason,
+        )
 
     def _wait_for_toolbox_executor_ready(
         self,

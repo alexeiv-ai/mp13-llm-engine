@@ -23,9 +23,10 @@ from .control import ControlMixin
 from .core import CoreMixin
 from .engines import EnginesMixin
 from .errors import ToolboxRolloutError
-from .execution_receipts import ToolboxExecutionReceiptLedger
 from .logs import LogsMixin
 from .metrics import MetricsMixin
+from .hosted_operations import HostedOperationsMixin
+from .operation_repository import AtomicJsonHostedOperationRepository, LegacyOperationRepositoryError
 from .policy import PolicyMixin
 from .proxy import ProxyMixin
 from .sandbox_api import SandboxApiMixin
@@ -35,25 +36,25 @@ from .toolbox_runtime import ToolboxRuntimeMixin
 from .workflow_helpers import WorkflowHelperMixin
 
 
-class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxRuntimeMixin, WorkflowHelperMixin):
+class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin):
     """Engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
     _toolbox_lock_guard = threading.Lock()
     _toolbox_locks: Dict[str, threading.RLock] = {}
-    _receipt_ledger_guard = threading.Lock()
-    _receipt_ledgers: Dict[str, ToolboxExecutionReceiptLedger] = {}
+    _operation_repository_guard = threading.Lock()
+    _operation_repositories: Dict[str, AtomicJsonHostedOperationRepository] = {}
 
     def __init__(
         self,
         *,
         engines_state_file: Optional[Path] = None,
         control_state_file: Optional[Path] = None,
-        toolbox_receipt_retention_seconds: Optional[float] = None,
-        toolbox_receipt_tombstone_seconds: Optional[float] = None,
-        toolbox_receipt_max_count: Optional[int] = None,
-        toolbox_receipt_max_tombstones: Optional[int] = None,
-        toolbox_receipt_max_result_bytes: Optional[int] = None,
+        operation_retention_seconds: Optional[float] = None,
+        operation_tombstone_seconds: Optional[float] = None,
+        operation_max_count: Optional[int] = None,
+        operation_max_tombstones: Optional[int] = None,
+        operation_max_inline_result_bytes: Optional[int] = None,
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
         raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
@@ -82,41 +83,48 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             except (TypeError, ValueError):
                 return default
 
-        self._toolbox_execution_receipt_options = {
+        self._hosted_operation_options = {
             "receipt_retention_seconds": _float_setting(
-                toolbox_receipt_retention_seconds,
-                "MP13_TOOLBOX_RECEIPT_RETENTION_SECONDS",
+                operation_retention_seconds,
+                "MP13_HOSTED_OPERATION_RETENTION_SECONDS",
                 7 * 24 * 3600,
             ),
             "tombstone_retention_seconds": _float_setting(
-                toolbox_receipt_tombstone_seconds,
-                "MP13_TOOLBOX_RECEIPT_TOMBSTONE_SECONDS",
+                operation_tombstone_seconds,
+                "MP13_HOSTED_OPERATION_TOMBSTONE_SECONDS",
                 14 * 24 * 3600,
             ),
-            "max_receipts": _int_setting(toolbox_receipt_max_count, "MP13_TOOLBOX_RECEIPT_MAX_COUNT", 10_000),
+            "max_receipts": _int_setting(operation_max_count, "MP13_HOSTED_OPERATION_MAX_COUNT", 10_000),
             "max_tombstones": _int_setting(
-                toolbox_receipt_max_tombstones,
-                "MP13_TOOLBOX_RECEIPT_MAX_TOMBSTONES",
+                operation_max_tombstones,
+                "MP13_HOSTED_OPERATION_MAX_TOMBSTONES",
                 20_000,
             ),
-            "max_result_bytes": _int_setting(
-                toolbox_receipt_max_result_bytes,
-                "MP13_TOOLBOX_RECEIPT_MAX_RESULT_BYTES",
+            "max_inline_result_bytes": _int_setting(
+                operation_max_inline_result_bytes,
+                "MP13_HOSTED_OPERATION_MAX_INLINE_RESULT_BYTES",
                 64 * 1024,
             ),
         }
         self._ensure_metrics_initialized()
 
     @property
-    def _toolbox_execution_receipts(self) -> ToolboxExecutionReceiptLedger:
-        path = (self.hosting_root / "state" / "toolbox_execution_receipts.json").resolve()
+    def _hosted_operations(self) -> AtomicJsonHostedOperationRepository:
+        state_root = (self.hosting_root / "state").resolve()
+        path = (state_root / "hosted_operations.json").resolve()
+        legacy_path = (state_root / "toolbox_execution_receipts.json").resolve()
+        if legacy_path.exists() and not path.exists():
+            raise LegacyOperationRepositoryError(
+                "legacy hosted-operation receipt schema is unsupported; "
+                "run hosting-receipt-ledger-cutover after confirming the replay window is clear"
+            )
         key = str(path)
-        with self._receipt_ledger_guard:
-            ledger = self._receipt_ledgers.get(key)
-            if ledger is None:
-                ledger = ToolboxExecutionReceiptLedger(path, **self._toolbox_execution_receipt_options)
-                self._receipt_ledgers[key] = ledger
-            return ledger
+        with self._operation_repository_guard:
+            repository = self._operation_repositories.get(key)
+            if repository is None:
+                repository = AtomicJsonHostedOperationRepository(path, **self._hosted_operation_options)
+                self._operation_repositories[key] = repository
+            return repository
 
     def close(self) -> None:
         node_registry = getattr(self, "_workflow_python_node_runtime_registry_instance", None)
