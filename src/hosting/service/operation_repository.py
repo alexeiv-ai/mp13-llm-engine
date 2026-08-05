@@ -26,6 +26,7 @@ from ..operation_contract import (
     canonical_json_bytes,
     canonical_sha256_digest,
 )
+from .result_artifacts import ResultArtifactError, TerminalResultArtifactStore
 
 
 OPERATION_REPOSITORY_CONTRACT = "hosting.operation_repository"
@@ -112,6 +113,7 @@ class AtomicJsonHostedOperationRepository:
         max_receipts: int = 10_000,
         max_tombstones: int = 20_000,
         max_inline_result_bytes: int = MAX_INLINE_RESULT_BYTES,
+        result_artifact_store: Optional[TerminalResultArtifactStore] = None,
         clock: Any = time.time,
     ) -> None:
         self.path = Path(path).expanduser().resolve()
@@ -120,6 +122,7 @@ class AtomicJsonHostedOperationRepository:
         self.max_receipts = max(1, int(max_receipts))
         self.max_tombstones = max(1, int(max_tombstones))
         self.max_inline_result_bytes = max(256, min(int(max_inline_result_bytes), MAX_INLINE_RESULT_BYTES))
+        self.result_artifact_store = result_artifact_store
         self._clock = clock
         self._condition = threading.Condition(threading.RLock())
         self._data = self._load()
@@ -281,6 +284,12 @@ class AtomicJsonHostedOperationRepository:
         ).to_dict()
 
     def _forget_locked(self, operation_id: str, row: Dict[str, Any], now_ms: int) -> None:
+        result_ref = dict(dict(row.get("terminal") or {}).get("result_ref") or {})
+        if self.result_artifact_store is not None and result_ref.get("artifact_id"):
+            try:
+                self.result_artifact_store.delete(str(result_ref["artifact_id"]))
+            except Exception:
+                pass
         self._data["receipts"].pop(operation_id, None)
         forgotten = copy.deepcopy(row)
         forgotten["lifecycle"] = HostedOperationLifecycle.FORGOTTEN.value
@@ -460,16 +469,31 @@ class AtomicJsonHostedOperationRepository:
                 self._condition.notify_all()
             return self._status_from_row(row)
 
-    def _bounded_terminal(self, envelope: Mapping[str, Any]) -> Dict[str, Any]:
+    def _bounded_terminal(self, envelope: Mapping[str, Any], *, row: Mapping[str, Any]) -> Dict[str, Any]:
         redacted = _redact(copy.deepcopy(dict(envelope or {})))
         encoded = canonical_json_bytes(redacted)
         digest = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
         if len(encoded) <= self.max_inline_result_bytes:
             return {"result": redacted, "digest": digest, "size_bytes": len(encoded)}
+        retain = bool(dict(row.get("metadata") or {}).get("retain_terminal_result"))
+        if retain and self.result_artifact_store is not None:
+            try:
+                result_ref = self.result_artifact_store.put(
+                    owner_actor_id=str(row.get("owner_actor_id") or ""),
+                    operation_id=str(dict(row.get("operation") or {}).get("operation_id") or ""),
+                    content=encoded,
+                )
+                return {"result_ref": result_ref.to_dict(), "digest": digest, "size_bytes": len(encoded)}
+            except ResultArtifactError as exc:
+                omission_reason = str(exc)
+            except Exception:
+                omission_reason = "result_artifact_store_failed"
+        else:
+            omission_reason = "retention_not_permitted"
         omission = HostedResultOmission(
             digest=digest,
             size_bytes=len(encoded),
-            reason="retention_not_permitted",
+            reason=omission_reason,
         )
         return {"result_omission": omission.to_dict(), "digest": digest, "size_bytes": len(encoded)}
 
@@ -500,7 +524,7 @@ class AtomicJsonHostedOperationRepository:
             row["terminal_at_ms"] = now_ms
             row["updated_at_ms"] = now_ms
             row["reason"] = terminal_reason
-            row["terminal"] = self._bounded_terminal(envelope)
+            row["terminal"] = self._bounded_terminal(envelope, row=row)
             self._prune_locked()
             self._persist_locked()
             self._condition.notify_all()
@@ -588,6 +612,46 @@ class AtomicJsonHostedOperationRepository:
         with self._condition:
             if self._prune_locked():
                 self._persist_locked()
+            if self.result_artifact_store is not None:
+                live_ids = {
+                    str(result_ref["artifact_id"])
+                    for row in self._data["receipts"].values()
+                    for result_ref in [dict(dict(row.get("terminal") or {}).get("result_ref") or {})]
+                    if result_ref.get("artifact_id")
+                }
+                self.result_artifact_store.prune(live_artifact_ids=live_ids)
+
+    def read_result(
+        self,
+        *,
+        ref: HostedOperationRef | Mapping[str, Any],
+        owner_actor_id: str,
+    ) -> Dict[str, Any]:
+        if self.result_artifact_store is None:
+            raise ResultArtifactError("result_artifact_store_unavailable")
+        operation = ref if isinstance(ref, HostedOperationRef) else HostedOperationRef.from_dict(ref)
+        with self._condition:
+            row = self.resolve(ref=operation, owner_actor_id=owner_actor_id)
+            if row is None:
+                raise ResultArtifactError("result_artifact_unauthorized")
+            result_ref_row = dict(dict(row.get("terminal") or {}).get("result_ref") or {})
+            if not result_ref_row:
+                raise ResultArtifactError("operation_has_no_result_artifact")
+            result_ref = HostedResultRef.from_dict(result_ref_row)
+        payload = self.result_artifact_store.read(
+            ref=result_ref,
+            owner_actor_id=owner_actor_id,
+            operation_id=operation.operation_id,
+        )
+        try:
+            content = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise ResultArtifactError("result_artifact_content_invalid") from exc
+        return {
+            "contract": "hosting.result_content",
+            "result_ref": result_ref.to_dict(),
+            "content": content,
+        }
 
     @classmethod
     def archive_legacy_checkpoint(

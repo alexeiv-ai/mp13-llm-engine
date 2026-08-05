@@ -1194,6 +1194,7 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
     }
     ch.hosted_operation_cancel(ref=workflow_operation)
     ch.hosted_operation_status(ref=workflow_operation)
+    ch.hosted_operation_result(ref=workflow_operation)
     ch.workflow_python_stream_open(
         profile="node",
         environment_key="env-key",
@@ -1360,6 +1361,13 @@ def test_workflow_python_channel_facade_forwards_expected_payloads() -> None:
         ),
         (
             "hosted-operation-status",
+            {
+                "ref": workflow_operation,
+                "session_token": "tok-123",
+            },
+        ),
+        (
+            "hosted-operation-result",
             {
                 "ref": workflow_operation,
                 "session_token": "tok-123",

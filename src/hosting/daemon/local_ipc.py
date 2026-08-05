@@ -2914,6 +2914,11 @@ class EngineHostDaemon:
                 ref=dict(payload.get("ref") or {}),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
+        if cmd == "hosted-operation-result":
+            return svc.hosted_operation_result(
+                ref=dict(payload.get("ref") or {}),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "hosted-operation-cancel":
             return svc.hosted_operation_cancel(
                 ref=dict(payload.get("ref") or {}),

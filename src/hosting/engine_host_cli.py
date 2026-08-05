@@ -95,6 +95,9 @@ EXAMPLES_BY_COMMAND = {
     "hosted-operation-status": [
         "Get-Content operation-ref.json | python -m hosting.engine_host_cli --payload-stdin hosted-operation-status",
     ],
+    "hosted-operation-result": [
+        "Get-Content operation-ref.json | python -m hosting.engine_host_cli --payload-stdin hosted-operation-result",
+    ],
     "hosted-operation-cancel": [
         "'{\"ref\":{...},\"reason\":\"workspace_unload\"}' | python -m hosting.engine_host_cli --payload-stdin hosted-operation-cancel",
     ],
@@ -838,6 +841,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-gate",
         "toolbox-execute",
         "hosted-operation-status",
+        "hosted-operation-result",
         "hosted-operation-cancel",
         "hosting-receipt-ledger-cutover",
         "toolbox-gc",
@@ -1819,6 +1823,13 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "hosted-operation-status":
             _print_ok(
                 svc.hosted_operation_status(
+                    ref=dict(payload.get("ref") or payload),
+                )
+            )
+            return 0
+        if cmd == "hosted-operation-result":
+            _print_ok(
+                svc.hosted_operation_result(
                     ref=dict(payload.get("ref") or payload),
                 )
             )

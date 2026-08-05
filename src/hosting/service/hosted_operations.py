@@ -25,6 +25,18 @@ class HostedOperationsMixin:
             owner_actor_id=self._operation_owner(owner_actor_id),
         )
 
+    def hosted_operation_result(
+        self,
+        *,
+        ref: HostedOperationRef | Mapping[str, Any],
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        operation = ref if isinstance(ref, HostedOperationRef) else HostedOperationRef.from_dict(ref)
+        return self._hosted_operations.read_result(
+            ref=operation,
+            owner_actor_id=self._operation_owner(owner_actor_id),
+        )
+
     def hosted_operation_cancel(
         self,
         *,

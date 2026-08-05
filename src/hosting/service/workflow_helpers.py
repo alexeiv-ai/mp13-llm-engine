@@ -1971,6 +1971,7 @@ class WorkflowHelperMixin:
                 "profile": prof,
                 "request_id": request_id,
                 "runtime": "javascript",
+                "retain_terminal_result": bool(dict(sandbox_policy or {}).get("retain_terminal_result")),
             },
         )
         action = str(prepared.get("action") or "")
@@ -2716,6 +2717,7 @@ class WorkflowHelperMixin:
                 "profile": prof,
                 "request_id": request_id,
                 "runtime": "python",
+                "retain_terminal_result": bool(dict(sandbox_policy or {}).get("retain_terminal_result")),
             },
         )
         action = str(prepared.get("action") or "")

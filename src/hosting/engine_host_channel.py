@@ -3249,6 +3249,13 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def hosted_operation_result(self, *, ref: Dict[str, Any]) -> Dict[str, Any]:
+        res = self._invoke(
+            "hosted-operation-result",
+            {"ref": dict(ref or {})},
+        )
+        return dict(res or {})
+
     def hosted_operation_cancel(
         self,
         *,

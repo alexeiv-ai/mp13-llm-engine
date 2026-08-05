@@ -230,20 +230,20 @@ generic status/cancel require only the operation ref.
 
 ### Phase 3 - Artifact-backed terminal results
 
-- [ ] **P3-01** Add a dedicated terminal-result artifact manager or extend
+- [x] **P3-01** Add a dedicated terminal-result artifact manager or extend
   `HostedArtifactManager` with bounded byte writes, digest verification, TTL,
   ownership metadata, and safe deletion. Do not store arbitrary worker paths.
-- [ ] **P3-02** On terminal persistence, redact first, serialize canonically,
+- [x] **P3-02** On terminal persistence, redact first, serialize canonically,
   compute digest/size, then either store inline, write an allowed artifact, or
   emit `result_omission`. Never call an omission a reference.
-- [ ] **P3-03** Define `hosting.result_ref` containing an opaque
+- [x] **P3-03** Define `hosting.result_ref` containing an opaque
   artifact ID, digest, size, media type, and expiry. Avoid exposing host paths.
-- [ ] **P3-04** Add an authorization-checked dereference endpoint/channel method
+- [x] **P3-04** Add an authorization-checked dereference endpoint/channel method
   that verifies operation ownership, retention, size, and digest before
   returning bounded bytes/content.
-- [ ] **P3-05** Couple artifact pruning to receipt/tombstone retention with a
+- [x] **P3-05** Couple artifact pruning to receipt/tombstone retention with a
   deterministic orphan cleanup pass.
-- [ ] **P3-06** Test allowed retention, denied retention, oversized artifact
+- [x] **P3-06** Test allowed retention, denied retention, oversized artifact
   limits, credential redaction, tampering, expiry, cross-actor denial, missing
   files, digest mismatch, and cleanup.
 

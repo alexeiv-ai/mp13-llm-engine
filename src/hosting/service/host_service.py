@@ -27,6 +27,7 @@ from .logs import LogsMixin
 from .metrics import MetricsMixin
 from .hosted_operations import HostedOperationsMixin
 from .operation_repository import AtomicJsonHostedOperationRepository, LegacyOperationRepositoryError
+from .result_artifacts import TerminalResultArtifactStore
 from .policy import PolicyMixin
 from .proxy import ProxyMixin
 from .sandbox_api import SandboxApiMixin
@@ -122,7 +123,15 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         with self._operation_repository_guard:
             repository = self._operation_repositories.get(key)
             if repository is None:
-                repository = AtomicJsonHostedOperationRepository(path, **self._hosted_operation_options)
+                artifact_store = TerminalResultArtifactStore(
+                    state_root / "hosted_operation_results",
+                    ttl_seconds=float(self._hosted_operation_options["receipt_retention_seconds"]),
+                )
+                repository = AtomicJsonHostedOperationRepository(
+                    path,
+                    result_artifact_store=artifact_store,
+                    **self._hosted_operation_options,
+                )
                 self._operation_repositories[key] = repository
             return repository
 

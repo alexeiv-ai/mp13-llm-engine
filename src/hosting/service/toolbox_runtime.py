@@ -875,6 +875,7 @@ class ToolboxRuntimeMixin:
                 "tool_name": tool_name,
                 "tool_call_id": model_tool_call_id,
                 "environment_key": environment_key,
+                "retain_terminal_result": bool(dict(reg.get("sandbox_policy") or {}).get("retain_terminal_result")),
             },
         )
         operation_action = str(prepared.get("action") or "")
