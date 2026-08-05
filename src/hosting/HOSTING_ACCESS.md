@@ -778,15 +778,15 @@ This section is the authoritative integration contract for hosting consumers.
    - OpenSSH passphrase-protected vs unprotected private key
 9. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
-### 11.6 Durable toolbox execution receipts
+### 11.6 Durable hosted operations
 
-Hosted toolbox execution is idempotent within the exact endpoint namespace used by the caller:
+Toolbox, workflow Python, and workflow JavaScript executions share one durable contract:
 
-1. `toolbox_execute(..., execution_request_id=...)` requires a non-empty caller-generated `execution_request_id`; the host no longer generates one.
-2. The namespace is `toolbox:<toolbox_id>` when execution uses `toolbox_id`, or `engine:<engine_id>` when it uses `engine_id`. Status and cancellation must use the same selector and request id.
-3. The durable fingerprint covers canonical tool name, arguments, and effective execution policy. Reusing an id with a different fingerprint returns `outcome=idempotency_conflict` and never dispatches.
-4. A matching duplicate attaches to queued/running work or replays the persisted terminal envelope. An oversized terminal envelope is replaced by `result_reference` containing its SHA-256 digest and byte size.
-5. `toolbox_request_status(...)` is ledger-authoritative and does not fall back to the in-memory sandbox pool. Its `lifecycle_state`/`outcome` values are:
+1. Execute requires a non-empty caller-generated request ID and returns `hosting.operation_status` containing a typed `hosting.operation_ref`.
+2. Persist that complete ref. Later status, result retrieval, and cancellation use only `hosted_operation_status(ref=...)`, `hosted_operation_result(ref=...)`, and `hosted_operation_cancel(ref=...)`. Caller-reconstructed selectors are not accepted or trusted.
+3. The durable fingerprint covers canonical family-specific dispatch inputs and effective policy. Reusing an ID with a different fingerprint returns `lifecycle=idempotency_conflict` and never dispatches.
+4. A matching duplicate attaches to queued/running work or replays persisted terminal truth without starting a worker or sandbox.
+5. The canonical `lifecycle` values are:
    - `queued`
    - `running`
    - `terminal_success`
@@ -796,19 +796,21 @@ Hosted toolbox execution is idempotent within the exact endpoint namespace used 
    - `interrupted_after_dispatch_unknown`
    - `forgotten`
    - `unknown_outside_retention`
-6. `interrupted_before_dispatch` may resume exactly once through another matching `toolbox_execute` call. `interrupted_after_dispatch_unknown` is fail-closed and never grants another dispatch.
-7. Targeted `toolbox_cancel` uses `request_id=execution_request_id`. `tool_call_id` remains model-call metadata and is not a request-id fallback. Calling cancel without `request_id` remains the separate coarse executor cancellation operation.
-8. Receipts are stored at `<hosting_root>/state/toolbox_execution_receipts.json`. They contain digests and bounded scalar metadata, not raw arguments, callback/session tokens, worker state, queues, or stream histories. Credential-shaped terminal fields are redacted before persistence.
+   - `idempotency_conflict`
+6. `interrupted_before_dispatch` may resume exactly once through another matching execute call. `interrupted_after_dispatch_unknown` is fail-closed and never grants another dispatch.
+7. Terminal payloads use exactly one of bounded inline `result`, authorized `result_ref`, or digest-only `result_omission`. Digests use `sha256:<hex>` and sizes use `size_bytes`.
+8. Receipts are stored at `<hosting_root>/state/hosted_operations.json`. Credential-shaped data is redacted before persistence. Callback bindings, lease tokens, raw worker state, queues, and stream histories are excluded.
+9. The legacy `toolbox_execution_receipts.json` schema is rejected. Stop the daemon, clear the protected replay window, and run `hosting-receipt-ledger-cutover` with explicit acknowledgement to archive it before starting this release.
 
 Retention defaults and daemon environment overrides:
 
-- retained receipts: 7 days, `MP13_TOOLBOX_RECEIPT_RETENTION_SECONDS`
-- forgotten tombstones: 14 additional days, `MP13_TOOLBOX_RECEIPT_TOMBSTONE_SECONDS`
-- receipt count: 10,000, `MP13_TOOLBOX_RECEIPT_MAX_COUNT`
-- tombstone count: 20,000, `MP13_TOOLBOX_RECEIPT_MAX_TOMBSTONES`
-- terminal envelope: 64 KiB, `MP13_TOOLBOX_RECEIPT_MAX_RESULT_BYTES`
+- retained receipts/results: 7 days, `MP13_HOSTED_OPERATION_RETENTION_SECONDS`
+- forgotten tombstones: 14 additional days, `MP13_HOSTED_OPERATION_TOMBSTONE_SECONDS`
+- receipt count: 10,000, `MP13_HOSTED_OPERATION_MAX_COUNT`
+- tombstone count: 20,000, `MP13_HOSTED_OPERATION_MAX_TOMBSTONES`
+- inline terminal result: 64 KiB, `MP13_HOSTED_OPERATION_MAX_INLINE_RESULT_BYTES`
 
-In-process construction may override the corresponding `EngineHostService(...)` keyword arguments. Compaction is deterministic by timestamp and receipt key. Loading the ledger does not route a toolbox or start a worker.
+In-process construction may override the corresponding `EngineHostService(...)` keyword arguments. Compaction is deterministic by timestamp and operation ID. Loading the repository does not route or start a worker or sandbox.
 
 ### 11.7 Compact try-out anchor recovery
 

@@ -28,8 +28,8 @@ The public entrypoints are the workflow facade commands and channel methods:
 5. `workflow-js-stream-close`
 6. `workflow-js-resources`
 7. `workflow-js-set-capacity`
-8. `workflow-js-request-status`
-9. `workflow-js-cancel-request`
+8. `hosted-operation-status` with the execute result's complete operation ref
+9. `hosted-operation-cancel` with that same ref
 
 This runtime is not a Node.js runtime. It does not expose Node built-ins or npm
 package execution by default. It executes QuickJS workflow code with explicit

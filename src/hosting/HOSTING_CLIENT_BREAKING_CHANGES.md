@@ -5,13 +5,15 @@ client does not provide compatibility adapters, fallback signatures, or
 parallel versioned APIs. Each dependent project must repin and apply every entry
 whose parent commit is newer than its current pin.
 
-## Pending staged release - unified hosted operations and capability leases
+## Unified hosted operations and capability leases
 
 Change set: `HOSTING-OPERATION-CONTRACT`
 
 Prepared against parent: `9895a98b8b7af7e4b248951d61b622c0c9c1caa3`
 
-First parent commit containing break: `<fill when staged changes are committed>`
+First parent commit containing break: `f4e4ec021e0e62485415ca376953fae9388f6e73`
+
+Implementation release commit: `4fa9c38a900e1bd857856aecd755681790ec47ae`
 
 Dependent project: `O:/repos/mp13-docs`
 
@@ -76,10 +78,11 @@ Never open a new-format ledger with the previous parent or vice versa.
 
 ### HC-003 - Host Capability provider identity is explicit
 
-`provider_id` and `session_id` are both required during registration.
-`provider_id` identifies the logical provider; `session_id` identifies one
-registration instance. The parent no longer derives either value from the
-other.
+`provider_id` is required during registration and identifies the logical
+provider. `session_id` identifies one registration instance; callers may
+supply it or persist the parent-minted value returned by registration. The two
+identities must differ, and the parent never derives `provider_id` from
+`session_id`.
 
 ```python
 channel.host_capability_session_register(
@@ -87,7 +90,12 @@ channel.host_capability_session_register(
     session_id="workspace.tools.session-17",
     methods=methods,
     scope=scope,
-    lifetime=lifetime,
+    authority_lease={
+        "expires_at_ms": expires_at_ms,
+        "on_transport_loss": "retain_until_expiry",
+        "on_authority_revoked": "close",
+        "on_request_terminal": "close",
+    },
 )
 ```
 
@@ -110,11 +118,10 @@ Contradictory callback arguments fail validation.
 ### HC-005 - Capability session lifetime descriptor replaced the disconnect boolean
 
 `close_on_client_disconnect` is removed. Registration requires an explicit
-lifetime descriptor:
+authority lease descriptor:
 
 ```python
-lifetime = {
-    "owner_authority_id": authority_id,
+authority_lease = {
     "expires_at_ms": expires_at_ms,  # null means no expiry; zero is invalid
     "on_transport_loss": "close",  # or retain_until_expiry
     "on_authority_revoked": "close",
@@ -122,7 +129,9 @@ lifetime = {
 }
 ```
 
-Use the new authority-renew and authority-revoke methods. Keep the protected
+The parent binds `owner_authority_id` from the authenticated actor. Use
+`host_capability_session_renew(...)` and
+`host_capability_session_revoke(...)`. Keep the protected
 lease token returned at registration process-local; never persist it in a
 workspace journal or send it to browser/UI state.
 
@@ -136,5 +145,5 @@ The dependent project must run its complete:
 - authority lease disconnect/expiry/revocation suite; and
 - workflow Python and JavaScript execution suites.
 
-Remove this entry's `Pending staged release` label and fill the exact parent
-commit before the parent release is considered consumable.
+Repin to the implementation release commit above or a descendant containing
+it. Do not adopt only a subset of these breaking changes.

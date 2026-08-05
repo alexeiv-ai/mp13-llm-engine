@@ -168,19 +168,21 @@ Workflow Python helper-profile workers are managed through workflow runtime faca
 @'{"profile":"helper","environment_name":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-ensure
 @'{"profile":"helper","environment_key":"<environment_key>","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-resources
 @'{"profile":"helper","environment_key":"<environment_key>","capacity":4,"session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-set-capacity
-@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-1","session_token":"<control_token>"}'@ | py hosting_cli.py --payload-stdin workflow-python-cancel-request
+Get-Content operation-ref.json | py hosting_cli.py --payload-stdin hosted-operation-status
 ```
 
 Workflow JavaScript uses the QuickJS-backed node facade with
 `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-stream-open`,
 `workflow-js-event-subscribe`, `workflow-js-stream-send`,
 `workflow-js-stream-close`, `workflow-js-resources`,
-`workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use
-`profile:"node"` with the `exports.run(input, api)` contract.
+`workflow-js-set-capacity`. Non-stream status and cancellation use
+`hosted-operation-status` and `hosted-operation-cancel` with the complete ref
+returned by execute. JS requests use `profile:"node"` with the
+`exports.run(input, api)` contract.
 
-The interactive menu exposes workflow runtime resource, capacity, refresh,
-request-status, event subscription, and request-cancel actions under `Manage
-workflow runtimes`.
+The interactive menu exposes workflow runtime resource, capacity, refresh, and
+stream event subscription actions under `Manage workflow runtimes`. Use the
+generic hosted-operation commands for durable non-stream status and cancel.
 
 ## Remote Authentication Model
 

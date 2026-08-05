@@ -25,8 +25,8 @@ The public entrypoints are the workflow facade commands and channel methods:
 5. `workflow-python-stream-close`
 6. `workflow-python-resources`
 7. `workflow-python-set-capacity`
-8. `workflow-python-request-status`
-9. `workflow-python-cancel-request`
+8. `hosted-operation-status` with the execute result's complete operation ref
+9. `hosted-operation-cancel` with that same ref
 
 The implementation lives in `hosting.sandbox.workflow_python_node_runtime`, launches the built-in `hosting.workflow_python_node_worker_ipc` harness, and is called by `WorkflowHelperMixin`. It is not an externally registered IPC worker module. The host starts a child Python harness process for execution and tracks it through the shared hosted workflow pool and request lifecycle.
 
@@ -54,7 +54,7 @@ Request lifecycle states are shared with the hosted pool model:
 
 Long-running requests can opt into host-side liveness events by setting `limits.heartbeat_interval_ms`. Heartbeats are emitted by the host wait loop as `heartbeat` stream events with `request_id`, `status=running`, `elapsed_ms`, and `remaining_ms`. They do not require sandbox code cooperation and are separate from user progress events.
 
-Stream retention is bounded per request. `limits.stream_max_events` sets the retained live-event queue size used by `workflow-python-event-subscribe`; the host caps this value to a finite range. Subscription responses return a compact `batch` plus helper-normalized `normalized_events`. Loss is reported in `batch.loss` and as a helper `stream_loss` event when helper policy is `mark`. Request status still records total `stream_event_count` for lifecycle metrics.
+Stream retention is bounded per request. `limits.stream_max_events` sets the retained live-event queue size used by `workflow-python-event-subscribe`; the host caps this value to a finite range. Subscription responses return a compact `batch` plus helper-normalized `normalized_events`. Loss is reported in `batch.loss` and as a helper `stream_loss` event when helper policy is `mark`. Stream status still records total `stream_event_count` for lifecycle metrics.
 
 ## Request Contract
 

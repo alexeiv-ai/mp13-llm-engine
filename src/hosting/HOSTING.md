@@ -240,13 +240,14 @@ when explicitly allowed, and `workflow-python-verify-install-receipt` before
 depending on installed packages. The stable `install_status` field summarizes
 that lifecycle.
 
-Resource and request operations are keyed by `environment_key`:
+Resource and capacity operations are keyed by `environment_key`. Durable status
+and cancellation use the complete operation ref returned by execute:
 
 ```powershell
 @'{"profile":"helper","environment_key":"<environment_key>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-resources
 @'{"profile":"helper","environment_key":"<environment_key>","capacity":4}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-set-capacity
-@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-123"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-request-status
-@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-123"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-cancel-request
+Get-Content operation-ref.json | python -m hosting.engine_host_cli --payload-stdin hosted-operation-status
+@'{"ref":<operation-ref>,"reason":"workspace_unload"}'@ | python -m hosting.engine_host_cli --payload-stdin hosted-operation-cancel
 ```
 
 Workflow Python node profile uses the stable node response envelope. The sync
@@ -259,8 +260,8 @@ Stream-open returns immediately and background execution emits `started`,
 Workflow JS node profile exposes the same environment-keyed management shape:
 `workflow-js-environment-spec`, `workflow-js-ensure`, `workflow-js-execute`,
 `workflow-js-stream-open`, `workflow-js-event-subscribe`, `workflow-js-stream-send`,
-`workflow-js-stream-close`, `workflow-js-resources`, `workflow-js-set-capacity`,
-`workflow-js-request-status`, and `workflow-js-cancel-request`.
+`workflow-js-stream-close`, `workflow-js-resources`, and `workflow-js-set-capacity`.
+Non-stream status and cancel use the generic hosted-operation ref APIs.
 
 ### 2.6 Proxying Worker Requests (RPC & Streams)
 
@@ -305,7 +306,7 @@ Workflow helpers are hosted `generic` workers behind workflow runtime facades. U
 @'{"profile":"helper","environment_name":"workflow-python-helper","capacity":2,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-ensure
 @'{"profile":"helper","environment_key":"<environment_key>","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-resources
 @'{"profile":"helper","environment_key":"<environment_key>","capacity":4,"session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-set-capacity
-@'{"profile":"helper","environment_key":"<environment_key>","request_id":"req-1","session_token":"<control_token>"}'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-cancel-request
+Get-Content operation-ref.json | python -m hosting.engine_host_cli --payload-stdin hosted-operation-status
 ```
 
 Execute Python helper-profile code through the workflow facade:
@@ -328,7 +329,7 @@ Execute Python helper-profile code through the workflow facade:
 }'@ | python -m hosting.engine_host_cli --payload-stdin workflow-python-execute
 ```
 
-Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-stream-open`, `workflow-js-event-subscribe`, `workflow-js-stream-send`, `workflow-js-stream-close`, `workflow-js-resources`, `workflow-js-set-capacity`, and `workflow-js-cancel-request`. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs. Clients that author with imports can use `hosting.sandbox.build_workflow_js_bundle(...)` to patch enabled `@host/...` bridge imports and inspect disabled or unresolved imports before submitting the single script. `host_call_id` values are scoped to a worker/request IPC conversation and are not global daemon-channel routes.
+Workflow JavaScript uses the QuickJS-backed node facade: `workflow-js-ensure`, `workflow-js-execute`, `workflow-js-stream-open`, `workflow-js-event-subscribe`, `workflow-js-stream-send`, `workflow-js-stream-close`, `workflow-js-resources`, and `workflow-js-set-capacity`. Non-stream status and cancellation use `hosted-operation-status` and `hosted-operation-cancel` with the execute result's complete ref. JS requests use `profile:"node"` and a single-script contract such as `exports.run = function(input, api) { return {output: input}; };`. The host verifies `module_sha256` before execution and exposes filesystem, HTTP, codec, crypto, console, and progress behavior only through explicit host APIs. Clients that author with imports can use `hosting.sandbox.build_workflow_js_bundle(...)` to patch enabled `@host/...` bridge imports and inspect disabled or unresolved imports before submitting the single script. `host_call_id` values are scoped to a worker/request IPC conversation and are not global daemon-channel routes.
 
 ## 3. Diagnostics and Auditing
 

@@ -185,17 +185,16 @@ idempotent. Exactly one of callable, pre-bound binding, or lease is accepted.
 - Renew/revoke requires the same actor and token. Administrative force revoke
   uses the existing admin claim path and is audited.
 
-Request terminal means the durable operation reaches success, failure, or
-cancellation. Interrupted-after-dispatch remains non-terminal until explicit
-reconciliation/cancellation policy resolves it. Sessions are in-memory and do
-not survive daemon restart; no persistence capability is promised.
+Request terminal means the durable operation reaches success, failure,
+cancellation, or an interrupted terminal policy state. Sessions are in-memory
+and do not survive daemon restart; no persistence capability is promised.
 
 ## Breaking cutover and rollback
 
 The change is prepared against parent base
-`9895a98b8b7af7e4b248951d61b622c0c9c1caa3`. The release commit hash is filled
-into `HOSTING_CLIENT_BREAKING_CHANGES.md` by the committer because this task
-intentionally leaves changes staged.
+`9895a98b8b7af7e4b248951d61b622c0c9c1caa3`. The first breaking commit and the
+implementation release commit are recorded in
+`HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 Before starting the replacement parent against an existing hosting root:
 

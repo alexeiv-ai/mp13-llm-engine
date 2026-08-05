@@ -50,12 +50,13 @@ surface:
 2. `workflow-python-execute`
 3. `workflow-python-resources`
 4. `workflow-python-set-capacity`
-5. `workflow-python-request-status`
-6. `workflow-python-cancel-request`
+5. `hosted-operation-status` with the execute result's complete operation ref
+6. `hosted-operation-cancel` with that same ref
 
-These commands route and report by host-derived `environment_key` so different
-runtime, dependency, or sandbox-policy identities do not share the same
-host-side pool.
+Resource and capacity commands route by host-derived `environment_key` so
+different runtime, dependency, or sandbox-policy identities do not share the
+same host-side pool. Durable status and cancellation route only from the stored
+operation identity in the complete ref.
 
 ## Python RPC Contract
 
