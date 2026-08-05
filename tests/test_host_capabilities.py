@@ -15,10 +15,26 @@ from hosting.sandbox.host_capabilities import (
     HostCapabilityDescriptor,
     HostCapabilityMethod,
     HostCapabilityProviderRef,
-    HostCapabilitySession,
+    HostCapabilitySession as _HostCapabilitySession,
     HostCapabilityTimeout,
     validate_provider_response,
 )
+
+
+def HostCapabilitySession(**kwargs):
+    """Build a session with the descriptor's explicit logical provider identity."""
+    methods = dict(kwargs.get("methods") or {})
+    provider_ids = {
+        method.descriptor.provider.provider_id
+        for method in methods.values()
+        if method.descriptor.provider.provider_id
+    }
+    if len(provider_ids) != 1:
+        raise ValueError("test_session_requires_one_provider_id")
+    provider_id = next(iter(provider_ids))
+    if kwargs.get("session_id") == provider_id:
+        kwargs["session_id"] = f"{provider_id}.registration"
+    return _HostCapabilitySession(provider_id=provider_id, **kwargs)
 
 
 def _descriptor(name: str = "crm.customer.lookup") -> HostCapabilityDescriptor:
@@ -204,7 +220,7 @@ def test_host_capability_broker_maps_provider_disconnect() -> None:
         broker.dispatch({"method": "crm.customer.lookup", "arguments": {"customer_id": "c-1"}})
 
     assert exc.value.reason == "host_capability_provider_unavailable"
-    assert exc.value.detail["provider_id"] == "client-crm"
+    assert exc.value.detail["provider_id"] == "provider-1"
     assert [kind for kind, _payload in events] == ["host_call", "provider_failure", "host_response"]
     assert events[1][1]["reason"] == "host_capability_provider_unavailable"
 

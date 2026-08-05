@@ -46,6 +46,7 @@ _WORKFLOW_PYTHON_COMMANDS = {
     "workflow-python-set-capacity",
     "workflow-python-stream-open",
     "workflow-python-event-subscribe",
+    "workflow-python-stream-status",
     "workflow-python-stream-send",
     "workflow-python-stream-close",
 }
@@ -59,6 +60,7 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-instance-list",
     "workflow-python-resources",
     "workflow-python-event-subscribe",
+    "workflow-python-stream-status",
 }
 
 _WORKFLOW_JS_COMMANDS = {
@@ -75,6 +77,7 @@ _WORKFLOW_JS_COMMANDS = {
     "workflow-js-set-capacity",
     "workflow-js-stream-open",
     "workflow-js-event-subscribe",
+    "workflow-js-stream-status",
     "workflow-js-stream-send",
     "workflow-js-stream-close",
 }
@@ -85,6 +88,7 @@ _WORKFLOW_JS_OBSERVE_COMMANDS = {
     "workflow-js-instance-list",
     "workflow-js-resources",
     "workflow-js-event-subscribe",
+    "workflow-js-stream-status",
 }
 
 _WORKFLOW_ARTIFACT_COMMANDS = {

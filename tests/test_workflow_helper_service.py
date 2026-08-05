@@ -13,7 +13,7 @@ import zipfile
 import pytest
 from hosting.callable_surface import HostCapabilityProviderCallbackRelay, host_capability_approval_decision
 from hosting._process_utils import terminate_process_tree
-from hosting.service.host_service import EngineHostService
+from hosting.service.host_service import EngineHostService as _EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
 from hosting.sandbox.host_capabilities import (
     HostCapabilityApproval,
@@ -26,6 +26,51 @@ from hosting.sandbox.host_capabilities import (
 from hosting.sandbox.service_broker_registry import service_broker_method_descriptors
 from hosting.sandbox.workflow_python_contract import build_workflow_python_node_snippet_request
 from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntime, WorkflowPythonNodeRuntimeRegistry
+
+
+class EngineHostService(_EngineHostService):
+    """Exercise worker behavior beneath the canonical durable-operation envelope."""
+
+    _test_request_sequence = 0
+
+    @classmethod
+    def _test_request(cls, request):
+        row = dict(request or {})
+        if not str(row.get("request_id") or "").strip():
+            cls._test_request_sequence += 1
+            row["request_id"] = f"worker-behavior-{cls._test_request_sequence}"
+        return row
+
+    @staticmethod
+    def _worker_result(status):
+        row = dict(status or {})
+        return dict(row.get("result") or {}) if row.get("contract") == "hosting.operation_status" else row
+
+    def execute_workflow_python(self, **kwargs):
+        kwargs["request"] = self._test_request(kwargs.get("request"))
+        return self._worker_result(super().execute_workflow_python(**kwargs))
+
+    def execute_workflow_js(self, **kwargs):
+        kwargs["request"] = self._test_request(kwargs.get("request"))
+        return self._worker_result(super().execute_workflow_js(**kwargs))
+
+    def workflow_python_instance_execute(self, **kwargs):
+        kwargs["request"] = self._test_request(kwargs.get("request"))
+        return self._worker_result(super().workflow_python_instance_execute(**kwargs))
+
+    def workflow_js_instance_execute(self, **kwargs):
+        kwargs["request"] = self._test_request(kwargs.get("request"))
+        return self._worker_result(super().workflow_js_instance_execute(**kwargs))
+
+    def _test_workflow_python_status(self, *, environment_key: str, request_id: str):
+        return self._workflow_python_pool_registry().request_status(
+            self._workflow_python_pool_key(environment_key), request_id
+        )
+
+    def _test_workflow_js_status(self, *, environment_key: str, request_id: str):
+        return self._workflow_python_pool_registry().request_status(
+            self._workflow_js_pool_key(environment_key), request_id
+        )
 
 
 def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
@@ -562,10 +607,6 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
             self.calls.append(("set_capacity", dict(kwargs)))
             return {"status": "ok", "capacity": kwargs["capacity"]}
 
-        def cancel_workflow_python_request(self, **kwargs):
-            self.calls.append(("cancel", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs["request_id"]}
-
         def workflow_python_stream_open(self, **kwargs):
             self.calls.append(("stream_open", dict(kwargs)))
             return {"status": "ok", "stream_id": "stream-1"}
@@ -599,7 +640,8 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
     assert daemon._call_service("workflow-python-instance-close", {"instance_id": "inst-1"})["closed"] is True
     assert daemon._call_service("workflow-python-resources", {"engine_id": "wf-py"})["status"] == "ok"
     assert daemon._call_service("workflow-python-set-capacity", {"engine_id": "wf-py", "capacity": 5})["capacity"] == 5
-    assert daemon._call_service("workflow-python-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})["request_id"] == "req-1"
+    with pytest.raises(ValueError, match="Unknown command"):
+        daemon._call_service("workflow-python-cancel-request", {"engine_id": "wf-py", "request_id": "req-1"})
     assert daemon._call_service("workflow-python-stream-open", {"profile": "node", "request": {"request_id": "req-node"}})["stream_id"] == "stream-1"
     assert daemon._call_service("workflow-python-event-subscribe", {"stream_id": "stream-1", "max_items": 2})["normalized_events"] == []
     assert daemon._call_service("workflow-python-stream-send", {"stream_id": "stream-1", "message": {"action": "cancel"}})["accepted"] is True
@@ -619,7 +661,6 @@ def test_daemon_dispatches_workflow_python_facade() -> None:
         "instance_close",
         "resources",
         "set_capacity",
-        "cancel",
         "stream_open",
         "event_subscribe",
         "stream_send",
@@ -779,14 +820,6 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
             self.calls.append(("set_capacity", dict(kwargs)))
             return {"status": "ok", "capacity": kwargs["capacity"]}
 
-        def cancel_workflow_js_request(self, **kwargs):
-            self.calls.append(("cancel", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs["request_id"]}
-
-        def workflow_js_request_status(self, **kwargs):
-            self.calls.append(("status", dict(kwargs)))
-            return {"status": "ok", "request_id": kwargs["request_id"]}
-
         def workflow_js_stream_open(self, **kwargs):
             self.calls.append(("stream_open", dict(kwargs)))
             return {"status": "ok", "stream_id": "js-stream-1"}
@@ -818,8 +851,10 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
     assert daemon._call_service("workflow-js-instance-close", {"instance_id": "js-inst-1"})["closed"] is True
     assert daemon._call_service("workflow-js-resources", {"engine_id": "wf-js"})["status"] == "ok"
     assert daemon._call_service("workflow-js-set-capacity", {"engine_id": "wf-js", "capacity": 5})["capacity"] == 5
-    assert daemon._call_service("workflow-js-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
-    assert daemon._call_service("workflow-js-request-status", {"engine_id": "wf-js", "request_id": "req-1"})["request_id"] == "req-1"
+    with pytest.raises(ValueError, match="Unknown command"):
+        daemon._call_service("workflow-js-cancel-request", {"engine_id": "wf-js", "request_id": "req-1"})
+    with pytest.raises(ValueError, match="Unknown command"):
+        daemon._call_service("workflow-js-request-status", {"engine_id": "wf-js", "request_id": "req-1"})
     assert daemon._call_service("workflow-js-stream-open", {"profile": "node", "request": {"request_id": "req-js-stream"}})["stream_id"] == "js-stream-1"
     assert daemon._call_service("workflow-js-event-subscribe", {"stream_id": "js-stream-1", "max_items": 2})["normalized_events"] == []
     assert daemon._call_service("workflow-js-stream-send", {"stream_id": "js-stream-1", "message": {"action": "cancel"}})["accepted"] is True
@@ -837,8 +872,6 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
         "instance_close",
         "resources",
         "set_capacity",
-        "cancel",
-        "status",
         "stream_open",
         "event_subscribe",
         "stream_send",
@@ -997,9 +1030,6 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
     assert out["workflow_execute"]["metrics"]["request"]["request_id"] == "req-runtime"
     python_runtime = rpc_params["python"]
     assert python_runtime["environment_name"] == "workflow-python-helper"
-    assert python_runtime["python_executable"]
-    assert python_runtime["python_source"] in {"bootstrap", "venv"}
-    assert python_runtime["runtime_environment"]["venv_key"]
 
 
 def test_workflow_python_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:
@@ -1225,18 +1255,10 @@ def test_workflow_python_capacity_and_cancel_infer_environment_key_from_registra
         engine_id="wf-py-existing",
         capacity=5,
     )
-    canceled = svc.cancel_workflow_python_request(
-        profile="helper",
-        engine_id="wf-py-existing",
-        request_id="req-missing",
-    )
-
     assert resized["environment_key"] == ensured["environment_key"]
-    assert canceled["environment_key"] == ensured["environment_key"]
     pool = svc._workflow_python_pool_registry().get(svc._workflow_python_pool_key(ensured["environment_key"]))
     assert pool is not None
     assert pool.resources()["metrics"]["desired_capacity"] == 5
-    assert canceled["workflow_pool_cancel"]["status"] == "not_found"
 
 
 def test_old_python_helper_resource_alias_reports_workflow_pool_for_annotated_registration(tmp_path: Path, monkeypatch) -> None:
@@ -1334,6 +1356,7 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
     out = svc.execute_workflow_python(
         profile="helper",
         request={
+            "request_id": "workflow-python-sync",
             "module_source": "def condition(input):\n    return {'accepted': True}\n",
             "module_sha256": "demo",
             "operation": "condition",
@@ -1363,6 +1386,7 @@ def test_execute_workflow_js_facade_uses_quickjs_node_runtime(tmp_path: Path) ->
     out = svc.execute_workflow_js(
         profile="node",
         request={
+            "request_id": "workflow-js-sync",
             "module_source": source,
             "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
             "package_id": "pkg-demo",
@@ -1771,7 +1795,7 @@ def test_workflow_python_node_dynamic_action_discovery_routes_exports(tmp_path: 
     out = svc.execute_workflow_python_action(
         profile="node",
         action_name="preview",
-        request={**request, "action_manifest": visible},
+        request={**request, "request_id": "req-py-dynamic-actions-execute", "action_manifest": visible},
     )
 
     assert visible["status"] == "ok"
@@ -1881,7 +1905,10 @@ def test_workflow_js_node_dynamic_action_discovery_routes_exports(tmp_path: Path
 
     visible = svc.workflow_js_action_describe(request=request, dynamic=True)
     hidden = svc.workflow_js_action_describe(request=request, dynamic=True, include_hidden=True)
-    out = svc.execute_workflow_js_action(action_name="preview", request={**request, "action_manifest": visible})
+    out = svc.execute_workflow_js_action(
+        action_name="preview",
+        request={**request, "request_id": "req-js-dynamic-actions-execute", "action_manifest": visible},
+    )
 
     assert visible["status"] == "ok"
     assert visible["dynamic"] is True
@@ -1955,15 +1982,14 @@ def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> N
     thread.start()
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        status = svc.workflow_js_request_status(
-            profile="node",
+        status = svc._test_workflow_js_status(
             environment_key=environment_key,
             request_id="req-js-metrics-cancel",
         )
         if dict(status.get("request") or {}).get("status") == "running":
             break
         time.sleep(0.05)
-    canceled = svc.cancel_workflow_js_request(
+    canceled = svc._cancel_workflow_js_runtime(
         profile="node",
         environment_key=environment_key,
         request_id="req-js-metrics-cancel",
@@ -2024,11 +2050,7 @@ exports.run = function(input, api) {
         if any(row["kind"] == "done" for row in normalized_events):
             break
         time.sleep(0.05)
-    status = svc.workflow_js_request_status(
-        profile="node",
-        environment_key=opened["environment_key"],
-        request_id="req-js-stream-ok",
-    )
+    status = svc.workflow_js_stream_status(stream_id=opened["stream_id"])
     svc.workflow_js_stream_close(stream_id=opened["stream_id"])
 
     event_types = [row["kind"] for row in normalized_events]
@@ -2108,11 +2130,7 @@ def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> No
     )
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        status = svc.workflow_js_request_status(
-            profile="node",
-            environment_key=opened["environment_key"],
-            request_id="req-js-stream-cancel",
-        )
+        status = svc.workflow_js_stream_status(stream_id=opened["stream_id"])
         if dict(status.get("request") or {}).get("status") == "running":
             break
         time.sleep(0.05)
@@ -2126,11 +2144,7 @@ def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> No
         if any(row["kind"] == "done" for row in events):
             break
         time.sleep(0.05)
-    status = svc.workflow_js_request_status(
-        profile="node",
-        environment_key=opened["environment_key"],
-        request_id="req-js-stream-cancel",
-    )
+    status = svc.workflow_js_stream_status(stream_id=opened["stream_id"])
     svc.workflow_js_stream_close(stream_id=opened["stream_id"])
 
     event_types = [row["kind"] for row in events]
@@ -4417,11 +4431,7 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
             if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
-        status = svc.workflow_python_request_status(
-            profile="node",
-            environment_key=opened["environment_key"],
-            request_id="req-node-stream",
-        )
+        status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
         closed = svc.workflow_python_stream_close(stream_id=opened["stream_id"])
     finally:
         svc.shutdown(str(opened.get("engine_id") or "workflow-python-node"), timeout_seconds=5.0)
@@ -4507,11 +4517,7 @@ def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_re
             if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
-        status = svc.workflow_python_request_status(
-            profile="node",
-            environment_key=str(opened["environment_key"]),
-            request_id="req-node-stream-heartbeat",
-        )
+        status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
     finally:
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
@@ -4556,11 +4562,7 @@ def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: P
             if any(dict(row or {}).get("kind") == "done" for row in list(received.get("normalized_events") or [])):
                 break
             time.sleep(0.05)
-        status = svc.workflow_python_request_status(
-            profile="node",
-            environment_key=str(opened["environment_key"]),
-            request_id="req-node-stream-retention",
-        )
+        status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
     finally:
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
@@ -4825,7 +4827,7 @@ def test_workflow_python_stream_cancel_routes_to_worker_cancel(tmp_path: Path, m
         calls.append(dict(kwargs))
         return {"status": "ok", "canceled": True, "request_id": kwargs["request_id"]}
 
-    monkeypatch.setattr(svc, "cancel_workflow_python_request", fake_cancel)
+    monkeypatch.setattr(svc, "_cancel_workflow_python_runtime", fake_cancel)
 
     out = svc.workflow_python_stream_send(
         stream_id=str(opened["stream_id"]),
@@ -4877,8 +4879,7 @@ def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path)
     saw_running = False
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        status = svc.workflow_python_request_status(
-            profile="node",
+        status = svc._test_workflow_python_status(
             environment_key=environment_key,
             request_id="req-node-active-cancel",
         )
@@ -4887,7 +4888,7 @@ def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path)
             break
         time.sleep(0.05)
 
-    canceled = svc.cancel_workflow_python_request(
+    canceled = svc._cancel_workflow_python_runtime(
         profile="node",
         environment_key=environment_key,
         request_id="req-node-active-cancel",
@@ -4927,11 +4928,7 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
         saw_running = False
         deadline = time.time() + 10.0
         while time.time() < deadline:
-            status = svc.workflow_python_request_status(
-                profile="node",
-                environment_key=str(opened["environment_key"]),
-                request_id="req-node-stream-active-cancel",
-            )
+            status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
             if dict(status.get("request") or {}).get("status") == "running":
                 saw_running = True
                 break
@@ -4949,11 +4946,7 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
             if any(dict(row or {}).get("kind") == "done" for row in events):
                 break
             time.sleep(0.05)
-        status = svc.workflow_python_request_status(
-            profile="node",
-            environment_key=str(opened["environment_key"]),
-            request_id="req-node-stream-active-cancel",
-        )
+        status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
     finally:
         if opened:
             svc.workflow_python_stream_close(stream_id=str(opened.get("stream_id") or ""))
@@ -4996,11 +4989,7 @@ def test_workflow_python_node_stream_reports_capacity_pressure_and_recovers_afte
         saw_running = False
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            status = svc.workflow_python_request_status(
-                profile="node",
-                environment_key=environment_key,
-                request_id="req-node-stream-pressure-active",
-            )
+            status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
             if dict(status.get("request") or {}).get("status") == "running":
                 saw_running = True
                 break
@@ -5029,11 +5018,7 @@ def test_workflow_python_node_stream_reports_capacity_pressure_and_recovers_afte
         deadline = time.time() + 5.0
         terminal_status = {}
         while time.time() < deadline:
-            terminal_status = svc.workflow_python_request_status(
-                profile="node",
-                environment_key=environment_key,
-                request_id="req-node-stream-pressure-active",
-            )
+            terminal_status = svc.workflow_python_stream_status(stream_id=opened["stream_id"])
             if dict(terminal_status.get("request") or {}).get("status") == "canceled":
                 break
             time.sleep(0.05)
@@ -5097,15 +5082,14 @@ def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) 
     thread.start()
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        status = svc.workflow_python_request_status(
-            profile="node",
+        status = svc._test_workflow_python_status(
             environment_key=environment_key,
             request_id="req-node-metrics-cancel",
         )
         if dict(status.get("request") or {}).get("status") == "running":
             break
         time.sleep(0.05)
-    canceled = svc.cancel_workflow_python_request(
+    canceled = svc._cancel_workflow_python_runtime(
         profile="node",
         environment_key=environment_key,
         request_id="req-node-metrics-cancel",

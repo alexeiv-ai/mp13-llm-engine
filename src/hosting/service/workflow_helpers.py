@@ -2550,6 +2550,22 @@ class WorkflowHelperMixin:
     def workflow_js_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         return dict(self._workflow_js_stream_base().event_subscribe(stream_id=stream_id, max_items=max_items))
 
+    def workflow_js_stream_status(self, *, stream_id: str) -> Dict[str, Any]:
+        base = self._workflow_js_stream_base()
+        session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+        if session is None:
+            return {"status": "not_found", "stream_id": str(stream_id or "").strip()}
+        out = base.request_status(
+            environment_key=str(getattr(session, "environment_key", "") or ""),
+            request_id=str(getattr(session, "request_id", "") or ""),
+        )
+        return {
+            **dict(out or {}),
+            "stream_id": str(stream_id or "").strip(),
+            "profile": str(getattr(session, "profile", "") or "node"),
+            "environment_key": str(getattr(session, "environment_key", "") or ""),
+        }
+
     def workflow_js_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         base = self._workflow_js_stream_base()
         msg = dict(message or {})
@@ -3756,6 +3772,22 @@ class WorkflowHelperMixin:
 
     def workflow_python_event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         return dict(self._workflow_python_stream_base().event_subscribe(stream_id=stream_id, max_items=max_items))
+
+    def workflow_python_stream_status(self, *, stream_id: str) -> Dict[str, Any]:
+        base = self._workflow_python_stream_base()
+        session = getattr(base, "_streams", {}).get(str(stream_id or "").strip())
+        if session is None:
+            return {"status": "not_found", "stream_id": str(stream_id or "").strip()}
+        out = base.request_status(
+            environment_key=str(getattr(session, "environment_key", "") or ""),
+            request_id=str(getattr(session, "request_id", "") or ""),
+        )
+        return {
+            **dict(out or {}),
+            "stream_id": str(stream_id or "").strip(),
+            "profile": str(getattr(session, "profile", "") or "node"),
+            "environment_key": str(getattr(session, "environment_key", "") or ""),
+        }
 
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         base = self._workflow_python_stream_base()

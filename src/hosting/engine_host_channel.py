@@ -2212,6 +2212,10 @@ class EngineHostControlChannel:
             self._release_stream_approval_lease(stream_id)
         return result
 
+    def workflow_python_stream_status(self, *, stream_id: str) -> Dict[str, Any]:
+        res = self._invoke("workflow-python-stream-status", {"stream_id": str(stream_id or "").strip()})
+        return dict(res or {})
+
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-python-stream-send",
@@ -2560,6 +2564,10 @@ class EngineHostControlChannel:
         if self._stream_result_terminal(result):
             self._release_stream_approval_lease(stream_id)
         return result
+
+    def workflow_js_stream_status(self, *, stream_id: str) -> Dict[str, Any]:
+        res = self._invoke("workflow-js-stream-status", {"stream_id": str(stream_id or "").strip()})
+        return dict(res or {})
 
     def workflow_js_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         res = self._invoke(

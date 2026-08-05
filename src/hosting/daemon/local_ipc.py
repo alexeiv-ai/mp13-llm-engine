@@ -2749,6 +2749,8 @@ class EngineHostDaemon:
                 approval_requester=self._host_capability_approval_requester_from_payload(payload),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
+        if cmd == "workflow-js-stream-status":
+            return svc.workflow_js_stream_status(stream_id=str(payload.get("stream_id") or ""))
         if cmd == "workflow-python-action-describe":
             return svc.workflow_python_action_describe(
                 request=dict(payload.get("request") or {}),
@@ -3027,6 +3029,8 @@ class EngineHostDaemon:
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
             )
+        if cmd == "workflow-python-stream-status":
+            return svc.workflow_python_stream_status(stream_id=str(payload.get("stream_id") or ""))
         if cmd == "toolbox-gate":
             return svc.toolbox_gate(
                 engine_id=str(payload.get("engine_id") or ""),
