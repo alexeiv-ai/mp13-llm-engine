@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import re
+import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .sandbox.host_capabilities import (
@@ -753,6 +754,83 @@ class HostCapabilityApprovalCallbackRelay:
         return None
 
 
+class ApprovalCallbackLease:
+    """Thread-safe ownership wrapper for one approval callback binding."""
+
+    def __init__(
+        self,
+        relay: HostCapabilityApprovalCallbackRelay,
+        binding: Dict[str, Any],
+        *,
+        scope: str = "single",
+    ) -> None:
+        normalized_scope = _clean(scope).lower() or "single"
+        if normalized_scope not in {"single", "shared"}:
+            raise ValueError("approval_callback_lease_scope_invalid")
+        self._relay = relay
+        self._binding = dict(binding or {})
+        self.scope = normalized_scope
+        self._lock = threading.Lock()
+        self._closed = False
+        self._claims: set[str] = set()
+
+    @classmethod
+    def bind(
+        cls,
+        relay: HostCapabilityApprovalCallbackRelay,
+        callback: Callable[..., Any],
+        *,
+        scope: str = "single",
+        provider_id: str = "",
+        method: str = "",
+        user_context: Any = None,
+    ) -> "ApprovalCallbackLease":
+        return cls(
+            relay,
+            relay.bind_callback(
+                callback,
+                provider_id=provider_id,
+                method=method,
+                user_context=user_context,
+            ),
+            scope=scope,
+        )
+
+    @property
+    def binding(self) -> Dict[str, Any]:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("approval_callback_lease_closed")
+            return dict(self._binding)
+
+    def claim(self, call_scope: str) -> Dict[str, Any]:
+        key = _clean(call_scope)
+        if not key:
+            raise ValueError("approval_callback_call_scope_required")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("approval_callback_lease_closed")
+            if self.scope == "single" and self._claims and key not in self._claims:
+                raise RuntimeError("approval_callback_lease_scope_mismatch")
+            self._claims.add(key)
+            return dict(self._binding)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            binding = dict(self._binding)
+        self._relay.release(binding)
+
+    def __enter__(self) -> "ApprovalCallbackLease":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        self.close()
+        return None
+
+
 def host_capability_approval_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(payload or {})
     arguments = dict(row.get("arguments") or {})
@@ -832,6 +910,7 @@ def host_capability_approval_decision(
 
 
 __all__ = [
+    "ApprovalCallbackLease",
     "HOST_CALLABLE_SCHEMA_CONTRACT",
     "HOST_CAPABILITY_APPROVAL_CALLBACK_NAME",
     "HOST_CAPABILITY_APPROVAL_DECISION_CONTRACT",

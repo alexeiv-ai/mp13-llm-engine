@@ -24,13 +24,14 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 from ._process_utils import hidden_subprocess_kwargs, pid_alive
 from .client_realm import resolve_client_profile_control_settings
 from .engine_host_connection import CommandError
+from .callable_surface import ApprovalCallbackLease, HostCapabilityApprovalCallbackRelay
 
 
 def _resolved_pid_path(pid_info: Any, pid_file_path: Any) -> Optional[Path]:
@@ -134,7 +135,98 @@ class EngineHostControlChannel:
             self.control_settings.get("engine_host_daemon_log_file") or ""
         ).strip() or None
         self._last_daemon_status_fingerprint: Optional[Dict[str, Any]] = None
+        self._approval_callback_relay = HostCapabilityApprovalCallbackRelay()
+        self._stream_approval_leases: Dict[str, ApprovalCallbackLease] = {}
+        self._stream_approval_lock = threading.Lock()
         self._refresh_base_cmd()
+
+    def approval_callback_lease(
+        self,
+        callback: Callable[..., Any],
+        *,
+        scope: str = "single",
+        provider_id: str = "",
+        method: str = "",
+        user_context: Any = None,
+    ) -> ApprovalCallbackLease:
+        return ApprovalCallbackLease.bind(
+            self._approval_callback_relay,
+            callback,
+            scope=scope,
+            provider_id=provider_id,
+            method=method,
+            user_context=user_context,
+        )
+
+    def _invoke_with_approval_callback(
+        self,
+        command: str,
+        payload: Dict[str, Any],
+        *,
+        approval_requester: Optional[Callable[..., Any]],
+        approval_requester_binding: Optional[Dict[str, Any]],
+        approval_callback_lease: Optional[ApprovalCallbackLease],
+        stream: bool = False,
+    ) -> Dict[str, Any]:
+        choices = sum(value is not None for value in (
+            approval_requester,
+            approval_requester_binding,
+            approval_callback_lease,
+        ))
+        if choices > 1:
+            raise ValueError("approval_callback_inputs_conflict")
+        owned: Optional[ApprovalCallbackLease] = None
+        lease = approval_callback_lease
+        call_scope = ":".join(
+            part for part in (
+                command,
+                str(dict(payload.get("request") or {}).get("request_id") or ""),
+                str(payload.get("instance_id") or ""),
+                str(payload.get("action_name") or ""),
+            ) if part
+        )
+        if approval_requester is not None:
+            owned = self.approval_callback_lease(approval_requester)
+            lease = owned
+        if lease is not None:
+            payload["approval_requester_binding"] = lease.claim(call_scope)
+        elif approval_requester_binding is not None:
+            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
+        try:
+            result = dict(self._invoke(command, payload) or {})
+        except Exception:
+            if owned is not None:
+                owned.close()
+            raise
+        if not stream:
+            if owned is not None:
+                owned.close()
+            return result
+        stream_id = str(result.get("stream_id") or "").strip()
+        if owned is not None:
+            if not stream_id:
+                owned.close()
+            else:
+                with self._stream_approval_lock:
+                    self._stream_approval_leases[stream_id] = owned
+        return result
+
+    def _release_stream_approval_lease(self, stream_id: str) -> None:
+        with self._stream_approval_lock:
+            lease = self._stream_approval_leases.pop(str(stream_id or "").strip(), None)
+        if lease is not None:
+            lease.close()
+
+    @staticmethod
+    def _stream_result_terminal(result: Dict[str, Any]) -> bool:
+        terminal = {"closed", "canceled", "cancelled", "terminal", "complete", "completed", "error", "failed"}
+        if str(result.get("status") or "").strip().lower() in terminal:
+            return True
+        for event in list(result.get("events") or []):
+            row = dict(event or {}) if isinstance(event, dict) else {}
+            if str(row.get("status") or row.get("kind") or row.get("event") or "").strip().lower() in terminal:
+                return True
+        return False
 
     @staticmethod
     def _is_localhost_target(target: str) -> bool:
@@ -1547,6 +1639,11 @@ class EngineHostControlChannel:
 
     def close_connection(self) -> None:
         """Close and discard the current persistent connection."""
+        with self._stream_approval_lock:
+            stream_leases = list(self._stream_approval_leases.values())
+            self._stream_approval_leases.clear()
+        for lease in stream_leases:
+            lease.close()
         with self._connection_lock:
             if self._connection is not None:
                 try:
@@ -1867,7 +1964,9 @@ class EngineHostControlChannel:
         request: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "profile": str(profile or "helper").strip() or "helper",
@@ -1878,11 +1977,11 @@ class EngineHostControlChannel:
             "capacity": max(1, min(int(capacity or 1), 256)),
             "sandbox_policy": dict(sandbox_policy or {}) or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-python-execute",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-python-execute", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -1899,7 +1998,9 @@ class EngineHostControlChannel:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         instance_id: Optional[str] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "request": dict(request or {}),
@@ -1913,11 +2014,11 @@ class EngineHostControlChannel:
             "sandbox_policy": dict(sandbox_policy or {}) or None,
             "instance_id": str(instance_id or "").strip() or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-python-action-describe",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-python-action-describe", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -1932,7 +2033,9 @@ class EngineHostControlChannel:
         request: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "action_name": str(action_name or "").strip(),
@@ -1944,11 +2047,11 @@ class EngineHostControlChannel:
             "capacity": max(1, min(int(capacity or 1), 256)),
             "sandbox_policy": dict(sandbox_policy or {}) or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-python-action-execute",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-python-action-execute", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -1990,7 +2093,9 @@ class EngineHostControlChannel:
         engine_id: Optional[str] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "instance_id": str(instance_id or "").strip(),
@@ -2002,11 +2107,11 @@ class EngineHostControlChannel:
             "capacity": max(1, min(int(capacity or 1), 256)),
             "sandbox_policy": dict(sandbox_policy or {}) or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-python-instance-execute",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-python-instance-execute", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -2074,7 +2179,9 @@ class EngineHostControlChannel:
         python: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "profile": str(profile or "node").strip() or "node",
@@ -2086,11 +2193,12 @@ class EngineHostControlChannel:
             "sandbox_policy": dict(sandbox_policy or {}) or None,
             "capacity": max(1, min(int(capacity or 1), 256)),
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-python-stream-open",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-python-stream-open", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
+            stream=True,
         )
         return dict(res or {})
 
@@ -2099,18 +2207,27 @@ class EngineHostControlChannel:
             "workflow-python-event-subscribe",
             {"stream_id": str(stream_id or "").strip(), "max_items": max(1, min(int(max_items or 64), 4096))},
         )
-        return dict(res or {})
+        result = dict(res or {})
+        if self._stream_result_terminal(result):
+            self._release_stream_approval_lease(stream_id)
+        return result
 
     def workflow_python_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-python-stream-send",
             {"stream_id": str(stream_id or "").strip(), "message": dict(message or {})},
         )
-        return dict(res or {})
+        result = dict(res or {})
+        if str(dict(message or {}).get("action") or "").strip().lower() in {"cancel", "close"} or self._stream_result_terminal(result):
+            self._release_stream_approval_lease(stream_id)
+        return result
 
     def workflow_python_stream_close(self, *, stream_id: str) -> Dict[str, Any]:
-        res = self._invoke("workflow-python-stream-close", {"stream_id": str(stream_id or "").strip()})
-        return dict(res or {})
+        try:
+            res = self._invoke("workflow-python-stream-close", {"stream_id": str(stream_id or "").strip()})
+            return dict(res or {})
+        finally:
+            self._release_stream_approval_lease(stream_id)
 
     def workflow_js_environment_spec(
         self,
@@ -2199,7 +2316,9 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "profile": str(profile or "node").strip() or "node",
@@ -2212,11 +2331,11 @@ class EngineHostControlChannel:
             "capacity": max(1, min(int(capacity or 1), 256)),
             "sandbox_policy": dict(sandbox_policy or {}) or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-js-execute",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-js-execute", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -2235,7 +2354,9 @@ class EngineHostControlChannel:
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         instance_id: Optional[str] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "request": dict(request or {}),
@@ -2251,11 +2372,11 @@ class EngineHostControlChannel:
             "sandbox_policy": dict(sandbox_policy or {}) or None,
             "instance_id": str(instance_id or "").strip() or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-js-action-describe",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-js-action-describe", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -2272,7 +2393,9 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "action_name": str(action_name or "").strip(),
@@ -2286,11 +2409,11 @@ class EngineHostControlChannel:
             "capacity": max(1, min(int(capacity or 1), 256)),
             "sandbox_policy": dict(sandbox_policy or {}) or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-js-action-execute",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-js-action-execute", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -2338,7 +2461,9 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
         sandbox_policy: Optional[Dict[str, Any]] = None,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "instance_id": str(instance_id or "").strip(),
@@ -2352,11 +2477,11 @@ class EngineHostControlChannel:
             "capacity": max(1, min(int(capacity or 1), 256)),
             "sandbox_policy": dict(sandbox_policy or {}) or None,
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-js-instance-execute",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-js-instance-execute", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
         )
         return dict(res or {})
 
@@ -2402,7 +2527,9 @@ class EngineHostControlChannel:
         javascript: Optional[Dict[str, Any]] = None,
         sandbox_policy: Optional[Dict[str, Any]] = None,
         capacity: int = 1,
+        approval_requester: Optional[Callable[..., Any]] = None,
         approval_requester_binding: Optional[Dict[str, Any]] = None,
+        approval_callback_lease: Optional[ApprovalCallbackLease] = None,
     ) -> Dict[str, Any]:
         payload = {
             "profile": str(profile or "node").strip() or "node",
@@ -2415,11 +2542,12 @@ class EngineHostControlChannel:
             "sandbox_policy": dict(sandbox_policy or {}) or None,
             "capacity": max(1, min(int(capacity or 1), 256)),
         }
-        if approval_requester_binding is not None:
-            payload["approval_requester_binding"] = dict(approval_requester_binding or {})
-        res = self._invoke(
-            "workflow-js-stream-open",
-            payload,
+        res = self._invoke_with_approval_callback(
+            "workflow-js-stream-open", payload,
+            approval_requester=approval_requester,
+            approval_requester_binding=approval_requester_binding,
+            approval_callback_lease=approval_callback_lease,
+            stream=True,
         )
         return dict(res or {})
 
@@ -2428,18 +2556,27 @@ class EngineHostControlChannel:
             "workflow-js-event-subscribe",
             {"stream_id": str(stream_id or "").strip(), "max_items": max(1, min(int(max_items or 64), 4096))},
         )
-        return dict(res or {})
+        result = dict(res or {})
+        if self._stream_result_terminal(result):
+            self._release_stream_approval_lease(stream_id)
+        return result
 
     def workflow_js_stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         res = self._invoke(
             "workflow-js-stream-send",
             {"stream_id": str(stream_id or "").strip(), "message": dict(message or {})},
         )
-        return dict(res or {})
+        result = dict(res or {})
+        if str(dict(message or {}).get("action") or "").strip().lower() in {"cancel", "close"} or self._stream_result_terminal(result):
+            self._release_stream_approval_lease(stream_id)
+        return result
 
     def workflow_js_stream_close(self, *, stream_id: str) -> Dict[str, Any]:
-        res = self._invoke("workflow-js-stream-close", {"stream_id": str(stream_id or "").strip()})
-        return dict(res or {})
+        try:
+            res = self._invoke("workflow-js-stream-close", {"stream_id": str(stream_id or "").strip()})
+            return dict(res or {})
+        finally:
+            self._release_stream_approval_lease(stream_id)
 
     def host_capability_session_register(
         self,

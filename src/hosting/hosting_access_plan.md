@@ -308,23 +308,23 @@ Exit gate: no code path treats `session_id` as `provider_id`, and missing
 
 ### Phase 6 - Parent-owned approval callback lease
 
-- [ ] **P6-01** Build `ApprovalCallbackLease` on the existing
+- [x] **P6-01** Build `ApprovalCallbackLease` on the existing
   `HostCapabilityApprovalCallbackRelay`, with idempotent, thread-safe close and
   context-manager support.
-- [ ] **P6-02** Let all Python/JavaScript execute, action-describe,
+- [x] **P6-02** Let all Python/JavaScript execute, action-describe,
   action-execute, pinned-instance execute, and stream-open channel methods
   accept exactly one of `approval_requester`, `approval_requester_binding`, or
   `approval_callback_lease`. Reject contradictory inputs and remove superseded
   signatures instead of inspecting them dynamically.
-- [ ] **P6-03** For a callable, bind before invoking the daemon and release
+- [x] **P6-03** For a callable, bind before invoking the daemon and release
   exactly once after a non-stream request returns or raises. For streams,
   transfer ownership to the stream handle and release on terminal event,
   explicit close/cancel, open failure, or channel shutdown.
-- [ ] **P6-04** Ensure a pre-created lease can span multiple calls only when its
+- [x] **P6-04** Ensure a pre-created lease can span multiple calls only when its
   documented scope permits it; otherwise fail closed on scope mismatch.
-- [ ] **P6-05** Persist/reuse logical callback IDs as decided in D-10 and test
+- [x] **P6-05** Persist/reuse logical callback IDs as decided in D-10 and test
   allow-once idempotency under duplicate delivery.
-- [ ] **P6-06** Add parity tests for direct callable versus pre-bound binding,
+- [x] **P6-06** Add parity tests for direct callable versus pre-bound binding,
   synchronous success/error/timeout, stream lifetime, double close, open
   failure, disconnect, and callback exception.
 

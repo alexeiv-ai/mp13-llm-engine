@@ -598,6 +598,8 @@ class HostCapabilityBroker:
         self.state_info = dict(state_info or {})
         self._sessions: Dict[str, HostCapabilitySession] = {}
         self._approval_grants: list[Dict[str, Any]] = []
+        self._provider_call_ids: Dict[str, str] = {}
+        self._approval_ids: Dict[str, str] = {}
 
     def cancel(self, reason: str = "host_call_canceled") -> None:
         self._cancel_requested = True
@@ -902,7 +904,8 @@ class HostCapabilityBroker:
     ) -> None:
         if not self._approval_required(method):
             return
-        approval_id = f"cap_approval_{uuid.uuid4().hex}"
+        approval_key = provider_call.provider_call_id
+        approval_id = self._approval_ids.setdefault(approval_key, f"cap_approval_{uuid.uuid4().hex}")
         call_id = _clean(host_call_id) or provider_call.provider_call_id
         argument_keys = sorted(str(key) for key in dict(provider_call.arguments or {}).keys())
         argument_preview = build_argument_preview(dict(provider_call.arguments or {}))
@@ -1191,8 +1194,13 @@ class HostCapabilityBroker:
                     self._check_canceled()
                     if self.provider_invoker is None:
                         raise HostCapabilityProviderUnavailable(detail={"provider_id": session.provider_id})
-                    provider_call_id = f"cap_call_{uuid.uuid4().hex}"
                     host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
+                    call_key = f"{session.provider_id}:{method_name}:{host_call_id}" if host_call_id else ""
+                    provider_call_id = (
+                        self._provider_call_ids.setdefault(call_key, f"cap_call_{uuid.uuid4().hex}")
+                        if call_key
+                        else f"cap_call_{uuid.uuid4().hex}"
+                    )
                     event_call_id = host_call_id or provider_call_id
                     timeout_seconds = self._provider_timeout_for_call(row)
                     call = HostCapabilityProviderCall(
