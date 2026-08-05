@@ -360,24 +360,24 @@ observable and enforceable.
 
 ### Phase 8 - Breaking release and dependent-project handoff
 
-- [ ] **P8-01** Remove superseded toolbox/workflow status, cancel, callback,
+- [x] **P8-01** Remove superseded toolbox/workflow status, cancel, callback,
   provider-identity, and lifetime signatures in the same release that adds the
   replacement contract. Do not advertise parallel old/new capabilities.
-- [ ] **P8-02** Update parent hosting documentation and
+- [x] **P8-02** Update parent hosting documentation and
   `HOSTING_CLIENT_BREAKING_CHANGES.md` with final method signatures, lifecycle
   mapping, retention behavior, ledger cutover procedure, and exact parent
   commit.
-- [ ] **P8-03** Run focused parent tests plus one real-daemon integration smoke
+- [x] **P8-03** Run focused parent tests plus one real-daemon integration smoke
   covering execute -> ref -> status -> cancel/replay -> artifact retrieval.
-- [ ] **P8-04** Publish a dependent-project adoption checklist: repin to the
+- [x] **P8-04** Publish a dependent-project adoption checklist: repin to the
   recorded commit, switch to typed refs/status, use callback leases, provide
   explicit provider IDs and authority leases, and delete signature inspection,
   `TypeError` fallbacks, selector dictionaries, local callback relays, local
   Host Capability session fallback, and family-specific status/cancel adapters.
-- [ ] **P8-05** Update the dependent project promptly and run its complete
+- [x] **P8-05** Update the dependent project promptly and run its complete
   recovery, approval, capability-session, and workflow suites against the new
   parent pin.
-- [ ] **P8-06** Define rollback as a source-and-data rollback to the previous
+- [x] **P8-06** Define rollback as a source-and-data rollback to the previous
   parent commit and its archived ledger. Do not implement runtime API fallback
   or dual-format ledger support.
 
@@ -385,30 +385,42 @@ Exit gate: the consumer passes its recovery/approval/session tests against the
 new parent pin, superseded parent APIs are absent, and no compatibility adapter
 was added.
 
+Verification evidence (2026-08-04):
+
+- Parent implementation release: `31a5b123fe4a7e554b1cf55cbb1f4ad8956bb85b`.
+- Real-daemon durable execute/replay/cancel/result/restart smoke:
+  `tests/test_hosting_operation_service.py` (`e4b3c01`).
+- Parent complete suite: 939 passed, 3 skipped.
+- Dependent adoption release: `b7c084eb` in `mp13-docs`; its focused recovery,
+  contract, approval/session, and Python/JavaScript workflow matrices passed.
+  Its complete suite produced 2,463 passed and 244 skipped plus one unrelated
+  queue heartbeat/completion ordering flake, which passed immediately in
+  isolation.
+
 ## Acceptance test matrix
 
-- [ ] A single typed operation ref works for execute attachment/replay, status,
+- [x] A single typed operation ref works for execute attachment/replay, status,
   and cancel for all three families.
-- [ ] The same request ID plus fingerprint attaches or replays; a changed
+- [x] The same request ID plus fingerprint attaches or replays; a changed
   fingerprint returns `idempotency_conflict` without dispatch.
-- [ ] Every lifecycle uses the same bounded status shape, digest spelling,
+- [x] Every lifecycle uses the same bounded status shape, digest spelling,
   `size_bytes` field, timestamps, and reason limits.
-- [ ] Status/cancel uses stored identity and does not require or trust
+- [x] Status/cancel uses stored identity and does not require or trust
   reconstructed selector kwargs.
-- [ ] Retained oversized results are retrievable and authorized; non-retained
+- [x] Retained oversized results are retrievable and authorized; non-retained
   results are explicit digest-only omissions.
-- [ ] Transitions remain correct under concurrent reads, cancellation races,
+- [x] Transitions remain correct under concurrent reads, cancellation races,
   service recreation, pruning, legacy-schema rejection, and corruption
   handling.
-- [ ] `provider_id` and `session_id` remain distinct through registration,
+- [x] `provider_id` and `session_id` remain distinct through registration,
   discovery, dispatch, approval, audit, list, and close.
-- [ ] Direct and pre-bound approval callbacks behave identically; stream leases
+- [x] Direct and pre-bound approval callbacks behave identically; stream leases
   live until terminal/close and every binding releases exactly once.
-- [ ] Transport loss, expiry, request completion, and authority revocation each
+- [x] Transport loss, expiry, request completion, and authority revocation each
   follow their explicit lease policy.
-- [ ] Receipt/repository load and status/replay do not start workers or
+- [x] Receipt/repository load and status/replay do not start workers or
   sandboxes.
-- [ ] Tests for superseded signatures are removed or rewritten, and tests assert
+- [x] Tests for superseded signatures are removed or rewritten, and tests assert
   that unsupported legacy inputs fail closed.
 
 ## Consumer-owned boundaries
