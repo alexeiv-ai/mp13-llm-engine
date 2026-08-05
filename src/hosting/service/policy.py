@@ -136,6 +136,8 @@ class PolicyMixin:
             "host-capability-session-register",
             "host-capability-session-list",
             "host-capability-session-close",
+            "host-capability-session-renew",
+            "host-capability-session-revoke",
             "host-capability-audit-list",
             "host-metrics",
             "op-start",

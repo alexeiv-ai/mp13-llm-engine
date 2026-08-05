@@ -1370,6 +1370,7 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
             "session_token": token,
             "session_id": "cap-session-1",
             "provider_id": "crm.provider",
+            "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
             "scope": {"workflow_id": "wf-cap"},
             "binding": {
                 "transport": "daemon_callback",
@@ -1435,6 +1436,7 @@ def test_daemon_registers_service_broker_host_capability_session(tmp_path: Path)
             "session_token": token,
             "session_id": "cap-session-service-broker",
             "provider_id": "builtin.service_broker",
+            "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
             "provider_kind": "service_broker",
             "scope": {"workflow_id": "wf-cap-service"},
             "methods": [{"name": "fs.read_text", "group_path": ["FS"], "args_schema": {}, "result_schema": {}}],
@@ -1457,6 +1459,7 @@ def test_daemon_rejects_duplicate_host_capability_method_unless_override_request
     base_payload = {
         "session_token": token,
         "provider_id": "crm.provider",
+        "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
         "scope": {"workflow_id": "wf-cap"},
         "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
     }
@@ -1505,6 +1508,7 @@ def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_
         "session_token": token,
         "session_id": "cap-session-ssh",
         "provider_id": "crm.provider.ssh",
+        "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
         "scope": {"workflow_id": "wf-cap"},
         "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
     }
@@ -1557,7 +1561,7 @@ def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path
             "session_token": token,
             "session_id": "cap-session-disconnect",
             "provider_id": "crm.provider.disconnect",
-            "close_on_client_disconnect": True,
+            "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
             "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
         },
     )
@@ -1574,3 +1578,115 @@ def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path
     assert closed == 1
     assert listed["ok"] is True
     assert listed["result"]["sessions"] == []
+
+
+def test_capability_authority_lease_retain_renew_terminal_and_revoke(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-authority", "secret-authority")
+    actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
+    expires_at_ms = int(time.time() * 1000) + 60_000
+    registered = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload={
+            "session_token": token,
+            "session_id": "authority-session-1",
+            "provider_id": "authority.provider.1",
+            "scope": {"request_id": "request-terminal-1"},
+            "authority_lease": {
+                "expires_at_ms": expires_at_ms,
+                "on_transport_loss": "retain_until_expiry",
+                "on_authority_revoked": "close",
+                "on_request_terminal": "close",
+            },
+            "methods": [{"name": "authority.lookup", "group_path": ["Authority"], "args_schema": {}, "result_schema": {}}],
+        },
+    )
+    assert registered["ok"] is True
+    result = registered["result"]
+    lease_token = result["authority_lease_token"]
+    assert lease_token
+    assert "authority_lease_token" not in result["session"]
+    assert result["session"]["lifetime"]["owner_authority_id"] == actor_id
+    assert daemon._close_host_capability_sessions_for_actor(actor_id, reason="transport_loss") == 0  # noqa: SLF001
+
+    wrong = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-renew",
+        payload={
+            "session_token": token,
+            "session_id": "authority-session-1",
+            "authority_lease_token": "wrong",
+            "expires_at_ms": expires_at_ms + 60_000,
+        },
+    )
+    assert wrong["ok"] is False
+    renewed = _dispatch(
+        daemon,
+        seq=3,
+        cmd="host-capability-session-renew",
+        payload={
+            "session_token": token,
+            "session_id": "authority-session-1",
+            "authority_lease_token": lease_token,
+            "expires_at_ms": expires_at_ms + 60_000,
+        },
+    )
+    assert renewed["ok"] is True and renewed["result"]["renewed"] is True
+    daemon._apply_request_terminal_session_policy(  # noqa: SLF001
+        {"contract": "hosting.operation_status", "request_id": "request-terminal-1", "lifecycle": "terminal_success"}
+    )
+    assert "authority-session-1" not in daemon._host_capability_sessions  # noqa: SLF001
+
+    registered = _dispatch(
+        daemon,
+        seq=4,
+        cmd="host-capability-session-register",
+        payload={
+            "session_token": token,
+            "session_id": "authority-session-2",
+            "provider_id": "authority.provider.2",
+            "authority_lease": {"on_transport_loss": "close", "on_request_terminal": "retain"},
+            "methods": [{"name": "authority.second", "group_path": ["Authority"], "args_schema": {}, "result_schema": {}}],
+        },
+    )
+    revoked = _dispatch(
+        daemon,
+        seq=5,
+        cmd="host-capability-session-revoke",
+        payload={
+            "session_token": token,
+            "session_id": "authority-session-2",
+            "authority_lease_token": registered["result"]["authority_lease_token"],
+        },
+    )
+    assert revoked["ok"] is True and revoked["result"]["revoked"] is True
+
+
+def test_capability_authority_lease_rejects_unsafe_retention_and_legacy_boolean(tmp_path: Path) -> None:
+    daemon = _make_daemon(tmp_path)
+    daemon.svc.set_control_config(require_auth=True)
+    token = _issue_mgmt_session(daemon, "admin-authority-invalid", "secret-authority-invalid")
+    base = {
+        "session_token": token,
+        "session_id": "authority-invalid",
+        "provider_id": "authority.provider.invalid",
+        "methods": [{"name": "authority.invalid", "group_path": ["Authority"], "args_schema": {}, "result_schema": {}}],
+    }
+    unsafe = _dispatch(
+        daemon,
+        seq=1,
+        cmd="host-capability-session-register",
+        payload={**base, "authority_lease": {"on_transport_loss": "retain_until_expiry"}},
+    )
+    legacy = _dispatch(
+        daemon,
+        seq=2,
+        cmd="host-capability-session-register",
+        payload={**base, "close_on_client_disconnect": True, "authority_lease": {"on_transport_loss": "close"}},
+    )
+    assert unsafe["ok"] is False
+    assert legacy["ok"] is False

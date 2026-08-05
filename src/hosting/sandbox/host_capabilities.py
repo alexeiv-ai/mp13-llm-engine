@@ -503,6 +503,45 @@ def validate_provider_response(payload: Dict[str, Any], *, provider_call_id: str
 
 
 @dataclass
+class CapabilityAuthorityLease:
+    owner_authority_id: str
+    token_digest: str
+    expires_at_ms: Optional[int] = None
+    on_transport_loss: str = "close"
+    on_authority_revoked: str = "close"
+    on_request_terminal: str = "retain"
+    renewed_at_ms: Optional[int] = None
+
+    def validate(self, *, now_ms: Optional[int] = None) -> None:
+        if not _clean(self.owner_authority_id):
+            raise ValueError("capability_authority_owner_required")
+        if not _clean(self.token_digest):
+            raise ValueError("capability_authority_token_digest_required")
+        if self.expires_at_ms is not None and int(self.expires_at_ms) <= 0:
+            raise ValueError("capability_authority_expiry_invalid")
+        if now_ms is not None and self.expires_at_ms is not None and int(self.expires_at_ms) <= int(now_ms):
+            raise ValueError("capability_authority_expiry_not_future")
+        if self.on_transport_loss not in {"close", "retain_until_expiry"}:
+            raise ValueError("capability_authority_transport_policy_invalid")
+        if self.on_authority_revoked != "close":
+            raise ValueError("capability_authority_revocation_policy_invalid")
+        if self.on_request_terminal not in {"close", "retain"}:
+            raise ValueError("capability_authority_terminal_policy_invalid")
+        if self.on_transport_loss == "retain_until_expiry" and self.expires_at_ms is None:
+            raise ValueError("capability_authority_retention_requires_expiry")
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        return {
+            "owner_authority_id": _clean(self.owner_authority_id),
+            "expires_at_ms": self.expires_at_ms,
+            "on_transport_loss": self.on_transport_loss,
+            "on_authority_revoked": self.on_authority_revoked,
+            "on_request_terminal": self.on_request_terminal,
+            "renewed_at_ms": self.renewed_at_ms,
+        }
+
+
+@dataclass
 class HostCapabilitySession:
     session_id: str
     provider_id: str
@@ -513,8 +552,11 @@ class HostCapabilitySession:
     methods: Dict[str, HostCapabilityMethod] = field(default_factory=dict)
     binding: Dict[str, Any] = field(default_factory=dict)
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
-    expires_at_ms: Optional[int] = None
-    close_on_client_disconnect: bool = True
+    authority_lease: CapabilityAuthorityLease = field(
+        default_factory=lambda: CapabilityAuthorityLease(
+            owner_authority_id="service", token_digest="internal", on_transport_loss="close"
+        )
+    )
     allow_override: bool = False
 
     def to_public_dict(self) -> Dict[str, Any]:
@@ -532,8 +574,7 @@ class HostCapabilitySession:
             },
             "lifetime": {
                 "created_at_ms": int(self.created_at_ms or 0),
-                "expires_at_ms": self.expires_at_ms,
-                "close_on_client_disconnect": bool(self.close_on_client_disconnect),
+                **self.authority_lease.to_public_dict(),
             },
             "override": {"allow": bool(self.allow_override)},
         }

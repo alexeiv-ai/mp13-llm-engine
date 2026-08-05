@@ -565,6 +565,7 @@ def test_host_capability_register_known_methods_helper_forwards_descriptors() ->
 
     out = ch.host_capability_session_register_known_methods(
         provider_id="builtin.service_broker",
+        authority_lease={"on_transport_loss": "close", "on_request_terminal": "retain"},
         session_id="known-host-api",
         scope={"workflow_id": "wf-1"},
         binding={"transport": "local_ipc", "address": "client-callback"},
@@ -665,6 +666,7 @@ def test_host_capability_session_upsert_closes_matching_session_before_register(
 
     out = ch.host_capability_session_upsert(
         provider_id="crm.logical",
+        authority_lease={"on_transport_loss": "close", "on_request_terminal": "retain"},
         session_id="crm-provider",
         scope={"workflow_id": "wf-1"},
         methods=[{"name": "crm.customer.lookup", "namespace": "crm", "group_path": ["CRM"]}],
@@ -740,6 +742,7 @@ def test_host_capability_register_toolbox_helper_adds_toolbox_binding() -> None:
 
     ch.host_capability_session_register_toolbox(
         provider_id="tools.logical",
+        authority_lease={"on_transport_loss": "close", "on_request_terminal": "retain"},
         toolbox_id="tb-1",
         session_id="tb-session",
         scope={"workflow_id": "wf-1"},

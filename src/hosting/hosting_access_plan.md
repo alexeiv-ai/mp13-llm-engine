@@ -333,20 +333,20 @@ including for streams, and leak/double-release tests pass.
 
 ### Phase 7 - Explicit capability-session authority leases
 
-- [ ] **P7-01** Replace the boolean with a validated lease model containing
+- [x] **P7-01** Replace the boolean with a validated lease model containing
   authenticated `owner_authority_id`, nullable expiry, transport-loss policy,
   authority-revocation policy, and request-terminal policy.
-- [ ] **P7-02** Add authenticated renew and revoke commands and channel methods.
+- [x] **P7-02** Add authenticated renew and revoke commands and channel methods.
   Keep renewal/revocation secrets process-local and out of public descriptors,
   receipts, logs, and artifacts.
-- [ ] **P7-03** Refactor disconnect cleanup to evaluate `on_transport_loss`
+- [x] **P7-03** Refactor disconnect cleanup to evaluate `on_transport_loss`
   rather than `close_on_client_disconnect`; remove the boolean from registration
   and session models.
-- [ ] **P7-04** Wire operation terminal transitions to
+- [x] **P7-04** Wire operation terminal transitions to
   `on_request_terminal=close`, authority revocation to the configured policy,
   and expiry to deterministic cleanup. Make every close path idempotent and
   audited with its cause.
-- [ ] **P7-05** Define daemon-restart behavior. If sessions remain in-memory,
+- [x] **P7-05** Define daemon-restart behavior. If sessions remain in-memory,
   report them closed on daemon loss and do not promise survival; if persistence
   is required later, make it a separate capability because callback bindings
   may not be recoverable.

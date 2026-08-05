@@ -2588,8 +2588,7 @@ class EngineHostControlChannel:
         provider_kind: str = "client_session",
         visibility: str = "workflow",
         binding: Optional[Dict[str, Any]] = None,
-        close_on_client_disconnect: bool = True,
-        expires_at_ms: Optional[int] = None,
+        authority_lease: Dict[str, Any],
         allow_override: bool = False,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -2600,11 +2599,9 @@ class EngineHostControlChannel:
             "scope": dict(scope or {}),
             "methods": [dict(row or {}) for row in list(methods or [])],
             "binding": dict(binding or {}),
-            "close_on_client_disconnect": bool(close_on_client_disconnect),
+            "authority_lease": dict(authority_lease or {}),
             "allow_override": bool(allow_override),
         }
-        if expires_at_ms is not None:
-            payload["expires_at_ms"] = int(expires_at_ms)
         res = self._invoke("host-capability-session-register", payload)
         return dict(res or {})
 
@@ -2623,8 +2620,7 @@ class EngineHostControlChannel:
         provider_kind: str = "service_broker",
         visibility: str = "workflow",
         binding: Optional[Dict[str, Any]] = None,
-        close_on_client_disconnect: bool = True,
-        expires_at_ms: Optional[int] = None,
+        authority_lease: Dict[str, Any],
         include_fs: bool = True,
         include_http: bool = True,
         allow_override: bool = False,
@@ -2641,8 +2637,7 @@ class EngineHostControlChannel:
             provider_kind=effective_provider_kind,
             visibility=visibility,
             binding=effective_binding,
-            close_on_client_disconnect=close_on_client_disconnect,
-            expires_at_ms=expires_at_ms,
+            authority_lease=authority_lease,
             allow_override=allow_override,
         )
 
@@ -2654,8 +2649,7 @@ class EngineHostControlChannel:
         session_id: Optional[str] = None,
         visibility: str = "workflow",
         binding: Optional[Dict[str, Any]] = None,
-        close_on_client_disconnect: bool = True,
-        expires_at_ms: Optional[int] = None,
+        authority_lease: Dict[str, Any],
         include_fs: bool = True,
         include_http: bool = True,
         allow_override: bool = False,
@@ -2667,8 +2661,7 @@ class EngineHostControlChannel:
             provider_kind="service_broker",
             visibility=visibility,
             binding=binding,
-            close_on_client_disconnect=close_on_client_disconnect,
-            expires_at_ms=expires_at_ms,
+            authority_lease=authority_lease,
             include_fs=include_fs,
             include_http=include_http,
             allow_override=allow_override,
@@ -2762,6 +2755,32 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def host_capability_session_renew(
+        self, *, session_id: str, authority_lease_token: str, expires_at_ms: int
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "host-capability-session-renew",
+            {
+                "session_id": str(session_id or "").strip(),
+                "authority_lease_token": str(authority_lease_token or ""),
+                "expires_at_ms": int(expires_at_ms),
+            },
+        )
+        return dict(res or {})
+
+    def host_capability_session_revoke(
+        self, *, session_id: str, authority_lease_token: str, force: bool = False
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "host-capability-session-revoke",
+            {
+                "session_id": str(session_id or "").strip(),
+                "authority_lease_token": str(authority_lease_token or ""),
+                "force": bool(force),
+            },
+        )
+        return dict(res or {})
+
     def host_capability_session_close_filtered(
         self,
         *,
@@ -2807,8 +2826,7 @@ class EngineHostControlChannel:
         provider_kind: str = "client_session",
         visibility: str = "workflow",
         binding: Optional[Dict[str, Any]] = None,
-        close_on_client_disconnect: bool = True,
-        expires_at_ms: Optional[int] = None,
+        authority_lease: Dict[str, Any],
         allow_override: bool = False,
         replace_workflow_id: Optional[str] = None,
         replace_instance_id: Optional[str] = None,
@@ -2850,8 +2868,7 @@ class EngineHostControlChannel:
             provider_kind=provider_kind,
             visibility=visibility,
             binding=binding,
-            close_on_client_disconnect=close_on_client_disconnect,
-            expires_at_ms=expires_at_ms,
+            authority_lease=authority_lease,
             allow_override=allow_override,
         )
         return {"status": "ok", "closed": close_result, "registered": register_result}
@@ -2867,8 +2884,7 @@ class EngineHostControlChannel:
         session_id: Optional[str] = None,
         visibility: str = "workflow",
         binding: Optional[Dict[str, Any]] = None,
-        close_on_client_disconnect: bool = True,
-        expires_at_ms: Optional[int] = None,
+        authority_lease: Dict[str, Any],
         namespace: str = "toolbox",
         owner: str = "client",
         allow_override: bool = False,
@@ -2901,8 +2917,7 @@ class EngineHostControlChannel:
             provider_kind="toolbox_session",
             visibility=visibility,
             binding=binding_payload,
-            close_on_client_disconnect=close_on_client_disconnect,
-            expires_at_ms=expires_at_ms,
+            authority_lease=authority_lease,
             allow_override=allow_override,
         )
 

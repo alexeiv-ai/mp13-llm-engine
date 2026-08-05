@@ -101,6 +101,8 @@ _HOST_CAPABILITY_SESSION_COMMANDS = {
     "host-capability-session-register",
     "host-capability-session-list",
     "host-capability-session-close",
+    "host-capability-session-renew",
+    "host-capability-session-revoke",
     "host-capability-audit-list",
 }
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -19,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..sandbox.host_capabilities import (
+    CapabilityAuthorityLease,
     HostCapabilityDescriptor,
     HostCapabilityMethod,
     HostCapabilityProviderRef,
@@ -1235,6 +1238,21 @@ class EngineHostDaemon:
     def _host_capability_session_public(session: HostCapabilitySession) -> Dict[str, Any]:
         return session.to_public_dict()
 
+    def _audit_host_capability_session_close(self, session: HostCapabilitySession, *, reason: str) -> None:
+        append = getattr(self.svc, "_append_host_capability_audit_event", None)
+        if not callable(append):
+            return
+        try:
+            append({
+                "event_type": "host_capability_session_close",
+                "session_id": session.session_id,
+                "provider_id": session.provider_id,
+                "result": "closed",
+                "reason": str(reason or "closed"),
+            })
+        except Exception:
+            return
+
     @staticmethod
     def _host_capability_session_methods(
         *,
@@ -1326,10 +1344,20 @@ class EngineHostDaemon:
         binding.setdefault("peer_host", str(peer_host or "") or None)
         binding.setdefault("peer_pid", int(peer_pid or 0) or None)
         binding.setdefault("peer_process", dict(peer_process_info or {}))
+        if "close_on_client_disconnect" in row or "expires_at_ms" in row:
+            raise ValueError("legacy_host_capability_lifetime_fields_unsupported")
         now_ms = int(time.time() * 1000)
-        expires_at_ms = row.get("expires_at_ms")
-        if expires_at_ms is not None:
-            expires_at_ms = max(now_ms, int(expires_at_ms or 0))
+        lease_row = dict(row.get("authority_lease") or {})
+        lease_token = secrets.token_urlsafe(32)
+        authority_lease = CapabilityAuthorityLease(
+            owner_authority_id=actor_id,
+            token_digest=hashlib.sha256(lease_token.encode("utf-8")).hexdigest(),
+            expires_at_ms=(int(lease_row["expires_at_ms"]) if lease_row.get("expires_at_ms") is not None else None),
+            on_transport_loss=str(lease_row.get("on_transport_loss") or "close").strip(),
+            on_authority_revoked=str(lease_row.get("on_authority_revoked") or "close").strip(),
+            on_request_terminal=str(lease_row.get("on_request_terminal") or "retain").strip(),
+        )
+        authority_lease.validate(now_ms=now_ms)
         session = HostCapabilitySession(
             session_id=session_id,
             provider_id=provider_id,
@@ -1340,8 +1368,7 @@ class EngineHostDaemon:
             methods=methods,
             binding=binding,
             created_at_ms=now_ms,
-            expires_at_ms=expires_at_ms,
-            close_on_client_disconnect=bool(row.get("close_on_client_disconnect", True)),
+            authority_lease=authority_lease,
             allow_override=allow_override,
         )
         with self._host_capability_sessions_lock:
@@ -1362,6 +1389,7 @@ class EngineHostDaemon:
         return {
             "status": "ok",
             "session": self._host_capability_session_public(session),
+            "authority_lease_token": lease_token,
         }
 
     def _list_host_capability_sessions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1374,10 +1402,13 @@ class EngineHostDaemon:
             expired = [
                 sid
                 for sid, session in self._host_capability_sessions.items()
-                if session.expires_at_ms is not None and int(session.expires_at_ms or 0) <= now_ms
+                if session.authority_lease.expires_at_ms is not None
+                and int(session.authority_lease.expires_at_ms or 0) <= now_ms
             ]
             for sid in expired:
-                self._host_capability_sessions.pop(sid, None)
+                session = self._host_capability_sessions.pop(sid, None)
+                if session is not None:
+                    self._audit_host_capability_session_close(session, reason="expired")
             sessions = [
                 self._host_capability_session_public(session)
                 for session in self._host_capability_sessions.values()
@@ -1401,18 +1432,90 @@ class EngineHostDaemon:
             if str(session.owner or "") != actor_id and not force:
                 raise PermissionError("host_capability_session_not_owned")
             self._host_capability_sessions.pop(session_id, None)
+        self._audit_host_capability_session_close(session, reason="administrative_force_close" if force else "explicit_close")
         return {"status": "closed", "session_id": session_id, "closed": True}
+
+    @staticmethod
+    def _authority_token_matches(session: HostCapabilitySession, token: str) -> bool:
+        digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+        return hmac.compare_digest(digest, session.authority_lease.token_digest)
+
+    def _renew_host_capability_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = str(payload.get("session_id") or "").strip()
+        actor_id = str(payload.get("_claim_actor_id") or "").strip()
+        token = str(payload.get("authority_lease_token") or "")
+        expires_at_ms = payload.get("expires_at_ms")
+        if not session_id or expires_at_ms is None or int(expires_at_ms or 0) <= int(time.time() * 1000):
+            raise ValueError("capability_authority_renewal_invalid")
+        with self._host_capability_sessions_lock:
+            session = self._host_capability_sessions.get(session_id)
+            if session is None:
+                return {"status": "not_found", "session_id": session_id, "renewed": False}
+            if session.authority_lease.owner_authority_id != actor_id:
+                raise PermissionError("capability_authority_not_owned")
+            if not self._authority_token_matches(session, token):
+                raise PermissionError("capability_authority_token_invalid")
+            session.authority_lease.expires_at_ms = int(expires_at_ms)
+            session.authority_lease.renewed_at_ms = int(time.time() * 1000)
+            session.authority_lease.validate()
+            public = self._host_capability_session_public(session)
+        return {"status": "renewed", "session_id": session_id, "renewed": True, "session": public}
+
+    def _revoke_host_capability_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = str(payload.get("session_id") or "").strip()
+        actor_id = str(payload.get("_claim_actor_id") or "").strip()
+        force = bool(payload.get("force", False))
+        token = str(payload.get("authority_lease_token") or "")
+        with self._host_capability_sessions_lock:
+            session = self._host_capability_sessions.get(session_id)
+            if session is None:
+                return {"status": "not_found", "session_id": session_id, "revoked": False}
+            if not force:
+                if session.authority_lease.owner_authority_id != actor_id:
+                    raise PermissionError("capability_authority_not_owned")
+                if not self._authority_token_matches(session, token):
+                    raise PermissionError("capability_authority_token_invalid")
+            self._host_capability_sessions.pop(session_id, None)
+        self._audit_host_capability_session_close(session, reason="authority_revoked")
+        return {"status": "revoked", "session_id": session_id, "revoked": True}
+
+    def _apply_request_terminal_session_policy(self, result: Any) -> None:
+        row = dict(result or {}) if isinstance(result, dict) else {}
+        lifecycle = str(row.get("lifecycle") or "")
+        if lifecycle not in {
+            "terminal_success", "terminal_failure", "terminal_cancellation",
+            "interrupted_before_dispatch", "interrupted_after_dispatch_unknown",
+        }:
+            return
+        request_id = str(row.get("request_id") or "").strip()
+        if not request_id:
+            return
+        closed: List[HostCapabilitySession] = []
+        with self._host_capability_sessions_lock:
+            for session_id, session in list(self._host_capability_sessions.items()):
+                if (
+                    session.authority_lease.on_request_terminal == "close"
+                    and str(dict(session.scope or {}).get("request_id") or "") == request_id
+                ):
+                    self._host_capability_sessions.pop(session_id, None)
+                    closed.append(session)
+        for session in closed:
+            self._audit_host_capability_session_close(session, reason="request_terminal")
 
     def _close_host_capability_sessions_for_actor(self, actor_id: str, *, reason: str) -> int:
         aid = str(actor_id or "").strip()
         if not aid:
             return 0
         closed = 0
+        closed_sessions: List[HostCapabilitySession] = []
         with self._host_capability_sessions_lock:
             for sid, session in list(self._host_capability_sessions.items()):
-                if str(session.owner or "") == aid and bool(session.close_on_client_disconnect):
+                if str(session.owner or "") == aid and session.authority_lease.on_transport_loss == "close":
                     self._host_capability_sessions.pop(sid, None)
                     closed += 1
+                    closed_sessions.append(session)
+        for session in closed_sessions:
+            self._audit_host_capability_session_close(session, reason=reason or "transport_loss")
         return closed
 
     def _host_capability_sessions_snapshot(self) -> List[HostCapabilitySession]:
@@ -1421,8 +1524,9 @@ class EngineHostDaemon:
         now_ms = int(time.time() * 1000)
         with self._host_capability_sessions_lock:
             for sid, session in list(self._host_capability_sessions.items()):
-                if session.expires_at_ms is not None and int(session.expires_at_ms or 0) <= now_ms:
+                if session.authority_lease.expires_at_ms is not None and int(session.authority_lease.expires_at_ms or 0) <= now_ms:
                     self._host_capability_sessions.pop(sid, None)
+                    self._audit_host_capability_session_close(session, reason="expired")
             return list(self._host_capability_sessions.values())
 
     def _host_capability_approval_requester_from_payload(self, payload: Dict[str, Any]) -> Any:
@@ -2283,6 +2387,12 @@ class EngineHostDaemon:
             if cmd == "host-capability-session-close":
                 result = self._close_host_capability_session(payload)
                 return {"seq": seq, "ok": True, "result": result}
+            if cmd == "host-capability-session-renew":
+                result = self._renew_host_capability_session(payload)
+                return {"seq": seq, "ok": True, "result": result}
+            if cmd == "host-capability-session-revoke":
+                result = self._revoke_host_capability_session(payload)
+                return {"seq": seq, "ok": True, "result": result}
             if cmd == "host-capability-audit-list":
                 result = await asyncio.to_thread(self._call_service, cmd, payload)
                 return {"seq": seq, "ok": True, "result": result}
@@ -2290,6 +2400,7 @@ class EngineHostDaemon:
                 registry_before = self._engine_registry_by_id()
             service_call_started = True
             result = await asyncio.to_thread(self._call_service, cmd, payload)
+            self._apply_request_terminal_session_policy(result)
             if isinstance(result, dict) and str(result.get("status") or "").strip().lower() == "denied":
                 return {
                     "seq": seq,
