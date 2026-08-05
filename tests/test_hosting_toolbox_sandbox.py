@@ -1008,10 +1008,16 @@ def test_toolbox_execution_harness_executes_request_tools_via_hosted_toolbox() -
             self.calls.append(dict(kwargs))
             tool_call = dict(kwargs.get("tool_call") or {})
             return {
-                "status": "ok",
-                "tool_call": {
-                    **tool_call,
-                    "result": json.dumps({"greeting": f"hi {dict(tool_call.get('arguments') or {}).get('name', 'world')}"}),
+                "contract": "hosting.operation_status",
+                "api_status": "ok",
+                "lifecycle": "terminal_success",
+                "operation": {"contract": "hosting.operation_ref", "operation_id": "op-test"},
+                "result": {
+                    "status": "ok",
+                    "tool_call": {
+                        **tool_call,
+                        "result": json.dumps({"greeting": f"hi {dict(tool_call.get('arguments') or {}).get('name', 'world')}"}),
+                    },
                 },
             }
 
@@ -1048,6 +1054,8 @@ def test_toolbox_execution_harness_executes_request_tools_via_hosted_toolbox() -
     call = list(block.calls or [])[0]
     assert call.name == "hello_remote"
     assert json.loads(str(call.result or "")) == {"greeting": "hi Sam"}
+    assert call.execution_envelope["contract"] == "hosting.operation_status"
+    assert call.execution_envelope["operation"]["operation_id"] == "op-test"
     assert events == ["calls_parsed", "call_starting", "call_finished", "all_finished"]
 
 

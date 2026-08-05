@@ -630,15 +630,24 @@ class ToolboxExecutionHarness:
             if 'callback_binding' in locals() and callback_binding and hasattr(self, "_callback_relay"):
                 self._callback_relay.release_session(str(callback_binding.get("session_token") or ""))
         payload = dict(rpc_out or {})
-        payload.setdefault("request_id", execution_request_id)
-        payload.setdefault("tool_call_id", str(call.id or "").strip() or None)
-        payload.setdefault("tool_name", str(call.name or "").strip())
         call.execution_envelope = dict(payload)
-        if str(payload.get("status") or "").strip().lower() == "error":
-            reason = str(payload.get("reason") or payload.get("error") or payload.get("message") or "toolbox_execute_failed").strip()
+        if str(payload.get("contract") or "") == "hosting.operation_status":
+            lifecycle = str(payload.get("lifecycle") or "").strip()
+            if lifecycle != "terminal_success":
+                reason = str(payload.get("reason") or lifecycle or "toolbox_execute_failed").strip()
+                call.error = call.error or f"Execution failed: {reason}"
+                return call
+            effective_payload = dict(payload.get("result") or {})
+        else:
+            effective_payload = payload
+        effective_payload.setdefault("request_id", execution_request_id)
+        effective_payload.setdefault("tool_call_id", str(call.id or "").strip() or None)
+        effective_payload.setdefault("tool_name", str(call.name or "").strip())
+        if str(effective_payload.get("status") or "").strip().lower() == "error":
+            reason = str(effective_payload.get("reason") or effective_payload.get("error") or effective_payload.get("message") or "toolbox_execute_failed").strip()
             call.error = call.error or f"Execution failed: {reason}"
             return call
-        tool_out = dict(payload.get("tool_call") or {})
+        tool_out = dict(effective_payload.get("tool_call") or {})
         if not tool_out:
             call.error = call.error or "Execution failed: toolbox_response_missing_tool_call"
             return call
