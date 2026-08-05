@@ -141,6 +141,20 @@ from .callable_surface import (
     normalize_host_capability_provider_response,
     toolbox_to_host_capability_descriptors,
 )
+from .operation_contract import (
+    HOSTED_OPERATION_REF_CONTRACT,
+    HOSTED_OPERATION_STATUS_CONTRACT,
+    HOSTED_RESULT_OMISSION_CONTRACT,
+    HOSTED_RESULT_REF_CONTRACT,
+    HostedExecutionKind,
+    HostedOperationLifecycle,
+    HostedOperationRef,
+    HostedOperationSelector,
+    HostedOperationStatus,
+    HostedResultOmission,
+    HostedResultRef,
+    hosted_execution_fingerprint,
+)
 
 __all__ = [
     "EngineHostService",
@@ -246,4 +260,16 @@ __all__ = [
     "host_capability_provider_success",
     "normalize_host_capability_provider_response",
     "toolbox_to_host_capability_descriptors",
+    "HOSTED_OPERATION_REF_CONTRACT",
+    "HOSTED_OPERATION_STATUS_CONTRACT",
+    "HOSTED_RESULT_OMISSION_CONTRACT",
+    "HOSTED_RESULT_REF_CONTRACT",
+    "HostedExecutionKind",
+    "HostedOperationLifecycle",
+    "HostedOperationRef",
+    "HostedOperationSelector",
+    "HostedOperationStatus",
+    "HostedResultOmission",
+    "HostedResultRef",
+    "hosted_execution_fingerprint",
 ]

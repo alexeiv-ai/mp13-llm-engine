@@ -60,55 +60,55 @@ replay window.
 Resolve and record these decisions before implementation. Defaults below are
 recommended.
 
-- [ ] **D-01 Operation identity:** make `operation_id` a random, parent-minted,
+- [x] **D-01 Operation identity:** make `operation_id` a random, parent-minted,
   globally unique opaque value persisted in the repository. Treat the selector
   embedded in a client reference as descriptive only; status and cancel must
   resolve the stored operation and authorize it against the authenticated
   caller.
-- [ ] **D-02 Reference validation:** accept a typed model or mapping, require
+- [x] **D-02 Reference validation:** accept a typed model or mapping, require
   `contract == "hosting.operation_ref"`, bound every string/map, reject
   unknown or contradictory identity fields, and never trust a caller-supplied
   selector to route cancellation.
-- [ ] **D-03 Lifecycle enum:** use exactly `queued`, `running`,
+- [x] **D-03 Lifecycle enum:** use exactly `queued`, `running`,
   `terminal_success`, `terminal_failure`, `terminal_cancellation`,
   `interrupted_before_dispatch`, `interrupted_after_dispatch_unknown`,
   `forgotten`, `unknown_outside_retention`, and `idempotency_conflict`.
   Represent API-call success separately from operation lifecycle.
-- [ ] **D-04 Digest and size:** use `digest: "sha256:<hex>"` and
+- [x] **D-04 Digest and size:** use `digest: "sha256:<hex>"` and
   `size_bytes: <integer>` everywhere. Do not introduce the ambiguous field
   `size`.
-- [ ] **D-05 Terminal payload:** define `result` for a bounded inline result,
+- [x] **D-05 Terminal payload:** define `result` for a bounded inline result,
   `result_ref` for a retrievable artifact, and `result_omission` for a
   digest-only result. These fields are mutually exclusive.
-- [ ] **D-06 Retention policy:** define which execution kinds/results may be
+- [x] **D-06 Retention policy:** define which execution kinds/results may be
   artifact-backed, maximum artifact size, TTL, deletion behavior, and whether
   retrieval is single- or multi-read. Default to omission when policy is
   absent or denies retention.
-- [ ] **D-07 Lease expiry:** use `expires_at_ms: null` for no expiry. Do not use
+- [x] **D-07 Lease expiry:** use `expires_at_ms: null` for no expiry. Do not use
   `0`, because the current session implementation interprets a past timestamp
   as immediately expired. A retained-on-transport-loss lease must either have
   a finite expiry or be explicitly renewable/revocable.
-- [ ] **D-08 Authority binding:** bind `owner_authority_id` to the authenticated
+- [x] **D-08 Authority binding:** bind `owner_authority_id` to the authenticated
   actor that registers it. Add explicit renew and revoke operations; possessing
   an opaque authority string alone must not grant control.
-- [ ] **D-09 Request terminal event:** define `on_request_terminal` as the
+- [x] **D-09 Request terminal event:** define `on_request_terminal` as the
   terminal transition of the referenced hosted operation, including
   cancellation and interrupted terminal policy. It is not merely the return of
   an execute RPC.
-- [ ] **D-10 Duplicate callbacks:** derive or persist stable `approval_id` and
+- [x] **D-10 Duplicate callbacks:** derive or persist stable `approval_id` and
   `provider_call_id` per logical parent request/call. A transport retry must
   reuse those IDs; a genuinely new provider call must not.
-- [ ] **D-11 Scope:** durable operations initially cover toolbox execute,
+- [x] **D-11 Scope:** durable operations initially cover toolbox execute,
   workflow Python execute, and workflow JavaScript execute. Action execute and
   pinned-instance execute may share the workflow execution kinds if their
   fingerprint includes action/instance identity. Describe calls are callback-
   lease consumers but are not durable operations. Streams get callback lease
   support; durable stream recovery is out of scope unless separately
   specified.
-- [ ] **D-12 Breaking cutover:** define the exact parent commit, dependent repin
-  sequence, unsupported legacy receipt behavior, ledger archival command, and
-  rollback constraints. No compatibility code may be introduced to smooth the
-  cutover.
+- [x] **D-12 Breaking cutover:** define the parent base commit, staged release
+  commit placeholder, dependent repin sequence, unsupported legacy receipt
+  behavior, ledger archival command, and rollback constraints. No compatibility
+  code may be introduced to smooth the cutover.
 
 ## Target public contracts
 
@@ -128,6 +128,7 @@ HostedOperationRef = {
 
 HostedOperationStatus = {
     "contract": "hosting.operation_status",
+    "api_status": "ok|error",
     "operation": HostedOperationRef,
     "lifecycle": "queued|running|terminal_success|terminal_failure|terminal_cancellation|interrupted_before_dispatch|interrupted_after_dispatch_unknown|forgotten|unknown_outside_retention|idempotency_conflict",
     "request_id": "...",
@@ -151,22 +152,23 @@ credentials, or other ephemeral transport data.
 
 ### Phase 0 - Contract, threat model, and breaking-change freeze
 
-- [ ] **P0-01** Resolve D-01 through D-12 with the consumer and add the final
+- [x] **P0-01** Resolve D-01 through D-12 with the consumer and add the final
   models/enums to a parent-owned module (suggested:
   `src/hosting/operation_contract.py`).
-- [ ] **P0-02** Document the authorization matrix for operation status, cancel,
+- [x] **P0-02** Document the authorization matrix for operation status, cancel,
   artifact retrieval, session renew/revoke, administrative inspection, and
   forced close.
-- [ ] **P0-03** Define per-family canonical fingerprint inputs and test vectors.
-- [ ] **P0-04** Define the storage-neutral repository interface, JSON schema
+- [x] **P0-03** Define per-family canonical fingerprint inputs and test vectors.
+- [x] **P0-04** Define the storage-neutral repository interface, JSON schema
   evolution, corruption behavior, backup policy, and process-locking
   assumptions.
-- [ ] **P0-05** Add contract serialization, validation, size-bound, and malformed
+- [x] **P0-05** Add contract serialization, validation, size-bound, and malformed
   input tests.
-- [ ] **P0-06** Create the entry in
+- [x] **P0-06** Create the entry in
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with change IDs, affected
   methods and shapes, old-to-new call examples, persisted-ledger cutoff steps,
-  required dependent changes, and the first parent commit containing the break.
+  required dependent changes, the parent base commit, and a release-commit
+  placeholder for the committer to fill because this task remains staged.
 
 Exit gate: contract examples round-trip through typed models and the consumer
 agrees it can update immediately from the breaking-change entry. The entry must
@@ -176,7 +178,7 @@ land with or before the first breaking implementation commit.
 
 - [ ] **P1-01** Generalize `ToolboxExecutionReceiptLedger` behind a repository
   interface supporting prepare, dispatch claim, terminal transition,
-  pre-dispatch cancel, lookup by `(namespace, request_id)`, lookup by
+  pre-dispatch cancel, lookup by `(owner_actor_id, namespace, request_id)`, lookup by
   `operation_id`, wait, and prune.
 - [ ] **P1-02** Mint and persist `operation_id` during the first prepare; return
   the same reference for attach, replay, conflict, and tombstone responses.
@@ -255,7 +257,8 @@ its authorized owner or explicitly marked digest-only.
 - [ ] **P4-02** Evolve the bounded JSON schema to store `operation_id`, execution
   kind, owner identity, selector, lifecycle timestamps, terminal
   payload/ref/omission, and tombstones.
-- [ ] **P4-03** Maintain in-memory indexes for `(namespace, request_id)` and
+- [ ] **P4-03** Maintain in-memory indexes for
+  `(owner_actor_id, namespace, request_id)` and
   `operation_id`, rebuilt and validated during ledger load, so generic lookup
   does not require worker discovery or repeated full scans.
 - [ ] **P4-04** Preserve the existing lock plus write-temp/fsync/atomic-replace
