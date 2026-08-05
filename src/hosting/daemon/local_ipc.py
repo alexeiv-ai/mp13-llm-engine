@@ -1238,7 +1238,7 @@ class EngineHostDaemon:
     @staticmethod
     def _host_capability_session_methods(
         *,
-        session_id: str,
+        provider_id: str,
         owner: str,
         provider_kind: str,
         visibility: str,
@@ -1254,8 +1254,11 @@ class EngineHostDaemon:
             name = str(row.get("name") or "").strip()
             if not name:
                 raise ValueError("host_capability_method_name_required")
+            declared_provider_id = str(dict(row.get("provider") or {}).get("provider_id") or "").strip()
+            if declared_provider_id and declared_provider_id != provider_id:
+                raise ValueError("host_capability_method_provider_id_mismatch")
             provider = HostCapabilityProviderRef(
-                provider_id=session_id,
+                provider_id=provider_id,
                 kind=provider_kind,
                 owner=owner,
                 visibility=visibility,
@@ -1295,6 +1298,11 @@ class EngineHostDaemon:
         if not actor_id:
             actor_id = self.svc._actor_id_from_payload(self.svc._read_control(), payload)  # noqa: SLF001
         session_id = str(row.get("session_id") or "").strip() or f"cap_{secrets.token_urlsafe(18)}"
+        provider_id = str(row.get("provider_id") or dict(row.get("provider") or {}).get("provider_id") or "").strip()
+        if not provider_id:
+            raise ValueError("host_capability_provider_id_required")
+        if provider_id == session_id:
+            raise ValueError("host_capability_provider_and_session_id_must_differ")
         provider_kind = str(row.get("provider_kind") or dict(row.get("provider") or {}).get("kind") or "client_session").strip()
         visibility = str(row.get("visibility") or dict(row.get("provider") or {}).get("visibility") or "workflow").strip()
         if provider_kind not in {"client_session", "toolbox_session", "service_broker"}:
@@ -1304,7 +1312,7 @@ class EngineHostDaemon:
         scope = dict(row.get("scope") or {})
         allow_override = bool(row.get("allow_override") or row.get("override"))
         methods = self._host_capability_session_methods(
-            session_id=session_id,
+            provider_id=provider_id,
             owner=actor_id,
             provider_kind=provider_kind,
             visibility=visibility,
@@ -1324,6 +1332,7 @@ class EngineHostDaemon:
             expires_at_ms = max(now_ms, int(expires_at_ms or 0))
         session = HostCapabilitySession(
             session_id=session_id,
+            provider_id=provider_id,
             owner=actor_id,
             provider_kind=provider_kind,
             visibility=visibility,
@@ -1338,6 +1347,11 @@ class EngineHostDaemon:
         with self._host_capability_sessions_lock:
             if session_id in self._host_capability_sessions:
                 raise ValueError("host_capability_session_already_exists")
+            if any(
+                existing.provider_id == provider_id and existing.session_id == session_id
+                for existing in self._host_capability_sessions.values()
+            ):
+                raise ValueError("host_capability_provider_session_already_exists")
             if not allow_override:
                 incoming_names = set(methods.keys())
                 for existing in self._host_capability_sessions.values():

@@ -177,6 +177,7 @@ class ToolboxRuntimeMixin:
             broker.register_session(
                 service_broker_host_capability_session(
                     session_id=f"{eid}.service_broker",
+                    provider_id="builtin.service_broker",
                     owner="service",
                     visibility="consumer",
                     scope={"consumer_id": eid},

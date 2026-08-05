@@ -286,20 +286,20 @@ current atomic receipt guarantees.
 
 ### Phase 5 - Stable Host Capability provider identity
 
-- [ ] **P5-01** Add `provider_id` as a first-class field on
+- [x] **P5-01** Add `provider_id` as a first-class field on
   `HostCapabilitySession`, separate from `session_id`, and include it in public
   provider descriptors and private persistence/transport shapes.
-- [ ] **P5-02** Accept `provider_id` in daemon/channel registration. Reject a
+- [x] **P5-02** Accept `provider_id` in daemon/channel registration. Reject a
   missing ID and reject contradictory duplicates according
   to the Phase 0 uniqueness rules.
-- [ ] **P5-03** Update broker discovery, method resolution, callback context,
+- [x] **P5-03** Update broker discovery, method resolution, callback context,
   approvals, audit, list filters, close filters, upsert, toolbox providers, and
   service-broker helpers to use `provider_id` semantically and `session_id` only
   as the registration instance identity.
-- [ ] **P5-04** Remove every fallback that derives `provider_id` from
+- [x] **P5-04** Remove every fallback that derives `provider_id` from
   `session_id`. Update built-in, toolbox, and service-broker constructors to
   supply both identities explicitly.
-- [ ] **P5-05** Add end-to-end tests proving distinct identities survive
+- [x] **P5-05** Add end-to-end tests proving distinct identities survive
   registration, list, discovery, dispatch, approval, audit, filtered close, and
   duplicate rejection.
 

@@ -505,6 +505,7 @@ def validate_provider_response(payload: Dict[str, Any], *, provider_call_id: str
 @dataclass
 class HostCapabilitySession:
     session_id: str
+    provider_id: str
     owner: str
     provider_kind: str = "builtin"
     visibility: str = "request"
@@ -520,10 +521,12 @@ class HostCapabilitySession:
         return {
             "contract": HOST_CAPABILITY_SESSION_CONTRACT,
             "session_id": _clean(self.session_id),
+            "provider_id": _clean(self.provider_id),
             "owner": _clean(self.owner),
             "scope": dict(self.scope or {}),
             "methods": [method.descriptor.to_dict() for method in self.methods.values()],
             "provider": {
+                "provider_id": _clean(self.provider_id),
                 "kind": _clean(self.provider_kind) or "builtin",
                 "visibility": _clean(self.visibility) or "request",
             },
@@ -685,7 +688,7 @@ class HostCapabilityBroker:
             "queue_depth": max(0, min(queue_depth, 4096)),
             "queue_timeout_seconds": max(0.0, min(queue_timeout, 3600.0)),
             "thread_safe_required": mode == "parallel",
-            "provider_id": session.session_id,
+            "provider_id": session.provider_id,
             "method": method.descriptor.name,
         }
 
@@ -841,7 +844,7 @@ class HostCapabilityBroker:
                 continue
             if _clean(grant.get("method")) != provider_call.method:
                 continue
-            if _clean(grant.get("provider_id")) != _clean(session.session_id):
+            if _clean(grant.get("provider_id")) != _clean(session.provider_id):
                 continue
             if _clean(grant.get("actor")) != _clean(session.owner):
                 continue
@@ -867,7 +870,7 @@ class HostCapabilityBroker:
         grant = {
             "approval_id": _clean(approval_id),
             "method": provider_call.method,
-            "provider_id": session.session_id,
+            "provider_id": session.provider_id,
             "provider_kind": session.provider_kind,
             "actor": session.owner,
             "scope_requirements": self._scope_requirement_keys(method),
@@ -915,7 +918,7 @@ class HostCapabilityBroker:
             "context": provider_call.context.to_dict(),
             "approval": method.descriptor.approval.to_dict(),
             "provider": {
-                "provider_id": session.session_id,
+                "provider_id": session.provider_id,
                 "kind": session.provider_kind,
                 "owner": session.owner,
                 "visibility": session.visibility,
@@ -957,7 +960,7 @@ class HostCapabilityBroker:
             "context": provider_call.context.to_dict(),
             "approval": method.descriptor.approval.to_dict(),
             "provider": {
-                "provider_id": session.session_id,
+                "provider_id": session.provider_id,
                 "kind": session.provider_kind,
                 "owner": session.owner,
                 "visibility": session.visibility,
@@ -1028,10 +1031,18 @@ class HostCapabilityBroker:
         sid = _clean(session.session_id)
         if not sid:
             raise ValueError("host_capability_session_id_required")
+        if not _clean(session.provider_id):
+            raise ValueError("host_capability_provider_id_required")
+        if sid == _clean(session.provider_id):
+            raise ValueError("host_capability_provider_and_session_id_must_differ")
+        if sid in self._sessions:
+            raise ValueError("host_capability_session_already_exists")
         for name, method in dict(session.methods or {}).items():
             if name != method.descriptor.name:
                 raise ValueError("host_capability_method_name_mismatch")
             method.descriptor.validate()
+            if _clean(method.descriptor.provider.provider_id) != _clean(session.provider_id):
+                raise ValueError("host_capability_method_provider_id_mismatch")
         incoming_names = set(str(name or "").strip() for name in dict(session.methods or {}).keys() if str(name or "").strip())
         if incoming_names and not bool(session.allow_override):
             for existing in self._sessions.values():
@@ -1048,7 +1059,8 @@ class HostCapabilityBroker:
         methods: Iterable[HostCapabilityMethod],
     ) -> HostCapabilitySession:
         session = HostCapabilitySession(
-            session_id=_clean(provider_id) or f"builtin.{uuid.uuid4().hex}",
+            session_id=f"cap_{uuid.uuid4().hex}",
+            provider_id=_clean(provider_id),
             owner=_clean(owner) or "service",
             provider_kind="builtin",
             visibility="request",
@@ -1083,7 +1095,7 @@ class HostCapabilityBroker:
                 continue
             out.append(
                 {
-                    "provider_id": session.session_id,
+                    "provider_id": session.provider_id,
                     "kind": session.provider_kind,
                     "owner": session.owner,
                     "visibility": session.visibility,
@@ -1178,7 +1190,7 @@ class HostCapabilityBroker:
                 if method.handler is None and method.async_handler is None:
                     self._check_canceled()
                     if self.provider_invoker is None:
-                        raise HostCapabilityProviderUnavailable(detail={"provider_id": session.session_id})
+                        raise HostCapabilityProviderUnavailable(detail={"provider_id": session.provider_id})
                     provider_call_id = f"cap_call_{uuid.uuid4().hex}"
                     host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
                     event_call_id = host_call_id or provider_call_id
@@ -1210,7 +1222,7 @@ class HostCapabilityBroker:
                             "call_id": event_call_id,
                             "host_call_id": host_call_id or None,
                             "provider_call_id": provider_call_id,
-                            "provider_id": session.session_id,
+                            "provider_id": session.provider_id,
                             "provider_kind": session.provider_kind,
                             "request_id": self.request_id or None,
                             "workflow_id": self.workflow_id or None,
@@ -1240,7 +1252,7 @@ class HostCapabilityBroker:
                                 "call_id": event_call_id,
                                 "host_call_id": host_call_id or None,
                                 "provider_call_id": provider_call_id,
-                                "provider_id": session.session_id,
+                                "provider_id": session.provider_id,
                             },
                         )
                         return result
@@ -1263,7 +1275,7 @@ class HostCapabilityBroker:
                                 "provider_call_id": provider_call_id,
                                 "reason": "host_capability_provider_unavailable",
                                 "error_type": type(exc).__name__,
-                                "provider_id": session.session_id,
+                                "provider_id": session.provider_id,
                             },
                         )
                         self._emit_event(
@@ -1278,7 +1290,7 @@ class HostCapabilityBroker:
                             },
                         )
                         raise HostCapabilityProviderUnavailable(
-                            detail={"provider_call_id": provider_call_id, "provider_id": session.session_id, "error_type": type(exc).__name__}
+                            detail={"provider_call_id": provider_call_id, "provider_id": session.provider_id, "error_type": type(exc).__name__}
                         ) from exc
                     except HostCapabilityCanceled as exc:
                         self._emit_event("canceled", {"method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": exc.reason, "detail": dict(exc.detail or {})})
@@ -1306,7 +1318,7 @@ class HostCapabilityBroker:
                         "method": method_name,
                         "call_id": host_call_id or None,
                         "host_call_id": host_call_id or None,
-                        "provider_id": session.session_id,
+                        "provider_id": session.provider_id,
                         "provider_kind": session.provider_kind,
                         "request_id": self.request_id or None,
                         "workflow_id": self.workflow_id or None,
@@ -1323,11 +1335,11 @@ class HostCapabilityBroker:
                         timeout_seconds=self._provider_timeout_for_call(row),
                     )
                     result = await method.dispatch_async(dict(row.get("arguments") or {}))
-                    self._emit_event("host_response", {"status": "ok", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.session_id})
+                    self._emit_event("host_response", {"status": "ok", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.provider_id})
                     return result
                 except Exception as exc:
                     reason = str(getattr(exc, "reason", "") or "host_call_failed")
-                    self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.session_id, "reason": reason})
+                    self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.provider_id, "reason": reason})
                     raise
                 finally:
                     if lease is not None:

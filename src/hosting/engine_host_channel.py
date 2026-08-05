@@ -2444,6 +2444,7 @@ class EngineHostControlChannel:
     def host_capability_session_register(
         self,
         *,
+        provider_id: str,
         methods: List[Dict[str, Any]],
         scope: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
@@ -2455,6 +2456,7 @@ class EngineHostControlChannel:
         allow_override: bool = False,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
+            "provider_id": str(provider_id or "").strip(),
             "session_id": str(session_id or "").strip() or None,
             "provider_kind": str(provider_kind or "client_session").strip() or "client_session",
             "visibility": str(visibility or "workflow").strip() or "workflow",
@@ -2478,6 +2480,7 @@ class EngineHostControlChannel:
     def host_capability_session_register_known_methods(
         self,
         *,
+        provider_id: str,
         scope: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         provider_kind: str = "service_broker",
@@ -2494,6 +2497,7 @@ class EngineHostControlChannel:
         if effective_provider_kind == "service_broker":
             effective_binding["transport"] = "service_broker"
         return self.host_capability_session_register(
+            provider_id=provider_id,
             methods=self.known_host_capability_methods(include_fs=include_fs, include_http=include_http),
             scope=scope,
             session_id=session_id,
@@ -2508,6 +2512,7 @@ class EngineHostControlChannel:
     def host_capability_session_register_service_broker_methods(
         self,
         *,
+        provider_id: str,
         scope: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         visibility: str = "workflow",
@@ -2519,6 +2524,7 @@ class EngineHostControlChannel:
         allow_override: bool = False,
     ) -> Dict[str, Any]:
         return self.host_capability_session_register_known_methods(
+            provider_id=provider_id,
             scope=scope,
             session_id=session_id,
             provider_kind="service_broker",
@@ -2555,7 +2561,7 @@ class EngineHostControlChannel:
             return False
         if consumer_id is not None and str(scope.get("consumer_id") or "") != str(consumer_id or ""):
             return False
-        if provider_id is not None and str(session.get("session_id") or "") != str(provider_id or ""):
+        if provider_id is not None and str(session.get("provider_id") or "") != str(provider_id or ""):
             return False
         if owner is not None and str(session.get("owner") or "") != str(owner or ""):
             return False
@@ -2657,6 +2663,7 @@ class EngineHostControlChannel:
     def host_capability_session_upsert(
         self,
         *,
+        provider_id: str,
         methods: List[Dict[str, Any]],
         scope: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
@@ -2691,7 +2698,7 @@ class EngineHostControlChannel:
             instance_id=replace_instance_id if replace_instance_id is not None else dict(scope or {}).get("instance_id"),
             request_id=replace_request_id if replace_request_id is not None else dict(scope or {}).get("request_id"),
             consumer_id=replace_consumer_id if replace_consumer_id is not None else dict(scope or {}).get("consumer_id"),
-            provider_id=replace_provider_id if replace_provider_id is not None else session_id,
+            provider_id=replace_provider_id if replace_provider_id is not None else provider_id,
             owner=replace_owner,
             visibility=visibility,
             methods=replacement_methods,
@@ -2699,6 +2706,7 @@ class EngineHostControlChannel:
             force=force_close,
         )
         register_result = self.host_capability_session_register(
+            provider_id=provider_id,
             methods=methods,
             scope=scope,
             session_id=session_id,
@@ -2714,6 +2722,7 @@ class EngineHostControlChannel:
     def host_capability_session_register_toolbox(
         self,
         *,
+        provider_id: str,
         engine_id: str = "",
         toolbox_id: str = "",
         tools_view: Optional[Dict[str, Any]] = None,
@@ -2734,7 +2743,7 @@ class EngineHostControlChannel:
         descriptors = toolbox_to_host_capability_descriptors(
             description,
             tools_view=tools_view,
-            provider_id=session_id or toolbox_id or engine_id or "toolbox",
+            provider_id=provider_id,
             owner=owner,
             visibility=visibility,
             namespace=namespace,
@@ -2748,6 +2757,7 @@ class EngineHostControlChannel:
         if isinstance(tools_view, dict):
             binding_payload.setdefault("tools_view", dict(tools_view or {}))
         return register(
+            provider_id=provider_id,
             methods=methods,
             scope=scope,
             session_id=session_id,

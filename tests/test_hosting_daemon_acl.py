@@ -1369,6 +1369,7 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
         payload={
             "session_token": token,
             "session_id": "cap-session-1",
+            "provider_id": "crm.provider",
             "scope": {"workflow_id": "wf-cap"},
             "binding": {
                 "transport": "daemon_callback",
@@ -1405,10 +1406,11 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
     assert registered["ok"] is True
     session = registered["result"]["session"]
     assert session["session_id"] == "cap-session-1"
+    assert session["provider_id"] == "crm.provider"
     assert session["owner"] == actor_id
     assert "binding" not in session
     assert session["methods"][0]["provider"] == {
-        "provider_id": "cap-session-1",
+        "provider_id": "crm.provider",
         "kind": "client_session",
         "owner": actor_id,
         "visibility": "workflow",
@@ -1432,6 +1434,7 @@ def test_daemon_registers_service_broker_host_capability_session(tmp_path: Path)
         payload={
             "session_token": token,
             "session_id": "cap-session-service-broker",
+            "provider_id": "builtin.service_broker",
             "provider_kind": "service_broker",
             "scope": {"workflow_id": "wf-cap-service"},
             "methods": [{"name": "fs.read_text", "group_path": ["FS"], "args_schema": {}, "result_schema": {}}],
@@ -1453,6 +1456,7 @@ def test_daemon_rejects_duplicate_host_capability_method_unless_override_request
     token = _issue_mgmt_session(daemon, "admin-cap-dup", "secret-cap-dup")
     base_payload = {
         "session_token": token,
+        "provider_id": "crm.provider",
         "scope": {"workflow_id": "wf-cap"},
         "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
     }
@@ -1500,6 +1504,7 @@ def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_
     payload = {
         "session_token": token,
         "session_id": "cap-session-ssh",
+        "provider_id": "crm.provider.ssh",
         "scope": {"workflow_id": "wf-cap"},
         "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
     }
@@ -1551,6 +1556,7 @@ def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path
         payload={
             "session_token": token,
             "session_id": "cap-session-disconnect",
+            "provider_id": "crm.provider.disconnect",
             "close_on_client_disconnect": True,
             "methods": [{"name": "crm.customer.lookup", "group_path": ["CRM"], "args_schema": {}, "result_schema": {}}],
         },

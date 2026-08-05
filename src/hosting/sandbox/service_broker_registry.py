@@ -457,6 +457,7 @@ def service_broker_discover(*, include_fs: bool = True, include_http: bool = Tru
 def service_broker_host_capability_session(
     *,
     session_id: str,
+    provider_id: str,
     owner: str = "service",
     visibility: str = "request",
     scope: Optional[Dict[str, Any]] = None,
@@ -471,7 +472,8 @@ def service_broker_host_capability_session(
         for row in service_broker_method_descriptors(include_fs=include_fs, include_http=include_http, approval=approval)
     ]
     return HostCapabilitySession(
-        session_id=_clean(session_id) or SERVICE_BROKER_PROVIDER_ID,
+        session_id=_clean(session_id),
+        provider_id=_clean(provider_id),
         owner=_clean(owner) or "service",
         provider_kind=SERVICE_BROKER_PROVIDER_KIND,
         visibility=_clean(visibility) or "request",

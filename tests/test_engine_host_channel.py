@@ -564,6 +564,7 @@ def test_host_capability_register_known_methods_helper_forwards_descriptors() ->
     ch._get_connection = lambda: fake  # type: ignore[method-assign]
 
     out = ch.host_capability_session_register_known_methods(
+        provider_id="builtin.service_broker",
         session_id="known-host-api",
         scope={"workflow_id": "wf-1"},
         binding={"transport": "local_ipc", "address": "client-callback"},
@@ -575,6 +576,7 @@ def test_host_capability_register_known_methods_helper_forwards_descriptors() ->
     payload = fake.calls[0][1]
     method_names = [row["name"] for row in payload["methods"]]
     assert payload["session_id"] == "known-host-api"
+    assert payload["provider_id"] == "builtin.service_broker"
     assert payload["provider_kind"] == "service_broker"
     assert payload["binding"] == {"transport": "service_broker", "address": "client-callback"}
     assert payload["scope"] == {"workflow_id": "wf-1"}
@@ -596,6 +598,7 @@ def test_host_capability_session_filtered_helpers_use_public_session_shapes() ->
                     "sessions": [
                         {
                             "session_id": "crm-provider",
+                            "provider_id": "crm.logical",
                             "owner": "client-a",
                             "scope": {"workflow_id": "wf-1", "request_id": "req-1"},
                             "provider": {"kind": "client_session", "visibility": "workflow"},
@@ -603,6 +606,7 @@ def test_host_capability_session_filtered_helpers_use_public_session_shapes() ->
                         },
                         {
                             "session_id": "erp-provider",
+                            "provider_id": "erp.logical",
                             "owner": "client-a",
                             "scope": {"workflow_id": "wf-2"},
                             "provider": {"kind": "client_session", "visibility": "workflow"},
@@ -618,8 +622,12 @@ def test_host_capability_session_filtered_helpers_use_public_session_shapes() ->
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
     ch._get_connection = lambda: fake  # type: ignore[method-assign]
 
-    listing = ch.host_capability_session_list_filtered(workflow_id="wf-1", method="crm.customer.lookup")
-    closed = ch.host_capability_session_close_filtered(workflow_id="wf-1", method="crm.customer.lookup")
+    listing = ch.host_capability_session_list_filtered(
+        workflow_id="wf-1", provider_id="crm.logical", method="crm.customer.lookup"
+    )
+    closed = ch.host_capability_session_close_filtered(
+        workflow_id="wf-1", provider_id="crm.logical", method="crm.customer.lookup"
+    )
 
     assert [row["session_id"] for row in listing["sessions"]] == ["crm-provider"]
     assert closed["count"] == 1
@@ -637,6 +645,7 @@ def test_host_capability_session_upsert_closes_matching_session_before_register(
                     "sessions": [
                         {
                             "session_id": "crm-provider",
+                            "provider_id": "crm.logical",
                             "owner": "client-a",
                             "scope": {"workflow_id": "wf-1"},
                             "provider": {"kind": "client_session", "visibility": "workflow"},
@@ -655,6 +664,7 @@ def test_host_capability_session_upsert_closes_matching_session_before_register(
     ch._get_connection = lambda: fake  # type: ignore[method-assign]
 
     out = ch.host_capability_session_upsert(
+        provider_id="crm.logical",
         session_id="crm-provider",
         scope={"workflow_id": "wf-1"},
         methods=[{"name": "crm.customer.lookup", "namespace": "crm", "group_path": ["CRM"]}],
@@ -729,6 +739,7 @@ def test_host_capability_register_toolbox_helper_adds_toolbox_binding() -> None:
     ch._get_connection = lambda: fake  # type: ignore[method-assign]
 
     ch.host_capability_session_register_toolbox(
+        provider_id="tools.logical",
         toolbox_id="tb-1",
         session_id="tb-session",
         scope={"workflow_id": "wf-1"},

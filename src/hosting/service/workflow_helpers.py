@@ -247,7 +247,7 @@ class WorkflowHelperMixin:
         callback_binding = self._host_capability_client_session_binding(session)
         if not callback_binding:
             raise HostCapabilityProviderUnavailable(
-                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "reason": "callback_binding_missing"}
+                detail={"provider_id": session.provider_id, "provider_kind": session.provider_kind, "reason": "callback_binding_missing"}
             )
         try:
             from ..callable_surface import HOST_CAPABILITY_PROVIDER_CALLBACK_NAME
@@ -262,7 +262,7 @@ class WorkflowHelperMixin:
         except RuntimeError as exc:
             raise HostCapabilityProviderUnavailable(
                 detail={
-                    "provider_id": session.session_id,
+                    "provider_id": session.provider_id,
                     "provider_kind": session.provider_kind,
                     "reason": str(exc).split(":", 1)[0] or "callback_invoke_failed",
                 }
@@ -286,7 +286,7 @@ class WorkflowHelperMixin:
         engine_id = str(call.context.engine_id or dict(session.binding or {}).get("engine_id") or "").strip()
         if not engine_id:
             raise HostCapabilityProviderUnavailable(
-                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind, "reason": "engine_id_required"}
+                detail={"provider_id": session.provider_id, "provider_kind": session.provider_kind, "reason": "engine_id_required"}
             )
         result = invoke_service_broker_method(
             self,
@@ -310,7 +310,7 @@ class WorkflowHelperMixin:
             return self._host_capability_service_broker_response(session, call)
         if provider_kind != "toolbox_session":
             raise HostCapabilityProviderUnavailable(
-                detail={"provider_id": session.session_id, "provider_kind": session.provider_kind}
+                detail={"provider_id": session.provider_id, "provider_kind": session.provider_kind}
             )
         binding = dict(session.binding or {})
         tool_name = self._toolbox_tool_name_for_host_capability(session, call)

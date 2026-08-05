@@ -175,6 +175,7 @@ def _service_broker_session(*, workflow_id: str, approval: dict | None = None) -
     }
     return HostCapabilitySession(
         session_id="service-broker-test",
+        provider_id="builtin.service_broker",
         owner="client-a",
         provider_kind="service_broker",
         visibility="workflow",
@@ -352,7 +353,8 @@ def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monk
         metadata={"toolbox": {"tool_name": "hello_tool", "toolbox_id": "tb-1", "allowed": True, "advertised": True}},
     )
     session = HostCapabilitySession(
-        session_id="tb-session",
+        session_id="tb-registration-1",
+        provider_id="tb-session",
         owner="client-a",
         provider_kind="toolbox_session",
         visibility="workflow",
@@ -392,7 +394,8 @@ def test_workflow_node_uses_client_host_capability_callback_session(tmp_path: Pa
         provider=HostCapabilityProviderRef(provider_id="client-crm", kind="client_session", owner="client-a", visibility="workflow"),
     )
     session = HostCapabilitySession(
-        session_id="client-crm",
+        session_id="client-crm-registration-1",
+        provider_id="client-crm",
         owner="client-a",
         provider_kind="client_session",
         visibility="workflow",
@@ -440,6 +443,7 @@ def _approval_test_session(relay: HostCapabilityProviderCallbackRelay, *, workfl
     )
     return HostCapabilitySession(
         session_id="client-crm-approvals",
+        provider_id="client-crm",
         owner="client-a",
         provider_kind="client_session",
         visibility="workflow",
@@ -645,7 +649,8 @@ def test_daemon_passes_host_capability_sessions_to_workflow_execute() -> None:
         provider=HostCapabilityProviderRef(provider_id="tb-session", kind="toolbox_session", owner="client-a", visibility="workflow"),
     )
     session = HostCapabilitySession(
-        session_id="tb-session",
+        session_id="tb-registration-2",
+        provider_id="tb-session",
         owner="client-a",
         provider_kind="toolbox_session",
         visibility="workflow",
@@ -656,7 +661,7 @@ def test_daemon_passes_host_capability_sessions_to_workflow_execute() -> None:
     fake = FakeService()
     daemon = EngineHostDaemon.__new__(EngineHostDaemon)
     daemon.svc = fake
-    daemon._host_capability_sessions = {"tb-session": session}
+    daemon._host_capability_sessions = {"tb-registration-2": session}
     daemon._host_capability_sessions_lock = threading.RLock()
 
     assert daemon._call_service("workflow-python-execute", {"request": {"request_id": "req-1"}})["ok"] is True
