@@ -840,7 +840,6 @@ Each must be documented with:
 ## 13. Documentation Maintenance Requirements
 
 1. `HOSTING_ACCESS.md` is the implementation-aligned architecture reference for hosting access.
-2. `hosting_access_plan.md` remains the forward-looking plan document and should not duplicate the architecture contract.
-3. Scenario-specific minimum controls and escalation triggers in Section 10 must stay current with the implemented command and policy behavior.
-4. Client-facing guidance should be maintained in Section 11 instead of being split across drifting duplicate documents.
-5. Any change to first-key bootstrap, no-auth safety rules, SSH host-key requirements, or client-realm custody rules must be reflected here at the same time as the code change.
+2. Scenario-specific minimum controls and escalation triggers in Section 10 must stay current with the implemented command and policy behavior.
+3. Client-facing guidance should be maintained in Section 11 instead of being split across drifting duplicate documents.
+4. Any change to first-key bootstrap, no-auth safety rules, SSH host-key requirements, or client-realm custody rules must be reflected here at the same time as the code change.
