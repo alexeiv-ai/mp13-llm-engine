@@ -9,7 +9,7 @@ import pytest
 
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
-from hosting.operation_contract import HostedOperationLifecycle, hosted_execution_fingerprint
+from hosting.operation_contract import hosted_execution_fingerprint
 from hosting.service.host_service import EngineHostService
 
 
@@ -242,24 +242,21 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
         control_state_file=control_file,
     )
     first_daemon._execute_startup_worker_recovery = lambda: {"status": "ok"}  # type: ignore[method-assign]
-    actor_id = first_daemon.svc._actor_id_from_payload(first_daemon.svc._read_control(), {})
-    prepared = first_daemon.svc._hosted_operations.prepare(
-        owner_actor_id=actor_id,
-        execution_kind="toolbox",
-        selector={"kind": "engine_id", "id": "receipt-smoke"},
-        namespace="engine:receipt-smoke",
-        request_id="restart-1",
-        fingerprint=hosted_execution_fingerprint({"tool_name": "smoke", "arguments": {}, "policy": {}}),
-        metadata={"engine_id": "receipt-smoke", "tool_name": "smoke"},
+    first_daemon.svc.register_spawned(
+        engine_id="receipt-smoke",
+        pid=2_147_483_000,
+        command=["python", "worker.py"],
+        executor_kind="toolbox_executor",
+        sandbox_policy={"retain_terminal_result": True},
+        bundle={"toolbox_id": "demo", "sandbox_profile_id": "default"},
+        environment={"environment_key": "demo-env"},
+        tool_access={"allowed_tool_names": ["smoke"]},
     )
-    operation_id = prepared["status"]["operation"]["operation_id"]
-    first_daemon.svc._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
-    first_daemon.svc._hosted_operations.finish(
-        operation_id=operation_id,
-        lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
-        envelope={"status": "ok", "request_id": "restart-1", "result": "persisted"},
-    )
-    ref = prepared["status"]["operation"]
+    first_daemon.svc._hosted_operations.max_inline_result_bytes = 256
+    first_daemon.svc._ipc_call = lambda **_kwargs: {  # type: ignore[method-assign]
+        "status": "ok",
+        "payload": "persisted" * 300,
+    }
 
     def _run(daemon: EngineHostDaemon) -> threading.Thread:
         thread = threading.Thread(target=lambda: asyncio.run(daemon.run()), daemon=True)
@@ -270,7 +267,10 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
         for _ in range(200):
             if pid_file.exists():
                 try:
-                    if channel.discover_running() is not None:
+                    if channel.discover_running_progress(
+                        include_reachability=False,
+                        prune_stale=False,
+                    ).get("status") == "ok":
                         return thread
                 except Exception:
                     pass
@@ -281,7 +281,24 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
         {"engine_host_daemon_pid_file": str(pid_file), "engine_host_daemon_auto_bootstrap": False}
     )
     first_thread = _run(first_daemon)
-    assert channel.hosted_operation_status(ref=ref)["lifecycle"] == "terminal_success"
+    tool_call = {"id": "call-1", "name": "smoke", "arguments": {}}
+    executed = channel.toolbox_execute(
+        engine_id="receipt-smoke",
+        execution_request_id="restart-1",
+        tool_call=tool_call,
+    )
+    ref = executed["operation"]
+    assert executed["lifecycle"] == "terminal_success"
+    assert executed["result"] is None
+    assert executed["result_ref"]["contract"] == "hosting.result_ref"
+    assert channel.hosted_operation_status(ref=ref) == executed
+    assert channel.toolbox_execute(
+        engine_id="receipt-smoke",
+        execution_request_id="restart-1",
+        tool_call=tool_call,
+    ) == executed
+    assert channel.hosted_operation_cancel(ref=ref)["lifecycle"] == "terminal_success"
+    assert channel.hosted_operation_result(ref=ref)["content"]["payload"] == "persisted" * 300
     channel.stop_daemon(reason="restart_smoke", requested_by="test")
     first_thread.join(5)
     assert not first_thread.is_alive()
@@ -298,7 +315,8 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
     try:
         status = channel.hosted_operation_status(ref=ref)
         assert status["lifecycle"] == "terminal_success"
-        assert status["result"]["result"] == "persisted"
+        assert status["result_ref"] == executed["result_ref"]
+        assert channel.hosted_operation_result(ref=ref)["content"]["payload"] == "persisted" * 300
         assert second_daemon.svc.discover_running(prune_stale=False, include_reachability=False) == []
     finally:
         channel.stop_daemon(reason="restart_smoke_complete", requested_by="test")
