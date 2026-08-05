@@ -801,6 +801,7 @@ Toolbox, workflow Python, and workflow JavaScript executions share one durable c
 7. Terminal payloads use exactly one of bounded inline `result`, authorized `result_ref`, or digest-only `result_omission`. Digests use `sha256:<hex>` and sizes use `size_bytes`.
 8. Receipts are stored at `<hosting_root>/state/hosted_operations.json`. Credential-shaped data is redacted before persistence. Callback bindings, lease tokens, raw worker state, queues, and stream histories are excluded.
 9. The legacy `toolbox_execution_receipts.json` schema is rejected. Stop the daemon, clear the protected replay window, and run `hosting-receipt-ledger-cutover` with explicit acknowledgement to archive it before starting this release.
+10. If transport loss hides the initial execute response, use `hosted_operation_resolve_request(execution_kind=..., selector=..., request_id=...)` once to recover the stored canonical ref/status. The lookup is owner-authorized, index-only, and never starts a worker; subsequent status/result/cancel calls remain ref-only.
 
 Retention defaults and daemon environment overrides:
 

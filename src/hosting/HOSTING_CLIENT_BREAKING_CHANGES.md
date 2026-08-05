@@ -13,7 +13,7 @@ Prepared against parent: `9895a98b8b7af7e4b248951d61b622c0c9c1caa3`
 
 First parent commit containing break: `f4e4ec021e0e62485415ca376953fae9388f6e73`
 
-Implementation release commit: `27e98c8782dfa6ac1080ec66bcec4a64b1aea624`
+Implementation release commit: `312e87f62fc12706b704f417c63eea7cf4ff8b29`
 
 Dependent project: `O:/repos/mp13-docs`
 
@@ -34,6 +34,23 @@ ref = started["operation"]
 status = channel.hosted_operation_status(ref=ref)
 canceled = channel.hosted_operation_cancel(ref=ref, reason="workspace_unload")
 ```
+
+If transport loss hides the initial execute response, recover the canonical
+ref/status through the authenticated request index, then persist the returned
+ref and resume the normal ref-only APIs:
+
+```python
+status = channel.hosted_operation_resolve_request(
+    execution_kind="workflow_python",
+    selector={"kind": "engine_id", "id": resolved_engine_id},
+    request_id=request_id,
+)
+ref = status["operation"]
+```
+
+This recovery lookup never probes or starts a worker. It is only for losing the
+parent-minted ref; status and cancel themselves do not accept reconstructed
+selectors.
 
 Old selector reconstruction is unsupported:
 

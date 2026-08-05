@@ -151,6 +151,12 @@ Unknown IDs and unauthorized IDs intentionally have the same public response.
 Authorization is resolved from the stored actor, never a caller-supplied owner
 field.
 
+If the synchronous execute response is lost after the parent persisted an
+operation, `hosted_operation_resolve_request` performs an authenticated indexed
+lookup by execution kind, resolved selector, and request ID and returns the
+stored canonical ref/status. It never probes or starts workers. Once recovered,
+all status, result, and cancel calls remain ref-only.
+
 ## Provider and session identity
 
 `provider_id` identifies the logical provider. `session_id` identifies one
