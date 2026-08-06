@@ -83,6 +83,8 @@ class EngineHostDaemon:
         self._operation_tasks_lock = threading.Lock()
         self._endpoint_mode_runtime_override: Optional[str] = None
         self._runtime_profile = str(runtime_profile or "foreground_terminal_bound").strip().lower()
+        self._started_at: Optional[float] = None
+        self._started_monotonic: Optional[float] = None
         self._actor_connections: Dict[str, int] = {}
         self._actor_connections_lock = threading.Lock()
         self._live_connections: Dict[str, Dict[str, Any]] = {}
@@ -1937,6 +1939,9 @@ class EngineHostDaemon:
                 "ipc_family": str(self._local_transport.get("family") or ""),
                 "ipc_address": str(self._local_transport.get("address") or ""),
             }
+            self._started_at = time.time()
+            self._started_monotonic = time.monotonic()
+            write_kwargs["started_at"] = self._started_at
             try:
                 self.pid_file.write(**write_kwargs)
             except TypeError:
@@ -2043,6 +2048,31 @@ class EngineHostDaemon:
                 self._loop = None
                 logger.info("EngineHostDaemon stopped")
 
+    def _daemon_runtime_status(self) -> Dict[str, Any]:
+        """Return daemon-owned startup timing for control-channel responses."""
+        now = time.time()
+        started_at = self._started_at
+        if started_at is None:
+            try:
+                persisted = dict(self.pid_file.read() or {})
+                raw_started_at = persisted.get("started_at")
+                started_at = float(raw_started_at) if raw_started_at is not None else None
+            except (TypeError, ValueError):
+                started_at = None
+        if self._started_monotonic is not None:
+            uptime_seconds = max(0.0, time.monotonic() - self._started_monotonic)
+        elif started_at is not None:
+            uptime_seconds = max(0.0, now - started_at)
+        else:
+            uptime_seconds = None
+        return {
+            "pid": os.getpid(),
+            "port": int(self.port),
+            "started_at": started_at,
+            "uptime_seconds": uptime_seconds,
+            "lifecycle_state": "running",
+        }
+
     async def _dispatch(
         self,
         raw_line: str,
@@ -2069,7 +2099,19 @@ class EngineHostDaemon:
         is_localhost = host in {"", "127.0.0.1", "::1", "localhost"}
 
         if cmd == "__ping__":
-            return {"seq": seq, "ok": True, "result": "pong"}
+            return {
+                "seq": seq,
+                "ok": True,
+                "result": "pong",
+                **self._daemon_runtime_status(),
+            }
+
+        if cmd in {"daemon-status", "__daemon_status__"}:
+            return {
+                "seq": seq,
+                "ok": True,
+                "result": self._daemon_runtime_status(),
+            }
 
         if cmd == "__shutdown__":
             if not self._terminal_control_enabled():

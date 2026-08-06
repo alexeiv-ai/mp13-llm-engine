@@ -242,6 +242,9 @@ def test_daemon_status_includes_auth_snapshot(monkeypatch) -> None:
             if cmd == "__ping__":
                 assert payload == {}
                 return "pong"
+            if cmd == "daemon-status":
+                assert payload == {}
+                return {"started_at": 120.0, "uptime_seconds": 3.25}
             assert cmd == "auth-status"
             assert payload == {}
             return {
@@ -283,6 +286,8 @@ def test_daemon_status_includes_auth_snapshot(monkeypatch) -> None:
     assert status["reachability_error"] is None
     assert status["pid"] == 9999
     assert status["port"] == 19876
+    assert status["started_at"] == 120.0
+    assert status["uptime_seconds"] == 3.25
     assert status["auth_status"] == {
         "daemon_version": "2.1.0",
         "capabilities": {

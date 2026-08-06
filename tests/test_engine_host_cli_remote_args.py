@@ -1,11 +1,37 @@
 from __future__ import annotations
 
 import json
+import logging
+import sys
 from typing import Any, Dict, Optional
 
 import pytest
 
 from hosting import engine_host_cli
+
+
+def test_cli_file_logging_configures_utc_formatter_without_crashing(tmp_path) -> None:
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_level = root_logger.level
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    try:
+        engine_host_cli._setup_file_logging(str(tmp_path / "daemon.log"))  # noqa: SLF001
+        assert any(
+            getattr(getattr(handler, "formatter", None), "converter", None) is engine_host_cli.time.gmtime
+            for handler in root_logger.handlers
+        )
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+            if handler not in original_handlers:
+                handler.close()
+        for handler in original_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(original_level)
 
 
 class _FakeChannel:

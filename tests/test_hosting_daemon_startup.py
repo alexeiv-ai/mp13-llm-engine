@@ -70,6 +70,36 @@ def test_daemon_tcp_control_listener_is_not_supported_even_with_remote_roles(tmp
     assert daemon._should_enable_tcp() is False  # noqa: SLF001
 
 
+def test_daemon_status_control_command_reports_start_time_and_uptime(monkeypatch, tmp_path: Path) -> None:
+    daemon = EngineHostDaemon(pid_file=tmp_path / "daemon.pid")
+    daemon._started_at = 100.0  # noqa: SLF001
+    daemon._started_monotonic = 10.0  # noqa: SLF001
+    monkeypatch.setattr("hosting.daemon.local_ipc.time.time", lambda: 125.0)
+    monkeypatch.setattr("hosting.daemon.local_ipc.time.monotonic", lambda: 42.5)
+
+    response = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            '{"seq": 7, "cmd": "daemon-status", "payload": {}}',
+            peer_host="127.0.0.1",
+        )
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["started_at"] == 100.0
+    assert response["result"]["uptime_seconds"] == 32.5
+    assert response["result"]["pid"] == os.getpid()
+
+    ping_response = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            '{"seq": 8, "cmd": "__ping__", "payload": {}}',
+            peer_host="127.0.0.1",
+        )
+    )
+    assert ping_response["result"] == "pong"
+    assert ping_response["started_at"] == 100.0
+    assert ping_response["uptime_seconds"] == 32.5
+
+
 def test_daemon_startup_recovery_stops_foreign_owner_registrations(
     monkeypatch,
     tmp_path: Path,

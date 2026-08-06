@@ -26,6 +26,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -853,6 +854,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "get-control-config",
         "set-control-config",
         "auth-status",
+        "daemon-status",
         "hosting-setup-status",
         "hosting-secure-state-status",
         "auth-list-keys",
@@ -2198,6 +2200,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "auth-status":
             _print_ok(svc.auth_status())
             return 0
+        if cmd == "daemon-status":
+            _print_error("daemon-status requires a running daemon")
+            return 1
         if cmd == "hosting-setup-status":
             _print_ok(svc.hosting_setup_summary())
             return 0

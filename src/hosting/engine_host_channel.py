@@ -1134,13 +1134,22 @@ class EngineHostControlChannel:
         pid_info = DaemonPidFile(pid_file_path)
         pid_path = _resolved_pid_path(pid_info, pid_file_path)
         info = pid_info.read() or {}
+        try:
+            started_at = float(info.get("started_at")) if info.get("started_at") is not None else None
+        except (TypeError, ValueError):
+            started_at = None
         pid_alive = self._pidfile_process_alive(pid_info)
         lifecycle_state = str(info.get("lifecycle_state") or "running").strip() or "running"
         status: Dict[str, Any] = {
             "pid_file": str(pid_info.path),
             "pid": info.get("pid"),
             "port": info.get("port"),
-            "started_at": info.get("started_at"),
+            "started_at": started_at,
+            "uptime_seconds": (
+                max(0.0, time.time() - started_at)
+                if started_at is not None
+                else None
+            ),
             "lifecycle_state": lifecycle_state if info else None,
             "shutdown_diagnostics": self._shutdown_diagnostics_from_pid_info(info, pid_file=pid_info.path),
             "pid_alive": pid_alive,
@@ -1173,6 +1182,16 @@ class EngineHostControlChannel:
                 status["reachability_error"] = "daemon_ping_failed"
                 conn.close()
                 return self._finalize_daemon_status(status)
+            try:
+                daemon_status = conn.invoke("daemon-status", {})
+                if isinstance(daemon_status, dict):
+                    for key in ("pid", "port", "started_at", "uptime_seconds", "lifecycle_state"):
+                        if key in daemon_status:
+                            status[key] = daemon_status.get(key)
+            except Exception as exc:
+                # Older daemons do not expose daemon-status. Keep the PID-file
+                # values above as a compatibility fallback.
+                logger.debug("Daemon status command unavailable: %s", exc)
             payload: Dict[str, Any] = {}
             if self._session_token:
                 payload["session_token"] = self._session_token

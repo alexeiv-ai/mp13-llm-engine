@@ -339,6 +339,13 @@ def test_pidfile_write_persists_payload(tmp_path: Path) -> None:
     assert str(raw["lifecycle_state"]) == "running"
 
 
+def test_pidfile_write_preserves_explicit_started_at(tmp_path: Path) -> None:
+    pid = DaemonPidFile(tmp_path / "daemon.pid")
+    pid.write(pid=1234, port=19876, shutdown_token="tok", started_at=123.5)
+
+    assert (pid.read() or {})["started_at"] == 123.5
+
+
 def test_pidfile_mark_shutting_down_hides_available_liveness_but_preserves_process_owner(
     monkeypatch,
     tmp_path: Path,

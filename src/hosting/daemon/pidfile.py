@@ -27,12 +27,13 @@ class DaemonPidFile:
         ipc_family: Optional[str] = None,
         ipc_address: Optional[str] = None,
         lifecycle_state: str = "running",
+        started_at: Optional[float] = None,
     ) -> None:
         payload = {
             "version": 1,
             "pid": int(pid),
             "port": int(port),
-            "started_at": time.time(),
+            "started_at": float(started_at if started_at is not None else time.time()),
             "shutdown_token": str(shutdown_token),
             "transport": str(transport or "").strip() or None,
             "ipc_family": str(ipc_family or "").strip() or None,
