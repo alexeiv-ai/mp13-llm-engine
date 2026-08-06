@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -30,6 +32,15 @@ def _prepare(repository: AtomicJsonHostedOperationRepository, request_id: str = 
         metadata=kwargs.pop("metadata", {"tool_name": "write"}),
         **kwargs,
     )
+
+
+def _prepare_from_process(path: str, barrier: Any, results: Any) -> None:
+    try:
+        repository = _repository(Path(path))
+        barrier.wait(timeout=30)
+        results.put(("ok", _prepare(repository, request_id="shared")["action"]))
+    except BaseException as exc:
+        results.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
 def test_prepare_mints_stable_ref_and_enforces_one_dispatch(tmp_path: Path) -> None:
@@ -68,6 +79,40 @@ def test_concurrent_prepare_grants_exactly_one_dispatch(tmp_path: Path) -> None:
     assert actions.count("attach") == 11
 
 
+def test_concurrent_multi_process_prepare_preserves_single_idempotent_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "operations.json"
+    context = multiprocessing.get_context("spawn")
+    worker_count = 6
+    barrier = context.Barrier(worker_count)
+    results = context.Queue()
+    processes = [
+        context.Process(target=_prepare_from_process, args=(str(path), barrier, results))
+        for _ in range(worker_count)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(30)
+        assert all(not process.is_alive() for process in processes)
+        assert all(process.exitcode == 0 for process in processes)
+        observed = [results.get(timeout=5) for _ in range(worker_count)]
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(5)
+        results.close()
+        results.join_thread()
+
+    assert all(kind == "ok" for kind, _ in observed), observed
+    actions = [value for _, value in observed]
+    assert actions.count("dispatch") == 1
+    assert actions.count("attach") == worker_count - 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert len(payload["receipts"]) == 1
+
+
 def test_interrupted_atomic_replace_preserves_last_valid_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -92,6 +137,29 @@ def test_interrupted_atomic_replace_preserves_last_valid_checkpoint(
     assert recreated.get_by_request(
         owner_actor_id="actor:a", namespace="toolbox:demo", request_id="not-persisted"
     ) is None
+
+
+def test_windows_replace_retries_are_bounded_and_eventually_succeed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path / "operations.json")
+    real_replace = os.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(source, target) -> None:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise OSError("simulated sharing violation")
+        real_replace(source, target)
+
+    monkeypatch.setattr("hosting.service.operation_repository.sys.platform", "win32")
+    monkeypatch.setattr("hosting.service.operation_repository.os.replace", flaky_replace)
+    monkeypatch.setattr("hosting.service.operation_repository.time.sleep", lambda _seconds: None)
+
+    prepared = _prepare(repository)
+
+    assert prepared["action"] == "dispatch"
+    assert attempts["count"] == 3
 
 
 def test_conflict_never_receives_dispatch_and_preserves_existing_ref(tmp_path: Path) -> None:

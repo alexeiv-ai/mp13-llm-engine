@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import hashlib
 import json
 import os
 import re
 import secrets
+import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Protocol
+from typing import Any, Dict, Generator, Mapping, Optional, Protocol
 
 from ..operation_contract import (
     HOSTED_OPERATION_REF_CONTRACT,
@@ -32,6 +34,9 @@ from .result_artifacts import ResultArtifactError, TerminalResultArtifactStore
 OPERATION_REPOSITORY_CONTRACT = "hosting.operation_repository"
 MAX_METADATA_BYTES = 8 * 1024
 MAX_OWNER_ACTOR_ID_BYTES = 256
+PROCESS_LOCK_TIMEOUT_SECONDS = 30.0
+WINDOWS_REPLACE_RETRY_ATTEMPTS = 8
+WINDOWS_REPLACE_RETRY_DELAY_SECONDS = 0.05
 _SECRET_KEY = re.compile(
     r"(?:authorization|credential|password|passwd|secret|session[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|private[_-]?key)$",
     re.IGNORECASE,
@@ -101,6 +106,70 @@ def _bounded_identity(value: Any, *, label: str, max_bytes: int = 256) -> str:
     return text
 
 
+@contextlib.contextmanager
+def _exclusive_process_file_lock(
+    path: Path,
+    *,
+    timeout_seconds: float = PROCESS_LOCK_TIMEOUT_SECONDS,
+) -> Generator[None, None, None]:
+    """Acquire an inter-process lock using a stable sidecar lock file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        locked = False
+        if sys.platform == "win32":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+            while True:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"timed out acquiring hosted operation repository lock: {path}")
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            locked = True
+        try:
+            yield
+        finally:
+            if locked:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _replace_with_bounded_retries(source: Path, target: Path) -> None:
+    attempts = WINDOWS_REPLACE_RETRY_ATTEMPTS if sys.platform == "win32" else 1
+    last_error: Optional[OSError] = None
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(WINDOWS_REPLACE_RETRY_DELAY_SECONDS * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+
+
 class AtomicJsonHostedOperationRepository:
     """Process-locked, bounded, atomic hosted-operation repository."""
 
@@ -124,16 +193,19 @@ class AtomicJsonHostedOperationRepository:
         self.max_inline_result_bytes = max(256, min(int(max_inline_result_bytes), MAX_INLINE_RESULT_BYTES))
         self.result_artifact_store = result_artifact_store
         self._clock = clock
+        self._lock_path = self.path.with_name(f"{self.path.name}.lock")
         self._condition = threading.Condition(threading.RLock())
-        self._data = self._load()
+        self._data = self._new_data()
         self._request_index: Dict[tuple[str, str, str], str] = {}
         self._operation_index: Dict[str, tuple[str, bool]] = {}
         with self._condition:
-            self._rebuild_indexes_locked()
-            changed = self._recover_interrupted_locked()
-            changed = self._prune_locked() or changed
-            if changed:
-                self._persist_locked()
+            with _exclusive_process_file_lock(self._lock_path):
+                self._data = self._load()
+                self._rebuild_indexes_locked()
+                changed = self._recover_interrupted_locked()
+                changed = self._prune_locked() or changed
+                if changed:
+                    self._persist_locked()
 
     def _now_ms(self) -> int:
         return max(0, int(float(self._clock()) * 1000))
@@ -179,12 +251,23 @@ class AtomicJsonHostedOperationRepository:
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
+            _replace_with_bounded_retries(temporary, self.path)
         finally:
             try:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
+
+    def _reload_locked(self) -> None:
+        self._data = self._load()
+        self._rebuild_indexes_locked()
+
+    @contextlib.contextmanager
+    def _state_lock(self) -> Generator[None, None, None]:
+        with self._condition:
+            with _exclusive_process_file_lock(self._lock_path):
+                self._reload_locked()
+                yield
 
     def _validate_row(self, operation_id: str, row: Mapping[str, Any], *, tombstone: bool) -> HostedOperationRef:
         record = dict(row or {})
@@ -370,7 +453,7 @@ class AtomicJsonHostedOperationRepository:
             raise ValueError("operation_metadata_too_large")
         key = self._request_key(owner, ns, rid)
         now_ms = self._now_ms()
-        with self._condition:
+        with self._state_lock():
             changed = self._prune_locked()
             existing_id = self._request_index.get(key)
             if existing_id:
@@ -456,7 +539,7 @@ class AtomicJsonHostedOperationRepository:
     def mark_dispatch_claimed(self, *, operation_id: str) -> Dict[str, Any]:
         oid = _bounded_identity(operation_id, label="operation_id")
         now_ms = self._now_ms()
-        with self._condition:
+        with self._state_lock():
             location = self._operation_index.get(oid)
             if location is None or location[1]:
                 raise KeyError(oid)
@@ -513,7 +596,7 @@ class AtomicJsonHostedOperationRepository:
             raise ValueError("operation_terminal_lifecycle_invalid")
         terminal_reason = str(reason or "").strip() or None
         now_ms = self._now_ms()
-        with self._condition:
+        with self._state_lock():
             location = self._operation_index.get(oid)
             if location is None or location[1]:
                 raise KeyError(oid)
@@ -532,7 +615,7 @@ class AtomicJsonHostedOperationRepository:
 
     def cancel_before_dispatch(self, *, operation_id: str, reason: str) -> Optional[Dict[str, Any]]:
         oid = _bounded_identity(operation_id, label="operation_id")
-        with self._condition:
+        with self._state_lock():
             location = self._operation_index.get(oid)
             if location is None or location[1]:
                 return None
@@ -552,7 +635,7 @@ class AtomicJsonHostedOperationRepository:
 
     def get_by_operation_id(self, operation_id: str) -> Optional[Dict[str, Any]]:
         oid = str(operation_id or "").strip()
-        with self._condition:
+        with self._state_lock():
             location = self._operation_index.get(oid)
             if location is None:
                 return None
@@ -560,9 +643,29 @@ class AtomicJsonHostedOperationRepository:
 
     def get_by_request(self, *, owner_actor_id: str, namespace: str, request_id: str) -> Optional[Dict[str, Any]]:
         key = self._request_key(str(owner_actor_id or "").strip(), str(namespace or "").strip(), str(request_id or "").strip())
-        with self._condition:
+        with self._state_lock():
             operation_id = self._request_index.get(key)
-            return self.get_by_operation_id(operation_id) if operation_id else None
+            if not operation_id:
+                return None
+            location = self._operation_index.get(operation_id)
+            if location is None:
+                return None
+            return copy.deepcopy(self._data[location[0]][operation_id])
+
+    def _resolve_locked(
+        self,
+        *,
+        operation: HostedOperationRef,
+        owner_actor_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        location = self._operation_index.get(operation.operation_id)
+        if location is None:
+            return None
+        row = self._data[location[0]][operation.operation_id]
+        stored = HostedOperationRef.from_dict(dict(row["operation"]))
+        if str(row.get("owner_actor_id") or "") != owner_actor_id or stored != operation:
+            return None
+        return copy.deepcopy(row)
 
     def resolve(
         self,
@@ -572,21 +675,15 @@ class AtomicJsonHostedOperationRepository:
     ) -> Optional[Dict[str, Any]]:
         operation = ref if isinstance(ref, HostedOperationRef) else HostedOperationRef.from_dict(ref)
         owner = _bounded_identity(owner_actor_id, label="owner_actor_id", max_bytes=MAX_OWNER_ACTOR_ID_BYTES)
-        with self._condition:
-            location = self._operation_index.get(operation.operation_id)
-            if location is None:
-                return None
-            row = self._data[location[0]][operation.operation_id]
-            stored = HostedOperationRef.from_dict(dict(row["operation"]))
-            if str(row.get("owner_actor_id") or "") != owner or stored != operation:
-                return None
-            return copy.deepcopy(row)
+        with self._state_lock():
+            return self._resolve_locked(operation=operation, owner_actor_id=owner)
 
     def status(self, *, ref: HostedOperationRef | Mapping[str, Any], owner_actor_id: str) -> Dict[str, Any]:
         operation = ref if isinstance(ref, HostedOperationRef) else HostedOperationRef.from_dict(ref)
-        with self._condition:
+        owner = _bounded_identity(owner_actor_id, label="owner_actor_id", max_bytes=MAX_OWNER_ACTOR_ID_BYTES)
+        with self._state_lock():
             changed = self._prune_locked()
-            row = self.resolve(ref=operation, owner_actor_id=owner_actor_id)
+            row = self._resolve_locked(operation=operation, owner_actor_id=owner)
             if changed:
                 self._persist_locked()
             return self._status_from_row(row) if row is not None else self._unknown_status(operation)
@@ -596,20 +693,22 @@ class AtomicJsonHostedOperationRepository:
         deadline = time.monotonic() + max(0.0, float(timeout_seconds))
         with self._condition:
             while True:
-                location = self._operation_index.get(oid)
-                if location is None:
-                    raise KeyError(oid)
-                row = self._data[location[0]][oid]
-                lifecycle = HostedOperationLifecycle(str(row["lifecycle"]))
-                if lifecycle not in {HostedOperationLifecycle.QUEUED, HostedOperationLifecycle.RUNNING}:
-                    return self._status_from_row(row)
+                with _exclusive_process_file_lock(self._lock_path):
+                    self._reload_locked()
+                    location = self._operation_index.get(oid)
+                    if location is None:
+                        raise KeyError(oid)
+                    row = self._data[location[0]][oid]
+                    lifecycle = HostedOperationLifecycle(str(row["lifecycle"]))
+                    if lifecycle not in {HostedOperationLifecycle.QUEUED, HostedOperationLifecycle.RUNNING}:
+                        return self._status_from_row(row)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return self._status_from_row(row)
-                self._condition.wait(timeout=remaining)
+                self._condition.wait(timeout=min(remaining, 0.25))
 
     def prune(self) -> None:
-        with self._condition:
+        with self._state_lock():
             if self._prune_locked():
                 self._persist_locked()
             if self.result_artifact_store is not None:
@@ -630,8 +729,9 @@ class AtomicJsonHostedOperationRepository:
         if self.result_artifact_store is None:
             raise ResultArtifactError("result_artifact_store_unavailable")
         operation = ref if isinstance(ref, HostedOperationRef) else HostedOperationRef.from_dict(ref)
-        with self._condition:
-            row = self.resolve(ref=operation, owner_actor_id=owner_actor_id)
+        owner = _bounded_identity(owner_actor_id, label="owner_actor_id", max_bytes=MAX_OWNER_ACTOR_ID_BYTES)
+        with self._state_lock():
+            row = self._resolve_locked(operation=operation, owner_actor_id=owner)
             if row is None:
                 raise ResultArtifactError("result_artifact_unauthorized")
             result_ref_row = dict(dict(row.get("terminal") or {}).get("result_ref") or {})
@@ -664,20 +764,22 @@ class AtomicJsonHostedOperationRepository:
         source = Path(path).expanduser().resolve()
         if not acknowledge_replay_window_clear:
             raise PermissionError("receipt_ledger_cutover_acknowledgement_required")
-        if not source.exists() or not source.is_file():
-            raise FileNotFoundError(source)
-        try:
-            payload = json.loads(source.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise RuntimeError(f"legacy receipt ledger is unreadable: {source}") from exc
-        if not isinstance(payload, dict) or "version" not in payload:
-            raise ValueError("receipt_ledger_is_not_legacy_schema")
-        timestamp = int(float(clock()) * 1000)
-        target = source.with_name(f"{source.name}.legacy-{timestamp}.archive")
-        if target.exists():
-            raise FileExistsError(target)
-        os.replace(source, target)
-        return target
+        lock_path = source.with_name(f"{source.name}.lock")
+        with _exclusive_process_file_lock(lock_path):
+            if not source.exists() or not source.is_file():
+                raise FileNotFoundError(source)
+            try:
+                payload = json.loads(source.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise RuntimeError(f"legacy receipt ledger is unreadable: {source}") from exc
+            if not isinstance(payload, dict) or "version" not in payload:
+                raise ValueError("receipt_ledger_is_not_legacy_schema")
+            timestamp = int(float(clock()) * 1000)
+            target = source.with_name(f"{source.name}.legacy-{timestamp}.archive")
+            if target.exists():
+                raise FileExistsError(target)
+            _replace_with_bounded_retries(source, target)
+            return target
 
 
 __all__ = [
