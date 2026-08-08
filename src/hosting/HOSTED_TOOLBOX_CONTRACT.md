@@ -417,6 +417,163 @@ entries whose grace period elapsed. Revoked content remains while referenced
 and becomes GC-eligible only after the last active/history retention reference
 and grace period expire.
 
+## Initial environment catalog
+
+The initial catalog exposes exactly two stable logical template IDs: `core` and
+`py-compute`. Logical IDs have no version suffix. A catalog update publishes a
+new immutable revision below the same logical ID; plans pin the selected
+revision and never resolve an unqualified ID again during apply.
+
+Both templates ship as signed complete manifests with complete distribution
+locks for every advertised target. A template revision identity is the tuple of
+logical template ID, template manifest digest, complete lock digest, catalog
+revision, Python ABI, platform tag, parent worker artifact digest, and isolation
+policy version. Changing any tuple member creates a different revision.
+
+`core` contains the installed hosting/worker artifact and only its complete
+protocol, serialization, validation, and sandbox-harness dependency closure.
+It contains no optional mathematics, data, document, network-client, or model
+packages. Standard-library modules need no distribution entry.
+
+`py-compute` has its own complete independently materialized lock. It includes
+the same hosting/worker closure plus pinned NumPy, SymPy, NumExpr, and every
+third-party distribution imported by a shipped parent compute intrinsic.
+`py-compute` is not constructed by copying, layering, or inheriting the
+`core` site-packages directory. Sharing digest-addressed artifact bytes is
+allowed; sharing a mutable installation is not.
+
+The host project configuration namespace is `toolbox_environment_catalog` and
+has these exact keys:
+
+| Key | Required value and meaning |
+| --- | --- |
+| `resource` | Required package-resource reference for the signed catalog manifest. The initial value is `pkg:hosting.resources/toolbox_templates/catalog.json`. |
+| `trusted_signing_key_ids` | Non-empty list of secret-store public-key IDs accepted for catalog and manifest signatures. |
+| `required_template_ids` | Exactly `core` and `py-compute` for the initial release. |
+| `required_target` | Exactly one host-supported target: `cp312-win_amd64` or `cp312-manylinux_2_28_x86_64`. |
+| `prewarm_required` | Boolean; must be `true` for standard hosting readiness. |
+| `artifact_source_ids` | Ordered non-empty list of administrator-configured digest-addressed sources. |
+| `offline_preseed_source_id` | Optional administrator source ID; never a client path. |
+| `cache_grace_seconds` | Integer from 86,400 through 7,776,000; default 604,800. |
+| `build_timeout_seconds` | Integer from 60 through 1,800; default 1,800. |
+
+The required sandbox configuration is
+`toolbox_sandbox_policies.compute_only`. Its exact effective policy is:
+
+```json
+{
+  "policy_id": "compute-only",
+  "sandbox_required": true,
+  "filesystem_read_roots": [],
+  "filesystem_write_roots": [],
+  "artifact_roots": [],
+  "network": false,
+  "subprocess": false,
+  "brokered_io": {
+    "filesystem": false,
+    "http": false,
+    "subprocess": false
+  },
+  "host_api_permissions": []
+}
+```
+
+An omitted request policy means this compute-only policy. A request may narrow
+it. Widening any capability requires an authorized parent sandbox-policy choice
+and remains independent of dependency approval. A package being importable
+never grants filesystem, network, subprocess, artifact, broker, or host API
+capability.
+
+At daemon startup, the host validates catalog and manifest signatures, complete
+locks, artifact availability, target tags, worker artifact digest, and the
+ability to enforce compute-only isolation. It then materializes and import
+probes both required templates before standard readiness succeeds. If the
+platform cannot enforce the policy, the host neither advertises nor launches
+the affected revision. `prewarm_required: false` may be used only for an
+explicit non-standard deployment; it reports degraded readiness until both
+templates have passed the same checks.
+
+Readiness diagnostics use the stable codes `required_template_missing`,
+`required_template_signature_invalid`, `required_template_lock_invalid`,
+`required_template_artifact_unavailable`,
+`required_template_materialization_failed`, `required_template_probe_failed`,
+and `compute_only_policy_unenforceable`. Normal projections contain only the
+template ID, target, state, stable code, bounded summary, catalog revision, and
+manifest/lock digests. Authorized operator projections may include bounded
+artifact and probe diagnostics but never credentials, approval values, host
+paths, interpreter paths, or installer output.
+
+Selection always chooses the smallest allowed complete template. Source using
+only the standard library, staged local modules, and the parent worker closure
+selects `core`. Source requiring only reviewed shipped compute distributions
+selects `py-compute`. Other reviewed requirements select another active signed
+template when one exists; otherwise they form an exact custom delta subject to
+package policy and, when required, dependency approval. A caller cannot force a
+larger template merely because it is installed.
+
+## Cross-worker use of core
+
+The catalog resolver may select the same immutable `core` revision for:
+
+- standard-library-only toolbox functions;
+- Python workflow modules and snippets whose workflow contract selects
+  `workflow_python(profile=node)`; and
+- Python workflow helper workers whose source and declared dependencies fit
+  `core`.
+
+This is environment reuse, not worker or protocol unification. Each consumer
+retains its own execution contract, source/import allowlist, effective sandbox
+policy, worker-pool identity, resource limits, authorization checks, operation
+kind, routing, readiness, cancellation rules, and lifecycle. A worker accepts
+only its own request protocol. Pools do not exchange live interpreters,
+processes, globals, module caches, credentials, or routes. Failure, draining,
+replacement, and GC of one pool do not implicitly mutate another pool.
+
+Catalog resolution and verified artifact caching may be shared parent services.
+They expose immutable revision identity and bounded readiness to each worker
+owner; they do not expose a generic Python execution endpoint.
+
+## Model runtime boundary
+
+The model runtime is a separate parent-owned execution domain. Its complete
+lock is derived from the root `pyproject.toml`, the committed lock file, and the
+administrator-configured optional model package set. Its identity pins the
+Python ABI/platform, engine artifact digest, complete distribution lock digest,
+optional package-set digest, model isolation-policy version, and materialization
+revision.
+
+The exact host configuration namespace is `model_runtime`:
+
+| Key | Meaning |
+| --- | --- |
+| `project_resource` | Required package-resource reference to the root `pyproject.toml`. |
+| `lock_resource` | Required package-resource reference to the committed complete lock. |
+| `optional_package_set` | Name of one administrator-reviewed optional model package set. |
+| `required_target` | Exact supported Python ABI/platform target. |
+| `engine_artifact_digest` | Required digest of the model-engine artifact used by workers. |
+| `readiness_required` | Boolean controlling whether model readiness gates model-operation readiness only. |
+
+Only authenticated model operations may activate this runtime, and they remain
+subject to their own model authorization, resource, network, data-access, and
+secret policies. Toolbox definition planning, custom environment building,
+toolbox workers, workflow Python nodes, workflow helpers, template
+administration, and consumer payloads cannot select it, derive from it, or use
+it as a template/base. It is not a generic interpreter or arbitrary-code route.
+
+The bounded `ModelRuntimeStatus` projection contains exactly `state`,
+`code`, `summary`, `python_abi`, `platform`, `engine_artifact_digest`,
+`complete_lock_digest`, `optional_package_set`, `materialization_revision`,
+and `updated_at_ms`. The normal projection never contains an environment name,
+environment key, virtual-environment path, interpreter path, activation
+command, package path, raw lock, credential, or installer output. An authorized
+operator may receive bounded package/probe diagnostics without those values.
+
+A preinstalled model environment is allowed only when it verifies to the same
+complete identity. Its discovery and activation remain internal to the model
+worker owner. Model-runtime failure affects model-operation readiness and does
+not cause toolbox catalog fallback, template substitution, or ambient-package
+use.
+
 ## Planning
 
 `plan_definition(definition)` is actor-authorized and side-effect-free with

@@ -654,21 +654,33 @@ review API.
   exact dependent-project requirements, and a link to the durable contract.
   Treat this entry as the adoption delta and release handoff, not as the
   normative contract specification.
-- [ ] **P0-13** Freeze the initial environment catalog contract: stable `core`
+- [x] **P0-13** Freeze the initial environment catalog contract: stable `core`
   and `py-compute` names without version suffixes, shipped complete manifests
   and locks, immutable revision identity, project-config keys, compute-only
   sandbox policy, supported-platform enforcement requirements, startup
   validation/prewarm behavior, readiness diagnostics, smallest-compatible
   selection rules, and authorization required to widen sandbox capabilities.
-- [ ] **P0-14** Freeze cross-worker use of `core`: standard-library-only toolbox
+- [x] **P0-14** Freeze cross-worker use of `core`: standard-library-only toolbox
   functions, `workflow_python(profile=node)` modules and snippets, and workflow
   helper workers may resolve to it, while each retains its own execution
   contract, import allowlist, sandbox policy, pool identity, and lifecycle.
-- [ ] **P0-15** Freeze the model-runtime boundary: derive its complete lock from
+- [x] **P0-15** Freeze the model-runtime boundary: derive its complete lock from
   `pyproject.toml` plus the configured optional model package set; keep it
   exclusive to model operations; expose bounded readiness/capability metadata
   but no venv path, generic interpreter selection, arbitrary-code route, or use
   as a template/custom-environment base.
+
+  Evidence (2026-08-08): the durable contract freezes the two signed complete
+  initial templates, immutable revision tuple, exact host config keys,
+  compute-only policy, supported-target/prewarm/readiness behavior, and
+  smallest-template selection. It separately freezes cross-worker `core`
+  resolution without process/protocol sharing and an exclusive model-runtime
+  lock, configuration, authorization, and bounded status surface. The dependent
+  handoff gives exact environment/readiness/model-runtime code removal and
+  replacement rules. The predeclared contract-doc command passed 10 tests and
+  its forbidden-vocabulary search returned no matches; the Phase 0
+  contract/identity/operation audit passed 62 tests. Runtime test categories
+  were not applicable to this documentation-only freeze.
 
 Exit gate: the breaking-change entry and typed examples cover every current
 call path found in the inventory.

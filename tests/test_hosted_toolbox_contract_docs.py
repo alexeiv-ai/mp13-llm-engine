@@ -25,6 +25,9 @@ def test_contract_has_frozen_public_sections_and_limits() -> None:
         "## ToolboxDependencyRequest",
         "## Environment template descriptor",
         "## Deployment administration policy",
+        "## Initial environment catalog",
+        "## Cross-worker use of core",
+        "## Model runtime boundary",
         "## Planning",
         "## Dependency approval references",
         "## Authoritative read",
@@ -155,3 +158,124 @@ def test_contract_freezes_deployment_administration_policy() -> None:
         "configurable from one to 90 days",
     ]:
         assert required in text
+
+
+def test_contract_freezes_initial_environment_catalog_and_config() -> None:
+    text = _contract_text()
+    prose = " ".join(text.split())
+    for required in [
+        "exactly two stable logical template IDs: `core` and `py-compute`",
+        "Logical IDs have no version suffix.",
+        "signed complete manifests with complete distribution locks",
+        "parent worker artifact digest, and isolation policy version",
+        "pinned NumPy, SymPy, NumExpr",
+        "independently materialized lock",
+        "`pkg:hosting.resources/toolbox_templates/catalog.json`",
+        "`toolbox_sandbox_policies.compute_only`",
+        "`required_template_missing`",
+        "`required_template_signature_invalid`",
+        "`required_template_lock_invalid`",
+        "`required_template_artifact_unavailable`",
+        "`required_template_materialization_failed`",
+        "`required_template_probe_failed`",
+        "`compute_only_policy_unenforceable`",
+        "Selection always chooses the smallest allowed complete template.",
+    ]:
+        assert required in prose
+    for key in [
+        "`resource`",
+        "`trusted_signing_key_ids`",
+        "`required_template_ids`",
+        "`required_target`",
+        "`prewarm_required`",
+        "`artifact_source_ids`",
+        "`offline_preseed_source_id`",
+        "`cache_grace_seconds`",
+        "`build_timeout_seconds`",
+    ]:
+        assert key in text
+    policy_block = next(
+        json.loads(block)
+        for block in re.findall(r"```json\n(.*?)\n```", text, flags=re.DOTALL)
+        if '"policy_id": "compute-only"' in block
+    )
+    assert policy_block == {
+        "policy_id": "compute-only",
+        "sandbox_required": True,
+        "filesystem_read_roots": [],
+        "filesystem_write_roots": [],
+        "artifact_roots": [],
+        "network": False,
+        "subprocess": False,
+        "brokered_io": {
+            "filesystem": False,
+            "http": False,
+            "subprocess": False,
+        },
+        "host_api_permissions": [],
+    }
+
+
+def test_contract_keeps_cross_worker_core_consumers_separate() -> None:
+    text = _contract_text()
+    for required in [
+        "standard-library-only toolbox functions",
+        "`workflow_python(profile=node)`",
+        "Python workflow helper workers",
+        "This is environment reuse, not worker or protocol unification.",
+        "worker-pool identity",
+        "Pools do not exchange live interpreters",
+        "do not expose a generic Python execution endpoint",
+    ]:
+        assert required in text
+
+
+def test_contract_freezes_exclusive_model_runtime_boundary() -> None:
+    text = _contract_text()
+    prose = " ".join(text.split())
+    for required in [
+        "root `pyproject.toml`",
+        "administrator-configured optional model package set",
+        "The exact host configuration namespace is `model_runtime`",
+        "Only authenticated model operations may activate this runtime",
+        "It is not a generic interpreter or arbitrary-code route.",
+        "`ModelRuntimeStatus`",
+        "model authorization, resource, network, data-access, and secret policies",
+        "does not cause toolbox catalog fallback",
+    ]:
+        assert required in prose
+    for key in [
+        "`project_resource`",
+        "`lock_resource`",
+        "`optional_package_set`",
+        "`required_target`",
+        "`engine_artifact_digest`",
+        "`readiness_required`",
+    ]:
+        assert key in text
+    for field in [
+        "`state`",
+        "`code`",
+        "`summary`",
+        "`python_abi`",
+        "`platform`",
+        "`complete_lock_digest`",
+        "`materialization_revision`",
+        "`updated_at_ms`",
+    ]:
+        assert field in text
+
+
+def test_handoff_requires_environment_and_model_runtime_removals() -> None:
+    text = HANDOFF.read_text(encoding="utf-8")
+    prose = " ".join(text.split())
+    for required in [
+        "### Required environment-selection and readiness changes",
+        "must not append version suffixes",
+        "Do not silently promote every tool to `py-compute`",
+        "must not run an import probe through a client-selected Python",
+        "Do not route workflow execution through a toolbox worker",
+        "Remove dependent fields, UI choices, fallbacks, and dispatch branches",
+        "never persist or render its activation path",
+    ]:
+        assert required in prose

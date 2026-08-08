@@ -103,6 +103,43 @@ Do not add compatibility shims for these behaviors. Code that still needs an
 old field must be changed to construct dependency intent or consume the
 authoritative definition/apply projection.
 
+### Required environment-selection and readiness changes
+
+Dependent deployment code may request only the logical template IDs `core` and
+`py-compute` exposed by the initial catalog, or express reviewed package intent
+for planning. It must not append version suffixes, persist a resolved revision
+as a user choice, or synthesize a template from a local environment name.
+
+Use `core` for source limited to the standard library, staged local modules,
+and the parent worker closure. Use `py-compute` only when source requires the
+shipped NumPy/SymPy/NumExpr compute set. For any other import, including
+Matplotlib in the inventoried starter tool, submit the import/distribution
+intent and let the plan select another allowed template or produce the exact
+custom delta. Do not silently promote every tool to `py-compute`, infer package
+permission from importability, or treat package availability as filesystem,
+network, subprocess, broker, or host-API permission.
+
+Dependent startup and deployment UI must consume the template readiness state
+and stable diagnostic code returned by the host. It must not run an import
+probe through a client-selected Python, inspect a virtual-environment path, or
+infer readiness from a successful lock/install subprocess. The host prewarms
+both initial templates and gates standard readiness. The dependent may present
+the bounded summary and retry an authorized plan/apply after readiness is
+restored; it may not bypass the gate with ambient packages.
+
+Workflow code may independently select `core` for
+`workflow_python(profile=node)` modules/snippets and Python workflow helpers,
+but must retain the workflow protocol, allowlist, sandbox policy, pool,
+authorization, limits, and lifecycle. Do not route workflow execution through
+a toolbox worker merely because both resolved to the same immutable template.
+
+The model runtime is not a toolbox template or consumer-selectable Python
+runtime. Remove dependent fields, UI choices, fallbacks, and dispatch branches
+that expose it as an environment name, template/base, interpreter, or
+arbitrary-code route. Only model-operation status UI may display its bounded
+readiness/capability projection; never persist or render its activation path,
+environment key, interpreter path, package path, or raw lock.
+
 ### Current parent removal inventory
 
 The following public `HostedToolBoxRef` methods and aliases disappear:

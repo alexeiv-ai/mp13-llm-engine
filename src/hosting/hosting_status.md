@@ -32,9 +32,8 @@ belong in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 Status: In progress
 
 The Phase 0 inventory, public contract, identities, hosted-operation foundation,
-and deployment administration policy are complete. Initial catalog,
-cross-worker `core`, model-runtime boundary, and final migration handoff are
-next.
+deployment administration policy, initial catalog, cross-worker `core`, and
+model-runtime boundary are complete. The final migration handoff is next.
 
 ## Active slice
 
@@ -49,6 +48,7 @@ None.
 | 2026-08-08 | P0-04 | Added canonical/domain-separated identity helpers and fixed vectors for definitions, resolved profiles, environments, manifests, template locks, and custom locks; documented dependent digest responsibilities. | `python -m pytest tests/test_hosted_toolbox_identity.py tests/test_hosted_toolbox_contract_docs.py -q` -> 10 passed, including two fresh hash-seeded processes; focused bundle staging regressions -> 3 passed, 135 deselected. Clean environment, daemon integration, and persistence/concurrency: not applicable until helpers are wired into runtime/state. | `feat: add canonical toolbox identities (P0-04)` |
 | 2026-08-08 | P0-08 | Added definition-apply execution identity and strict persisted monotonic operation progress, including recovery, terminal diagnostic placement, and an irreversible publication cancellation boundary. | Contract/repository/toolbox-doc command -> 52 passed, including repository recreation/interruption and multi-process idempotency; operation service/workflow regressions -> 15 passed. Clean-environment build/import: not applicable. | `feat: extend hosted operation progress (P0-08)` |
 | 2026-08-08 | P0-05 | Froze template/package/artifact trust, roles/control methods, signed immutable publication, offline preseeding, supported targets/timeouts, lifecycle/audit, and cache retention; removed dependent installation authority in the handoff. | Contract-doc command -> 6 passed; exact forbidden-history search -> no matches. Clean environment, daemon, persistence/concurrency, and runtime regressions: not applicable (policy-only). | `docs: freeze template deployment policy (P0-05)` |
+| 2026-08-08 | P0-13, P0-14, P0-15 | Froze the complete initial catalog/config/sandbox/readiness contract, isolated cross-worker `core` resolution, and exclusive model-runtime lock/status/authorization boundary; added exact dependent selection/readiness/removal rules. | Contract-doc command -> 10 passed; exact forbidden-history search -> no matches; Phase 0 contract/identity/operation audit -> 62 passed. Clean environment, daemon integration, persistence/concurrency, and model execution regressions: not applicable (documentation-only freeze). | `docs: freeze initial environment boundaries (P0-13 P0-14 P0-15)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -76,5 +76,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Freeze the initial `core`/`py-compute` catalog, cross-worker `core` use, and the
-exclusive model-runtime boundary.
+Complete the final Phase 0 dependent migration handoff, including exact
+old-to-new examples and the version-1 state archival procedure.
