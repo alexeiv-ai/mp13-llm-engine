@@ -698,13 +698,23 @@ call path found in the inventory.
 
 ### Phase 1 - Template catalog and dependency analysis
 
-- [ ] **P1-01** Add a parent-owned `ToolboxEnvironmentTemplateSpec` containing
+- [x] **P1-01** Add a parent-owned `ToolboxEnvironmentTemplateSpec` containing
   immutable template ID, Python/runtime constraints, platform constraints,
   locked distributions, exposed import roots, lock digest, and provenance.
-- [ ] **P1-02** Add a reviewed import-to-distribution catalog supporting aliases,
+- [x] **P1-02** Add a reviewed import-to-distribution catalog supporting aliases,
   package extras, and version constraints. Seed it only from Phase 0 inventory;
   likely candidates visible in current code/tests include calculator/symbolic,
   NumPy/SymPy, and HTTP packages.
+
+  Evidence (2026-08-08): `toolbox/catalog.py` adds frozen strict template,
+  locked-distribution, provenance, reviewed-rule, and deterministic catalog
+  models. Template data includes Python/runtime/platform constraints, complete
+  exact distributions, exposed roots, lock/worker digests, isolation version,
+  and provenance. The reviewed seed contains only the inventoried NumPy, SymPy,
+  NumExpr, Requests, and Matplotlib roots while the model supports distinct
+  import/distribution names, package aliases, extras, and normalized version
+  constraints. Focused tests passed 16 cases; identity/runtime-key regressions
+  passed 20 tests; compile and diff checks passed.
 - [ ] **P1-03** Move intrinsic dependency knowledge out of
   `SandboxProfileSpec.intrinsics_profile_id()` and into dependency-only
   intrinsic registry metadata that can be read on `core` without importing

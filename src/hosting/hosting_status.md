@@ -52,6 +52,7 @@ None.
 | 2026-08-08 | P0-05 | Froze template/package/artifact trust, roles/control methods, signed immutable publication, offline preseeding, supported targets/timeouts, lifecycle/audit, and cache retention; removed dependent installation authority in the handoff. | Contract-doc command -> 6 passed; exact forbidden-history search -> no matches. Clean environment, daemon, persistence/concurrency, and runtime regressions: not applicable (policy-only). | `docs: freeze template deployment policy (P0-05)` |
 | 2026-08-08 | P0-13, P0-14, P0-15 | Froze the complete initial catalog/config/sandbox/readiness contract, isolated cross-worker `core` resolution, and exclusive model-runtime lock/status/authorization boundary; added exact dependent selection/readiness/removal rules. | Contract-doc command -> 10 passed; exact forbidden-history search -> no matches; Phase 0 contract/identity/operation audit -> 62 passed. Clean environment, daemon integration, persistence/concurrency, and model execution regressions: not applicable (documentation-only freeze). | `docs: freeze initial environment boundaries (P0-13 P0-14 P0-15)` |
 | 2026-08-08 | P0-12 | Completed the dependent adoption handoff with old/new code, durable recovery and teardown flows, exact version-1 archive/rollback procedure, and an inventory-to-removal matrix. | Document suite -> 12 passed; identity/operation audit -> 52 passed; exit audit -> 21 public operation names, 19 commands, and six dependent file groups covered; durable-contract forbidden-history search -> no matches. Runtime/state-command/client-repository categories: not applicable (documentation-only handoff). | `docs: complete toolbox migration handoff (P0-12)` |
+| 2026-08-08 | P1-01, P1-02 | Added frozen strict immutable template/lock/provenance models and a deterministic reviewed import/distribution catalog, seeded only from inventoried roots. | Catalog -> 16 passed; identity/runtime-key regressions -> 20 passed; compile/diff checks passed. Clean environment and daemon integration: not applicable (pure models/catalog). | `feat: add toolbox template catalog (P1-01 P1-02)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -79,5 +80,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Implement the parent-owned template/catalog and dependency-analysis foundation
-from P1-01 through P1-06.
+Move intrinsic dependency declarations into read-only metadata and implement the
+source analyzer/resolver/template selection pipeline from P1-03 through P1-06.

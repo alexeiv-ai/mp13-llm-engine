@@ -15,6 +15,14 @@ from .bundle_models import (
     ToolboxWorkerStartupSpec,
 )
 from .callbacks import HostedToolCallbackContext
+from .catalog import (
+    PHASE0_REVIEWED_IMPORT_CATALOG,
+    ReviewedImportDistributionCatalog,
+    ReviewedImportDistributionRule,
+    ToolboxEnvironmentTemplateSpec,
+    ToolboxLockedDistributionSpec,
+    ToolboxTemplateProvenance,
+)
 from .cancellation import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
 from .execution import ToolboxExecutionHarness
@@ -26,6 +34,12 @@ from .tools_view import serialize_tools_view
 
 __all__ = [
     "HostedToolCallbackContext",
+    "ToolboxEnvironmentTemplateSpec",
+    "ToolboxLockedDistributionSpec",
+    "ToolboxTemplateProvenance",
+    "ReviewedImportDistributionRule",
+    "ReviewedImportDistributionCatalog",
+    "PHASE0_REVIEWED_IMPORT_CATALOG",
     "ToolboxBundleFile",
     "ToolboxBundleTool",
     "ToolboxBundleAutoTool",
