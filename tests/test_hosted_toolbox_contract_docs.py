@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -279,3 +280,123 @@ def test_handoff_requires_environment_and_model_runtime_removals() -> None:
         "never persist or render its activation path",
     ]:
         assert required in prose
+
+
+def test_handoff_examples_and_archive_procedure_are_complete() -> None:
+    text = HANDOFF.read_text(encoding="utf-8")
+    prose = " ".join(text.split())
+    assert "Release commit: pending" in text
+    assert "Dependent adoption commit: pending" in text
+    assert "Parent inventory baseline:" in text
+    for block in re.findall(r"```python\n(.*?)\n```", text, flags=re.DOTALL):
+        ast.parse(block)
+    for required in [
+        "### Old-to-new dependent code",
+        "active = hosted.get_definition()",
+        '"expected_revision": active["active_revision"]',
+        "plan = hosted.plan_definition(definition)",
+        "hosted.approve_definition_plan(plan_id=plan[\"plan_id\"])",
+        "dependency_approval_ref=approval_ref",
+        "deployment_store.save_operation_ref",
+        'execution_kind="toolbox_definition_apply"',
+        "channel.hosted_operation_resolve_request",
+        "channel.hosted_operation_status",
+        "channel.hosted_operation_result",
+        '"auto_requests": []',
+        '"manual_requests": []',
+        '"intrinsics": []',
+        "On `revision_conflict`, re-read `get_definition()`",
+        "### Inventory-to-adoption matrix",
+    ]:
+        assert required in prose
+    for required in [
+        "toolbox-state-archive-v1",
+        '"acknowledge_version_1_archive":true',
+        "`<hosting_root>/state/toolbox_sandboxes.json`",
+        "expected_state_sha256",
+        "confirms no daemon owns the hosting root",
+        "version is not exactly `1`",
+        "verifies every referenced bundle path resolves below the hosting root",
+        "atomically moves the state plus referenced bundle directories",
+        "only then initializes an empty strict version-2 state",
+        "Rollback means stopping the daemon",
+        "Do not restore an archive under different parent code",
+    ]:
+        assert required in prose
+    assert "command name pending" not in text
+
+
+def test_handoff_covers_every_inventoried_removal_and_dependent_site() -> None:
+    text = HANDOFF.read_text(encoding="utf-8")
+    prose = " ".join(text.split())
+    removed_commands = {
+        "toolbox-register-auto",
+        "toolbox-unregister-auto",
+        "toolbox-register-manual",
+        "toolbox-unregister-manual",
+        "toolbox-register-intrinsics",
+        "toolbox-unregister-intrinsics",
+        "toolbox-environment-list",
+        "toolbox-environment-upsert",
+        "toolbox-environment-clone",
+        "toolbox-environment-resolve",
+        "toolbox-environment-apply",
+        "toolbox-environment-realize",
+        "toolbox-environment-sync",
+        "toolbox-environment-prepare-install",
+        "toolbox-environment-lock-install",
+        "toolbox-environment-resolve-install-lock",
+        "toolbox-environment-verify-install-lock",
+        "toolbox-environment-execute-install",
+        "toolbox-environment-verify-install-receipt",
+    }
+    command_block = re.search(
+        r"The daemon, subprocess CLI, authorization, and policy entries removed with\n"
+        r"those methods are:\n\n```text\n(.*?)\n```",
+        text,
+        flags=re.DOTALL,
+    )
+    assert command_block is not None
+    assert set(command_block.group(1).splitlines()) == removed_commands
+    for removed_api in [
+        "`mutate()`",
+        "`register_auto_callable()`",
+        "`register_python_callable()`",
+        "`register_manual_tool()`",
+        "`unregister_auto_callable()`",
+        "`unregister_manual_tool()`",
+        "`register_intrinsic_tools()`",
+        "`unregister_intrinsic_tools()`",
+        "`environment_descriptions()`",
+        "`upsert_environment_description()`",
+        "`clone_environment_description()`",
+        "`resolve_environment_requirements()`",
+        "`apply_environment_description()`",
+        "`realize_environment()`",
+        "`sync_environment_description()`",
+        "`prepare_environment_install()`",
+        "`lock_environment_install()`",
+        "`resolve_environment_install_lock()`",
+        "`verify_environment_install_lock()`",
+        "`execute_environment_install()`",
+        "`verify_environment_install_receipt()`",
+        "`PendingHostedToolboxRef`",
+    ]:
+        assert removed_api in text
+    for dependent_path in [
+        "`src/backend/platform/toolboxes/hosted_store.py`",
+        "`src/tools/tool_authoring.py`",
+        "`src/tools/registry.py`",
+        "`src/tools/llm_tool_parser.py`",
+        "`src/tools/LLM_PROMPT.md`",
+        "`src/tools/TOOLS_DEV_GUIDE.md`",
+    ]:
+        assert dependent_path in text
+    for instruction in [
+        "Remove, rather than wrap or emulate",
+        "Do not add compatibility shims",
+        "must be rewritten around complete definitions",
+        "remove any package download, lock resolution, installation",
+        "Remove dependent fields, UI choices, fallbacks, and dispatch branches",
+    ]:
+        assert instruction in prose

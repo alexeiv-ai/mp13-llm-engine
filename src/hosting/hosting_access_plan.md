@@ -646,7 +646,7 @@ review API.
   Deployment-policy audit: the P0-05 additions describe supported
   administration only and preserve the public model/client algorithm and the
   durable document's no-history rules; the expanded suite remained green.
-- [ ] **P0-12** Add migration change set `HOSTED-TOOLBOX-DEFINITION` to
+- [x] **P0-12** Add migration change set `HOSTED-TOOLBOX-DEFINITION` to
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with removed APIs/fields,
   old-to-new examples, state archival procedure, parent baseline, release
   placeholder, hosted-operation extension, approval-reference flow,
@@ -654,6 +654,17 @@ review API.
   exact dependent-project requirements, and a link to the durable contract.
   Treat this entry as the adoption delta and release handoff, not as the
   normative contract specification.
+
+  Evidence (2026-08-08): the handoff now contains syntactically valid old/new
+  Python examples for complete definitions, approval, durable apply/recovery,
+  empty-definition teardown, and conflict replanning; it freezes the exact
+  `toolbox-state-archive-v1` command, path/digest/daemon/locking/archive safety
+  checks, and code-matched rollback boundary. Its inventory matrix maps every
+  prior call-path category to replacement logic and behavior to delete. The
+  focused document suite passed 12 tests, the independent identity/operation
+  audit passed 52 tests, and the exit audit covered 21 public operation names,
+  all 19 daemon commands, and all six dependent file groups. The durable
+  contract forbidden-vocabulary search returned no matches.
 - [x] **P0-13** Freeze the initial environment catalog contract: stable `core`
   and `py-compute` names without version suffixes, shipped complete manifests
   and locks, immutable revision identity, project-config keys, compute-only

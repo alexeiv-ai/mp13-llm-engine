@@ -67,6 +67,112 @@ from the durable contract. The definition digest excludes
 The predictive digest never replaces `get_definition()` as the source of the
 active revision used for compare-and-swap.
 
+### Old-to-new dependent code
+
+Delete procedural deployment shaped like this:
+
+```python
+# Remove this entire pattern. It can partially publish and lets the client
+# select a host interpreter/environment.
+hosted = HostedToolBoxRef(
+    toolbox_id=toolbox_id,
+    host=channel,
+    python_executable=python_executable,
+    worker_profile_class="generic",
+)
+pending = hosted.mutate()
+for request in auto_requests:
+    pending.register_auto_callable(**request)
+for request in manual_requests:
+    pending.register_manual_tool(**request)
+pending.register_intrinsic_tools(
+    intrinsic_tool_names=intrinsic_names,
+    environment_name="base",
+)
+pending.resolve_sandbox()
+```
+
+Build and apply one complete desired definition instead. This example shows the
+required control flow; dependent authoring adapters supply the full request
+fields frozen by the durable contract:
+
+```python
+request_id = deployment_store.get_or_create_request_id(toolbox_id, edit_revision)
+active = hosted.get_definition()
+definition = {
+    "contract": "hosting.toolbox.definition",
+    "toolbox_id": toolbox_id,
+    "expected_revision": active["active_revision"],
+    "auto_requests": build_all_enabled_auto_requests(),
+    "manual_requests": build_all_enabled_manual_requests(),
+    "intrinsics": build_all_enabled_intrinsics(),
+}
+
+plan = hosted.plan_definition(definition)
+if not plan["can_apply"] and not plan["approval_required"]:
+    raise UserVisibleDeploymentError(plan["user_projection"], plan["diagnostics"])
+
+approval_ref = None
+if plan["approval_required"]:
+    approval = hosted.approve_definition_plan(plan_id=plan["plan_id"])
+    approval_ref = approval["dependency_approval_ref"]
+
+started = hosted.apply_definition(
+    definition=definition,
+    plan_id=plan["plan_id"],
+    request_id=request_id,
+    dependency_approval_ref=approval_ref,
+)
+deployment_store.save_operation_ref(toolbox_id, request_id, started["operation"])
+```
+
+If the apply response is lost after dispatch, recover the same operation; do
+not create a new request ID:
+
+```python
+status = channel.hosted_operation_resolve_request(
+    execution_kind="toolbox_definition_apply",
+    selector={
+        "kind": "toolbox_id",
+        "id": toolbox_id,
+    },
+    request_id=request_id,
+)
+operation_ref = status["operation"]
+while status["lifecycle"] in {"queued", "running", "interrupted"}:
+    render_progress(status.get("progress"))
+    status = channel.hosted_operation_status(ref=operation_ref)
+result = channel.hosted_operation_result(ref=operation_ref)
+```
+
+Use the same flow for teardown with empty request arrays. Never enumerate the
+previous tool keys:
+
+```python
+active = hosted.get_definition()
+empty_definition = {
+    "contract": "hosting.toolbox.definition",
+    "toolbox_id": toolbox_id,
+    "expected_revision": active["active_revision"],
+    "auto_requests": [],
+    "manual_requests": [],
+    "intrinsics": [],
+}
+plan = hosted.plan_definition(empty_definition)
+started = hosted.apply_definition(
+    definition=empty_definition,
+    plan_id=plan["plan_id"],
+    request_id=retirement_request_id,
+)
+```
+
+On `revision_conflict`, re-read `get_definition()`, rebuild the complete desired
+definition against the returned `active_revision`, obtain a new plan, and use a
+new request ID for that changed fingerprint. On `plan_stale` or `plan_expired`,
+obtain a new plan. On `dependency_approval_invalid`, obtain a new plan and a new
+parent-minted approval reference if the new plan still requires it. Never edit
+a plan, approval value, definition hash, resolved template, or operation ref.
+
 ### Deprecated behavior to remove from dependents
 
 Remove, rather than wrap or emulate, all of the following behavior:
@@ -254,12 +360,56 @@ Serialized request profiles contain `profile_id`, `environment_name`,
 `required_imports`, and `sandbox_policy`.
 
 No version-1 field is active-revision truth under the replacement. Before
-running replacement code against an existing hosting root, an operator must use
-the release's exact-path archival command (command name pending) to validate and
-archive the version-1 state and associated bundles, then initialize version 2.
-Do not hand-edit the version number, copy rows into version 2, or expect a
-dual-schema reader. Rollback requires matching code plus restoration of the
-matching archived state.
+running replacement code against an existing hosting root, stop the daemon and
+run the release command locally as the hosting-root owner:
+
+```powershell
+@'{"hosting_root":"O:\\exact\\hosting-root","expected_state_sha256":"sha256:<64-lowercase-hex>","acknowledge_version_1_archive":true}'@ |
+  python -m hosting.engine_host_cli --payload-stdin toolbox-state-archive-v1
+```
+
+`hosting_root` must be an absolute, resolved, non-symlink directory selected by
+the operator. The command accepts no remote target and derives the only input
+state path as `<hosting_root>/state/toolbox_sandboxes.json`; a state-file path,
+glob, parent directory, or alternate filename is rejected. The operator first
+calculates and records the exact file SHA-256 and supplies it as
+`expected_state_sha256` to prevent archiving changed state.
+
+The command takes the process-safe toolbox-state lock, confirms no daemon owns
+the hosting root, rejects malformed JSON or any root whose version is not
+exactly `1`, verifies every referenced bundle path resolves below the hosting
+root, and refuses an existing/incomplete archive marker. It writes and fsyncs
+an inventory containing source relative paths, byte sizes, SHA-256 digests, and
+the parent release commit. It then atomically moves the state plus referenced
+bundle directories into
+`<hosting_root>/archive/toolbox-state-v1/<UTC timestamp>-<state digest>/`,
+fsyncs the archive and parent directories, writes a completion receipt, and
+only then initializes an empty strict version-2 state. Any validation or move
+failure leaves version 2 uninitialized and reports a stable operator error.
+
+Store the archive inventory, receipt, parent release artifact, and command
+output together. Do not hand-edit the version number, copy rows into version 2,
+or run a dual-schema reader. Rollback means stopping the daemon, reinstalling
+the exact parent release recorded in the archive, verifying every archived
+digest, removing the empty version-2 state only through the release rollback
+command, and atomically restoring the matching archived state/bundles. Do not
+restore an archive under different parent code or merge it with version-2
+definitions.
+
+### Inventory-to-adoption matrix
+
+| Inventoried path | Required dependent replacement | Behavior to delete |
+| --- | --- | --- |
+| `HostedToolBoxRef` construction/serialization | Persist only toolbox identity plus host connection; use the four definition calls. | `python_executable`, `worker_profile_class`, and `PendingHostedToolboxRef`. |
+| Auto/manual/intrinsic deployment | Put the complete enabled set in one `ToolboxDefinitionSpec`, plan, optionally approve, then durably apply. | Every per-category register/unregister call, batching loop, and partial rollback. |
+| Toolbox retirement | Plan/apply an empty complete definition against the authoritative active revision. | Tool-key enumeration and category teardown calls. |
+| Environment preparation | Submit dependency mode, template ID when explicit, declared imports, and distribution requirements; consume plan/readiness diagnostics. | Description/list/clone/resolve/apply/realize/sync and prepare/lock/install/verify/receipt chains. |
+| Readiness/UI | Persist active revision, request ID, operation ref, and bounded projections; recover/status/result through hosted operations. | Lock-fragment readiness, local probes, physical paths, raw locks, engine/profile/environment IDs, and installer output. |
+| Conflict/retry | Re-read, rebuild the complete desired definition, re-plan, and use a new request ID when the fingerprint changes. | Replaying individual calls or reusing stale plans/approvals. |
+| Package/sandbox choice | Let the plan select the smallest complete template; request sandbox capability separately through parent policy. | Ambient-package fallback and treating an installed package as capability authorization. |
+| Workflow Python/helper use | Resolve `core` independently while retaining workflow contracts, pools, policies, and lifecycle. | Routing workflow work through toolbox workers. |
+| Model operations | Consume only bounded model-operation readiness/status. | Model runtime as a template, base, interpreter choice, or arbitrary-code route. |
+| Existing parent state | Install the replacement artifact without starting its daemon, run `toolbox-state-archive-v1` before first replacement startup, and retain the verified archive for code-matched rollback. | Direct version edits, translation, dual reads/writes, and mixed-release restoration. |
 
 ### Inventoried `mp13-docs` adoption sites
 
