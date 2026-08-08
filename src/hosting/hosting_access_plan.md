@@ -570,12 +570,25 @@ review API.
   Subsequent-slice audit: verified against commit `cfbaf1b`; the operation
   contract extension did not change any canonicalization/domain/input rule or
   published vector, and all identity/doc tests remained in the required suite.
-- [ ] **P0-05** Decide package index/artifact policy, online build approval,
+- [x] **P0-05** Decide package index/artifact policy, online build approval,
   template administration roles, remote control-channel management methods,
   signed/immutable manifest and artifact requirements, offline artifact
   preseeding, supported Python ABI/platform combinations, build/prewarm timeout,
   lifecycle/revocation behavior, audit, and cache retention. Physical box login
   must not be part of the normal management contract.
+
+  Evidence (2026-08-08): the durable contract freezes four distinct roles, six
+  consumer/admin control methods, Ed25519-signed canonical manifests,
+  digest/size-verified allowlisted HTTPS or offline-preseeded artifacts,
+  default-denied online resolution with exact parent approval, CPython 3.12
+  Windows/Linux x64 targets, bounded fetch/resolve/build/probe/operation
+  timeouts, immutable active/deprecated/revoked lifecycle behavior, audit event
+  contents/redactions, quarantine, and reference/grace/LRU cache retention.
+  The handoff explicitly removes dependent-side installation, venv/path, and
+  artifact administration. Contract-doc command passed 6 tests and the exact
+  forbidden-history search returned no matches; executable test categories were
+  not applicable to this policy-only slice. Commit: recorded by git history
+  under `docs: freeze template deployment policy (P0-05)`.
 - [x] **P0-06** Freeze `ToolboxDependencyApprovalRef`: minting authority,
   authenticated actor binding, plan/definition/delta/policy/catalog scope,
   expiry, revocation, retry/consumption behavior, audit fields, and
@@ -630,6 +643,9 @@ review API.
   canonical-identity section and vectors preserved every strict model,
   authorization, scope, projection, and client-flow requirement, and the full
   contract-doc suite remained green.
+  Deployment-policy audit: the P0-05 additions describe supported
+  administration only and preserve the public model/client algorithm and the
+  durable document's no-history rules; the expanded suite remained green.
 - [ ] **P0-12** Add migration change set `HOSTED-TOOLBOX-DEFINITION` to
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with removed APIs/fields,
   old-to-new examples, state archival procedure, parent baseline, release

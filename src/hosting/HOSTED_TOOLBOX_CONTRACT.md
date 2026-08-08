@@ -305,6 +305,118 @@ Consumer descriptors omit resolved distribution locks, artifact locations,
 environment keys, interpreter paths, and installer output. Those values are
 available only through an authorized bounded operator projection.
 
+## Deployment administration policy
+
+Package resolution, artifact acquisition, and physical environment creation run
+only in the daemon on the target tool runtime. A toolbox client cannot supply a
+prebuilt environment, interpreter path, arbitrary host path, package-installer
+command, or unrestricted package origin. Interactive login to the target host
+is not part of the management contract.
+
+### Roles and control methods
+
+Roles are derived from the authenticated parent authority; payload fields cannot
+assert them.
+
+| Role | Authority |
+| --- | --- |
+| `toolbox_consumer` | List/describe visible templates and submit definition read/plan/apply requests. |
+| `toolbox_dependency_approver` | Mint an exact actor/plan/delta-bound approval reference when package policy marks the delta reviewable. |
+| `hosting_template_admin` | Publish immutable template revisions, move lifecycle state, and start prewarm/materialization. |
+| `hosting_auditor` | Read bounded operator projections and audit events; no mutation authority is implied. |
+
+The consumer control methods are `toolbox-template-list` and
+`toolbox-template-describe`. The administrative methods are
+`toolbox-template-publish`, `toolbox-template-deprecate`,
+`toolbox-template-revoke`, and `toolbox-template-prewarm`. They use the same
+authenticated daemon control transport as other host administration. Prewarm
+returns a durable hosted-operation ref. Role checks are distinct even when one
+actor holds multiple roles.
+
+### Immutable manifests and artifacts
+
+A published revision contains a stable logical template ID, complete resolved
+distribution lock, import-root set, Python ABI/platform constraints, parent
+worker artifact digest, isolation-policy version, artifact records, provenance,
+manifest digest, signing-key ID, signature algorithm, and signature.
+
+The signature algorithm is `ed25519`. The signature is base64url over canonical
+manifest bytes with the signature field absent. `signing_key_id` must resolve to
+an active trusted public key in host project configuration. Every artifact
+record contains immutable filename/distribution identity, exact byte size,
+SHA-256 digest, and an approved logical origin reference. The daemon verifies
+signature, manifest digest, artifact digest, artifact size, lock consistency,
+and target tags before installation. A logical template ID plus identical
+manifest digest is idempotent; the same immutable revision identity with
+different content is rejected.
+
+Artifact origin references resolve through administrator-configured sources.
+Network origins are normalized HTTPS origins on an allowlist and use the
+daemon's secret store for credentials. Redirects must remain on allowed origins.
+Plain HTTP, VCS working trees, local client paths, mutable unpinned URLs, shell
+commands, and credential material in manifests are denied.
+
+Online index resolution is denied by default. Host project policy may allow
+specific normalized HTTPS indexes, distribution allow/deny rules, and version
+constraints. A custom delta that requires online resolution is always
+`approval_required`; only the exact parent-minted dependency approval reference
+authorizes the planned delta. Approval does not widen index, artifact, package,
+or sandbox policy.
+
+For offline hosts, administrators preseed the same digest-addressed artifacts
+through the approved deployment/artifact channel. Preseeding verifies manifest
+signature and artifact digest before the artifact becomes discoverable. Clients
+receive readiness/diagnostic projections, never the physical preseed path.
+
+### Supported targets and timeouts
+
+The initial supported targets are CPython 3.12 on `win_amd64` and CPython 3.12
+on `manylinux_2_28_x86_64`. Their ABI tag is `cp312`. A template revision is
+advertised only when its complete lock has compatible artifacts for the exact
+target and the configured sandbox policy is enforceable. Other Python ABIs,
+32-bit targets, macOS, musl, ARM, and free-threaded Python are unsupported until
+a later signed catalog revision explicitly adds them.
+
+Timeout ceilings are 300 seconds per artifact fetch, 600 seconds for approved
+custom lock resolution, 1,800 seconds for one environment materialization, 120
+seconds for the complete import-probe set, and 3,600 seconds for one prewarm or
+lazy materialization durable operation. A timeout fails/quarantines the
+candidate; it never publishes a partial cache entry or falls back to another
+interpreter.
+
+### Lifecycle, audit, and retention
+
+Template lifecycle is `active`, `deprecated`, or `revoked`. Auto selection uses
+only active revisions. An explicitly selected deprecated revision may be
+planned with a stable warning while policy permits it. A revoked revision is
+denied for new plans, builds, and worker starts. Revocation does not silently
+rewrite an active toolbox definition or destroy an environment still serving an
+active route; readiness reports the affected reference so an administrator can
+publish/apply a replacement. Every lifecycle or active-revision-pointer change
+mints a new catalog revision and invalidates older plans.
+
+Publishing a new immutable revision under a stable logical template ID does not
+mutate old revision content. The administrator separately makes the new
+revision active. Plans pin the catalog revision and template/lock digests they
+resolved.
+
+Audit records cover publish, active-pointer change, deprecate, revoke, prewarm,
+artifact verification, build, quarantine, approval mint/validation, and GC.
+They contain event time, authenticated actor/authority, logical template and
+revision digests, catalog/policy revisions, target, outcome/stable code, and
+operation/request IDs where applicable. They exclude signatures' secret
+material, repository credentials, approval secret values, host paths, and
+installer output from normal projections.
+
+Referenced verified environments/artifacts are retained. An unreferenced
+verified entry has a seven-day grace period, configurable from one to 90 days,
+before deterministic least-recently-used GC may remove it. Failed or partial
+builds are quarantined, never routable, and retained for bounded diagnostics for
+24 hours before GC eligibility. Cache pressure may evict only unreferenced
+entries whose grace period elapsed. Revoked content remains while referenced
+and becomes GC-eligible only after the last active/history retention reference
+and grace period expire.
+
 ## Planning
 
 `plan_definition(definition)` is actor-authorized and side-effect-free with

@@ -24,6 +24,7 @@ def test_contract_has_frozen_public_sections_and_limits() -> None:
         "## ToolboxManualAssignmentRequestV2",
         "## ToolboxDependencyRequest",
         "## Environment template descriptor",
+        "## Deployment administration policy",
         "## Planning",
         "## Dependency approval references",
         "## Authoritative read",
@@ -108,7 +109,7 @@ def test_contract_contains_only_supported_vocabulary() -> None:
         "environment_descriptions",
         "version-1",
         "migration",
-        "deprecated",
+        "deprecated behavior",
         "compatibility",
     ]
     assert not {item for item in forbidden if item in text}
@@ -121,3 +122,36 @@ def test_handoff_links_contract_and_keeps_client_removal_instructions() -> None:
     assert "### Deprecated behavior to remove from dependents" in text
     assert "retire_toolbox_daemon_registration()" in text
     assert "_run_environment_checks()" in text
+
+
+def test_contract_freezes_deployment_administration_policy() -> None:
+    text = _contract_text()
+    for role in [
+        "toolbox_consumer",
+        "toolbox_dependency_approver",
+        "hosting_template_admin",
+        "hosting_auditor",
+    ]:
+        assert f"`{role}`" in text
+    for method in [
+        "toolbox-template-list",
+        "toolbox-template-describe",
+        "toolbox-template-publish",
+        "toolbox-template-deprecate",
+        "toolbox-template-revoke",
+        "toolbox-template-prewarm",
+    ]:
+        assert f"`{method}`" in text
+    for required in [
+        "The signature algorithm is `ed25519`.",
+        "Online index resolution is denied by default.",
+        "CPython 3.12 on `win_amd64`",
+        "CPython 3.12\non `manylinux_2_28_x86_64`",
+        "300 seconds per artifact fetch",
+        "1,800 seconds for one environment materialization",
+        "3,600 seconds for one prewarm or",
+        "Template lifecycle is `active`, `deprecated`, or `revoked`.",
+        "seven-day grace period",
+        "configurable from one to 90 days",
+    ]:
+        assert required in text

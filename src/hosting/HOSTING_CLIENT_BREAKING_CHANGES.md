@@ -92,6 +92,13 @@ Remove, rather than wrap or emulate, all of the following behavior:
 - dependent reads of the parent's version-1 `toolbox_sandboxes.json` or of
   candidate/live engine registrations to infer active routing.
 
+Dependent code must also remove any package download, lock resolution,
+installation, prebuilt-venv upload, interpreter-path selection, or local-host
+path exchange performed on the dependent machine. Clients submit source and
+dependency intent, then consume plan/build diagnostics. Template publication,
+lifecycle, artifact sources, offline preseeding, and prewarm belong to the
+authenticated hosting-administration channel.
+
 Do not add compatibility shims for these behaviors. Code that still needs an
 old field must be changed to construct dependency intent or consume the
 authoritative definition/apply projection.
