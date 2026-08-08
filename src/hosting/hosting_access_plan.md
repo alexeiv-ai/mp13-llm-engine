@@ -756,8 +756,18 @@ call path found in the inventory.
   compatible base minimizing the exact custom delta. Focused tests passed 15
   cases; catalog/identity regressions passed 21 tests; the Poetry lock, compile,
   and diff checks passed. No worker or mutable host state is touched.
-- [ ] **P1-07** Validate requested templates and custom packages against runtime,
+- [x] **P1-07** Validate requested templates and custom packages against runtime,
   platform, package allow/deny policy, index policy, and intrinsic requirements.
+
+  Evidence (2026-08-08): `dependency_policy.py` adds a strict immutable policy
+  and fail-closed validation of exact ABI/platform, selected/requested template,
+  custom-delta permission and approval classification, normalized distribution
+  allow/deny rules with deny precedence, normalized HTTPS-only index origins,
+  online-resolution policy, and import-root/version-complete intrinsic
+  requirements. Recursive dependency metadata cannot assert approval or
+  sandbox capability. Focused tests passed 11 cases; dependency/catalog
+  regressions passed 31 tests; compile and diff checks passed. The validator is
+  pure and starts no resolution, build, or worker action.
 - [ ] **P1-08** Add actor-authorized template list/describe APIs for consumers
   and operator-authorized publish/deprecate/revoke APIs over the daemon control
   channel. Publishing accepts immutable lock/manifests and approved artifact

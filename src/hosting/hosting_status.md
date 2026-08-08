@@ -55,6 +55,7 @@ None.
 | 2026-08-08 | P1-01, P1-02 | Added frozen strict immutable template/lock/provenance models and a deterministic reviewed import/distribution catalog, seeded only from inventoried roots. | Catalog -> 16 passed; identity/runtime-key regressions -> 20 passed; compile/diff checks passed. Clean environment and daemon integration: not applicable (pure models/catalog). | `feat: add toolbox template catalog (P1-01 P1-02)` |
 | 2026-08-08 | P1-03 | Moved intrinsic discovery/dependency knowledge into import-safe metadata, derived environment roots/profile identity from it, removed profile branching, and pinned direct SymPy with a current lock. | Metadata -> 7 passed; complete toolbox sandbox -> 138 passed; Poetry lock, compile, and diff checks passed. Clean isolated-template execution remains P1-11/P1-12. | `refactor: isolate intrinsic dependency metadata (P1-03)` |
 | 2026-08-08 | P1-04, P1-05, P1-06 | Added deterministic staged-source AST evidence, reviewed/explicit PEP 440 requirement resolution, and smallest exact template or minimal custom-delta selection. | Dependency pipeline -> 15 passed; catalog/identity regressions -> 21 passed; Poetry lock, compile, and diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure planning). | `feat: add toolbox dependency planner (P1-04 P1-05 P1-06)` |
+| 2026-08-08 | P1-07 | Added strict fail-closed target/template, package allow/deny, custom approval, HTTPS index, intrinsic-completeness, and payload-authority validation. | Policy -> 11 passed; dependency/catalog regressions -> 31 passed; compile/diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure policy). | `feat: add toolbox dependency policy (P1-07)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -82,5 +83,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Add policy validation, catalog administration, and durable prewarm/materialize
-control paths from P1-07 through P1-10.
+Add actor-authorized catalog administration and durable prewarm/materialize
+control paths from P1-08 through P1-10.

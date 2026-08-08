@@ -32,6 +32,12 @@ from .dependency_analysis import (
     resolve_toolbox_dependencies,
     select_toolbox_environment_template,
 )
+from .dependency_policy import (
+    ToolboxDependencyPolicy,
+    ToolboxDependencyPolicyDecision,
+    ToolboxDependencyPolicyError,
+    validate_toolbox_dependency_policy,
+)
 from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
 from .execution import ToolboxExecutionHarness
 from .hosted_ref import HostedToolBoxRef, PendingHostedToolboxRef, SandboxedToolboxFacade
@@ -54,6 +60,10 @@ __all__ = [
     "analyze_toolbox_bundle_imports",
     "resolve_toolbox_dependencies",
     "select_toolbox_environment_template",
+    "ToolboxDependencyPolicy",
+    "ToolboxDependencyPolicyDecision",
+    "ToolboxDependencyPolicyError",
+    "validate_toolbox_dependency_policy",
     "ToolboxBundleFile",
     "ToolboxBundleTool",
     "ToolboxBundleAutoTool",
