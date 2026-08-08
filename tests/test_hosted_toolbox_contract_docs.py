@@ -18,6 +18,7 @@ def test_contract_has_frozen_public_sections_and_limits() -> None:
     text = _contract_text()
     required = [
         "## Validation limits",
+        "## Canonical identities",
         "## ToolboxDefinitionSpec",
         "## ToolboxAutoAssignmentRequestV2",
         "## ToolboxManualAssignmentRequestV2",

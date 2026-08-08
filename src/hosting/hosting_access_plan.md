@@ -551,9 +551,22 @@ review API.
 - [x] **P0-03** Freeze `ToolboxDefinitionSpec`, version-2 request models,
   `ToolboxDependencyRequest`, template descriptors, plan/apply results, strict
   validation limits, and error codes.
-- [ ] **P0-04** Freeze canonical hashes for definition revision, resolved
+- [x] **P0-04** Freeze canonical hashes for definition revision, resolved
   profile identity, environment identity, bundle manifest, template lock, and
   custom lock. Add cross-process test vectors.
+
+  Evidence (2026-08-08): `hosting.toolbox.identity` implements Unicode-NFC,
+  finite-JSON, canonical-order, domain-separated SHA-256 identities for all six
+  required domains. `HOSTED_TOOLBOX_HASH_VECTORS.json` publishes fixed inputs
+  and digests. `python -m pytest tests/test_hosted_toolbox_identity.py
+  tests/test_hosted_toolbox_contract_docs.py -q` passed (10 tests), including
+  fresh interpreters with `PYTHONHASHSEED=1` and `987654`; three focused
+  existing bundle staging/manifest regressions also passed. Clean-environment,
+  daemon, and persistence categories were not applicable because the helpers
+  are not yet wired into those runtime paths. The dependent handoff states that
+  predictive digests use these vectors but never replace authoritative reads.
+  Commit: recorded by git history under `feat: add canonical toolbox identities
+  (P0-04)`.
 - [ ] **P0-05** Decide package index/artifact policy, online build approval,
   template administration roles, remote control-channel management methods,
   signed/immutable manifest and artifact requirements, offline artifact
@@ -597,6 +610,10 @@ review API.
   categories were not applicable because this slice changes documentation only.
   Commit: recorded by git history under `docs: freeze toolbox public contract`
   with the completed item IDs in its body.
+  Subsequent-slice audit: verified against commit `ec0bd66`; adding the
+  canonical-identity section and vectors preserved every strict model,
+  authorization, scope, projection, and client-flow requirement, and the full
+  contract-doc suite remained green.
 - [ ] **P0-12** Add migration change set `HOSTED-TOOLBOX-DEFINITION` to
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with removed APIs/fields,
   old-to-new examples, state archival procedure, parent baseline, release

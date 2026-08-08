@@ -37,6 +37,40 @@ Unix epoch milliseconds. Lists whose order is not semantically meaningful are
 deduplicated and sorted during canonicalization; source-file order is replaced
 by normalized path order.
 
+## Canonical identities
+
+The executable identity rules are in `hosting.toolbox.identity`; published
+cross-process inputs and results are in
+`hosting/toolbox/HOSTED_TOOLBOX_HASH_VECTORS.json`. Typed validation runs before
+identity calculation.
+
+Canonical JSON recursively normalizes strings and object keys to Unicode NFC,
+requires string object keys and finite JSON numbers, preserves JSON number
+types, renders negative zero as `0.0`, and serializes UTF-8 with sorted object
+keys, no ASCII escaping, and separators `,` and `:`. A domain-separated digest
+is SHA-256 over the canonical JSON object `{"domain": <domain>, "value":
+<canonical input>}`.
+
+| Identity | Domain | Canonical semantic input |
+| --- | --- | --- |
+| Definition revision | `hosting.toolbox.definition.v2` | Complete definition without `expected_revision`; auto/manual requests sorted by stable key; files sorted by normalized path; dependency import/requirement lists and intrinsic names sorted and deduplicated. |
+| Resolved profile | `hosting.toolbox.resolved_profile.v2` | Resolved environment digest plus canonical sandbox policy. Assigned tool keys do not change grouping identity. |
+| Package environment | `hosting.toolbox.environment.v2` | Runtime/ABI/platform/worker identity, immutable template-lock digest, nullable custom-lock digest, and isolation policy. Per-function raw import subsets are excluded. |
+| Bundle manifest | `hosting.toolbox.bundle_manifest.v2` | Complete semantic manifest without its output digest/revision; files, tools, and name sets use canonical order. |
+| Template lock | `hosting.toolbox.template_lock.v1` | Complete template constraints, distributions, artifacts, import roots, and provenance with set-like records canonically sorted. |
+| Custom lock | `hosting.toolbox.custom_lock.v1` | Base template-lock digest plus the complete resolved distributions, artifacts, import roots, and provenance for the derived environment. |
+
+Published vector results are:
+
+| Vector | Digest |
+| --- | --- |
+| `definition_revision` | `sha256:cce56c94b2e4e8d7fc64cba803934e198df731bb6d3af6a9df48dc4c7da73795` |
+| `resolved_profile_identity` | `sha256:da8dc5f609e918edca510d73e46c14a608230b6d0d3fa7870d27ec4e7b9c4a09` |
+| `environment_identity` | `sha256:dea6b64250c4d630868309df55b40172a38ea68b4c67ce1f68b715edabe6370c` |
+| `bundle_manifest_digest` | `sha256:44a182a5af380504695e8baee182ed3ac3aeb4aeb3eccc5085e0249b62a962d3` |
+| `template_lock_digest` | `sha256:87f500104aa9645d1d558501ab23580e012ce7bf3ab90fd7b2f8836e0701110f` |
+| `custom_lock_digest` | `sha256:06bf7a8786595c56a2597f2c8b75c2c6bba0a4e41b5bb7df6e6a6fce4d1757f3` |
+
 ## Validation limits
 
 The parent enforces these limits before dependency analysis or environment

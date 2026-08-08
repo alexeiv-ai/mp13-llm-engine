@@ -1,0 +1,183 @@
+{
+  "contract": "hosting.toolbox.identity_vectors.v1",
+  "vectors": [
+    {
+      "name": "definition_revision",
+      "input": {
+        "contract": "hosting.toolbox.definition",
+        "toolbox_id": "café-tools",
+        "expected_revision": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "auto_requests": [
+          {
+            "files": [
+              {
+                "relative_path": "pkg\\weather.py",
+                "content": "import json\n\ndef Weather(city):\n    return json.dumps({'city': city})\n"
+              }
+            ],
+            "module_name": "pkg.weather",
+            "callable_name": "Weather",
+            "dependency": {
+              "mode": "auto",
+              "template_id": null,
+              "declared_imports": ["json", "json"],
+              "package_requirements": []
+            },
+            "sandbox_policy": {
+              "sandbox": {
+                "enabled": true
+              }
+            },
+            "activate": true,
+            "hidden": false,
+            "non_restartable": false,
+            "guide_content": null,
+            "guide_description": null,
+            "callback_signature": null,
+            "concurrency": null
+          }
+        ],
+        "manual_requests": [],
+        "intrinsics": {
+          "names": ["symbolic_algebra", "scriptable_calculator"],
+          "include_guides": true,
+          "sandbox_policy": {
+            "sandbox": {
+              "enabled": true
+            }
+          }
+        }
+      },
+      "expected": "sha256:cce56c94b2e4e8d7fc64cba803934e198df731bb6d3af6a9df48dc4c7da73795"
+    },
+    {
+      "name": "resolved_profile_identity",
+      "input": {
+        "environment_identity": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "sandbox_policy": {
+          "sandbox": {
+            "enabled": true,
+            "network": {
+              "mode": "disabled"
+            }
+          }
+        }
+      },
+      "expected": "sha256:da8dc5f609e918edca510d73e46c14a608230b6d0d3fa7870d27ec4e7b9c4a09"
+    },
+    {
+      "name": "environment_identity",
+      "input": {
+        "runtime_identity": {
+          "python_abi": "cp312",
+          "platform": "win_amd64",
+          "worker_artifact_digest": "sha256:abababababababababababababababababababababababababababababababab"
+        },
+        "template_lock_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "custom_lock_digest": null,
+        "isolation_policy": {
+          "version": 1,
+          "system_site_packages": false
+        }
+      },
+      "expected": "sha256:dea6b64250c4d630868309df55b40172a38ea68b4c67ce1f68b715edabe6370c"
+    },
+    {
+      "name": "bundle_manifest_digest",
+      "input": {
+        "executor_kind": "toolbox_executor",
+        "bundle_id": "workspace-tools:profile-a",
+        "toolbox_id": "workspace-tools",
+        "resolved_profile": {
+          "profile_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "environment_identity": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "files": [
+          {
+            "relative_path": "pkg\\b.py",
+            "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          {
+            "relative_path": "pkg/a.py",
+            "content_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "tools": [],
+        "auto_tools": [
+          {
+            "name": "B",
+            "module_name": "pkg.b",
+            "callable_name": "B"
+          },
+          {
+            "name": "A",
+            "module_name": "pkg.a",
+            "callable_name": "A"
+          }
+        ],
+        "intrinsic_tool_names": ["symbolic_algebra", "scriptable_calculator"],
+        "active_intrinsic_tool_names": ["scriptable_calculator", "symbolic_algebra"],
+        "hidden_intrinsic_tool_names": [],
+        "hidden_tool_names": ["B"],
+        "dependency_lock_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "manifest_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "bundle_revision": "ffffffffffffffff"
+      },
+      "expected": "sha256:44a182a5af380504695e8baee182ed3ac3aeb4aeb3eccc5085e0249b62a962d3"
+    },
+    {
+      "name": "template_lock_digest",
+      "input": {
+        "template_id": "py-compute",
+        "python_abis": ["cp312"],
+        "platforms": ["win_amd64"],
+        "import_roots": ["sympy", "numpy", "numexpr"],
+        "distributions": [
+          {
+            "name": "sympy",
+            "version": "1.14.0"
+          },
+          {
+            "name": "numpy",
+            "version": "2.4.3"
+          },
+          {
+            "name": "numexpr",
+            "version": "2.14.1"
+          }
+        ],
+        "artifacts": [
+          {
+            "filename": "numpy.whl",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "filename": "sympy.whl",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      },
+      "expected": "sha256:87f500104aa9645d1d558501ab23580e012ce7bf3ab90fd7b2f8836e0701110f"
+    },
+    {
+      "name": "custom_lock_digest",
+      "input": {
+        "base_template_lock_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "import_roots": ["matplotlib"],
+        "distributions": [
+          {
+            "name": "matplotlib",
+            "version": "3.10.8"
+          }
+        ],
+        "artifacts": [
+          {
+            "filename": "matplotlib.whl",
+            "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        ]
+      },
+      "expected": "sha256:06bf7a8786595c56a2597f2c8b75c2c6bba0a4e41b5bb7df6e6a6fce4d1757f3"
+    }
+  ]
+}

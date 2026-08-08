@@ -54,6 +54,13 @@ deployment truth must be represented by the active parent revision and durable
 apply operation ref. Local `state_revision` or `toolbox_definition_digest`
 values are not substitutes for the parent active revision.
 
+If a dependent needs a predictive definition digest for caching or diagnostics,
+it must use the canonical identity implementation and published vectors linked
+from the durable contract. The definition digest excludes
+`expected_revision`; request/file/name sets use the documented canonical order.
+The predictive digest never replaces `get_definition()` as the source of the
+active revision used for compare-and-swap.
+
 ### Deprecated behavior to remove from dependents
 
 Remove, rather than wrap or emulate, all of the following behavior:
