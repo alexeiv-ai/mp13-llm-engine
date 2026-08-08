@@ -1,13 +1,14 @@
 # Hosting client breaking changes
 
 This file is the transient adoption handoff for dependent projects. The durable
-supported contract will live at `src/hosting/HOSTED_TOOLBOX_CONTRACT.md` once
-the contract-freezing slice creates it. Delete this file only after every
-dependent project listed below has adopted the replacement.
+supported behavior is specified by the
+[Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md). Delete this
+file only after every dependent project listed below has adopted the
+replacement.
 
 ## Change set: `HOSTED-TOOLBOX-DEFINITION`
 
-Status: inventory frozen; replacement signatures and release commit pending
+Status: inventory and public contract frozen; release commit pending
 
 Parent inventory baseline: `5823d87ab6095c8864ec8ed5bedd251f9772cfc8`
 

@@ -545,7 +545,10 @@ review API.
   Matplotlib starter import, and the stale non-imported Requests declaration.
   Commit: recorded by git history under `docs: freeze hosting inventories
   (P0-01 P0-02)`.
-- [ ] **P0-03** Freeze `ToolboxDefinitionSpec`, version-2 request models,
+  Resumed-session audit: verified against commit `4efc3f0`; the subsequent
+  public-contract slice did not remove or weaken the inventory or handoff
+  instructions.
+- [x] **P0-03** Freeze `ToolboxDefinitionSpec`, version-2 request models,
   `ToolboxDependencyRequest`, template descriptors, plan/apply results, strict
   validation limits, and error codes.
 - [ ] **P0-04** Freeze canonical hashes for definition revision, resolved
@@ -557,22 +560,22 @@ review API.
   preseeding, supported Python ABI/platform combinations, build/prewarm timeout,
   lifecycle/revocation behavior, audit, and cache retention. Physical box login
   must not be part of the normal management contract.
-- [ ] **P0-06** Freeze `ToolboxDependencyApprovalRef`: minting authority,
+- [x] **P0-06** Freeze `ToolboxDependencyApprovalRef`: minting authority,
   authenticated actor binding, plan/definition/delta/policy/catalog scope,
   expiry, revocation, retry/consumption behavior, audit fields, and
   unauthorized-response behavior. Prohibit Boolean approval authority.
-- [ ] **P0-07** Freeze authoritative `get_definition()` snapshot semantics,
+- [x] **P0-07** Freeze authoritative `get_definition()` snapshot semantics,
   source visibility/size limits, revision-conflict recovery, and side-effect-
   free behavior.
 - [ ] **P0-08** Extend the existing hosted-operation contract with
   `toolbox_definition_apply`, bounded progress, request recovery, terminal
   diagnostics, and the pre-publication/post-publication cancellation boundary.
-- [ ] **P0-09** Freeze per-toolbox scope: atomicity and name uniqueness are per
+- [x] **P0-09** Freeze per-toolbox scope: atomicity and name uniqueness are per
   toolbox; duplicate names across toolboxes are valid; routing includes
   `toolbox_id`; multiple toolbox references remain concurrent.
-- [ ] **P0-10** Freeze the cross-project vocabulary and user-safe/operator
+- [x] **P0-10** Freeze the cross-project vocabulary and user-safe/operator
   projection split defined above.
-- [ ] **P0-11** Create a durable parent-owned public contract document,
+- [x] **P0-11** Create a durable parent-owned public contract document,
   `src/hosting/HOSTED_TOOLBOX_CONTRACT.md`, covering typed models, strict field
   validation, actor authorization, plan/approval/read/apply semantics, durable
   operation behavior, progress/cancellation, per-toolbox scope, user/operator
@@ -580,6 +583,20 @@ review API.
   specification for the parent and dependent projects. Write only the target
   supported contract; do not include legacy names, migration notes, old state
   formats, historical references, or compatibility language.
+
+  Evidence (2026-08-08): `HOSTED_TOOLBOX_CONTRACT.md` freezes strict JSON
+  models and limits, exact public client signatures, validation and stable
+  errors, per-toolbox scope, actor/source authorization, immutable bounded
+  plans, opaque actor/request-bound approval references, side-effect-free
+  authoritative reads, durable apply/progress/cancellation/result behavior,
+  retention, and the user/operator projection split. The transient handoff
+  links the durable contract while retaining concrete dependent rewrite and
+  removal instructions. `python -m pytest
+  tests/test_hosted_toolbox_contract_docs.py -q` passed (5 tests); the
+  predeclared forbidden-vocabulary `rg` search returned no matches. Runtime test
+  categories were not applicable because this slice changes documentation only.
+  Commit: recorded by git history under `docs: freeze toolbox public contract`
+  with the completed item IDs in its body.
 - [ ] **P0-12** Add migration change set `HOSTED-TOOLBOX-DEFINITION` to
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with removed APIs/fields,
   old-to-new examples, state archival procedure, parent baseline, release
