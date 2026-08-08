@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 # Import the Tool model for validation
 from .mp13_config import RegisteredTool, Tool, ToolCall, ToolCallBlock, InferenceResponse
+from .mp13_intrinsics_metadata import INTRINSICS_METADATA_REGISTRY
 from .mp13_tools_parser import UnifiedToolIO
 
 if TYPE_CHECKING:
@@ -601,12 +602,11 @@ class Toolbox:
         targets = {str(n).strip() for n in ([intrinsic_names] if isinstance(intrinsic_names, str) else intrinsic_names) if str(n).strip()}
         if not targets:
             return set(), []
-        registry = _get_intrinsics_registry()
         known: Set[str] = set()
-        for container in registry.values():
-            known.add(container.name)
-            if container.guide_definition:
-                known.add(container.guide_definition["function"]["name"])
+        for metadata in INTRINSICS_METADATA_REGISTRY.values():
+            known.add(metadata.name)
+            if metadata.guide_name:
+                known.add(metadata.guide_name)
         missing = sorted([name for name in targets if name not in known])
         valid_targets = {name for name in targets if name in known}
         return valid_targets, missing
@@ -616,26 +616,22 @@ class Toolbox:
         Returns discoverable intrinsic tool metadata for registration UX.
         """
         items: List[Dict[str, Any]] = []
-        for container in _get_intrinsics_registry().values():
-            base_def = container.definition or {}
-            base_fn = base_def.get("function", {})
+        for metadata in INTRINSICS_METADATA_REGISTRY.values():
             items.append({
-                "name": container.name,
+                "name": metadata.name,
                 "is_guide": False,
                 "parent": None,
-                "has_guide": bool(container.guide_definition and container.guide_content),
-                "description": base_fn.get("description", ""),
+                "has_guide": bool(metadata.guide_name),
+                "description": metadata.description,
             })
-            if include_guides and container.guide_definition and container.guide_content:
-                guide_name = container.guide_definition.get("function", {}).get("name")
-                if guide_name:
-                    items.append({
-                        "name": guide_name,
-                        "is_guide": True,
-                        "parent": container.name,
-                        "has_guide": False,
-                        "description": container.guide_definition.get("function", {}).get("description", ""),
-                    })
+            if include_guides and metadata.guide_name:
+                items.append({
+                    "name": metadata.guide_name,
+                    "is_guide": True,
+                    "parent": metadata.name,
+                    "has_guide": False,
+                    "description": metadata.guide_description,
+                })
         return sorted(items, key=lambda x: x["name"])
 
     def _initialize_intrinsic_tools(
@@ -789,31 +785,37 @@ class Toolbox:
 
         # Intrinsic tools
         if self.with_intrinsics:
-            for tool_container in _get_intrinsics_registry().values():
-                guide_name = tool_container.guide_definition["function"]["name"] if tool_container.guide_definition else None
-                has_base = tool_container.name in self.intrinsic_tools
+            for metadata in INTRINSICS_METADATA_REGISTRY.values():
+                guide_name = metadata.guide_name
+                has_base = metadata.name in self.intrinsic_tools
                 has_guide = bool(guide_name and guide_name in self.intrinsic_tools)
                 if not has_base and not has_guide:
                     continue
                 # Process main tool
-                if has_base and tool_container.name not in managed_tools:
-                    override = self.intrinsic_overrides.get(tool_container.name, {})
-                    base_desc = tool_container.definition.get("function", {}).get("description", "No description.")
-                    managed_tools[tool_container.name] = {
+                if has_base and metadata.name not in managed_tools:
+                    override = self.intrinsic_overrides.get(metadata.name, {})
+                    loaded_definition = dict(self.intrinsic_tools.get(metadata.name) or {})
+                    base_desc = loaded_definition.get("function", {}).get(
+                        "description", metadata.description
+                    )
+                    managed_tools[metadata.name] = {
                         "description": override.get("description", base_desc),
                         "type": "intrinsic",
-                        "is_active": tool_container.name in self.active_intrinsic_tool_names,
-                        "is_hidden": tool_container.name in self.hidden_intrinsic_tool_names,
+                        "is_active": metadata.name in self.active_intrinsic_tool_names,
+                        "is_hidden": metadata.name in self.hidden_intrinsic_tool_names,
                         "is_intrinsic": True,
                         "is_guide": False,
-                        "is_modified": tool_container.name in self.intrinsic_overrides,
+                        "is_modified": metadata.name in self.intrinsic_overrides,
                     }
                 # Process guide tool if it exists
-                if tool_container.guide_definition:
+                if guide_name:
                     if guide_name in self.intrinsic_tools and guide_name not in managed_tools:
                         # Guides can't be modified directly, but their content comes from the parent tool's override
-                        parent_override = self.intrinsic_overrides.get(tool_container.name, {})
-                        base_guide_desc = tool_container.guide_definition.get("function", {}).get("description", "No description.")
+                        parent_override = self.intrinsic_overrides.get(metadata.name, {})
+                        loaded_guide = dict(self.intrinsic_tools.get(guide_name) or {})
+                        base_guide_desc = loaded_guide.get("function", {}).get(
+                            "description", metadata.guide_description
+                        )
                         managed_tools[guide_name] = {
                             "description": parent_override.get("guide_description", base_guide_desc),
                             "type": "intrinsic",
@@ -821,7 +823,7 @@ class Toolbox:
                             "is_hidden": guide_name in self.hidden_intrinsic_tool_names,
                             "is_intrinsic": True,
                             "is_guide": True,
-                            "is_modified": tool_container.name in self.intrinsic_overrides, # Guide is modified if parent is
+                            "is_modified": metadata.name in self.intrinsic_overrides, # Guide is modified if parent is
                         }
         
         # Add user-defined guides to the list
@@ -1099,18 +1101,10 @@ class Toolbox:
             # We create a temporary structure for the editor.
             temp_def = {
                 "description": override_def.get("description", base_def.get("function", {}).get("description", "")), # type: ignore
-                "guide_content": override_def.get("guide_content", {})
+                "guide_content": override_def.get(
+                    "guide_content", copy.deepcopy(dict(base_def.get("guide_content") or {}))
+                )
             }
-            # If the base tool has a guide and there's no override content yet, pre-populate it.
-            if not temp_def["guide_content"]:
-                parent_tool_name = tool_name_to_edit.removesuffix("_guide")
-                registry = _get_intrinsics_registry()
-                if parent_tool_name in registry and registry[parent_tool_name].guide_content:
-                    temp_def["guide_content"] = {
-                        k: copy.deepcopy(v)
-                        for k, v in dict(registry[parent_tool_name].guide_content or {}).items()
-                        if isinstance(v, list)
-                    }
 
             original_name = tool_name_to_edit
         elif is_create_mode:

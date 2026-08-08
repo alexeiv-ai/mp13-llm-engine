@@ -1527,6 +1527,8 @@ def test_toolbox_execution_harness_approval_timeout_defaults_to_deny() -> None:
 
 
 def test_toolbox_environment_manager_derives_stable_environment_identity() -> None:
+    from mp13_engine.mp13_intrinsics_metadata import intrinsic_dependency_profile_id
+
     root = _scratch_dir("env-spec-")
     try:
         stager = ToolboxBundleStager(root)
@@ -1545,8 +1547,8 @@ def test_toolbox_environment_manager_derives_stable_environment_identity() -> No
         spec = manager.environment_spec_for_bundle(staged)
 
         assert spec.venv_key
-        assert spec.intrinsics_profile_id == "symbolic_math"
-        assert spec.required_imports == ["requests", "numpy"]
+        assert spec.intrinsics_profile_id == intrinsic_dependency_profile_id(["symbolic_algebra"])
+        assert spec.required_imports == ["requests", "numpy", "sympy"]
         assert spec.venv_path.endswith(spec.venv_key)
         assert "toolbox_venvs" in spec.venv_path.replace("\\", "/")
         assert spec.python_executable
@@ -2071,12 +2073,13 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
 
         registration = ref.register_auto_callable(
             relative_path="real_parallel_tools.py",
-            content=(
-                "import time\n"
-                "def sleep_tool(delay=0.2, label=''):\n"
-                "    time.sleep(float(delay))\n"
-                "    return {'label': label, 'delay': delay}\n"
-            ),
+                content=(
+                    "import time\n"
+                    "def sleep_tool(delay=0.2, label=''):\n"
+                    "    started_ns = time.time_ns()\n"
+                    "    time.sleep(float(delay))\n"
+                    "    return {'label': label, 'delay': delay, 'started_ns': started_ns, 'finished_ns': time.time_ns()}\n"
+                ),
             module_name="real_parallel_tools",
             callable_name="sleep_tool",
             concurrency={"mode": "parallel", "max_concurrency": 2},
@@ -2106,13 +2109,17 @@ def test_real_local_control_path_overlaps_actual_tool_calls(monkeypatch: pytest.
             )
             return await asyncio.gather(first, second)
 
-        started = time.perf_counter()
         results = asyncio.run(run_calls())
-        elapsed = time.perf_counter() - started
 
         assert all(result["lifecycle"] == "terminal_success" for result in results)
         assert {dict(dict(result["result"])["tool_call"]).get("id") for result in results} == {"real-call-a", "real-call-b"}
-        assert elapsed < 0.38
+        call_results = [
+            json.loads(str(dict(dict(result["result"])["tool_call"])["result"]))
+            for result in results
+        ]
+        assert max(item["started_ns"] for item in call_results) < min(
+            item["finished_ns"] for item in call_results
+        )
     finally:
         try:
             channel.stop_daemon(reason="test_complete", requested_by="test_real_local_control_path_overlaps_actual_tool_calls")

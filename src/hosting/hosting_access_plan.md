@@ -715,12 +715,25 @@ call path found in the inventory.
   import/distribution names, package aliases, extras, and normalized version
   constraints. Focused tests passed 16 cases; identity/runtime-key regressions
   passed 20 tests; compile and diff checks passed.
-- [ ] **P1-03** Move intrinsic dependency knowledge out of
+- [x] **P1-03** Move intrinsic dependency knowledge out of
   `SandboxProfileSpec.intrinsics_profile_id()` and into dependency-only
   intrinsic registry metadata that can be read on `core` without importing
   implementations. Remove its hard-coded calculator/symbolic branching,
   eliminate eager optional-package loading during registry inspection, and
   declare and pin the currently undeclared SymPy requirement.
+
+  Evidence (2026-08-08): `mp13_intrinsics_metadata.py` is a standard-library-
+  only discovery/dependency registry with exact module-load roots and pinned
+  distribution requirements for both intrinsic families and their guides.
+  Discovery, target validation, and loaded-tool listing no longer import the
+  implementation registry; only intrinsic initialization does. Environment
+  identity/probes merge metadata roots and use a canonical dependency-derived
+  profile ID; the calculator/symbolic branching was deleted from
+  `SandboxProfileSpec`. SymPy 1.14.0 is now an exact direct dependency and the
+  Poetry lock is current. Focused tests passed 7 cases, the complete toolbox
+  sandbox suite passed 138 tests, `poetry check --lock`, compile, and diff checks
+  passed. The real-daemon concurrency regression now asserts worker-reported
+  interval overlap instead of a scheduler-sensitive wall-clock ceiling.
 - [ ] **P1-04** Add an AST analyzer over the existing `ToolboxBundleFile`
   contents. Classify standard-library, local staged modules, parent runtime,
   known third-party, declared dynamic/optional, and unresolved imports.

@@ -143,26 +143,6 @@ class SandboxProfileSpec:
         }
         return _sha256_text(_stable_json(payload))
 
-    def intrinsics_profile_id(self, intrinsic_tool_names: Sequence[Any]) -> str:
-        names = {
-            str(item or "").strip()
-            for item in list(intrinsic_tool_names or [])
-            if str(item or "").strip()
-        }
-        uses_calculator = bool(
-            {"scriptable_calculator", "scriptable_calculator_guide"} & names
-        )
-        uses_symbolic = bool(
-            {"symbolic_algebra", "symbolic_algebra_guide"} & names
-        )
-        if uses_calculator and uses_symbolic:
-            return "calculator+symbolic_math"
-        if uses_symbolic:
-            return "symbolic_math"
-        if uses_calculator:
-            return "calculator"
-        return "none"
-
     def to_dict(self) -> Dict[str, Any]:
         return {
             "profile_id": self.normalized_profile_id(),

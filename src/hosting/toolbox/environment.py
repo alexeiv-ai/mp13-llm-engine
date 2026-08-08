@@ -9,6 +9,11 @@ import venv
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from mp13_engine.mp13_intrinsics_metadata import (
+    intrinsic_dependency_metadata,
+    intrinsic_dependency_profile_id,
+)
+
 from .._process_utils import hidden_subprocess_kwargs
 from .common import _sha256_text, _stable_json
 from .bundle_models import SandboxProfileSpec, ToolboxEnvironmentSpec
@@ -119,9 +124,17 @@ class ToolboxEnvironmentManager:
         manifest = dict(staged.manifest or {})
         sandbox_profile = SandboxProfileSpec.from_dict(dict(manifest.get("sandbox_profile") or {}))
         intrinsic_tool_names = list(manifest.get("intrinsic_tool_names") or [])
-        intrinsics_profile_id = sandbox_profile.intrinsics_profile_id(intrinsic_tool_names)
+        intrinsic_dependencies = intrinsic_dependency_metadata(intrinsic_tool_names)
+        intrinsics_profile_id = intrinsic_dependency_profile_id(intrinsic_tool_names)
         dependency_lock_hash = str(manifest.get("dependency_lock_hash") or "").strip() or None
-        required_imports = sandbox_profile.normalized_required_imports()
+        required_imports = list(
+            dict.fromkeys(
+                [
+                    *sandbox_profile.normalized_required_imports(),
+                    *list(intrinsic_dependencies["import_roots"]),
+                ]
+            )
+        )
         toolbox_runtime_hash = "toolbox-executor-v1"
         environment_name = str(sandbox_profile.environment_name or "base").strip() or "base"
         input_desc = dict(environment_description or {})
