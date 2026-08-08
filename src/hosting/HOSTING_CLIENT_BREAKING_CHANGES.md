@@ -49,6 +49,12 @@ instead submit the complete desired state of one toolbox:
    profile IDs, environment keys, package paths, installer output, or raw locks
    outside an authorized operator projection.
 
+Persisted apply progress contains a stable phase/code, bounded counts and
+summary, update time, and `cancellable`. Disable cancellation in dependent UI as
+soon as `cancellable` becomes false; it never becomes true again. Reconnect and
+request recovery must render the recovered progress checkpoint, then fetch the
+terminal result for final diagnostics.
+
 The dependent store may retain its own authoring and UI metadata, but parent
 deployment truth must be represented by the active parent revision and durable
 apply operation ref. Local `state_revision` or `toolbox_definition_digest`

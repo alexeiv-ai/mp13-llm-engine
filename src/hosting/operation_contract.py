@@ -28,6 +28,9 @@ MAX_SELECTOR_ID_BYTES = 256
 MAX_REASON_BYTES = 512
 MAX_MEDIA_TYPE_BYTES = 128
 MAX_INLINE_RESULT_BYTES = 64 * 1024
+MAX_PROGRESS_PHASE_BYTES = 64
+MAX_PROGRESS_CODE_BYTES = 128
+MAX_PROGRESS_SUMMARY_BYTES = 512
 MAX_REFERENCE_FIELDS = 8
 
 _OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
@@ -44,6 +47,15 @@ _REF_FIELDS = {
 _SELECTOR_FIELDS = {"kind", "id"}
 _RESULT_REF_FIELDS = {"contract", "artifact_id", "digest", "size_bytes", "media_type", "expires_at_ms"}
 _OMISSION_FIELDS = {"contract", "digest", "size_bytes", "reason"}
+_PROGRESS_FIELDS = {
+    "phase",
+    "code",
+    "completed_units",
+    "total_units",
+    "updated_at_ms",
+    "summary",
+    "cancellable",
+}
 _STATUS_FIELDS = {
     "contract",
     "api_status",
@@ -58,11 +70,26 @@ _STATUS_FIELDS = {
     "result",
     "result_ref",
     "result_omission",
+    "progress",
 }
+
+TOOLBOX_DEFINITION_APPLY_PHASES = frozenset(
+    {
+        "validation",
+        "environment_build",
+        "staging",
+        "warmup",
+        "publication",
+        "draining",
+        "cleanup",
+    }
+)
+TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES = frozenset({"publication", "draining", "cleanup"})
 
 
 class HostedExecutionKind(StrEnum):
     TOOLBOX = "toolbox"
+    TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -299,6 +326,94 @@ class HostedResultOmission:
 
 
 @dataclass(frozen=True)
+class HostedOperationProgress:
+    phase: str
+    code: str
+    completed_units: Optional[int]
+    total_units: Optional[int]
+    updated_at_ms: int
+    summary: str
+    cancellable: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.phase, str):
+            raise ValueError("operation_progress_phase_invalid")
+        if not isinstance(self.code, str):
+            raise ValueError("operation_progress_code_invalid")
+        if not isinstance(self.summary, str):
+            raise ValueError("operation_progress_summary_invalid")
+        phase = _bounded_text(
+            self.phase,
+            label="operation_progress_phase",
+            max_bytes=MAX_PROGRESS_PHASE_BYTES,
+        )
+        code = _bounded_text(
+            self.code,
+            label="operation_progress_code",
+            max_bytes=MAX_PROGRESS_CODE_BYTES,
+        )
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]*", phase):
+            raise ValueError("operation_progress_phase_invalid")
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]*", code):
+            raise ValueError("operation_progress_code_invalid")
+        if self.completed_units is not None and (
+            not isinstance(self.completed_units, int) or isinstance(self.completed_units, bool)
+        ):
+            raise ValueError("operation_progress_completed_units_invalid")
+        if self.total_units is not None and (
+            not isinstance(self.total_units, int) or isinstance(self.total_units, bool)
+        ):
+            raise ValueError("operation_progress_total_units_invalid")
+        if not isinstance(self.updated_at_ms, int) or isinstance(self.updated_at_ms, bool):
+            raise ValueError("operation_progress_updated_at_ms_invalid")
+        completed = self.completed_units
+        total = self.total_units
+        if completed is not None and completed < 0:
+            raise ValueError("operation_progress_completed_units_invalid")
+        if total is not None and total < 0:
+            raise ValueError("operation_progress_total_units_invalid")
+        if completed is not None and total is not None and completed > total:
+            raise ValueError("operation_progress_completed_exceeds_total")
+        if int(self.updated_at_ms) < 0:
+            raise ValueError("operation_progress_updated_at_ms_invalid")
+        _bounded_text(
+            self.summary,
+            label="operation_progress_summary",
+            max_bytes=MAX_PROGRESS_SUMMARY_BYTES,
+        )
+        if not isinstance(self.cancellable, bool):
+            raise ValueError("operation_progress_cancellable_invalid")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "code": self.code,
+            "completed_units": int(self.completed_units) if self.completed_units is not None else None,
+            "total_units": int(self.total_units) if self.total_units is not None else None,
+            "updated_at_ms": int(self.updated_at_ms),
+            "summary": self.summary,
+            "cancellable": self.cancellable,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "HostedOperationProgress":
+        row = dict(payload or {})
+        _strict_fields(row, _PROGRESS_FIELDS, label="operation_progress")
+        missing = sorted(_PROGRESS_FIELDS - set(row))
+        if missing:
+            raise ValueError(f"operation_progress_missing_fields:{','.join(missing)}")
+        return cls(
+            phase=row["phase"],
+            code=row["code"],
+            completed_units=row["completed_units"],
+            total_units=row["total_units"],
+            updated_at_ms=row["updated_at_ms"],
+            summary=row["summary"],
+            cancellable=row["cancellable"],
+        )
+
+
+@dataclass(frozen=True)
 class HostedOperationStatus:
     operation: HostedOperationRef
     lifecycle: HostedOperationLifecycle
@@ -312,6 +427,7 @@ class HostedOperationStatus:
     result: Any = None
     result_ref: Optional[HostedResultRef] = None
     result_omission: Optional[HostedResultOmission] = None
+    progress: Optional[HostedOperationProgress] = None
     contract: str = HOSTED_OPERATION_STATUS_CONTRACT
 
     def __post_init__(self) -> None:
@@ -340,6 +456,21 @@ class HostedOperationStatus:
             raise ValueError("operation_updated_at_before_created_at")
         if self.reason is not None:
             _bounded_text(self.reason, label="operation_reason", max_bytes=MAX_REASON_BYTES, required=False)
+        if self.progress is not None:
+            if not isinstance(self.progress, HostedOperationProgress):
+                raise ValueError("operation_progress_invalid")
+            if int(self.progress.updated_at_ms) < int(self.created_at_ms):
+                raise ValueError("operation_progress_before_created_at")
+            if int(self.progress.updated_at_ms) > int(self.updated_at_ms):
+                raise ValueError("operation_progress_after_status_updated_at")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_APPLY:
+                if self.progress.phase not in TOOLBOX_DEFINITION_APPLY_PHASES:
+                    raise ValueError("toolbox_definition_apply_progress_phase_invalid")
+                if (
+                    self.progress.phase in TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES
+                    and self.progress.cancellable
+                ):
+                    raise ValueError("toolbox_definition_apply_committed_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -361,6 +492,7 @@ class HostedOperationStatus:
             "result": copy.deepcopy(self.result),
             "result_ref": self.result_ref.to_dict() if self.result_ref is not None else None,
             "result_omission": self.result_omission.to_dict() if self.result_omission is not None else None,
+            "progress": self.progress.to_dict() if self.progress is not None else None,
         }
 
     @classmethod
@@ -373,6 +505,9 @@ class HostedOperationStatus:
             raise ValueError("operation_lifecycle_invalid") from exc
         result_ref = row.get("result_ref")
         result_omission = row.get("result_omission")
+        progress = row.get("progress")
+        if progress is not None and not isinstance(progress, Mapping):
+            raise ValueError("operation_progress_invalid")
         return cls(
             contract=str(row.get("contract") or ""),
             api_status=str(row.get("api_status") or ""),
@@ -391,6 +526,9 @@ class HostedOperationStatus:
             result_omission=(
                 HostedResultOmission.from_dict(result_omission) if isinstance(result_omission, Mapping) else None
             ),
+            progress=(
+                HostedOperationProgress.from_dict(progress) if isinstance(progress, Mapping) else None
+            ),
         )
 
 
@@ -402,13 +540,19 @@ __all__ = [
     "MAX_INLINE_RESULT_BYTES",
     "MAX_MEDIA_TYPE_BYTES",
     "MAX_OPERATION_ID_BYTES",
+    "MAX_PROGRESS_CODE_BYTES",
+    "MAX_PROGRESS_PHASE_BYTES",
+    "MAX_PROGRESS_SUMMARY_BYTES",
     "MAX_REASON_BYTES",
     "MAX_RECEIPT_NAMESPACE_BYTES",
     "MAX_REQUEST_ID_BYTES",
     "MAX_SELECTOR_ID_BYTES",
     "TERMINAL_OPERATION_LIFECYCLES",
+    "TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES",
+    "TOOLBOX_DEFINITION_APPLY_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
+    "HostedOperationProgress",
     "HostedOperationRef",
     "HostedOperationSelector",
     "HostedOperationStatus",

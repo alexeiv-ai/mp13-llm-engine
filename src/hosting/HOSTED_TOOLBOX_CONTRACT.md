@@ -493,7 +493,8 @@ contract):
     "completed_units": 0,
     "total_units": null,
     "updated_at_ms": 1786230000000,
-    "summary": "The toolbox definition is queued for validation."
+    "summary": "The toolbox definition is queued for validation.",
+    "cancellable": true
   },
   "result": null,
   "result_ref": null,
@@ -506,7 +507,9 @@ generic hosted-operation APIs. A status may include bounded progress with
 `phase`, `code`, optional non-negative `completed_units` and `total_units`,
 `updated_at_ms`, and a user-safe `summary`. Stable phases are `validation`,
 `environment_build`, `staging`, `warmup`, `publication`, `draining`, and
-`cleanup`.
+`cleanup`. The strict progress object also contains `cancellable`; it is always
+false from `publication` through `cleanup` and can never return to true for one
+operation.
 
 Cancellation is allowed while queued and during validation, environment build,
 staging, and warmup when candidate cleanup is safe. The persisted start of

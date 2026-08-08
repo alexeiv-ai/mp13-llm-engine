@@ -567,6 +567,9 @@ review API.
   predictive digests use these vectors but never replace authoritative reads.
   Commit: recorded by git history under `feat: add canonical toolbox identities
   (P0-04)`.
+  Subsequent-slice audit: verified against commit `cfbaf1b`; the operation
+  contract extension did not change any canonicalization/domain/input rule or
+  published vector, and all identity/doc tests remained in the required suite.
 - [ ] **P0-05** Decide package index/artifact policy, online build approval,
   template administration roles, remote control-channel management methods,
   signed/immutable manifest and artifact requirements, offline artifact
@@ -580,9 +583,22 @@ review API.
 - [x] **P0-07** Freeze authoritative `get_definition()` snapshot semantics,
   source visibility/size limits, revision-conflict recovery, and side-effect-
   free behavior.
-- [ ] **P0-08** Extend the existing hosted-operation contract with
+- [x] **P0-08** Extend the existing hosted-operation contract with
   `toolbox_definition_apply`, bounded progress, request recovery, terminal
   diagnostics, and the pre-publication/post-publication cancellation boundary.
+
+  Evidence (2026-08-08): `HostedExecutionKind` now includes
+  `toolbox_definition_apply`; `HostedOperationProgress` strictly bounds and
+  round-trips phase/code/count/time/summary/cancellability; the atomic
+  repository persists monotonic checkpoints and rejects terminal updates,
+  timestamp regression, and reversal of the cancellation boundary. The generic
+  contract freezes the full apply fingerprint input, authenticated request
+  recovery, terminal diagnostic placement, and publication boundary. Contract,
+  repository, and toolbox-doc command passed 52 tests, including repository
+  recreation/interruption and existing multi-process idempotency; service and
+  workflow regression command passed 15 tests. Clean-environment coverage was
+  not applicable. Commit: recorded by git history under `feat: extend hosted
+  operation progress (P0-08)`.
 - [x] **P0-09** Freeze per-toolbox scope: atomicity and name uniqueness are per
   toolbox; duplicate names across toolboxes are valid; routing includes
   `toolbox_id`; multiple toolbox references remain concurrent.

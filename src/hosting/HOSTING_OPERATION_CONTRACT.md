@@ -43,6 +43,20 @@ Terminal result fields are mutually exclusive:
 All digests use `sha256:<lowercase-hex>`. All sizes use `size_bytes`. Reasons
 are limited to 512 UTF-8 bytes. Timestamps are non-negative Unix milliseconds.
 
+`HostedExecutionKind` also includes `toolbox_definition_apply`, selected by a
+`toolbox_id`. `HostedOperationStatus` contains optional strict `progress` with
+exactly `phase`, `code`, nullable `completed_units`, nullable `total_units`,
+`updated_at_ms`, `summary`, and `cancellable`. Phase is limited to 64 bytes,
+code to 128 bytes, and summary to 512 bytes. Counts are non-negative and
+completed cannot exceed total. Progress time is within the receipt's created
+and updated times.
+
+Definition-apply phases are `validation`, `environment_build`, `staging`,
+`warmup`, `publication`, `draining`, and `cleanup`. Progress is cancellable only
+before publication. Once a persisted progress record has `cancellable: false`,
+later progress cannot restore it to true. Status/result/request recovery returns
+the latest persisted bounded progress without starting or probing work.
+
 ## Result retention policy
 
 The default policy is:
@@ -106,6 +120,16 @@ effective sandbox policy
 capacity where it changes dispatch behavior
 ```
 
+Toolbox definition apply fingerprint input:
+
+```text
+execution kind and toolbox selector
+definition hash and expected active revision
+plan ID and exact custom-delta digest
+approval identity digest
+catalog revision and package-policy revision
+```
+
 Test vectors live in `tests/test_hosting_operation_contract.py` and are the
 authority for canonical serialization changes.
 
@@ -117,6 +141,8 @@ The storage-neutral repository exposes these operations:
   attach, replay, conflict, forgotten, or capacity;
 - `mark_dispatch_claimed(operation_id)` performs queued-to-running compare and
   set;
+- `update_progress(operation_id, progress)` persists one bounded monotonic
+  checkpoint for queued/running work;
 - `finish(operation_id, lifecycle, terminal)` performs one terminal transition;
 - `cancel_before_dispatch(operation_id, reason)` performs a queued/interrupted
   compare and set;
@@ -156,6 +182,13 @@ operation, `hosted_operation_resolve_request` performs an authenticated indexed
 lookup by execution kind, resolved selector, and request ID and returns the
 stored canonical ref/status. It never probes or starts workers. Once recovered,
 all status, result, and cancel calls remain ref-only.
+
+For definition apply, cancellation before publication finishes with bounded
+candidate-cleanup diagnostics. Publication is the commit boundary. A cancel
+request after the persisted boundary returns
+`apply_publication_committed`; the operation continues idempotent draining and
+cleanup. Terminal diagnostics live in the bounded, redacted terminal result (or
+its normal result reference/omission), not in unbounded progress history.
 
 ## Provider and session identity
 

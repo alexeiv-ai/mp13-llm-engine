@@ -9,7 +9,11 @@ from typing import Any
 
 import pytest
 
-from hosting.operation_contract import HostedOperationLifecycle, hosted_execution_fingerprint
+from hosting.operation_contract import (
+    HostedOperationLifecycle,
+    HostedOperationProgress,
+    hosted_execution_fingerprint,
+)
 from hosting.service.operation_repository import (
     AtomicJsonHostedOperationRepository,
     LegacyOperationRepositoryError,
@@ -258,17 +262,20 @@ def test_restart_recovers_before_dispatch_once_and_fails_closed_after_dispatch(t
     assert _prepare(failed_closed)["action"] == "attach"
 
 
-@pytest.mark.parametrize("execution_kind", ["toolbox", "workflow_python", "workflow_js"])
+@pytest.mark.parametrize(
+    "execution_kind",
+    ["toolbox", "toolbox_definition_apply", "workflow_python", "workflow_js"],
+)
 def test_execution_families_share_every_lifecycle_shape(tmp_path: Path, execution_kind: str) -> None:
     selector = {
-        "kind": "toolbox_id" if execution_kind == "toolbox" else "engine_id",
+        "kind": "toolbox_id" if execution_kind in {"toolbox", "toolbox_definition_apply"} else "engine_id",
         "id": f"{execution_kind}-target",
     }
     namespace = f"{execution_kind}:target"
     expected_fields = {
         "contract", "api_status", "operation", "lifecycle", "request_id",
         "created_at_ms", "updated_at_ms", "dispatch_claimed_at_ms", "terminal_at_ms",
-        "reason", "result", "result_ref", "result_omission",
+        "reason", "result", "result_ref", "result_omission", "progress",
     }
 
     def prepare(repository, request_id: str, fingerprint_payload=None):
@@ -343,6 +350,72 @@ def test_execution_families_share_every_lifecycle_shape(tmp_path: Path, executio
         "unknown_outside_retention", "idempotency_conflict",
     }
     assert all(set(row) == expected_fields for row in observed)
+
+
+def test_progress_is_persisted_recovered_and_cancellation_boundary_is_monotonic(tmp_path: Path) -> None:
+    now = [100.0]
+    path = tmp_path / "operations.json"
+    repository = _repository(path, clock=lambda: now[0])
+    prepared = _prepare(repository, execution_kind="toolbox_definition_apply")
+    operation_id = prepared["status"]["operation"]["operation_id"]
+    repository.mark_dispatch_claimed(operation_id=operation_id)
+    warmup = repository.update_progress(
+        operation_id=operation_id,
+        progress=HostedOperationProgress(
+            phase="warmup",
+            code="candidate_warmup",
+            completed_units=1,
+            total_units=2,
+            updated_at_ms=100_000,
+            summary="Warming candidate workers.",
+            cancellable=True,
+        ),
+    )
+    assert warmup["progress"]["phase"] == "warmup"
+    now[0] = 101.0
+    published = repository.update_progress(
+        operation_id=operation_id,
+        progress={
+            "phase": "publication",
+            "code": "routes_published",
+            "completed_units": 2,
+            "total_units": 2,
+            "updated_at_ms": 101_000,
+            "summary": "The active routes were published.",
+            "cancellable": False,
+        },
+    )
+    assert published["progress"]["cancellable"] is False
+    with pytest.raises(ValueError, match="operation_progress_cancellation_boundary_regression"):
+        repository.update_progress(
+            operation_id=operation_id,
+            progress={**published["progress"], "phase": "cleanup", "cancellable": True},
+        )
+
+    recreated = _repository(path, clock=lambda: now[0])
+    status = recreated.status(ref=prepared["status"]["operation"], owner_actor_id="actor:a")
+    assert status["lifecycle"] == "interrupted_after_dispatch_unknown"
+    assert status["progress"] == published["progress"]
+    with pytest.raises(ValueError, match="operation_progress_terminal_update_denied"):
+        recreated.update_progress(operation_id=operation_id, progress=published["progress"])
+
+
+def test_progress_rejects_a_future_checkpoint_timestamp(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "operations.json", clock=lambda: 100.0)
+    prepared = _prepare(repository)
+    with pytest.raises(ValueError, match="operation_progress_future_timestamp"):
+        repository.update_progress(
+            operation_id=prepared["status"]["operation"]["operation_id"],
+            progress={
+                "phase": "work",
+                "code": "work_started",
+                "completed_units": None,
+                "total_units": None,
+                "updated_at_ms": 100_001,
+                "summary": "Work started.",
+                "cancellable": True,
+            },
+        )
 
 
 def test_cancel_before_dispatch_is_atomic_and_replayed(tmp_path: Path) -> None:

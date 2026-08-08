@@ -31,10 +31,10 @@ belong in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 Status: In progress
 
-The Phase 0 inventory, durable public contract, and canonical identity vectors
-are complete. The hosted-operation extension and deployment policy/catalog
-contracts are next; identity helpers are not yet wired into toolbox runtime
-behavior.
+The Phase 0 inventory, durable public contract, canonical identities, and
+hosted-operation progress/recovery foundation are complete. Deployment
+policy/catalog/model-runtime contracts are next; definition apply dispatch
+remains a later implementation slice.
 
 ## Active slice
 
@@ -47,6 +47,7 @@ None.
 | 2026-08-08 | P0-01, P0-02 | Froze all current parent/dependent mutation, environment, payload, persisted-state, and actual hosted import removal/catalog inputs in the transient migration handoff. | Both predeclared parent/dependent `rg` inventories passed. AST assertions covered all 19 old dispatch commands, every deprecated hosted-ref method, parent intrinsic NumPy/SymPy/NumExpr imports, dependent Matplotlib import, and stale Requests declaration. Clean environment, daemon integration, persistence/concurrency, and runtime regression categories: not applicable (documentation-only inventory; no runtime change). | `docs: freeze hosting inventories (P0-01 P0-02)` |
 | 2026-08-08 | P0-03, P0-06, P0-07, P0-09, P0-10, P0-11 | Froze the normative typed public definition/plan/approval/read/apply contract, strict limits and codes, actor rules, per-toolbox scope, retention, projections, and client algorithm; linked the dependent handoff. | `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q` -> 5 passed; forbidden-vocabulary `rg` -> no matches. Clean environment, daemon integration, persistence/concurrency, and runtime regression categories: not applicable (documentation-only contract slice). | `docs: freeze toolbox public contract` (item IDs in commit body) |
 | 2026-08-08 | P0-04 | Added canonical/domain-separated identity helpers and fixed vectors for definitions, resolved profiles, environments, manifests, template locks, and custom locks; documented dependent digest responsibilities. | `python -m pytest tests/test_hosted_toolbox_identity.py tests/test_hosted_toolbox_contract_docs.py -q` -> 10 passed, including two fresh hash-seeded processes; focused bundle staging regressions -> 3 passed, 135 deselected. Clean environment, daemon integration, and persistence/concurrency: not applicable until helpers are wired into runtime/state. | `feat: add canonical toolbox identities (P0-04)` |
+| 2026-08-08 | P0-08 | Added definition-apply execution identity and strict persisted monotonic operation progress, including recovery, terminal diagnostic placement, and an irreversible publication cancellation boundary. | Contract/repository/toolbox-doc command -> 52 passed, including repository recreation/interruption and multi-process idempotency; operation service/workflow regressions -> 15 passed. Clean-environment build/import: not applicable. | `feat: extend hosted operation progress (P0-08)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -74,5 +75,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Extend the generic hosted-operation contract for definition apply, then freeze
-deployment/package/catalog/model-runtime policy in separate slices.
+Freeze deployment/package/catalog policy, then the initial environment catalog,
+cross-worker `core` use, and exclusive model-runtime boundary.

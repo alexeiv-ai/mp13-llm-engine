@@ -19,6 +19,7 @@ from ..operation_contract import (
     MAX_INLINE_RESULT_BYTES,
     HostedExecutionKind,
     HostedOperationLifecycle,
+    HostedOperationProgress,
     HostedOperationRef,
     HostedOperationSelector,
     HostedOperationStatus,
@@ -61,6 +62,13 @@ class HostedOperationRepository(Protocol):
     ) -> Dict[str, Any]: ...
 
     def mark_dispatch_claimed(self, *, operation_id: str) -> Dict[str, Any]: ...
+
+    def update_progress(
+        self,
+        *,
+        operation_id: str,
+        progress: HostedOperationProgress | Mapping[str, Any],
+    ) -> Dict[str, Any]: ...
 
     def finish(
         self,
@@ -282,6 +290,16 @@ class AtomicJsonHostedOperationRepository:
         for name in ("created_at_ms", "updated_at_ms"):
             if int(record.get(name) or 0) < 0:
                 raise RuntimeError(f"hosted operation {name} invalid")
+        raw_progress = record.get("progress")
+        if raw_progress is not None:
+            if not isinstance(raw_progress, Mapping):
+                raise RuntimeError("hosted operation progress invalid")
+            progress = HostedOperationProgress.from_dict(raw_progress)
+            if progress.updated_at_ms < int(record.get("created_at_ms") or 0):
+                raise RuntimeError("hosted operation progress predates receipt")
+            if progress.updated_at_ms > int(record.get("updated_at_ms") or 0):
+                raise RuntimeError("hosted operation progress exceeds receipt update time")
+        self._status_from_row(record)
         return operation
 
     def _rebuild_indexes_locked(self) -> None:
@@ -352,6 +370,11 @@ class AtomicJsonHostedOperationRepository:
             result=copy.deepcopy(terminal.get("result")),
             result_ref=HostedResultRef.from_dict(result_ref) if isinstance(result_ref, dict) else None,
             result_omission=HostedResultOmission.from_dict(result_omission) if isinstance(result_omission, dict) else None,
+            progress=(
+                HostedOperationProgress.from_dict(record["progress"])
+                if isinstance(record.get("progress"), Mapping)
+                else None
+            ),
         )
         return model.to_dict()
 
@@ -551,6 +574,47 @@ class AtomicJsonHostedOperationRepository:
                 self._persist_locked()
                 self._condition.notify_all()
             return self._status_from_row(row)
+
+    def update_progress(
+        self,
+        *,
+        operation_id: str,
+        progress: HostedOperationProgress | Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        oid = _bounded_identity(operation_id, label="operation_id")
+        model = (
+            progress
+            if isinstance(progress, HostedOperationProgress)
+            else HostedOperationProgress.from_dict(progress)
+        )
+        now_ms = self._now_ms()
+        if model.updated_at_ms > now_ms:
+            raise ValueError("operation_progress_future_timestamp")
+        with self._state_lock():
+            location = self._operation_index.get(oid)
+            if location is None or location[1]:
+                raise KeyError(oid)
+            row = self._data[location[0]][oid]
+            lifecycle = HostedOperationLifecycle(str(row["lifecycle"]))
+            if lifecycle not in {HostedOperationLifecycle.QUEUED, HostedOperationLifecycle.RUNNING}:
+                raise ValueError("operation_progress_terminal_update_denied")
+            previous = row.get("progress")
+            if isinstance(previous, Mapping):
+                previous_model = HostedOperationProgress.from_dict(previous)
+                if model.updated_at_ms < previous_model.updated_at_ms:
+                    raise ValueError("operation_progress_timestamp_regression")
+                if not previous_model.cancellable and model.cancellable:
+                    raise ValueError("operation_progress_cancellation_boundary_regression")
+            row["progress"] = model.to_dict()
+            row["updated_at_ms"] = max(
+                int(row.get("updated_at_ms") or 0),
+                int(model.updated_at_ms),
+                now_ms,
+            )
+            status = self._status_from_row(row)
+            self._persist_locked()
+            self._condition.notify_all()
+            return status
 
     def _bounded_terminal(self, envelope: Mapping[str, Any], *, row: Mapping[str, Any]) -> Dict[str, Any]:
         redacted = _redact(copy.deepcopy(dict(envelope or {})))
