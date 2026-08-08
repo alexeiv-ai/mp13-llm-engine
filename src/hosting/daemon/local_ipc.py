@@ -3119,6 +3119,36 @@ class EngineHostDaemon:
             )
         if cmd == "toolbox-gc":
             return svc.toolbox_gc()
+        if cmd == "toolbox-template-list":
+            return svc.toolbox_template_list()
+        if cmd == "toolbox-template-describe":
+            return svc.toolbox_template_describe(
+                template_id=str(payload.get("template_id") or ""),
+                template_digest=str(payload.get("template_digest") or "").strip() or None,
+            )
+        if cmd == "toolbox-template-publish":
+            return svc.toolbox_template_publish(
+                template=dict(payload.get("template") or {}),
+                artifact_references=[
+                    dict(item or {})
+                    for item in list(payload.get("artifact_references") or [])
+                ],
+                manifest_signature=str(payload.get("manifest_signature") or ""),
+                activate=payload.get("activate", False),
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-template-deprecate":
+            return svc.toolbox_template_deprecate(
+                template_id=str(payload.get("template_id") or ""),
+                template_digest=str(payload.get("template_digest") or ""),
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-template-revoke":
+            return svc.toolbox_template_revoke(
+                template_id=str(payload.get("template_id") or ""),
+                template_digest=str(payload.get("template_digest") or ""),
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "toolbox-references":
             return svc.toolbox_references()
         if cmd == "toolbox-consistency":

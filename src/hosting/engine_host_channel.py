@@ -3481,6 +3481,70 @@ class EngineHostControlChannel:
         res = self._invoke("toolbox-gc", {})
         return dict(res or {})
 
+    def toolbox_template_list(self) -> Dict[str, Any]:
+        res = self._invoke("toolbox-template-list", {})
+        return dict(res or {})
+
+    def toolbox_template_describe(
+        self,
+        *,
+        template_id: str,
+        template_digest: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-template-describe",
+            {
+                "template_id": str(template_id or "").strip(),
+                "template_digest": str(template_digest or "").strip() or None,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_template_publish(
+        self,
+        *,
+        template: Dict[str, Any],
+        artifact_references: list[Dict[str, Any]],
+        manifest_signature: str,
+        activate: bool = False,
+    ) -> Dict[str, Any]:
+        if not isinstance(activate, bool):
+            raise ValueError("template_activate_must_be_boolean")
+        res = self._invoke(
+            "toolbox-template-publish",
+            {
+                "template": dict(template or {}),
+                "artifact_references": [dict(item or {}) for item in artifact_references],
+                "manifest_signature": str(manifest_signature or "").strip(),
+                "activate": activate,
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_template_deprecate(
+        self, *, template_id: str, template_digest: str
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-template-deprecate",
+            {
+                "template_id": str(template_id or "").strip(),
+                "template_digest": str(template_digest or "").strip(),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_template_revoke(
+        self, *, template_id: str, template_digest: str
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-template-revoke",
+            {
+                "template_id": str(template_id or "").strip(),
+                "template_digest": str(template_digest or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def toolbox_references(self) -> Dict[str, Any]:
         res = self._invoke("toolbox-references", {})
         return dict(res or {})

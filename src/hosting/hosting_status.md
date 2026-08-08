@@ -56,6 +56,7 @@ None.
 | 2026-08-08 | P1-03 | Moved intrinsic discovery/dependency knowledge into import-safe metadata, derived environment roots/profile identity from it, removed profile branching, and pinned direct SymPy with a current lock. | Metadata -> 7 passed; complete toolbox sandbox -> 138 passed; Poetry lock, compile, and diff checks passed. Clean isolated-template execution remains P1-11/P1-12. | `refactor: isolate intrinsic dependency metadata (P1-03)` |
 | 2026-08-08 | P1-04, P1-05, P1-06 | Added deterministic staged-source AST evidence, reviewed/explicit PEP 440 requirement resolution, and smallest exact template or minimal custom-delta selection. | Dependency pipeline -> 15 passed; catalog/identity regressions -> 21 passed; Poetry lock, compile, and diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure planning). | `feat: add toolbox dependency planner (P1-04 P1-05 P1-06)` |
 | 2026-08-08 | P1-07 | Added strict fail-closed target/template, package allow/deny, custom approval, HTTPS index, intrinsic-completeness, and payload-authority validation. | Policy -> 11 passed; dependency/catalog regressions -> 31 passed; compile/diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure policy). | `feat: add toolbox dependency policy (P1-07)` |
+| 2026-08-08 | P1-08 | Added an atomic immutable catalog with signed manifest/artifact references, lifecycle/active revisions, bounded consumer projections/audit, and end-to-end authorized service/daemon/channel/CLI controls. | Catalog control -> 11 passed including multi-process/restart/auth/transport; existing channel/CLI/auth regressions -> 95 passed; compile/diff checks passed. Environment materialization: not applicable until P1-09. | `feat: add toolbox catalog control (P1-08)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -83,5 +84,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Add actor-authorized catalog administration and durable prewarm/materialize
-control paths from P1-08 through P1-10.
+Add durable operator prewarm/materialize control and its progress/verification
+tests from P1-09/P1-10.

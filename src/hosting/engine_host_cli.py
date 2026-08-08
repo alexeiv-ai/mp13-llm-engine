@@ -108,6 +108,21 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-gc": [
         "python -m hosting.engine_host_cli toolbox-gc",
     ],
+    "toolbox-template-list": [
+        "python -m hosting.engine_host_cli toolbox-template-list",
+    ],
+    "toolbox-template-describe": [
+        "'{\"template_id\":\"core\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-template-describe",
+    ],
+    "toolbox-template-publish": [
+        "Get-Content template-publish.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-publish",
+    ],
+    "toolbox-template-deprecate": [
+        "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-deprecate",
+    ],
+    "toolbox-template-revoke": [
+        "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-revoke",
+    ],
     "toolbox-references": [
         "python -m hosting.engine_host_cli toolbox-references",
     ],
@@ -846,6 +861,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "hosted-operation-cancel",
         "hosting-receipt-ledger-cutover",
         "toolbox-gc",
+        "toolbox-template-list",
+        "toolbox-template-describe",
+        "toolbox-template-publish",
+        "toolbox-template-deprecate",
+        "toolbox-template-revoke",
         "toolbox-references",
         "toolbox-consistency",
         "toolbox-review-snapshot",
@@ -1855,6 +1875,43 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "toolbox-gc":
             _print_ok(svc.toolbox_gc())
+            return 0
+        if cmd == "toolbox-template-list":
+            _print_ok(svc.toolbox_template_list())
+            return 0
+        if cmd == "toolbox-template-describe":
+            _print_ok(
+                svc.toolbox_template_describe(
+                    template_id=str(payload.get("template_id") or ""),
+                    template_digest=str(payload.get("template_digest") or "").strip() or None,
+                )
+            )
+            return 0
+        if cmd == "toolbox-template-publish":
+            _print_ok(
+                svc.toolbox_template_publish(
+                    template=dict(payload.get("template") or {}),
+                    artifact_references=[dict(item or {}) for item in list(payload.get("artifact_references") or [])],
+                    manifest_signature=str(payload.get("manifest_signature") or ""),
+                    activate=payload.get("activate", False),
+                )
+            )
+            return 0
+        if cmd == "toolbox-template-deprecate":
+            _print_ok(
+                svc.toolbox_template_deprecate(
+                    template_id=str(payload.get("template_id") or ""),
+                    template_digest=str(payload.get("template_digest") or ""),
+                )
+            )
+            return 0
+        if cmd == "toolbox-template-revoke":
+            _print_ok(
+                svc.toolbox_template_revoke(
+                    template_id=str(payload.get("template_id") or ""),
+                    template_digest=str(payload.get("template_digest") or ""),
+                )
+            )
             return 0
         if cmd == "toolbox-references":
             _print_ok(svc.toolbox_references())

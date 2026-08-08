@@ -63,6 +63,17 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
     "workflow-python-stream-status",
 }
 
+_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS = {
+    "toolbox-template-list",
+    "toolbox-template-describe",
+}
+
+_TOOLBOX_TEMPLATE_ADMIN_COMMANDS = {
+    "toolbox-template-publish",
+    "toolbox-template-deprecate",
+    "toolbox-template-revoke",
+}
+
 _WORKFLOW_JS_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-ensure",
@@ -340,6 +351,8 @@ class AuthMixin:
             "hosted-operation-result",
             "hosted-operation-cancel",
             "toolbox-gc",
+            *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
+            *_TOOLBOX_TEMPLATE_ADMIN_COMMANDS,
             "toolbox-references",
             "toolbox-consistency",
             "toolbox-review-snapshot",
@@ -444,6 +457,7 @@ class AuthMixin:
                 "hosted-operation-result",
                 "hosted-operation-cancel",
                 "toolbox-gc",
+                *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
                 "toolbox-consistency",
                 "toolbox-review-snapshot",
@@ -516,6 +530,7 @@ class AuthMixin:
                 "hosted-operation-result",
                 "hosted-operation-cancel",
                 "toolbox-gc",
+                *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
                 "toolbox-consistency",
                 "toolbox-review-snapshot",
@@ -603,6 +618,7 @@ class AuthMixin:
                 "sandbox-fs-stat",
                 "toolbox-describe",
                 "toolbox-gate",
+                *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
                 "toolbox-consistency",
                 "toolbox-review-snapshot",

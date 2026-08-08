@@ -768,10 +768,22 @@ call path found in the inventory.
   sandbox capability. Focused tests passed 11 cases; dependency/catalog
   regressions passed 31 tests; compile and diff checks passed. The validator is
   pure and starts no resolution, build, or worker action.
-- [ ] **P1-08** Add actor-authorized template list/describe APIs for consumers
+- [x] **P1-08** Add actor-authorized template list/describe APIs for consumers
   and operator-authorized publish/deprecate/revoke APIs over the daemon control
   channel. Publishing accepts immutable lock/manifests and approved artifact
   references, never a mutable package list bound to an existing template ID.
+
+  Evidence (2026-08-08): `service/toolbox_catalog.py` adds a strict
+  process-locked, fsync/atomic-replace catalog with immutable canonical revision
+  identities, signed manifest value, digest/size/source artifact references,
+  multiple stable-ID revisions, active pointer, lifecycle transitions, catalog
+  revision, bounded audit, and fail-closed reads. Consumer list/describe returns
+  only logical bounded descriptors. Publish/deprecate/revoke and reads are wired
+  through service, daemon, channel, CLI/SSH routing, command policy, and roles;
+  worker/config/diagnostic roles read while only admin mutates. Focused tests
+  passed 11 cases including multi-process/restart/corruption/role/transport
+  coverage; existing channel/CLI/auth regressions passed 95 tests; compile and
+  diff checks passed. Materialization remains P1-09.
 - [ ] **P1-09** Add an operator prewarm/materialize operation that executes on
   the target runtime host and returns a durable operation ref with progress and
   terminal verification diagnostics. Apply may invoke the same builder lazily.
