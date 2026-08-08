@@ -1,440 +1,963 @@
-# Hosting Operation and Capability Access: Execution Plan
+# Hosted Toolbox Reconfiguration and Environment Templates
 
-Status: feasible; direct breaking replacement after the contract decisions in Phase 0
+Status: proposed direct breaking replacement
 
 Owner: parent hosting team
 
-Consumer: `O:/repos/mp13-docs`
+Primary consumer: `O:/repos/mp13-docs`
 
-Consumer's current pinned parent: `084e559796b3ef01d94bbb749ba51aa215e79f05`
+Plan date: 2026-08-08
 
-Reviewed against parent: `a74c4bdce3e0013238954808241fecd11a61e6dc`
+## Goal
 
-Review date: 2026-08-04
+Replace the current hosted-toolbox mutation and environment workflow with one
+code-derived definition/apply flow:
 
-## Verdict
+1. The consumer submits the complete desired toolbox definition.
+2. The host analyzes the submitted bundle imports.
+3. The host maps imports to an immutable built-in environment template or to an
+   approved custom locked environment.
+4. The host prepares and verifies the environment before importing tool code.
+5. The host stages and warms only changed sandbox profiles.
+6. The host atomically publishes the new profile/tool routing revision.
+7. The host drains replaced workers and later garbage-collects unreferenced
+   bundles and environments.
+8. Apply runs as an actor-owned durable hosted operation with progress,
+   reconnect recovery, idempotent retry, terminal diagnostics, and explicitly
+   bounded cancellation semantics.
 
-The feature is feasible and fits the parent hosting boundary. It should replace
-the current client contract directly. Do not add a parallel version, legacy
-adapter, fallback signature, migration window, or deprecation period. Record
-every client-visible and persisted-format break in
-`src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` before merging it. The dependent
-project will promptly repin and adopt the new contract.
+Adding, changing, and removing functions use the same operation. Legacy APIs,
+state readers, environment-description behavior, and fallback execution paths
+are removed rather than adapted. Every consumer requirement must be entered in
+`src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` before the corresponding code
+change merges.
 
-This is a multi-phase change, not only a client facade. Toolbox already has a
-durable prepare/dispatch/terminal ledger, replay protection, pruning, and
-restart tests. Workflow Python and JavaScript status/cancellation currently
-depend on runtime-pool identity and in-memory request state. They must first be
-put behind the same durable operation repository before the parent can honestly
-advertise one cross-family status contract.
+## Documentation policy
 
-The remaining requests are compatible with existing building blocks:
+- [ ] `src/hosting/HOSTED_TOOLBOX_CONTRACT.md` is durable normative
+  documentation. It describes only the supported contract as implemented. It
+  must not mention removed methods, legacy fields, old state schemas, migration
+  aliases, historical behavior, cutover instructions, parent pin transitions,
+  or compatibility comparisons.
+- [ ] `src/hosting/sandbox/TOOLBOX_WORKER.md` is durable implementation
+  documentation. It describes only the current worker architecture and links to
+  the normative contract. It must not retain a legacy-behavior or migration
+  section.
+- [ ] `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` is the sole transient
+  migration handoff. All removed APIs/fields, old-to-new examples, unsupported
+  state formats, archival/cutover steps, release commits, dependent-project
+  requirements, and historical references belong there.
+- [ ] Remove `HOSTING_CLIENT_BREAKING_CHANGES.md` after every listed dependent
+  project confirms adoption and the handoff is no longer needed. Durable
+  documentation must remain complete without it.
 
-- the client already has family-specific execute/status/cancel methods;
-- the daemon and channel already have routing points that can be changed
-  directly;
-- the parent already has callback relay classes for provider and approval
-  callbacks;
-- Host Capability sessions already have expiry and disconnect handling;
-- workflow artifacts already use host-minted `@artifacts/...` references; and
-- the existing atomic, bounded JSON receipt ledger can be generalized behind a
-  storage-neutral repository interface without changing storage technology.
+## Execution, sliced-commit, and completion policy
 
-The highest-risk areas are workflow durability across daemon recreation,
-artifact authorization/retention, callback lifetime for streams, and lease
-revocation semantics. These risks are manageable with the ordering and gates
-below.
+- [ ] Implement the plan as small dependency-closed slices. Each commit must
+  name the plan item IDs it advances and contain one coherent contract, model,
+  implementation, test, documentation, or removal slice rather than an entire
+  phase-sized change.
+- [ ] Every slice must leave the parent repository in an internally consistent
+  state. Do not commit calls to APIs that are not present, state writers without
+  strict readers, routable candidates without active-route selection, or new
+  contract fields without validation and focused tests.
+- [ ] A breaking replacement and removal of the superseded behavior should land
+  in the same dependency-closed slice when possible. If sequencing requires
+  intermediate commits on the implementation branch, those commits must not be
+  released or presented as supported states and must not add compatibility
+  adapters.
+- [ ] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` in the same commit as, or
+  before, the first client-visible break in a slice. Keep durable documentation
+  current in the slice that establishes the replacement behavior.
+- [ ] Do not mark a plan item `[x]` merely because code exists. Before marking
+  it complete, inspect the implemented code against the full item, run the
+  focused tests required by that item, confirm removal requirements by search,
+  and verify any required durable/transient documentation changes.
+- [ ] Record completion evidence next to each completed item or in a phase
+  evidence block: commit hash, focused test commands/results, relevant contract
+  or state-schema artifact, and dependent-project impact. An item without
+  reviewable evidence remains incomplete.
+- [ ] At the start of every resumed implementation session and before each phase
+  exit, audit all previously checked items affected by subsequent changes.
+  Compare the current code and tests with their recorded evidence; do not trust
+  checkmarks or old summaries alone.
+- [ ] Reopen a checked item immediately if its implementation was removed,
+  weakened, contradicted by a later slice, lacks the promised tests, or no
+  longer satisfies the current contract. Record why it was reopened.
+- [ ] A phase exit gate may be marked complete only after every item in that
+  phase and every prerequisite defect fix has current evidence, focused tests
+  pass, and no known blocking TODO is deferred to a later phase without being
+  explicitly represented there.
+- [ ] Parent and dependent-project changes use separate sliced commits. Record
+  the finalized parent commit in the transient breaking-change handoff before
+  the dependent project repins; then record the dependent adoption commit and
+  verification evidence before deleting the handoff file.
 
-SQLite is explicitly not a dependency of this plan. A future storage migration
-may be evaluated from measured receipt volume and write latency, but it must not
-gate the contract or dependent-project repin.
+### Completed-slice test, checkbox, status, and commit protocol
 
-API compatibility and data safety are separate concerns. The parent will not
-read or translate a legacy receipt schema. It must fail closed when one is
-present and provide a documented cutover procedure that archives the old ledger
-only after the operator confirms no protected operation remains inside its
-replay window.
+Every implementation slice must close one coherent server-side outcome and map
+to explicit unchecked item IDs in this plan. If an item cannot be completed in
+one reviewable slice, split it into independently checkable plan items before
+implementation; do not check a parent item for partial work.
 
-## Non-negotiable contract decisions
+Before implementation, write the slice and its exact required test commands in
+`hosting_status.md`. Select tests from every affected category:
 
-Resolve and record these decisions before implementation. Defaults below are
-recommended.
+1. Focused unit and contract tests for each changed type, planner rule, state
+   transition, policy decision, or diagnostic.
+2. Clean-environment build, import, probe, and worker-launch tests for template,
+   package, intrinsic, sandbox, or materialization changes.
+3. Daemon/control-channel and client integration tests for public API,
+   operation, authorization, projection, or reconnect behavior.
+4. Persistence, restart, migration, rollback, repair, and concurrency tests for
+   state or rollout changes.
+5. Existing regression tests covering changed server and dependent-facing
+   behavior. Record a justified `not applicable` for a category that the slice
+   cannot affect; absence of a test command is not evidence of completion.
 
-- [x] **D-01 Operation identity:** make `operation_id` a random, parent-minted,
-  globally unique opaque value persisted in the repository. Treat the selector
-  embedded in a client reference as descriptive only; status and cancel must
-  resolve the stored operation and authorize it against the authenticated
-  caller.
-- [x] **D-02 Reference validation:** accept a typed model or mapping, require
-  `contract == "hosting.operation_ref"`, bound every string/map, reject
-  unknown or contradictory identity fields, and never trust a caller-supplied
-  selector to route cancellation.
-- [x] **D-03 Lifecycle enum:** use exactly `queued`, `running`,
-  `terminal_success`, `terminal_failure`, `terminal_cancellation`,
-  `interrupted_before_dispatch`, `interrupted_after_dispatch_unknown`,
-  `forgotten`, `unknown_outside_retention`, and `idempotency_conflict`.
-  Represent API-call success separately from operation lifecycle.
-- [x] **D-04 Digest and size:** use `digest: "sha256:<hex>"` and
-  `size_bytes: <integer>` everywhere. Do not introduce the ambiguous field
-  `size`.
-- [x] **D-05 Terminal payload:** define `result` for a bounded inline result,
-  `result_ref` for a retrievable artifact, and `result_omission` for a
-  digest-only result. These fields are mutually exclusive.
-- [x] **D-06 Retention policy:** define which execution kinds/results may be
-  artifact-backed, maximum artifact size, TTL, deletion behavior, and whether
-  retrieval is single- or multi-read. Default to omission when policy is
-  absent or denies retention.
-- [x] **D-07 Lease expiry:** use `expires_at_ms: null` for no expiry. Do not use
-  `0`, because the current session implementation interprets a past timestamp
-  as immediately expired. A retained-on-transport-loss lease must either have
-  a finite expiry or be explicitly renewable/revocable.
-- [x] **D-08 Authority binding:** bind `owner_authority_id` to the authenticated
-  actor that registers it. Add explicit renew and revoke operations; possessing
-  an opaque authority string alone must not grant control.
-- [x] **D-09 Request terminal event:** define `on_request_terminal` as the
-  terminal transition of the referenced hosted operation, including
-  cancellation and interrupted terminal policy. It is not merely the return of
-  an execute RPC.
-- [x] **D-10 Duplicate callbacks:** derive or persist stable `approval_id` and
-  `provider_call_id` per logical parent request/call. A transport retry must
-  reuse those IDs; a genuinely new provider call must not.
-- [x] **D-11 Scope:** durable operations initially cover toolbox execute,
-  workflow Python execute, and workflow JavaScript execute. Action execute and
-  pinned-instance execute may share the workflow execution kinds if their
-  fingerprint includes action/instance identity. Describe calls are callback-
-  lease consumers but are not durable operations. Streams get callback lease
-  support; durable stream recovery is out of scope unless separately
-  specified.
-- [x] **D-12 Breaking cutover:** define the parent base commit, staged release
-  commit placeholder, dependent repin sequence, unsupported legacy receipt
-  behavior, ledger archival command, and rollback constraints. No compatibility
-  code may be introduced to smooth the cutover.
+Close and commit a slice only in this order:
 
-## Target public contracts
+1. Complete the implementation and remove superseded behavior required by the
+   slice.
+2. Run all predeclared focused and regression commands and record their results.
+3. Update durable contracts and worker documentation to describe only the new
+   supported behavior.
+4. Update `HOSTING_CLIENT_BREAKING_CHANGES.md` with any dependent-project
+   adoption delta introduced by the slice.
+5. Check only the plan boxes whose full acceptance criteria are satisfied.
+6. Move the slice from Active to Completed in `hosting_status.md`, listing the
+   checked item IDs, delivered outcome, exact passing test commands, and planned
+   commit subject.
+7. Review the staged slice for unrelated or incomplete changes, then create one
+   non-amended commit whose subject or body includes the completed plan item
+   IDs. Do not mix unchecked follow-up work into that commit.
 
-Freeze typed Python models for the following shapes. Keep transport envelopes
-separate from these domain models.
+Git history is the source of commit hashes; the status ledger records the commit
+subject because a commit cannot contain its own final hash. A failed test,
+unresolved diagnostic, missing required documentation, or unchecked acceptance
+criterion keeps the slice Active or Blocked and must not produce a completion
+commit.
+
+## Implementation baseline from the current code
+
+The plan is based on these current implementation facts.
+
+- [ ] **B-01 Models:** `src/hosting/toolbox/bundle_models.py` represents auto
+  and manual functions as `ToolboxAutoAssignmentRequest` and
+  `ToolboxManualAssignmentRequest`. Their stable keys are respectively
+  `module_name:callable_name` and `manual:module_name:callable_name`.
+- [ ] **B-02 Profiles:** `SandboxProfileSpec` currently hashes
+  `environment_name`, `required_imports`, and `sandbox_policy` to derive a
+  profile ID. An explicit `profile_id` bypasses that derivation.
+- [ ] **B-03 Bundles:** `ToolboxBundleSpec.manifest_payload()` already computes
+  a deterministic full manifest hash and 16-character bundle revision from
+  files, tool metadata, intrinsics, profile, and dependency-lock hash.
+- [ ] **B-04 Staging:** `ToolboxBundleStager` writes immutable revision-named
+  bundle directories and verifies conflicting existing content. This remains
+  the bundle materialization boundary.
+- [ ] **B-05 Loading:** `load_toolbox_from_manifest()` imports every staged auto
+  and manual module while constructing the worker toolbox. A missing top-level
+  import therefore fails worker startup/warmup.
+- [ ] **B-06 Grouping:** `ToolboxSandboxOrchestrator.build_assignments()` groups
+  requests by normalized profile ID. It does not reject two requests that use
+  the same explicit profile ID with contradictory profile contents.
+- [ ] **B-07 Rollout:** every register/unregister implementation reconstructs
+  all assignments, calls `spawn_assignments()`, waits for readiness and exact
+  tool inventory, retires replaced registrations, then writes logical state.
+- [ ] **B-08 Routing:** `_route_toolbox_registration()` scans all live toolbox
+  executor registrations and requires exactly one registration containing the
+  requested tool. Candidate and active registrations are not distinguished.
+  Overlapping old/new workers can therefore make routing ambiguous during a
+  rollout.
+- [ ] **B-09 Mutation state:** version-1 `toolbox_sandboxes.json` stores
+  `requests`, `manual_requests`, `intrinsics`, derived `profiles`, `runtime`, and
+  global mutable `environment_descriptions`.
+- [ ] **B-10 State safety:** `_read_toolboxes()` delegates to `_read_json()`,
+  which returns default empty state on invalid JSON. `_write_toolboxes()` writes
+  the file directly. The per-toolbox `RLock` is process-local.
+- [ ] **B-11 Environment identity:** `environment_spec_for_bundle()` hashes the
+  environment name/description, intrinsic dependency profile, raw required
+  imports, runtime hash, and optional dependency-lock hash into `venv_key`.
+- [ ] **B-12 Environment isolation:** `ensure_environment()` creates venvs with
+  `system_site_packages=True` and no dedicated pip bootstrap. Host packages can
+  satisfy undeclared imports.
+- [ ] **B-13 Runtime selection:** `runtime_python_executable()` runs a
+  dependency-bearing toolbox worker with the bootstrap interpreter until both
+  install execution and receipt verification are `ok`.
+- [ ] **B-14 Dependency workflow:** toolbox consumers currently manage mutable
+  descriptions and separate resolve, apply, realize, prepare, lock, resolve
+  lock, verify, execute, and receipt-verification calls.
+- [ ] **B-15 Package naming:** `required_imports` are copied directly into pip
+  requirement planning. There is no import-root to distribution mapping.
+- [ ] **B-16 Intrinsics:** `SandboxProfileSpec.intrinsics_profile_id()` contains
+  hard-coded calculator/symbolic dependency categories rather than dependency
+  metadata owned by each intrinsic.
+- [ ] **B-17 Cleanup:** mutation and failed-rollout paths can immediately delete
+  unreferenced environment directories; repair/reconcile/GC derive references
+  from version-1 logical profiles and live registrations.
+- [ ] **B-18 Public surface:** the old commands are duplicated across
+  `HostedToolBoxRef`, `EngineHostControlChannel`, daemon dispatch, subprocess
+  CLI dispatch, authorization/policy lists, service methods, and tests.
+
+## Confirmed defects that the replacement must fix
+
+These are required correctness fixes, not optional benefits of the redesign.
+Each must have a focused regression test in addition to the broader phase exit
+tests.
+
+- [ ] **F-01 Conflicting explicit profile IDs:** remove consumer-supplied
+  `profile_id` and derive resolved profile identity from canonical sandbox
+  policy plus resolved environment identity. Until the old model is removed,
+  reject duplicate explicit IDs with differing profile contents. This prevents
+  tools from being grouped under the first request's environment or sandbox
+  policy. Address in P3-01 through P3-03 and verify in P7-01.
+- [ ] **F-02 Intrinsic mutation deletes manual tools:** the replacement
+  definition must always contain and validate auto requests, manual requests,
+  and intrinsics together. Applying an intrinsic-only difference must preserve
+  every manual tool, its bundle membership, dependency intent, and route.
+  Delete the current intrinsic register/unregister implementations rather than
+  repairing their partial merge behavior. Address in P4, P6-04/P6-05, and add a
+  mixed-tool regression in P7-01.
+- [ ] **F-03 Corrupt state becomes empty state:** add a strict toolbox-state
+  reader that fails closed on malformed, truncated, non-object, wrong-version,
+  or digest-invalid state. A failed read must never produce default empty state
+  when the state file exists. Address in P5-02 and verify in P7-06.
+- [ ] **F-04 Non-atomic and cross-process-unsafe state updates:** write toolbox
+  state through temp-file, flush, fsync, and atomic replace under a process-safe
+  lock. Perform expected-revision compare-and-swap inside that transaction.
+  Address in P5-03/P5-04 and verify concurrent-process and interrupted-write
+  behavior in P7-06.
+- [ ] **F-05 Candidate/active routing ambiguity:** candidate registrations must
+  remain non-routable during environment preparation, spawn, and warmup.
+  Execution must route through the persisted active `tool_routes` map rather
+  than all live registrations. Address in P4-02 through P4-05 and verify with
+  continuous execution during rollout in P7-03.
+- [ ] **F-06 Duplicate tool names create permanent ambiguous routes:** validate
+  advertised tool-name uniqueness across auto, manual, intrinsic, and guide
+  tools before staging. Return a definition validation error identifying every
+  conflicting stable key/profile. Address in P3-04 and verify in P7-01.
+- [ ] **F-07 Auto mutation drops manual profile membership:** resolved profile
+  state must be generated once from the complete definition and must contain
+  all assigned auto/manual/intrinsic tool keys. Environment planning, expected
+  inventory, consistency, repair, references, and GC must consume that same
+  canonical membership instead of independently reconstructed partial lists.
+  Address in P3-03/P3-06, P4-03, and P6-10; verify in P7-01/P7-07.
+- [ ] **F-08 New top-level dependencies cannot reach installation:** complete
+  dependency analysis and template/custom environment preparation before
+  `load_toolbox_from_manifest()` imports staged modules. Environment build must
+  not depend on a previously persisted toolbox profile. Address in P1, P2-06/
+  P2-07, and P4-04; verify missing and newly approved top-level imports in
+  P7-04.
+- [ ] **F-09 Ambient packages and bootstrap fallback defeat dependency
+  isolation:** create toolbox environments without `system_site_packages` and
+  remove the toolbox bootstrap-interpreter fallback. Spawn only with the final
+  receipt-verified interpreter. Address in P2-04/P2-05 and verify in P7-05 and
+  P7-08.
+- [ ] **F-10 Retirement precedes durable logical publication:** do not retire
+  active workers before the new definition/routes are durably published. After
+  publication, retirement must be recoverable and idempotent so a crash leaves
+  either serving old routes or serving new routes with stale old workers ready
+  for cleanup. Address in P4-05 through P4-07 and P5-05; verify every crash
+  point in P7-06.
+
+## Code to retain and build on
+
+- [ ] Keep `ToolboxBundleFile`, auto/manual tool metadata, callback signatures,
+  guide metadata, visibility, `non_restartable`, and concurrency metadata.
+- [ ] Keep deterministic manifest hashing and bundle revision generation, but
+  feed them the new resolved profile/environment identity.
+- [ ] Keep bundle path validation, staging, startup specs, worker IPC, manifest
+  loading, and exact worker tool-inventory warmup checks.
+- [ ] Keep the per-toolbox mutation serialization concept, extending it to a
+  process-safe state transaction.
+- [ ] Keep hosted execution, gate, cancel, callback relay, and scope behavior.
+- [ ] Keep `toolbox_consistency`, `toolbox_review_snapshot`, `toolbox_repair`,
+  `toolbox_reconcile`, `toolbox_references`, and `toolbox_gc`, rewriting their
+  state/reference logic for the new schema.
+- [ ] Keep shared runtime-environment functionality used by workflow Python and
+  JavaScript. Toolbox environment replacement must not remove those consumers.
+
+## Replacement contracts
+
+### Cross-project vocabulary and scope
+
+| Term | Meaning |
+| --- | --- |
+| Tool runtime | Configured hosting/execution target to which a client connects |
+| Toolbox | One deployed tool namespace governed by one `ToolboxDefinitionSpec` |
+| Package environment | Verified dependency environment inside the tool runtime |
+| Environment template | Parent-owned immutable dependency base |
+| Resolved profile | Parent-internal grouping by package environment and sandbox policy |
+
+Environment templates and resolved profiles are implementation/deployment
+details. They are not tool categories, user-saved runtime selections, or
+consumer-visible toolbox identities.
+
+Atomicity, revision compare-and-swap, and advertised-name uniqueness are scoped
+to one `toolbox_id` on one tool runtime. Multiple toolbox references remain
+concurrently executable. Routing always includes toolbox identity, and the same
+advertised tool name is valid in different toolboxes.
+
+### Complete toolbox definition
+
+Add a typed `ToolboxDefinitionSpec` in
+`src/hosting/toolbox/bundle_models.py`. It replaces all incremental register and
+unregister payloads.
 
 ```python
-HostedOperationRef = {
-    "contract": "hosting.operation_ref",
-    "operation_id": "opaque-parent-id",
-    "request_id": "caller-idempotency-id",
-    "execution_kind": "toolbox|workflow_python|workflow_js",
-    "selector": {"kind": "toolbox_id|engine_id", "id": "..."},
-    "fingerprint": "sha256:<hex>",
-    "receipt_namespace": "...",
-}
-
-HostedOperationStatus = {
-    "contract": "hosting.operation_status",
-    "api_status": "ok|error",
-    "operation": HostedOperationRef,
-    "lifecycle": "queued|running|terminal_success|terminal_failure|terminal_cancellation|interrupted_before_dispatch|interrupted_after_dispatch_unknown|forgotten|unknown_outside_retention|idempotency_conflict",
-    "request_id": "...",
-    "created_at_ms": 0,
-    "updated_at_ms": 0,
-    "dispatch_claimed_at_ms": None,
-    "terminal_at_ms": None,
-    "reason": None,
-    "result": None,
-    "result_ref": None,
-    "result_omission": None,
+ToolboxDefinitionSpec = {
+    "contract": "hosting.toolbox.definition",
+    "toolbox_id": "workspace-tools",
+    "expected_revision": "sha256:<current-definition-hash>",  # null only on create
+    "auto_requests": [ToolboxAutoAssignmentRequestV2],
+    "manual_requests": [ToolboxManualAssignmentRequestV2],
+    "intrinsics": {
+        "names": ["symbolic_algebra"],
+        "include_guides": True,
+        "sandbox_policy": {...},
+    },
 }
 ```
 
-All free-form reasons, selectors, metadata, and returned payloads must have
-documented byte/count limits. Fingerprints are computed over canonical,
-family-specific dispatch inputs and policy, never callback bindings,
-credentials, or other ephemeral transport data.
+Continue using the current auto/manual stable-key rules unless Phase 0 finds a
+real collision in the consumer. Reject duplicate stable keys, duplicate tool
+names across profiles, conflicting staged paths/content, and contradictory
+profiles before environment work starts.
 
-## Itemized execution plan
+Remove `python_executable` from consumer toolbox definitions. The host chooses
+the runtime interpreter and records its runtime/ABI identity. The tool runtime
+is selected by the configured host connection/`HostedToolBoxRef`, not by a
+field inside the toolbox definition.
 
-### Phase 0 - Contract, threat model, and breaking-change freeze
+### Per-request dependency intent
 
-- [x] **P0-01** Resolve D-01 through D-12 with the consumer and add the final
-  models/enums to a parent-owned module (suggested:
-  `src/hosting/operation_contract.py`).
-- [x] **P0-02** Document the authorization matrix for operation status, cancel,
-  artifact retrieval, session renew/revoke, administrative inspection, and
-  forced close.
-- [x] **P0-03** Define per-family canonical fingerprint inputs and test vectors.
-- [x] **P0-04** Define the storage-neutral repository interface, JSON schema
-  evolution, corruption behavior, backup policy, and process-locking
-  assumptions.
-- [x] **P0-05** Add contract serialization, validation, size-bound, and malformed
-  input tests.
-- [x] **P0-06** Create the entry in
-  `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with change IDs, affected
-  methods and shapes, old-to-new call examples, persisted-ledger cutoff steps,
-  required dependent changes, the parent base commit, and a release-commit
-  placeholder for the committer to fill because this task remains staged.
+Replace `SandboxProfileSpec.environment_name` and `required_imports` with a
+dependency request attached to each auto/manual request:
 
-Exit gate: contract examples round-trip through typed models and the consumer
-agrees it can update immediately from the breaking-change entry. The entry must
-land with or before the first breaking implementation commit.
+```python
+ToolboxDependencyRequest = {
+    "mode": "auto|template|custom",
+    "template_id": None,
+    "declared_imports": [],
+    "package_requirements": [],
+}
+```
 
-### Phase 1 - Generic operation repository and read facade
+- `auto` scans source and chooses the smallest compatible template.
+- `template` requires the named immutable template and verifies coverage.
+- `custom` uses a selected base template plus explicit package requirements.
+- `declared_imports` handles dynamic/optional imports that static analysis
+  cannot prove.
+- `package_requirements` contains installable distribution requirements and is
+  never inferred merely by copying an import name.
 
-- [x] **P1-01** Generalize `ToolboxExecutionReceiptLedger` behind a repository
-  interface supporting prepare, dispatch claim, terminal transition,
-  pre-dispatch cancel, lookup by `(owner_actor_id, namespace, request_id)`, lookup by
-  `operation_id`, wait, and prune.
-- [x] **P1-02** Mint and persist `operation_id` during the first prepare; return
-  the same reference for attach, replay, conflict, and tombstone responses.
-- [x] **P1-03** Add one status normalizer that emits
-  `hosting.operation_status`; replace the existing toolbox status and receipt
-  payload shape rather than preserving two representations.
-- [x] **P1-04** Add daemon commands and channel methods
-  `hosted_operation_status(ref=...)` and
-  `hosted_operation_cancel(ref=..., reason=...)`, including auth/policy/CLI
-  routing where appropriate.
-- [x] **P1-05** Make generic lookup resolve the stored selector and owner. Reject
-  altered refs, cross-owner access, execution-kind mismatch, and unknown
-  operation IDs without probing workers.
-- [x] **P1-06** Add toolbox facade tests for new, attach, replay, conflict,
-  pre-dispatch cancel, post-dispatch cancel, forgotten, unknown, and interrupted
-  states.
-- [x] **P1-07** Remove the superseded toolbox status/cancel signatures and update
-  all parent call sites and tests in the same change. Do not retain aliases or
-  `TypeError` fallbacks.
+Sandbox policy remains per request. The host derives the resolved profile ID
+from canonical sandbox policy plus resolved environment identity. Remove
+consumer-supplied `profile_id` so contradictory profile aliases cannot group
+together.
 
-Exit gate: toolbox uses one ref for status/cancel, superseded APIs are absent,
-and the corresponding breaking-change entry is complete.
+### Plan and apply APIs
 
-### Phase 2 - Durable workflow Python and JavaScript integration
+The consumer flow is:
 
-- [x] **P2-01** Define stable workflow namespaces/selectors from the resolved
-  runtime registration. Do not require a caller to reconstruct
-  `environment_key`, profile, or engine ID for later status/cancel.
-- [x] **P2-02** Wrap workflow Python execute with repository prepare before pool
-  submission, dispatch claim immediately before worker dispatch, and terminal
-  persistence on every return/error/cancel path.
-- [x] **P2-03** Apply the same wrapper to workflow JavaScript execute.
-- [x] **P2-04** Include runtime, action, pinned-instance, request body, effective
-  sandbox policy, and other dispatch-affecting inputs in family-specific
-  fingerprints. Exclude callback bindings and secrets.
-- [x] **P2-05** Route generic status and cancel from stored operation identity to
-  the correct pool/runtime. Persist cancellation races atomically and preserve
-  the existing fail-closed `interrupted_after_dispatch_unknown` behavior.
-- [x] **P2-06** Ensure attach/replay never starts an environment, worker, or
-  sandbox. Preserve the existing local application-journal boundary.
-- [x] **P2-07** Add parameterized parity tests across toolbox, workflow Python,
-  and workflow JavaScript for every lifecycle branch and fingerprint conflict.
-- [x] **P2-08** Add service-recreation tests proving workflow terminal replay,
-  pre-dispatch recovery, post-dispatch uncertainty, and cancel correctness
-  without worker startup.
+```python
+plan = toolbox.plan_definition(definition)
+approval = None
+if plan["user_projection"]["state"] == "approval_required":
+    approval = toolbox.approve_definition_plan(plan_id=plan["plan_id"])
 
-Exit gate: all three execution families return the same status shape and
-generic status/cancel require only the operation ref.
+started = toolbox.apply_definition(
+    definition=definition,
+    plan_id=plan["plan_id"],
+    request_id=stable_request_id,
+    dependency_approval_ref=(approval or {}).get("approval_ref"),
+)
+operation_ref = started["operation"]
+```
 
-### Phase 3 - Artifact-backed terminal results
+Planning returns detected imports, import evidence, mapped distributions,
+selected templates, custom deltas, unresolved imports, policy denials, profile
+diffs, and whether apply can proceed. Planning does not write logical toolbox
+state, spawn workers, or install packages.
 
-- [x] **P3-01** Add a dedicated terminal-result artifact manager or extend
-  `HostedArtifactManager` with bounded byte writes, digest verification, TTL,
-  ownership metadata, and safe deletion. Do not store arbitrary worker paths.
-- [x] **P3-02** On terminal persistence, redact first, serialize canonically,
-  compute digest/size, then either store inline, write an allowed artifact, or
-  emit `result_omission`. Never call an omission a reference.
-- [x] **P3-03** Define `hosting.result_ref` containing an opaque
-  artifact ID, digest, size, media type, and expiry. Avoid exposing host paths.
-- [x] **P3-04** Add an authorization-checked dereference endpoint/channel method
-  that verifies operation ownership, retention, size, and digest before
-  returning bounded bytes/content.
-- [x] **P3-05** Couple artifact pruning to receipt/tombstone retention with a
-  deterministic orphan cleanup pass.
-- [x] **P3-06** Test allowed retention, denied retention, oversized artifact
-  limits, credential redaction, tampering, expiry, cross-actor denial, missing
-  files, digest mismatch, and cleanup.
+`approve_definition_plan()` is authenticated parent behavior, not a client
+assertion. If policy permits approval, it returns an opaque parent-minted
+`ToolboxDependencyApprovalRef`. The parent stores and validates its binding to
+the authenticated actor/authority, exact toolbox/plan/definition, exact custom
+delta digest, catalog and package-policy revisions, decision, and expiry.
+Apply accepts no approval Boolean. It rejects expired, cross-actor, wrong-plan,
+changed-delta, changed-policy, and changed-catalog references without exposing
+another actor's approval state.
 
-Exit gate: every non-inline terminal result is either actually retrievable by
-its authorized owner or explicitly marked digest-only.
+Apply revalidates the definition hash, expected active revision, catalog,
+policy, and approval reference before dispatch. It returns immediately using
+the existing `hosting.operation_status` shape and a parent-minted
+`HostedOperationRef`. Extend `HostedExecutionKind` with
+`toolbox_definition_apply`, use a `toolbox_id` selector, and include all
+dispatch-affecting definition/plan/approval identities in its fingerprint.
 
-### Phase 4 - Existing JSON repository evolution
+Extend the strict hosted-operation status with optional bounded progress for
+apply: stable phase/code, completed/total units where meaningful, update time,
+and user-safe summary. Status, reconnect recovery, result retrieval, and retry
+use the existing generic hosted-operation APIs and repository.
 
-- [x] **P4-01** Keep the atomic JSON checkpoint as the production backend and
-  implement the Phase 1 repository interface over it.
-- [x] **P4-02** Evolve the bounded JSON schema to store `operation_id`, execution
-  kind, owner identity, selector, lifecycle timestamps, terminal
-  payload/ref/omission, and tombstones.
-- [x] **P4-03** Maintain in-memory indexes for
-  `(owner_actor_id, namespace, request_id)` and
-  `operation_id`, rebuilt and validated during ledger load, so generic lookup
-  does not require worker discovery or repeated full scans.
-- [x] **P4-04** Preserve the existing lock plus write-temp/fsync/atomic-replace
-  transition model so concurrent callers cannot obtain two dispatch
-  permissions.
-- [x] **P4-05** Implement deterministic age/count pruning ordered by timestamp
-  then stable ID. Keep tombstones long enough to prevent unsafe re-dispatch.
-- [x] **P4-06** Reject a legacy schema without reading, translating, deleting,
-  or overwriting it. Emit a bounded diagnostic pointing to the documented
-  archival/cutover procedure.
-- [x] **P4-07** Provide an explicit operator cutover command that first verifies
-  the resolved ledger path and requires acknowledgement that no protected
-  operation remains inside its replay window, then archives rather than deletes
-  the legacy file.
-- [x] **P4-08** Fail closed on invalid schema, interrupted cutover, or unreadable
-  checkpoint. Ledger initialization must not start workers or sandboxes.
-- [x] **P4-09** Add concurrency, interrupted-write, deterministic pruning,
-  legacy-schema rejection, cutover archival, corrupt JSON, and index-rebuild
-  tests. Keep one daemon restart smoke test; use repository fixtures for the
-  rest.
+Cancellation is allowed while queued and during pre-publication build/stage/
+warmup when candidate cleanup is safe. Publication is a non-cancellable commit
+boundary. Cancellation after publication begins must not roll back the active
+definition; the operation completes draining/cleanup idempotently.
 
-Exit gate: the evolved JSON backend passes the repository contract suite,
-rejects rather than adapts legacy data, remains bounded, and preserves the
-current atomic receipt guarantees.
+### Authoritative read API
 
-### Phase 5 - Stable Host Capability provider identity
+Add `toolbox.get_definition()` / `toolbox-get-definition`. It returns the
+complete canonical active definition, active revision used by
+`expected_revision`, toolbox and tool-runtime identity, active tool inventory,
+bounded rollout state, and stable user-safe diagnostics.
 
-- [x] **P5-01** Add `provider_id` as a first-class field on
-  `HostCapabilitySession`, separate from `session_id`, and include it in public
-  provider descriptors and private persistence/transport shapes.
-- [x] **P5-02** Accept `provider_id` in daemon/channel registration. Reject a
-  missing ID and reject contradictory duplicates according
-  to the Phase 0 uniqueness rules.
-- [x] **P5-03** Update broker discovery, method resolution, callback context,
-  approvals, audit, list filters, close filters, upsert, toolbox providers, and
-  service-broker helpers to use `provider_id` semantically and `session_id` only
-  as the registration instance identity.
-- [x] **P5-04** Remove every fallback that derives `provider_id` from
-  `session_id`. Update built-in, toolbox, and service-broker constructors to
-  supply both identities explicitly.
-- [x] **P5-05** Add end-to-end tests proving distinct identities survive
-  registration, list, discovery, dispatch, approval, audit, filtered close, and
-  duplicate rejection.
+The read is actor-authorized and side-effect-free. It does not discover, start,
+repair, or reconcile workers. Revision-conflict responses direct the client to
+read again instead of embedding a potentially large stale definition.
 
-Exit gate: no code path treats `session_id` as `provider_id`, and missing
-`provider_id` fails validation.
+### Template administration and physical materialization
 
-### Phase 6 - Parent-owned approval callback lease
+Template control and package installation are separate responsibilities:
 
-- [x] **P6-01** Build `ApprovalCallbackLease` on the existing
-  `HostCapabilityApprovalCallbackRelay`, with idempotent, thread-safe close and
-  context-manager support.
-- [x] **P6-02** Let all Python/JavaScript execute, action-describe,
-  action-execute, pinned-instance execute, and stream-open channel methods
-  accept exactly one of `approval_requester`, `approval_requester_binding`, or
-  `approval_callback_lease`. Reject contradictory inputs and remove superseded
-  signatures instead of inspecting them dynamically.
-- [x] **P6-03** For a callable, bind before invoking the daemon and release
-  exactly once after a non-stream request returns or raises. For streams,
-  transfer ownership to the stream handle and release on terminal event,
-  explicit close/cancel, open failure, or channel shutdown.
-- [x] **P6-04** Ensure a pre-created lease can span multiple calls only when its
-  documented scope permits it; otherwise fail closed on scope mismatch.
-- [x] **P6-05** Persist/reuse logical callback IDs as decided in D-10 and test
-  allow-once idempotency under duplicate delivery.
-- [x] **P6-06** Add parity tests for direct callable versus pre-bound binding,
-  synchronous success/error/timeout, stream lifetime, double close, open
-  failure, disconnect, and callback exception.
+- An authenticated hosting administrator manages immutable template manifests
+  and lifecycle through daemon control-channel APIs. Normal toolbox consumers
+  may list/describe/select templates but cannot publish, mutate, deprecate, or
+  revoke them.
+- Control-channel requests carry template identity, immutable lock/manifests,
+  and approved package-artifact or repository references. They do not carry a
+  prebuilt venv, arbitrary host paths, or authority to run unrestricted pip.
+- The daemon-owned environment builder on the target tool runtime performs the
+  physical artifact download, local venv materialization, installation, receipt
+  verification, and import probes. The worker later performs ordinary Python
+  imports only from that verified local package environment.
+- Interactive or physical access to the target box is not required when the
+  daemon can reach policy-approved artifact sources. Air-gapped/offline hosts
+  require the locked artifacts to be preseeded through the host's approved
+  deployment/artifact channel; this is provisioning, not a toolbox-client
+  installation fallback.
+- Apply may lazily materialize a published template, and administrators may
+  prewarm it. Both paths use the same lock verification and content-addressed
+  cache and are observable as durable host operations where execution may be
+  long-running.
 
-Exit gate: consumer code no longer needs to construct/release approval relays,
-including for streams, and leak/double-release tests pass.
+### Required initial Python environments
 
-### Phase 7 - Explicit capability-session authority leases
+The parent release must ship two visible, parent-owned environment templates.
+Their stable logical names do not contain version suffixes:
 
-- [x] **P7-01** Replace the boolean with a validated lease model containing
-  authenticated `owner_authority_id`, nullable expiry, transport-loss policy,
-  authority-revocation policy, and request-terminal policy.
-- [x] **P7-02** Add authenticated renew and revoke commands and channel methods.
-  Keep renewal/revocation secrets process-local and out of public descriptors,
-  receipts, logs, and artifacts.
-- [x] **P7-03** Refactor disconnect cleanup to evaluate `on_transport_loss`
-  rather than `close_on_client_disconnect`; remove the boolean from registration
-  and session models.
-- [x] **P7-04** Wire operation terminal transitions to
-  `on_request_terminal=close`, authority revocation to the configured policy,
-  and expiry to deterministic cleanup. Make every close path idempotent and
-  audited with its cause.
-- [x] **P7-05** Define daemon-restart behavior. If sessions remain in-memory,
-  report them closed on daemon loss and do not promise survival; if persistence
-  is required later, make it a separate capability because callback bindings
-  may not be recoverable.
-- [x] **P7-06** Test transport loss with remaining actor connections, final
-  transport loss, retain-until-expiry, explicit renewal, expiry, authority
-  revocation, request terminal, races among close causes, and unauthorized
-  renew/revoke.
+1. `core` is the smallest supported Python execution template. It contains the
+   installed hosting/worker artifact and its required protocol, serialization,
+   validation, and sandbox-harness dependencies, but no optional mathematical,
+   data, document, network-client, or model package set. It is a useful public
+   template for standard-library-only toolbox functions, Python node modules
+   and snippets, and workflow helper workers whose declared imports fit it; it
+   is not merely a hidden bootstrap venv.
+2. `py-compute` contains the complete `core` dependency specification plus
+   pinned NumPy, SymPy, NumExpr, and every third-party import required to load
+   and execute the project built-ins. It is the standard compute-friendly
+   template and must run all shipped built-ins without a custom environment.
 
-Exit gate: transport attachment and authority lifetime are independently
-observable and enforceable.
+Logical template names remain stable. Template digest, complete lock digest,
+catalog revision, Python ABI, platform, parent worker artifact digest, and
+isolation version identify immutable revisions and invalidate materializations.
+The relationship between `core` and `py-compute` is dependency provenance, not
+physical venv cloning, shared `site-packages`, or runtime inheritance. Every
+resolved environment is independently materialized and verified from its
+complete lock.
 
-### Phase 8 - Breaking release and dependent-project handoff
+Each template is paired by default with the compute-only sandbox policy:
+sandbox enforcement enabled, no filesystem rules or artifact roots, subprocess
+disabled, network disabled, and all brokered filesystem/HTTP/subprocess
+capabilities disabled. Package availability conveys no sandbox or host-API
+authority. If the target platform cannot enforce this policy, the host must
+refuse to advertise or launch either template rather than silently weaken it.
 
-- [x] **P8-01** Remove superseded toolbox/workflow status, cancel, callback,
-  provider-identity, and lifetime signatures in the same release that adds the
-  replacement contract. Do not advertise parallel old/new capabilities.
-- [x] **P8-02** Update parent hosting documentation and
-  `HOSTING_CLIENT_BREAKING_CHANGES.md` with final method signatures, lifecycle
-  mapping, retention behavior, ledger cutover procedure, and exact parent
-  commit.
-- [x] **P8-03** Run focused parent tests plus one real-daemon integration smoke
-  covering execute -> ref -> status -> cancel/replay -> artifact retrieval.
-- [x] **P8-04** Publish a dependent-project adoption checklist: repin to the
-  recorded commit, switch to typed refs/status, use callback leases, provide
-  explicit provider IDs and authority leases, and delete signature inspection,
-  `TypeError` fallbacks, selector dictionaries, local callback relays, local
-  Host Capability session fallback, and family-specific status/cancel adapters.
-- [x] **P8-05** Update the dependent project promptly and run its complete
-  recovery, approval, capability-session, and workflow suites against the new
-  parent pin.
-- [x] **P8-06** Define rollback as a source-and-data rollback to the previous
-  parent commit and its archived ledger. Do not implement runtime API fallback
-  or dual-format ledger support.
+The exact template manifests/locks and compute-only policy are shipped as
+parent project resources and referenced from host project configuration. Daemon
+startup validates and materializes/prewarms both before reporting standard
+Python deployment readiness. Missing, stale, or unverifiable required
+materializations produce degraded/not-ready host status with stable
+diagnostics. Physical-box access is not required after daemon administration is
+configured.
 
-Exit gate: the consumer passes its recovery/approval/session tests against the
-new parent pin, superseded parent APIs are absent, and no compatibility adapter
-was added.
+`auto` dependency planning selects the smallest compatible environment: `core`
+for standard-library-only work, then `py-compute`, then another allowed
+parent-owned template, and only then an approved custom environment. Planning
+unions imports and packages from user code and selected built-ins. A selected
+tool import that is absent from the resolved environment is a planning/build
+failure, never a post-rollout worker failure. Custom environments use a
+complete approved resolved lock and are independently materialized; they do not
+inherit a live template venv.
 
-Verification evidence (2026-08-04):
+The local model worker environment is a separate exclusive runtime, not an
+environment template. It is assembled from the project's `pyproject.toml` lock
+and the configured optional model packages required to run local `mp13-engine`
+models. Its preinstalled activation path is an internal model-worker launch
+detail. Toolbox, Python node, snippet, helper, and custom-environment requests
+must not select it, use it as a base, receive its interpreter path, or execute
+arbitrary code through it.
 
-- Parent implementation release: `31a5b123fe4a7e554b1cf55cbb1f4ad8956bb85b`.
-- Real-daemon durable execute/replay/cancel/result/restart smoke:
-  `tests/test_hosting_operation_service.py` (`e4b3c01`).
-- Parent complete suite: 939 passed, 3 skipped.
-- Dependent adoption release: `b7c084eb` in `mp13-docs`; its focused recovery,
-  contract, approval/session, and Python/JavaScript workflow matrices passed.
-  Its complete suite produced 2,463 passed and 244 skipped plus one unrelated
-  queue heartbeat/completion ordering flake, which passed immediately in
-  isolation.
+Expose only a bounded read-only model-runtime projection through model/host
+status APIs: readiness, Python/runtime compatibility, engine artifact and lock
+digests, configured optional-package set, materialization revision, and stable
+diagnostics. Model operations are the only execution route for this runtime and
+retain their own authorization and resource policy. Generic environment APIs
+must not turn the convenience of a preinstalled model venv into execution
+authority.
 
-## Acceptance test matrix
+Omitting sandbox policy from a toolbox or compatible Python worker request
+selects compute-only. Any wider filesystem, network, brokered I/O, artifact,
+host-API, or subprocess policy must be explicit, validated separately from
+dependencies, and authorized by host policy.
 
-- [x] A single typed operation ref works for execute attachment/replay, status,
-  and cancel for all three families.
-- [x] The same request ID plus fingerprint attaches or replays; a changed
-  fingerprint returns `idempotency_conflict` without dispatch.
-- [x] Every lifecycle uses the same bounded status shape, digest spelling,
-  `size_bytes` field, timestamps, and reason limits.
-- [x] Status/cancel uses stored identity and does not require or trust
-  reconstructed selector kwargs.
-- [x] Retained oversized results are retrievable and authorized; non-retained
-  results are explicit digest-only omissions.
-- [x] Transitions remain correct under concurrent reads, cancellation races,
-  service recreation, pruning, legacy-schema rejection, and corruption
-  handling.
-- [x] `provider_id` and `session_id` remain distinct through registration,
-  discovery, dispatch, approval, audit, list, and close.
-- [x] Direct and pre-bound approval callbacks behave identically; stream leases
-  live until terminal/close and every binding releases exactly once.
-- [x] Transport loss, expiry, request completion, and authority revocation each
-  follow their explicit lease policy.
-- [x] Receipt/repository load and status/replay do not start workers or
-  sandboxes.
-- [x] Tests for superseded signatures are removed or rewritten, and tests assert
-  that unsupported legacy inputs fail closed.
+### User-safe and operator projections
+
+Plan, read, apply-progress, and terminal responses include a stable
+`user_projection` suitable for `ready`, `setup_needed`, `approval_required`,
+`deploying`, and `deployment_failed`. Diagnostics contain stable codes,
+bounded summaries, affected tool keys where safe, and remediation categories.
+
+Raw profile IDs, engine IDs, package/filesystem paths, environment keys,
+installer output, and internal locks are excluded. They may appear only in a
+separately authorized bounded `operator_details` projection or administrative
+review API.
+
+## Itemized implementation plan
+
+### Phase 0 - Freeze code-derived contracts and breaking handoff
+
+- [ ] **P0-01** Inventory current parent and `mp13-docs` uses of auto, manual,
+  intrinsic, environment-description, and install APIs. Record every method,
+  command, payload field, and persisted field that will disappear.
+- [ ] **P0-02** Inventory imports used by actual hosted functions and intrinsics.
+  Use that inventory, not speculative package groupings, to choose the first
+  template set and package locks.
+- [ ] **P0-03** Freeze `ToolboxDefinitionSpec`, version-2 request models,
+  `ToolboxDependencyRequest`, template descriptors, plan/apply results, strict
+  validation limits, and error codes.
+- [ ] **P0-04** Freeze canonical hashes for definition revision, resolved
+  profile identity, environment identity, bundle manifest, template lock, and
+  custom lock. Add cross-process test vectors.
+- [ ] **P0-05** Decide package index/artifact policy, online build approval,
+  template administration roles, remote control-channel management methods,
+  signed/immutable manifest and artifact requirements, offline artifact
+  preseeding, supported Python ABI/platform combinations, build/prewarm timeout,
+  lifecycle/revocation behavior, audit, and cache retention. Physical box login
+  must not be part of the normal management contract.
+- [ ] **P0-06** Freeze `ToolboxDependencyApprovalRef`: minting authority,
+  authenticated actor binding, plan/definition/delta/policy/catalog scope,
+  expiry, revocation, retry/consumption behavior, audit fields, and
+  unauthorized-response behavior. Prohibit Boolean approval authority.
+- [ ] **P0-07** Freeze authoritative `get_definition()` snapshot semantics,
+  source visibility/size limits, revision-conflict recovery, and side-effect-
+  free behavior.
+- [ ] **P0-08** Extend the existing hosted-operation contract with
+  `toolbox_definition_apply`, bounded progress, request recovery, terminal
+  diagnostics, and the pre-publication/post-publication cancellation boundary.
+- [ ] **P0-09** Freeze per-toolbox scope: atomicity and name uniqueness are per
+  toolbox; duplicate names across toolboxes are valid; routing includes
+  `toolbox_id`; multiple toolbox references remain concurrent.
+- [ ] **P0-10** Freeze the cross-project vocabulary and user-safe/operator
+  projection split defined above.
+- [ ] **P0-11** Create a durable parent-owned public contract document,
+  `src/hosting/HOSTED_TOOLBOX_CONTRACT.md`, covering typed models, strict field
+  validation, actor authorization, plan/approval/read/apply semantics, durable
+  operation behavior, progress/cancellation, per-toolbox scope, user/operator
+  projections, retention, and error codes. This document is the normative
+  specification for the parent and dependent projects. Write only the target
+  supported contract; do not include legacy names, migration notes, old state
+  formats, historical references, or compatibility language.
+- [ ] **P0-12** Add migration change set `HOSTED-TOOLBOX-DEFINITION` to
+  `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` with removed APIs/fields,
+  old-to-new examples, state archival procedure, parent baseline, release
+  placeholder, hosted-operation extension, approval-reference flow,
+  authoritative read contract, vocabulary/scope rules, projection contract,
+  exact dependent-project requirements, and a link to the durable contract.
+  Treat this entry as the adoption delta and release handoff, not as the
+  normative contract specification.
+- [ ] **P0-13** Freeze the initial environment catalog contract: stable `core`
+  and `py-compute` names without version suffixes, shipped complete manifests
+  and locks, immutable revision identity, project-config keys, compute-only
+  sandbox policy, supported-platform enforcement requirements, startup
+  validation/prewarm behavior, readiness diagnostics, smallest-compatible
+  selection rules, and authorization required to widen sandbox capabilities.
+- [ ] **P0-14** Freeze cross-worker use of `core`: standard-library-only toolbox
+  functions, `workflow_python(profile=node)` modules and snippets, and workflow
+  helper workers may resolve to it, while each retains its own execution
+  contract, import allowlist, sandbox policy, pool identity, and lifecycle.
+- [ ] **P0-15** Freeze the model-runtime boundary: derive its complete lock from
+  `pyproject.toml` plus the configured optional model package set; keep it
+  exclusive to model operations; expose bounded readiness/capability metadata
+  but no venv path, generic interpreter selection, arbitrary-code route, or use
+  as a template/custom-environment base.
+
+Exit gate: the breaking-change entry and typed examples cover every current
+call path found in the inventory.
+
+### Phase 1 - Template catalog and dependency analysis
+
+- [ ] **P1-01** Add a parent-owned `ToolboxEnvironmentTemplateSpec` containing
+  immutable template ID, Python/runtime constraints, platform constraints,
+  locked distributions, exposed import roots, lock digest, and provenance.
+- [ ] **P1-02** Add a reviewed import-to-distribution catalog supporting aliases,
+  package extras, and version constraints. Seed it only from Phase 0 inventory;
+  likely candidates visible in current code/tests include calculator/symbolic,
+  NumPy/SymPy, and HTTP packages.
+- [ ] **P1-03** Move intrinsic dependency knowledge out of
+  `SandboxProfileSpec.intrinsics_profile_id()` and into dependency-only
+  intrinsic registry metadata that can be read on `core` without importing
+  implementations. Remove its hard-coded calculator/symbolic branching,
+  eliminate eager optional-package loading during registry inspection, and
+  declare and pin the currently undeclared SymPy requirement.
+- [ ] **P1-04** Add an AST analyzer over the existing `ToolboxBundleFile`
+  contents. Classify standard-library, local staged modules, parent runtime,
+  known third-party, declared dynamic/optional, and unresolved imports.
+- [ ] **P1-05** Resolve source evidence plus explicit declarations into
+  distribution requirements. Reject incompatible declarations and unresolved
+  required imports with file/line diagnostics.
+- [ ] **P1-06** Select the smallest allowed template covering the complete
+  resolved requirement set. If none matches, produce a custom delta from an
+  allowed base template.
+- [ ] **P1-07** Validate requested templates and custom packages against runtime,
+  platform, package allow/deny policy, index policy, and intrinsic requirements.
+- [ ] **P1-08** Add actor-authorized template list/describe APIs for consumers
+  and operator-authorized publish/deprecate/revoke APIs over the daemon control
+  channel. Publishing accepts immutable lock/manifests and approved artifact
+  references, never a mutable package list bound to an existing template ID.
+- [ ] **P1-09** Add an operator prewarm/materialize operation that executes on
+  the target runtime host and returns a durable operation ref with progress and
+  terminal verification diagnostics. Apply may invoke the same builder lazily.
+- [ ] **P1-10** Add strict tests for relative/local imports, alias mappings such
+  as import name versus distribution name, optional imports, dynamic imports,
+  duplicate staged paths, intrinsic requirements, role separation, immutable
+  publish conflicts, remote management, and offline artifact availability.
+- [ ] **P1-11** Add shipped `core` and `py-compute` descriptors and complete
+  immutable locks plus the compute-only sandbox policy preset. Materialize and
+  probe both during normal host setup, advertise only verified templates, make
+  the planner choose the smallest compatible template, and reject package
+  metadata that attempts to grant sandbox capabilities.
+- [ ] **P1-12** Use the same template resolver and materialization receipts for
+  toolbox, Python node, snippet, and helper worker classes without merging their
+  worker processes or public contracts. Probe standard-library execution on
+  `core` and every shipped built-in on `py-compute` in clean environments.
+- [ ] **P1-13** Add the read-only model-runtime status projection and enforce
+  that generic template planning, custom environment building, Python worker
+  launch, and control-channel requests cannot select or reveal the exclusive
+  model environment. Test denial even when its venv is already installed and
+  healthy.
+
+Exit gate: the same source/metadata/catalog inputs produce the same resolved
+environment request and diagnostics without starting a worker.
+
+### Phase 2 - Toolbox-specific hermetic environment builder
+
+- [ ] **P2-01** Split toolbox-specific environment behavior from the shared
+  runtime environment code in `src/hosting/toolbox/environment.py`. Preserve or
+  relocate primitives still used by `RuntimeEnvironmentManager` and workflow
+  Python/JavaScript.
+- [ ] **P2-02** Replace toolbox environment-description lookup with a resolved
+  template/custom-lock input. Remove environment-name inheritance from toolbox
+  environment identity.
+- [ ] **P2-03** Derive toolbox `venv_key` from runtime/ABI/platform identity,
+  immutable template lock digest, optional custom resolved-lock digest, and
+  isolation policy. Do not include each function's raw import subset.
+- [ ] **P2-04** Create toolbox venvs without `system_site_packages`; ensure pip
+  or the selected installer exists inside the build environment explicitly.
+- [ ] **P2-05** Remove `runtime_python_executable()` bootstrap fallback for
+  toolbox executors. Do not alter workflow fallback behavior unless separately
+  required by workflow contracts.
+- [ ] **P2-06** On the target runtime host, materialize built-in templates from
+  policy-approved locked artifacts and resolve, lock, install, and receipt-
+  verify approved custom deltas before worker spawn. Never accept a client-
+  supplied venv or execute installation on the dependent-project machine.
+- [ ] **P2-07** Run import probes with the final environment interpreter for all
+  resolved import roots before staging a candidate worker.
+- [ ] **P2-08** Publish a cache entry only after lock, receipt, and import-probe
+  verification. Quarantine partial/failed builds.
+- [ ] **P2-09** Deduplicate concurrent builds by environment key using a
+  process-safe lock. Track references and defer deletion to GC with a grace
+  period instead of deleting immediately in mutation failure paths.
+- [ ] **P2-10** Materialize and verify derived environments from the complete
+  base-plus-delta resolved lock. Prove that they do not read or inherit another
+  venv's `site-packages`, and report required-base readiness during daemon
+  startup/configuration checks.
+
+Exit gate: no toolbox worker can start with ambient host packages, a bootstrap
+interpreter, an unverified lock, or a failed import probe.
+
+### Phase 3 - Definition planner and resolved profile model
+
+- [ ] **P3-01** Add strict `ToolboxDefinitionSpec` parsing and canonicalization
+  to `bundle_models.py`; reject unknown version-1 profile/dependency fields.
+- [ ] **P3-02** Replace public `SandboxProfileSpec` use with an internal
+  `ResolvedToolboxProfileSpec` containing host-derived profile ID, resolved
+  environment key/lock digest, canonical sandbox policy, and assigned tool keys.
+- [ ] **P3-03** Group requests only after dependency resolution. Functions with
+  different import subsets share a profile when the resolved environment and
+  sandbox policy are identical.
+- [ ] **P3-04** Validate advertised tool names as unique within one toolbox
+  definition before grouping so `_route_toolbox_registration()` cannot face a
+  legitimate duplicate route. Duplicate names in different toolboxes are
+  valid and must not be compared.
+- [ ] **P3-05** Continue producing `ToolboxBundleSpec`, but set
+  `dependency_lock_hash` from the resolved environment and serialize the new
+  resolved profile shape into the manifest.
+- [ ] **P3-06** Compare proposed profiles with persisted active profiles by
+  manifest hash, environment key, and policy digest. Classify each as reused,
+  added, replaced, or removed.
+- [ ] **P3-07** Persist bounded expiring plans keyed by `plan_id`, definition
+  hash, expected revision, catalog revision, and package-policy revision.
+
+Exit gate: planning identifies unchanged profiles without staging, spawning, or
+changing registrations.
+
+### Phase 4 - Candidate rollout and atomic active routing
+
+- [ ] **P4-01** Extend `HostedExecutionKind`, hosted-operation fingerprinting,
+  repository metadata, status normalization, request recovery, and cancellation
+  dispatch for durable `toolbox_definition_apply` operations. Add bounded
+  persisted progress checkpoints for validation, environment build, staging,
+  warmup, publication, draining, and cleanup.
+- [ ] **P4-02** Refactor `ToolboxSandboxOrchestrator` to accept resolved profile
+  assignments and skip staging/spawn for profiles classified as reused.
+- [ ] **P4-03** Spawn added/replaced workers as non-routable candidates. Add an
+  explicit candidate/active registration state or ensure routing never scans
+  candidate registrations.
+- [ ] **P4-04** Reuse `_ensure_toolbox_assignments_ready()` to verify RPC
+  readiness, exact expected tool inventory, environment receipt status, and
+  candidate metadata before publication.
+- [ ] **P4-05** Persist an explicit active `tool_routes` map from tool name to
+  profile ID/engine ID in toolbox state. Change execute/describe/gate/cancel
+  routing to use that map instead of scanning all live registrations.
+- [ ] **P4-06** Publish definition revision, active profiles, and `tool_routes`
+  in one state transition. Only after publication may candidate registrations
+  become active routes.
+- [ ] **P4-07** Treat publication as the operation's non-cancellable commit
+  boundary. Persist progress before and after it so restart/cancel handling
+  cannot mistake a committed revision for a candidate.
+- [ ] **P4-08** Drain and retire replaced/removed engines after publication.
+  Preserve `non_restartable` metadata and cancellation policy for in-flight
+  work.
+- [ ] **P4-09** If environment build, staging, spawn, readiness, inventory, or
+  publication fails, retire candidates and leave old active routes untouched.
+- [ ] **P4-10** Treat an empty definition as a valid active revision with no
+  routes. Do not delete all toolbox history during apply.
+- [ ] **P4-11** Persist terminal apply results through the hosted-operation
+  repository. Put stable user-safe diagnostics in the normal result and expose
+  raw deployment details only through authorized operator details.
+
+Exit gate: execution sees either the complete old routing map or the complete
+new routing map and can never encounter candidate/active ambiguity.
+
+### Phase 5 - Version-2 state and transaction safety
+
+- [ ] **P5-01** Replace version-1 toolbox state with a strict version-2 schema:
+  active definition revision, canonical desired definition, resolved profiles,
+  explicit tool routes, bounded rollout history, and environment references.
+- [ ] **P5-02** Add a toolbox-specific strict reader. Invalid JSON, wrong schema,
+  wrong version, and digest mismatch must fail closed; do not inherit
+  `_read_json()` behavior that returns empty defaults on corruption.
+- [ ] **P5-03** Replace direct toolbox state writes with temp-file write, flush,
+  fsync, and atomic replace under a process-safe file lock.
+- [ ] **P5-04** Keep the current per-toolbox in-process lock for local
+  serialization, and add expected-revision compare-and-swap inside the
+  process-safe state transaction.
+- [ ] **P5-05** Write candidate intent only if restart recovery needs it; never
+  expose candidate routes as active. Define recovery for crashes before publish,
+  during atomic replace, and after publish but before old-worker retirement.
+- [ ] **P5-06** Reject version-1 `toolbox_sandboxes.json` without translation.
+  Add an operator command that validates the exact path and archives version-1
+  state/bundles before initializing version 2.
+- [ ] **P5-07** Define rollback as code rollback plus restoration of matching
+  archived state. Do not implement dual-schema reads or writes.
+
+Exit gate: corruption and concurrent writers cannot silently reset, merge, or
+partially publish toolbox state.
+
+### Phase 6 - Replace service, transport, client, and admin paths
+
+- [ ] **P6-01** Add service methods `toolbox_get_definition()`,
+  `toolbox_plan_definition()`, `toolbox_approve_definition_plan()`, and
+  `toolbox_apply_definition()` in `toolbox_runtime.py`. Consolidate mutation
+  logic there and route apply through the hosted-operation repository.
+- [ ] **P6-02** Add `toolbox-get-definition`, `toolbox-plan-definition`,
+  `toolbox-approve-definition-plan`, and `toolbox-apply-definition` to daemon
+  dispatch, subprocess CLI dispatch, `EngineHostControlChannel`, authorization,
+  audit, and policy routing. Add template list/describe for authorized consumers
+  and template publish/deprecate/revoke/prewarm for hosting administrators over
+  the same control transport, with distinct role/policy checks.
+- [ ] **P6-03** Add `HostedToolBoxRef.get_definition()`, `plan_definition()`,
+  `approve_definition_plan()`, and `apply_definition()`. Apply returns a durable
+  operation status/ref; observation and recovery use generic hosted-operation
+  methods. Expose template list/describe as read-only client helpers; keep
+  publication/lifecycle/prewarm on an administrative channel surface. Keep
+  execution/describe/gate/cancel methods unchanged except for their internal
+  use of active routes.
+- [ ] **P6-04** Remove `register_auto_callable`, `register_python_callable`,
+  `register_manual_tool`, intrinsic register methods, every unregister/remove
+  method, aliases, `mutate()`, `PendingHostedToolboxRef`, and
+  `resolve_sandbox()`.
+- [ ] **P6-05** Remove service/channel/daemon/CLI/auth/policy support for
+  `toolbox-register-*` and `toolbox-unregister-*` commands.
+- [ ] **P6-06** Remove hosted-ref and transport APIs for environment list,
+  upsert, clone, resolve, apply, realize, sync, install planning, lock,
+  resolution, verification, execution, and receipt verification.
+- [ ] **P6-07** Remove `ToolboxEnvironmentMixin` methods and version-1
+  environment-description state once workflow/shared callers are proven not to
+  depend on them.
+- [ ] **P6-08** Remove `environment_name`, `required_imports`, consumer
+  `profile_id`, and toolbox `python_executable` from runtime payloads and tests.
+  Reject these legacy fields rather than ignoring them.
+- [ ] **P6-09** Update hosted chat/demo setup to submit one complete definition;
+  update teardown to apply an empty definition instead of unregistering tools.
+- [ ] **P6-10** Rewrite consistency, review, repair, reconcile, references, and
+  GC against active revisions/routes and candidate/retired registrations.
+- [ ] **P6-11** Add host project configuration for the exact required standard
+  base template and compute-only policy IDs, startup materialization/prewarm,
+  readiness reporting, and administrative replacement with a new immutable
+  version. Do not expose these settings as mutable per-toolbox environment
+  descriptions.
+
+Exit gate: repository search finds no old toolbox mutation command, public
+method, environment-description API, install sequence, field fallback, or
+version-1 toolbox state path.
+
+### Phase 7 - Tests and dependent-project cutover
+
+- [ ] **P7-01** Replace current register/unregister/builder tests with complete
+  definition create, code update, add/remove combination, intrinsic update, and
+  empty-definition tests. Include a mixed auto/manual/intrinsic toolbox and
+  prove that changing each category independently preserves the other two,
+  their dependencies, profile membership, inventory, and routes. Also reject
+  conflicting profile identities and duplicate advertised tool names.
+- [ ] **P7-02** Add profile-diff tests proving unchanged profiles and
+  environments are reused while only changed profiles are staged and spawned.
+- [ ] **P7-03** Add routing-concurrency tests that execute continuously during
+  candidate warmup and publication and never observe ambiguity, missing tools,
+  or a partial definition.
+- [ ] **P7-04** Add dependency tests for template hits, import/distribution
+  aliases, custom fallback, denied online build, lock mismatch, failed import
+  probe, and top-level missing imports before worker spawn.
+- [ ] **P7-05** Add hermeticity tests proving packages available only in the
+  host interpreter are unavailable to toolbox workers unless present in the
+  resolved template/custom lock.
+- [ ] **P7-06** Add state tests for stale expected revisions, concurrent
+  processes, corrupt/truncated JSON, interrupted write, version-1 rejection,
+  archival cutover, and each crash-recovery point before/during/after route
+  publication and before/during/after old-worker retirement.
+- [ ] **P7-07** Update repair/GC tests for candidates, active routes, retired
+  workers, environment reference grace periods, and orphaned bundles.
+- [ ] **P7-08** Add absence tests for every removed API, command, payload field,
+  state schema, bootstrap fallback, and ambient-site-package behavior.
+- [ ] **P7-09** Add approval tests for cross-actor denial, wrong plan/definition/
+  delta, changed catalog/policy revision, expiry, retry, duplicate apply, and
+  rejection of client-fabricated Boolean or mapping evidence.
+- [ ] **P7-10** Add authoritative-read and durable-apply tests for side-effect-
+  free snapshots, revision-conflict recovery, immediate operation return,
+  progress persistence, reconnect/request recovery, idempotent retry, terminal
+  diagnostics, safe pre-publication cancellation, denied post-publication
+  cancellation, and daemon restart in every phase.
+- [ ] **P7-11** Add multi-toolbox tests proving duplicate names across toolboxes
+  are valid, references execute concurrently, updates are atomic only within
+  the target toolbox, and routing always includes toolbox identity.
+- [ ] **P7-12** Add projection tests proving stable user codes/summaries and no
+  engine IDs, profile IDs, environment keys, package paths, or installer output
+  leak without operator authorization.
+- [ ] **P7-13** Finalize `HOSTED_TOOLBOX_CONTRACT.md` against the implemented
+  public models and behavior. Rewrite
+  `src/hosting/sandbox/TOOLBOX_WORKER.md` to describe the new internal worker,
+  template/custom package environment, candidate rollout, active routing,
+  durable apply, recovery, and GC architecture. Both documents must describe
+  only the supported implementation, contain no migration/history sections,
+  and remain complete after the transient breaking-changes file is deleted.
+  Link the worker document to the normative contract instead of duplicating it.
+- [ ] **P7-14** Complete `HOSTING_CLIENT_BREAKING_CHANGES.md` with final method
+  signatures, models, template catalog, custom-build approval semantics,
+  authoritative read, durable apply/progress/cancellation behavior, projection
+  vocabulary, operator cutover command, release commit, adoption checklist, and
+  durable-contract link.
+- [ ] **P7-15** Update `mp13-docs` to build complete definitions, persist active
+  revision hashes and apply operation refs, handle user-safe plan/progress/
+  terminal diagnostics, recover revision conflicts through authoritative reads,
+  and remove procedural mutation/environment-management logic.
+- [ ] **P7-16** Repin `mp13-docs` and run parent focused/full suites plus the
+  dependent project's complete hosted toolbox, workflow, recovery, approval,
+  and sandbox suites.
+- [ ] **P7-17** Add standard-base tests for clean-host bootstrap, project-config
+  validation, eager prewarm and lazy materialization, offline preseed, missing/
+  corrupt lock, unsupported sandbox enforcement, compute-only defaults,
+  explicit authorized policy widening, base-plus-delta derivation, and proof
+  that derived environments do not inherit another venv or host packages.
+- [ ] **P7-18** After every listed dependent project confirms adoption, remove
+  `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` and remove any transient
+  references to it. Confirm the durable contract and worker documentation are
+  independently complete before deletion.
+
+Exit gate: the direct replacement passes both repositories, all old behavior is
+absent, and a dependent project can migrate using only the breaking-change
+entry and public examples.
+
+## Acceptance checklist
+
+- [ ] Built-in functions declare dependencies through intrinsic registry
+  metadata and load in the selected verified environment.
+- [ ] Source imports map to the smallest compatible immutable template.
+- [ ] A clean configured host can validate/materialize the shipped standard
+  base and run a standard-library compute tool without online package access.
+- [ ] The default base uses compute-only sandbox policy; package templates
+  cannot grant filesystem, network, brokered I/O, artifact, or subprocess
+  capabilities.
+- [ ] Every derived package environment has a complete independently verified
+  lock and does not inherit host or base-venv `site-packages`.
+- [ ] Import names and distribution names are modeled separately.
+- [ ] Unknown/dynamic imports require explicit declarations and never trigger
+  silent package guesses.
+- [ ] A custom package environment is locked, installed, receipt-verified, and
+  import-probed before worker spawn.
+- [ ] Code-only updates reuse their environment.
+- [ ] Different import subsets covered by one template reuse one environment.
+- [ ] Unchanged profiles remain running through another profile's update.
+- [ ] Additions and removals in one definition become visible atomically.
+- [ ] Candidate workers are never selected by execution routing.
+- [ ] Failed preparation/warmup leaves the complete prior revision active.
+- [ ] Apply returns an actor-owned durable operation ref and survives reconnect,
+  duplicate retry, and daemon restart with bounded progress and diagnostics.
+- [ ] Only an exact host-minted, actor-bound, unexpired approval reference can
+  authorize the custom delta covered by its plan.
+- [ ] `get_definition()` returns canonical active definition/revision without
+  starting or repairing workers.
+- [ ] Name uniqueness and atomicity are per toolbox; duplicate names in
+  different toolboxes route and execute correctly.
+- [ ] User projections contain stable translatable diagnostics and exclude
+  internal deployment identities and paths.
+- [ ] State corruption fails closed instead of producing an empty toolbox.
+- [ ] Toolbox venvs cannot import undeclared ambient host packages.
+- [ ] Toolbox workers never use the bootstrap interpreter as a dependency
+  fallback.
+- [ ] Version-1 APIs, commands, fields, state, and compatibility code are absent.
+- [ ] All dependent-project requirements are recorded in
+  `HOSTING_CLIENT_BREAKING_CHANGES.md` before release.
 
 ## Consumer-owned boundaries
 
-The parent must not take ownership of:
+The parent owns import analysis, template/package mapping, environment build and
+verification, candidate rollout, atomic route publication, active toolbox
+revision truth, authoritative reads, approval-reference validation, durable
+apply operation truth/progress, repair, and derived-resource cleanup.
 
-- workspace admission fencing or workspace unload policy;
-- consumer workflow pause/resume or absent-user dependencies;
-- browser Disconnect versus Sign Out semantics;
-- local turn/workflow application markers;
-- replay eligibility for protected operations;
-- session-tree, card, or Inspect projections; or
-- a consumer's SQLite journal of local application targets.
+Consumers own:
 
-The parent supplies authoritative hosted-execution truth, transport-safe
-capability sessions, and stable callback/lease primitives. Consumers decide
-how that truth changes their own workspace, workflow, and UI state.
+- the complete desired auto/manual/intrinsic tool set;
+- staged source and explicit dependency declarations when analysis is
+  insufficient;
+- sandbox policies and function metadata;
+- requesting user/operator approval for policy-allowed custom builds and
+  returning only the parent-minted approval reference;
+- retry after an expected-revision conflict using the newly read definition;
+- persisting apply operation refs and recovering status through generic hosted-
+  operation APIs;
+- workspace lifecycle decisions that apply a replacement or empty definition;
+  and
+- persistence/UI projection of the parent-returned revision and rollout state.
