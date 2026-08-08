@@ -734,15 +734,28 @@ call path found in the inventory.
   sandbox suite passed 138 tests, `poetry check --lock`, compile, and diff checks
   passed. The real-daemon concurrency regression now asserts worker-reported
   interval overlap instead of a scheduler-sensitive wall-clock ceiling.
-- [ ] **P1-04** Add an AST analyzer over the existing `ToolboxBundleFile`
+- [x] **P1-04** Add an AST analyzer over the existing `ToolboxBundleFile`
   contents. Classify standard-library, local staged modules, parent runtime,
   known third-party, declared dynamic/optional, and unresolved imports.
-- [ ] **P1-05** Resolve source evidence plus explicit declarations into
+- [x] **P1-05** Resolve source evidence plus explicit declarations into
   distribution requirements. Reject incompatible declarations and unresolved
   required imports with file/line diagnostics.
-- [ ] **P1-06** Select the smallest allowed template covering the complete
+- [x] **P1-06** Select the smallest allowed template covering the complete
   resolved requirement set. If none matches, produce a custom delta from an
   allowed base template.
+
+  Evidence (2026-08-08): `dependency_analysis.py` implements a bounded,
+  side-effect-free AST pipeline over normalized staged files. It classifies
+  standard, local/relative, parent, reviewed third-party, explicitly declared
+  optional/dynamic, and unresolved imports with deterministic file/line
+  evidence. Resolution combines reviewed mappings, aliases/extras, explicit
+  PEP 508 requirements, and real PEP 440 intersections; syntax, duplicate
+  paths, dynamic expressions, unreviewed roots/packages/extras, and conflicting
+  constraints fail with stable diagnostics. Selection filters exact ABI/
+  platform/allowlist, chooses the smallest complete template, or chooses the
+  compatible base minimizing the exact custom delta. Focused tests passed 15
+  cases; catalog/identity regressions passed 21 tests; the Poetry lock, compile,
+  and diff checks passed. No worker or mutable host state is touched.
 - [ ] **P1-07** Validate requested templates and custom packages against runtime,
   platform, package allow/deny policy, index policy, and intrinsic requirements.
 - [ ] **P1-08** Add actor-authorized template list/describe APIs for consumers

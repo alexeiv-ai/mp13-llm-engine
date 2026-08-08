@@ -24,6 +24,14 @@ from .catalog import (
     ToolboxTemplateProvenance,
 )
 from .cancellation import is_canceled_tool_error, should_resubmit_canceled_tool_call
+from .dependency_analysis import (
+    ToolboxDependencyAnalysisError,
+    ToolboxResolvedDependencies,
+    ToolboxTemplateSelection,
+    analyze_toolbox_bundle_imports,
+    resolve_toolbox_dependencies,
+    select_toolbox_environment_template,
+)
 from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
 from .execution import ToolboxExecutionHarness
 from .hosted_ref import HostedToolBoxRef, PendingHostedToolboxRef, SandboxedToolboxFacade
@@ -40,6 +48,12 @@ __all__ = [
     "ReviewedImportDistributionRule",
     "ReviewedImportDistributionCatalog",
     "PHASE0_REVIEWED_IMPORT_CATALOG",
+    "ToolboxDependencyAnalysisError",
+    "ToolboxResolvedDependencies",
+    "ToolboxTemplateSelection",
+    "analyze_toolbox_bundle_imports",
+    "resolve_toolbox_dependencies",
+    "select_toolbox_environment_template",
     "ToolboxBundleFile",
     "ToolboxBundleTool",
     "ToolboxBundleAutoTool",

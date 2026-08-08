@@ -4323,4 +4323,4 @@ xformers = ["xformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "131bc4dd196c8134c3494428e8775c0ffb14e91fbe2c528fe5e599093666ac3a"
+content-hash = "d71ffcd76551ab3db8e4e4e087881fa7fb9dc6a09da017c47b0ea3f77f81d7b9"

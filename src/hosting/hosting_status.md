@@ -54,6 +54,7 @@ None.
 | 2026-08-08 | P0-12 | Completed the dependent adoption handoff with old/new code, durable recovery and teardown flows, exact version-1 archive/rollback procedure, and an inventory-to-removal matrix. | Document suite -> 12 passed; identity/operation audit -> 52 passed; exit audit -> 21 public operation names, 19 commands, and six dependent file groups covered; durable-contract forbidden-history search -> no matches. Runtime/state-command/client-repository categories: not applicable (documentation-only handoff). | `docs: complete toolbox migration handoff (P0-12)` |
 | 2026-08-08 | P1-01, P1-02 | Added frozen strict immutable template/lock/provenance models and a deterministic reviewed import/distribution catalog, seeded only from inventoried roots. | Catalog -> 16 passed; identity/runtime-key regressions -> 20 passed; compile/diff checks passed. Clean environment and daemon integration: not applicable (pure models/catalog). | `feat: add toolbox template catalog (P1-01 P1-02)` |
 | 2026-08-08 | P1-03 | Moved intrinsic discovery/dependency knowledge into import-safe metadata, derived environment roots/profile identity from it, removed profile branching, and pinned direct SymPy with a current lock. | Metadata -> 7 passed; complete toolbox sandbox -> 138 passed; Poetry lock, compile, and diff checks passed. Clean isolated-template execution remains P1-11/P1-12. | `refactor: isolate intrinsic dependency metadata (P1-03)` |
+| 2026-08-08 | P1-04, P1-05, P1-06 | Added deterministic staged-source AST evidence, reviewed/explicit PEP 440 requirement resolution, and smallest exact template or minimal custom-delta selection. | Dependency pipeline -> 15 passed; catalog/identity regressions -> 21 passed; Poetry lock, compile, and diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure planning). | `feat: add toolbox dependency planner (P1-04 P1-05 P1-06)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -81,5 +82,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Implement the deterministic source analyzer, requirement resolver, and
-smallest-template/custom-delta selection pipeline from P1-04 through P1-06.
+Add policy validation, catalog administration, and durable prewarm/materialize
+control paths from P1-07 through P1-10.
