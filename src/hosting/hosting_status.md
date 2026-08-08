@@ -29,29 +29,37 @@ belong in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Overall status
 
-Status: Not started
+Status: In progress
 
-No implementation slice has been completed against the replacement plan.
+The Phase 0 API/state/import inventory is complete. Typed contract freezing is
+next; no replacement runtime behavior has been committed yet.
 
 ## Active slice
 
 None.
 
-When work starts, replace `None` with:
-
-| Field | Value |
-| --- | --- |
-| Plan items | Unchecked item IDs |
-| Scope | One coherent server-side outcome |
-| Files/components | Expected implementation surface |
-| Required tests | Exact commands and expected coverage |
-| Documentation | Contract, worker, migration, and status updates required |
-| Blockers | None, or concrete unresolved conditions |
-
 ## Completed slices
 
 | Date | Plan items checked | Delivered outcome | Tests passed | Commit subject |
 | --- | --- | --- | --- | --- |
+| 2026-08-08 | P0-01, P0-02 | Froze all current parent/dependent mutation, environment, payload, persisted-state, and actual hosted import removal/catalog inputs in the transient migration handoff. | Both predeclared parent/dependent `rg` inventories passed. AST assertions covered all 19 old dispatch commands, every deprecated hosted-ref method, parent intrinsic NumPy/SymPy/NumExpr imports, dependent Matplotlib import, and stale Requests declaration. Clean environment, daemon integration, persistence/concurrency, and runtime regression categories: not applicable (documentation-only inventory; no runtime change). | `docs: freeze hosting inventories (P0-01 P0-02)` |
+
+P0-01/P0-02 exact verification commands:
+
+```powershell
+rg -n 'register_auto_callable|register_python_callable|register_manual_tool|register_intrinsics|unregister_|resolve_sandbox|environment_(description|resolve|apply|realize|sync|lock|verify|execute)|toolbox-(register|unregister|environment)' src tests
+rg -n 'register_auto_callable|register_python_callable|register_manual_tool|register_intrinsics|unregister_|resolve_sandbox|environment_(description|resolve|apply|realize|sync|lock|verify|execute)|toolbox-(register|unregister|environment)' O:/repos/mp13-docs
+```
+
+The AST verification was executed as an inline Python assertion over
+`src/hosting/toolbox/hosted_ref.py`, both dispatch implementations,
+`src/mp13_engine/mp13_tools_builtin.py`,
+`O:/repos/mp13-docs/src/tools/examples.py`, and the migration handoff. It
+reported:
+
+```text
+commands=19; deprecated_methods_checked; parent_imports=['.mp13_config', '__future__', 'codecs', 'dataclasses', 'importlib', 'json', 'numexpr', 'numpy', 're', 'sympy', 'typing']; starter_imports=['__future__', 'base64', 'io', 'math', 'matplotlib', 'pathlib', 'tools']
+```
 
 ## Blocked or deferred work
 
@@ -62,5 +70,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Select the smallest coherent set of unchecked Phase 0 items whose contracts,
-tests, documentation, and migration handoff can be completed in one commit.
+Freeze the typed public models, validation/error vocabulary, per-toolbox scope,
+projection split, and canonical hashes as the next dependency-closed slice.

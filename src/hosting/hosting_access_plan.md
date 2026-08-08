@@ -528,12 +528,23 @@ review API.
 
 ### Phase 0 - Freeze code-derived contracts and breaking handoff
 
-- [ ] **P0-01** Inventory current parent and `mp13-docs` uses of auto, manual,
+- [x] **P0-01** Inventory current parent and `mp13-docs` uses of auto, manual,
   intrinsic, environment-description, and install APIs. Record every method,
   command, payload field, and persisted field that will disappear.
-- [ ] **P0-02** Inventory imports used by actual hosted functions and intrinsics.
+- [x] **P0-02** Inventory imports used by actual hosted functions and intrinsics.
   Use that inventory, not speculative package groupings, to choose the first
   template set and package locks.
+
+  Evidence (2026-08-08): the `HOSTED-TOOLBOX-DEFINITION` handoff inventories
+  all parent hosted-ref/channel/service/command/payload/state removals, the
+  concrete `mp13-docs` deployment/authoring/persistence call sites, and actual
+  parent-intrinsic/demo/dependent-starter imports with import-to-distribution
+  distinctions. Verification passed both predeclared repository-wide `rg`
+  searches and an AST assertion covering all 19 old dispatch commands, every
+  deprecated hosted-ref method, NumPy/SymPy/NumExpr intrinsic imports, the
+  Matplotlib starter import, and the stale non-imported Requests declaration.
+  Commit: recorded by git history under `docs: freeze hosting inventories
+  (P0-01 P0-02)`.
 - [ ] **P0-03** Freeze `ToolboxDefinitionSpec`, version-2 request models,
   `ToolboxDependencyRequest`, template descriptors, plan/apply results, strict
   validation limits, and error codes.
