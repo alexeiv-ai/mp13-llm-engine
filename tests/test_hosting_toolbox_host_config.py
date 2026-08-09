@@ -22,6 +22,7 @@ from hosting.toolbox.shipped_templates import (
     compute_only_sandbox_policy,
     load_shipped_toolbox_catalog,
 )
+from hosting.toolbox import shipped_templates
 
 
 class VerifiedMaterializer:
@@ -118,6 +119,68 @@ def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
     assert "artifact_source" not in serialized
     assert "python_executable" not in serialized
     assert "installer" not in serialized
+
+
+def test_nonstandard_deferred_materialization_stays_degraded_until_durable_prewarm(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration() | {"prewarm_required": False}
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "access_control.json",
+        toolbox_template_materializer=VerifiedMaterializer(),
+        toolbox_environment_catalog=configuration,
+        toolbox_sandbox_policies={"compute_only": compute_only_sandbox_policy()},
+    )
+    assert service._toolbox_startup["operations"] == []  # noqa: SLF001
+    assert service.hosting_setup_summary()["toolbox_environment_catalog"]["status"] == "degraded"
+
+    state = service._toolbox_template_catalog.read()  # noqa: SLF001
+    for template_id in SHIPPED_TEMPLATE_IDS:
+        started = service.toolbox_template_prewarm(
+            template_id=template_id,
+            template_digest=state["active"][template_id],
+            python_abi="cp312",
+            platform="win_amd64",
+            request_id=f"deferred-materialization:{template_id}",
+            owner_actor_id="admin:deferred-materialization-test",
+        )
+        terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+            operation_id=started["operation"]["operation_id"], timeout_seconds=10
+        )
+        assert terminal["lifecycle"] == "terminal_success"
+    assert service.hosting_setup_summary()["toolbox_environment_catalog"]["status"] == "ready"
+
+
+def test_offline_preseed_source_must_be_one_of_the_host_artifact_sources() -> None:
+    configured = _configuration() | {
+        "artifact_source_ids": ["parent-release-resources", "offline-cache"],
+        "offline_preseed_source_id": "offline-cache",
+    }
+    parsed = ToolboxHostProjectConfiguration.from_dict(configured)
+    assert parsed.offline_preseed_source_id == "offline-cache"
+    with pytest.raises(ValueError, match="offline_preseed_source_id_invalid"):
+        ToolboxHostProjectConfiguration.from_dict(
+            configured | {"offline_preseed_source_id": "unconfigured-cache"}
+        )
+
+
+@pytest.mark.parametrize("failure", ["missing", "corrupt"])
+def test_missing_or_corrupt_shipped_lock_fails_with_stable_readiness_code(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    original = shipped_templates._read_json_resource
+
+    def broken_resource(name: str):
+        if name.endswith(".lock.json"):
+            if failure == "missing":
+                raise FileNotFoundError(name)
+            raise ValueError(f"shipped_template_resource_invalid:{name}")
+        return original(name)
+
+    monkeypatch.setattr(shipped_templates, "_read_json_resource", broken_resource)
+    with pytest.raises(ValueError, match="required_template_lock_invalid"):
+        shipped_templates.load_shipped_toolbox_catalog()
 
 
 def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -> None:

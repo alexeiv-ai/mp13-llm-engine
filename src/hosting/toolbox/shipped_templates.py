@@ -158,7 +158,10 @@ class ShippedToolboxCatalog:
 
 
 def _load_lock(template_id: str, resource_name: str) -> tuple[tuple[ToolboxLockedDistributionSpec, ...], str, str, int]:
-    payload, raw = _read_json_resource(resource_name)
+    try:
+        payload, raw = _read_json_resource(resource_name)
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError("required_template_lock_invalid") from exc
     _strict_fields(payload, {"contract", "template_id", "distributions"}, label="shipped_template_lock")
     if payload["contract"] != SHIPPED_LOCK_CONTRACT or payload["template_id"] != template_id:
         raise ValueError("shipped_template_lock_identity_invalid")

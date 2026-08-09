@@ -161,6 +161,31 @@ def test_sandbox_policy_changes_binding_not_physical_environment(tmp_path: Path)
     assert default["sandbox_policy_digest"] != narrowed["sandbox_policy_digest"]
 
 
+def test_explicit_parent_policy_widening_changes_binding_not_package_environment(
+    tmp_path: Path,
+) -> None:
+    service = _ready_service(tmp_path)
+    common = {
+        "consumer_kind": "toolbox",
+        "files": [{"relative_path": "main.py", "content": "import json\n"}],
+        "python_abi": "cp312",
+        "platform": "win_amd64",
+    }
+    default = service.resolve_hosted_template_environment(**common)["binding"]
+    authorized = service.resolve_hosted_template_environment(
+        **common,
+        sandbox_policy={
+            "policy_id": "operator-authorized-network",
+            "sandbox_required": True,
+            "network": True,
+        },
+    )["binding"]
+    assert default["template_id"] == authorized["template_id"] == "core"
+    assert default["environment_digest"] == authorized["environment_digest"]
+    assert default["binding_id"] != authorized["binding_id"]
+    assert default["sandbox_policy_digest"] != authorized["sandbox_policy_digest"]
+
+
 def test_isolated_process_probes_core_and_every_shipped_compute_intrinsic(tmp_path: Path) -> None:
     core = subprocess.run(
         [sys.executable, "-I", "-c", "import json,math,pathlib; print(json.dumps({'ok': math.sqrt(81)}))"],

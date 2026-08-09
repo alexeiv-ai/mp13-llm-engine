@@ -121,7 +121,7 @@ def _materialize_in_process(host: str, source: str, payload: dict, reference: st
         queue.put({"ok": False, "error": type(exc).__name__, "detail": str(exc)})
 
 
-def test_builds_offline_non_inheriting_venv_and_publishes_verified_receipt(tmp_path: Path) -> None:
+def test_offline_preseed_builds_non_inheriting_venv_and_publishes_verified_receipt(tmp_path: Path) -> None:
     source = tmp_path / "approved"
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")

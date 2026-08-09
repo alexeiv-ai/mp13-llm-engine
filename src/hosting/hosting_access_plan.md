@@ -1290,15 +1290,34 @@ version-1 toolbox state path.
   workflow run passed 335 with 13 skips and hit two Windows socket-buffer
   exhaustion errors that both passed immediately in isolation. Parent final
   docs passed 16; compilation, diff, and removed-API scans passed.
-- [ ] **P7-17** Add standard-base tests for clean-host bootstrap, project-config
+- [x] **P7-17** Add standard-base tests for clean-host bootstrap, project-config
   validation, eager prewarm and lazy materialization, offline preseed, missing/
   corrupt lock, unsupported sandbox enforcement, compute-only defaults,
   explicit authorized policy widening, base-plus-delta derivation, and proof
   that derived environments do not inherit another venv or host packages.
+
+  Evidence (2026-08-08): the 42-test standard-base matrix covers strict clean
+  configured startup, exact project configuration, eager startup prewarm,
+  explicitly non-standard deferred durable materialization, validated offline
+  preseed source selection, stable missing/corrupt shipped-lock failure,
+  unsupported compute-policy widening, exact compute-only defaults, explicit
+  parent sandbox-policy widening with unchanged package environment,
+  independent complete base-plus-delta locks, real non-inheriting venvs, and
+  ambient host-package exclusion. The final exact repository suite passed
+  1,118 with three skips and four pre-existing async-marker warnings; compile
+  and diff checks passed. The first full run's two unrelated warm workflow
+  process timing failures passed together in isolation before the clean full
+  rerun.
 - [ ] **P7-18** After every listed dependent project confirms adoption, remove
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` and remove any transient
   references to it. Confirm the durable contract and worker documentation are
   independently complete before deletion.
+
+  Delivery override (2026-08-08): intentionally not executed because the user
+  explicitly requires this file to contain dependent-project code-change and
+  deprecated-behavior removal instructions. The file remains the complete
+  checked adoption handoff; the durable contract and worker documentation are
+  independently complete.
 
 Exit gate: the direct replacement passes both repositories, all old behavior is
 absent, and a dependent project can migrate using only the breaking-change
@@ -1306,43 +1325,43 @@ entry and public examples.
 
 ## Acceptance checklist
 
-- [ ] Built-in functions declare dependencies through intrinsic registry
+- [x] Built-in functions declare dependencies through intrinsic registry
   metadata and load in the selected verified environment.
-- [ ] Source imports map to the smallest compatible immutable template.
-- [ ] A clean configured host can validate/materialize the shipped standard
+- [x] Source imports map to the smallest compatible immutable template.
+- [x] A clean configured host can validate/materialize the shipped standard
   base and run a standard-library compute tool without online package access.
-- [ ] The default base uses compute-only sandbox policy; package templates
+- [x] The default base uses compute-only sandbox policy; package templates
   cannot grant filesystem, network, brokered I/O, artifact, or subprocess
   capabilities.
-- [ ] Every derived package environment has a complete independently verified
+- [x] Every derived package environment has a complete independently verified
   lock and does not inherit host or base-venv `site-packages`.
-- [ ] Import names and distribution names are modeled separately.
-- [ ] Unknown/dynamic imports require explicit declarations and never trigger
+- [x] Import names and distribution names are modeled separately.
+- [x] Unknown/dynamic imports require explicit declarations and never trigger
   silent package guesses.
-- [ ] A custom package environment is locked, installed, receipt-verified, and
+- [x] A custom package environment is locked, installed, receipt-verified, and
   import-probed before worker spawn.
-- [ ] Code-only updates reuse their environment.
-- [ ] Different import subsets covered by one template reuse one environment.
-- [ ] Unchanged profiles remain running through another profile's update.
-- [ ] Additions and removals in one definition become visible atomically.
-- [ ] Candidate workers are never selected by execution routing.
-- [ ] Failed preparation/warmup leaves the complete prior revision active.
-- [ ] Apply returns an actor-owned durable operation ref and survives reconnect,
+- [x] Code-only updates reuse their environment.
+- [x] Different import subsets covered by one template reuse one environment.
+- [x] Unchanged profiles remain running through another profile's update.
+- [x] Additions and removals in one definition become visible atomically.
+- [x] Candidate workers are never selected by execution routing.
+- [x] Failed preparation/warmup leaves the complete prior revision active.
+- [x] Apply returns an actor-owned durable operation ref and survives reconnect,
   duplicate retry, and daemon restart with bounded progress and diagnostics.
-- [ ] Only an exact host-minted, actor-bound, unexpired approval reference can
+- [x] Only an exact host-minted, actor-bound, unexpired approval reference can
   authorize the custom delta covered by its plan.
-- [ ] `get_definition()` returns canonical active definition/revision without
+- [x] `get_definition()` returns canonical active definition/revision without
   starting or repairing workers.
-- [ ] Name uniqueness and atomicity are per toolbox; duplicate names in
+- [x] Name uniqueness and atomicity are per toolbox; duplicate names in
   different toolboxes route and execute correctly.
-- [ ] User projections contain stable translatable diagnostics and exclude
+- [x] User projections contain stable translatable diagnostics and exclude
   internal deployment identities and paths.
-- [ ] State corruption fails closed instead of producing an empty toolbox.
-- [ ] Toolbox venvs cannot import undeclared ambient host packages.
-- [ ] Toolbox workers never use the bootstrap interpreter as a dependency
+- [x] State corruption fails closed instead of producing an empty toolbox.
+- [x] Toolbox venvs cannot import undeclared ambient host packages.
+- [x] Toolbox workers never use the bootstrap interpreter as a dependency
   fallback.
-- [ ] Version-1 APIs, commands, fields, state, and compatibility code are absent.
-- [ ] All dependent-project requirements are recorded in
+- [x] Version-1 APIs, commands, fields, state, and compatibility code are absent.
+- [x] All dependent-project requirements are recorded in
   `HOSTING_CLIENT_BREAKING_CHANGES.md` before release.
 
 ## Consumer-owned boundaries
