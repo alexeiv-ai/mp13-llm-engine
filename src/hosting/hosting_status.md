@@ -31,16 +31,15 @@ belong in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 Status: In progress
 
-Phases 0 and 1 are complete. The public contract/migration handoff, strict
-dependency pipeline, immutable catalog/control, durable materialization
-receipts, shipped initial templates, shared cross-worker resolver, and exclusive
-model-runtime boundary are implemented and audited. Phase 2 hermetic toolbox
-environment builder work is next.
+Phases 0 through 3 are complete. The public contract/migration handoff, strict
+dependency pipeline, hermetic environment builder, definition planner, and
+durable pinned plan repository are implemented and audited. Phase 4 atomic
+rollout and routing work is in progress.
 
 ## Active slice
 
-None. The next slice will predeclare Phase 4 rollout/atomic-routing work before
-changing files.
+None. The next slice will predeclare resolved candidate rollout and atomic
+routing work (P4-02 onward) before changing files.
 
 ## Completed slices
 
@@ -67,6 +66,7 @@ changing files.
 | 2026-08-08 | P2-01 through P2-10, Phase 2 exit | Added the target-host offline hermetic builder, exact wheel/lock/probe receipts, atomic publication/quarantine, thread/process deduplication, reference/grace GC, complete independent derived locks, receipt-gated readiness, catalog prewarm adaptation, and configured-orchestrator verified interpreter routing. | Hermetic builder -> 11 passed including real venvs, two fresh processes, service configuration, quarantine, ambient exclusion, complete base-plus-delta, and GC; environment/prewarm/shipped templates -> 19 passed; workflow/runtime -> 29 passed; focused toolbox environment -> 3 passed, 135 deselected; compile/diff checks passed. | `feat: build hermetic toolbox environments (P2-01..P2-10)` |
 | 2026-08-08 | P3-01 through P3-05 | Added strict canonical version-2 definition/request/dependency models, host-derived resolved profiles, per-toolbox advertised-name and file conflict validation, post-resolution grouping, and resolved-profile bundle manifests. | Definition planner -> 11 passed; dependency/identity -> 20 passed; focused bundle/profile/duplicate regressions -> 18 passed, 120 deselected; docs/compile/diff checks passed. The initially predeclared dependency-pipeline filename did not exist and was corrected to the repository's dependency-analysis suite before execution. | `feat: add toolbox definition planner (P3-01..P3-05)` |
 | 2026-08-08 | P3-06, P3-07, Phase 3 exit | Added exact active/proposed profile classification and a strict atomic expiring plan repository pinned to definition/expected/catalog/policy and resolved bundle identities. | Plan repository -> 10 passed including restart, expiry/no-refresh, pin identity, corruption, two-process writes, and no side effects; planner/identity -> 16 passed; operation repository -> 23 passed; docs/compile/diff checks passed. | `feat: persist toolbox definition plans (P3-06 P3-07)` |
+| 2026-08-08 | P4-01 | Completed durable definition-apply recovery and cancellation dispatch with an atomic persisted publication boundary and bounded candidate-cleanup terminal diagnostics. | Definition apply/contract/repository -> 51 passed including the cancel/publication race; operation/workflow regressions -> 28 passed; compile/diff checks passed. The initially named `tests/test_hosting_workflow_contract.py` did not exist and failed before collection; closeout used the repository's actual workflow operation and Python contract suites. | `feat: add durable definition apply operations (P4-01)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -94,5 +94,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Begin Phase 4 candidate rollout, readiness validation, atomic active routing,
-draining, rollback, and cancellation-boundary work (P4-01 onward).
+Continue Phase 4 resolved candidate rollout, readiness validation, atomic
+active routing, draining, and rollback work (P4-02 onward).

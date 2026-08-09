@@ -4,7 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from ..operation_contract import HostedExecutionKind, HostedOperationRef, HostedOperationSelector
+from ..operation_contract import (
+    TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES,
+    HostedExecutionKind,
+    HostedOperationRef,
+    HostedOperationSelector,
+)
 from .operation_repository import AtomicJsonHostedOperationRepository
 
 
@@ -43,6 +48,10 @@ class HostedOperationsMixin:
             if target.kind != "template_id":
                 raise ValueError("template_prewarm_selector_must_be_template_id")
             namespace = f"toolbox_template_prewarm:{target.id}"
+        elif kind == HostedExecutionKind.TOOLBOX_DEFINITION_APPLY:
+            if target.kind != "toolbox_id":
+                raise ValueError("toolbox_definition_apply_selector_must_be_toolbox_id")
+            namespace = f"toolbox-definition:{target.id}"
         else:
             if target.kind != "engine_id":
                 raise ValueError("workflow_operation_selector_must_be_engine_id")
@@ -98,6 +107,29 @@ class HostedOperationsMixin:
             if canceled is not None:
                 return canceled
             return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
+        if operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_APPLY:
+            cleanup = getattr(self, "_cleanup_toolbox_definition_apply_candidates", None)
+
+            def cancellation_envelope() -> Dict[str, Any]:
+                cleanup_diagnostics: Mapping[str, Any] = {
+                    "status": "not_required",
+                    "candidate_count": 0,
+                }
+                if callable(cleanup):
+                    cleanup_diagnostics = dict(cleanup(record=record) or {})
+                return {
+                    "contract": "hosting.toolbox.definition_apply_result",
+                    "status": "canceled",
+                    "code": "apply_canceled_before_publication",
+                    "diagnostics": {"candidate_cleanup": dict(cleanup_diagnostics)},
+                }
+
+            return self._hosted_operations.cancel_before_progress_commit(
+                operation_id=operation.operation_id,
+                committed_phases=tuple(sorted(TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES)),
+                reason=str(reason or "client_requested"),
+                envelope_factory=cancellation_envelope,
+            )
         return self._cancel_workflow_operation(record=record, reason=str(reason or "client_requested"))
 
     def hosting_receipt_ledger_cutover(

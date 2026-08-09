@@ -55,6 +55,14 @@ soon as `cancellable` becomes false; it never becomes true again. Reconnect and
 request recovery must render the recovered progress checkpoint, then fetch the
 terminal result for final diagnostics.
 
+Cancellation clients must inspect the returned hosted-operation status. A
+pre-publication success is terminal with lifecycle `terminal_cancellation` and
+code `apply_canceled_before_publication`; do not report cancellation merely
+because the request was sent. A response with reason
+`apply_publication_committed` means the new revision is already authoritative:
+keep observing the same operation through draining/cleanup and never submit an
+inverse definition as an automatic rollback.
+
 The dependent store may retain its own authoring and UI metadata, but parent
 deployment truth must be represented by the active parent revision and durable
 apply operation ref. Local `state_revision` or `toolbox_definition_digest`

@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Generator, Mapping, Optional, Protocol
+from typing import Any, Callable, Dict, Generator, Mapping, Optional, Protocol, Sequence
 
 from ..operation_contract import (
     HOSTED_OPERATION_REF_CONTRACT,
@@ -80,6 +80,15 @@ class HostedOperationRepository(Protocol):
     ) -> Dict[str, Any]: ...
 
     def cancel_before_dispatch(self, *, operation_id: str, reason: str) -> Optional[Dict[str, Any]]: ...
+
+    def cancel_before_progress_commit(
+        self,
+        *,
+        operation_id: str,
+        committed_phases: Sequence[str],
+        reason: str,
+        envelope_factory: Callable[[], Mapping[str, Any]],
+    ) -> Dict[str, Any]: ...
 
     def status(self, *, ref: HostedOperationRef | Mapping[str, Any], owner_actor_id: str) -> Dict[str, Any]: ...
 
@@ -696,6 +705,55 @@ class AtomicJsonHostedOperationRepository:
             envelope={"status": "canceled", "reason": str(reason or "canceled_before_dispatch")},
             reason=str(reason or "canceled_before_dispatch"),
         )
+
+    def cancel_before_progress_commit(
+        self,
+        *,
+        operation_id: str,
+        committed_phases: Sequence[str],
+        reason: str,
+        envelope_factory: Callable[[], Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        """Atomically cancel an operation only while its persisted progress is pre-commit.
+
+        The cleanup callback runs while the same repository/process lock that
+        guards progress is held. A concurrent publication checkpoint therefore
+        wins wholly before cancellation, or observes the terminal cancellation
+        and is rejected; the boundary cannot be split by a race.
+        """
+
+        oid = _bounded_identity(operation_id, label="operation_id")
+        phases = frozenset(str(item or "").strip() for item in committed_phases)
+        terminal_reason = str(reason or "client_requested").strip() or "client_requested"
+        now_ms = self._now_ms()
+        with self._state_lock():
+            location = self._operation_index.get(oid)
+            if location is None or location[1]:
+                raise KeyError(oid)
+            row = self._data[location[0]][oid]
+            lifecycle = HostedOperationLifecycle(str(row["lifecycle"]))
+            if lifecycle in TERMINAL_OPERATION_LIFECYCLES:
+                return self._status_from_row(row)
+            progress = row.get("progress")
+            progress_model = HostedOperationProgress.from_dict(progress) if isinstance(progress, Mapping) else None
+            if progress_model is not None and (
+                progress_model.phase in phases or not progress_model.cancellable
+            ):
+                return self._status_from_row(
+                    row,
+                    api_status="error",
+                    reason="apply_publication_committed",
+                )
+            envelope = dict(envelope_factory() or {})
+            row["lifecycle"] = HostedOperationLifecycle.TERMINAL_CANCELLATION.value
+            row["terminal_at_ms"] = now_ms
+            row["updated_at_ms"] = now_ms
+            row["reason"] = terminal_reason
+            row["terminal"] = self._bounded_terminal(envelope, row=row)
+            self._prune_locked()
+            self._persist_locked()
+            self._condition.notify_all()
+            return self._status_from_row(row)
 
     def get_by_operation_id(self, operation_id: str) -> Optional[Dict[str, Any]]:
         oid = str(operation_id or "").strip()

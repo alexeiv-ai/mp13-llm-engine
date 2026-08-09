@@ -950,11 +950,21 @@ planner/identity regressions passed 16; operation-repository regressions passed
 
 ### Phase 4 - Candidate rollout and atomic active routing
 
-- [ ] **P4-01** Extend `HostedExecutionKind`, hosted-operation fingerprinting,
+- [x] **P4-01** Extend `HostedExecutionKind`, hosted-operation fingerprinting,
   repository metadata, status normalization, request recovery, and cancellation
   dispatch for durable `toolbox_definition_apply` operations. Add bounded
   persisted progress checkpoints for validation, environment build, staging,
   warmup, publication, draining, and cleanup.
+
+  Evidence (2026-08-08): definition applies recover only through the exact
+  toolbox-scoped receipt namespace and reject engine selectors. Queued/running
+  cancellation and publication checkpoints serialize under the same durable
+  repository lock; a pre-publication cancellation performs candidate cleanup
+  and persists a bounded terminal result, while a publication winner returns
+  `apply_publication_committed` without cleanup or rollback. Focused operation,
+  contract, and repository tests passed 51 including the cancellation/
+  publication race; operation/workflow regressions passed 28; compile and diff
+  checks passed.
 - [ ] **P4-02** Refactor `ToolboxSandboxOrchestrator` to accept resolved profile
   assignments and skip staging/spawn for profiles classified as reused.
 - [ ] **P4-03** Spawn added/replaced workers as non-routable candidates. Add an
