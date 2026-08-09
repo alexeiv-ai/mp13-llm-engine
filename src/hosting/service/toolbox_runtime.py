@@ -41,6 +41,11 @@ class ToolboxRuntimeMixin:
             operation_id=str(operation_id or "").strip(),
         )
 
+    def recover_toolbox_definition_rollouts(self) -> Dict[str, Any]:
+        from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
+
+        return ToolboxDefinitionRolloutCoordinator(self).recover()
+
     def _cleanup_toolbox_definition_apply_candidates(self, *, record: Dict[str, Any]) -> Dict[str, Any]:
         metadata = dict(dict(record or {}).get("metadata") or {})
         candidates = sorted(
@@ -286,7 +291,18 @@ class ToolboxRuntimeMixin:
         repository = getattr(self, "_toolbox_state_v2", None)
         if repository is None:
             return None
-        return repository.get(str(toolbox_id or "").strip())
+        try:
+            return repository.get(str(toolbox_id or "").strip())
+        except Exception as exc:
+            # The deprecated procedural adapter remains isolated until Phase 6
+            # removes it. Definition APIs call the strict repository directly
+            # and reject version 1; legacy execution may still route its own
+            # registrations during that temporary compatibility window.
+            from .toolbox_state_v2 import LegacyToolboxStateError
+
+            if isinstance(exc, LegacyToolboxStateError):
+                return None
+            raise
 
     def _active_toolbox_v2_registrations(self, toolbox_id: str) -> Optional[List[Dict[str, Any]]]:
         snapshot = self._active_toolbox_v2_snapshot(toolbox_id)

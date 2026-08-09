@@ -22,10 +22,15 @@ class ToolboxRevisionConflictError(RuntimeError):
     pass
 
 
+class LegacyToolboxStateError(RuntimeError):
+    pass
+
+
 class AtomicJsonToolboxStateV2Repository:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, legacy_path: Path | None = None):
         self.path = Path(path).expanduser().resolve()
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        self.legacy_path = Path(legacy_path).expanduser().resolve() if legacy_path is not None else None
 
     @staticmethod
     def _payload(toolboxes: Mapping[str, Any]) -> dict[str, Any]:
@@ -145,6 +150,10 @@ class AtomicJsonToolboxStateV2Repository:
 
     def _read_unlocked(self) -> dict[str, Any]:
         if not self.path.exists():
+            if self.legacy_path is not None and self.legacy_path.exists():
+                raise LegacyToolboxStateError(
+                    "toolbox_state_v1_unsupported: run toolbox-state-archive-v1 before using definition APIs"
+                )
             return self._payload({})
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -166,8 +175,29 @@ class AtomicJsonToolboxStateV2Repository:
                 handle.flush()
                 os.fsync(handle.fileno())
             _replace_with_bounded_retries(temporary, self.path)
+            self._fsync_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        if os.name == "nt":
+            return
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def initialize_empty(self) -> dict[str, Any]:
+        with _exclusive_process_file_lock(self.lock_path):
+            if self.path.exists():
+                raise FileExistsError("toolbox_state_v2_already_initialized")
+            if self.legacy_path is not None and self.legacy_path.exists():
+                raise LegacyToolboxStateError("toolbox_state_v1_still_present")
+            state = self._payload({})
+            self._write_unlocked(state)
+            return copy.deepcopy(state)
 
     def read(self) -> dict[str, Any]:
         with _exclusive_process_file_lock(self.lock_path):
@@ -232,5 +262,6 @@ __all__ = [
     "AtomicJsonToolboxStateV2Repository",
     "MAX_ROLLOUT_HISTORY",
     "TOOLBOX_STATE_V2_CONTRACT",
+    "LegacyToolboxStateError",
     "ToolboxRevisionConflictError",
 ]

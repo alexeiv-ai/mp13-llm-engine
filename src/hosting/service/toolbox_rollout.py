@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from ..operation_contract import HostedOperationLifecycle
+from ..operation_contract import TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES, HostedOperationLifecycle
 from ..toolbox.bundle_models import ResolvedToolboxSandboxAssignment
 from ..toolbox.definition_planner import ToolboxDefinitionPlanDraft
 from ..toolbox.orchestration import ToolboxSandboxOrchestrator
@@ -173,6 +173,10 @@ class ToolboxDefinitionRolloutCoordinator:
         published = False
         operator_details: dict[str, Any] = {"toolbox_id": tid, "candidate_engine_ids": []}
         try:
+            repository.merge_metadata(
+                operation_id=operation_id,
+                metadata={"toolbox_id": tid, "definition_revision": draft.definition.revision},
+            )
             self._progress(
                 operation_id,
                 phase="validation",
@@ -333,6 +337,106 @@ class ToolboxDefinitionRolloutCoordinator:
                 },
                 reason=code,
             )
+
+    def recover(self) -> dict[str, Any]:
+        """Reconcile registrations and interrupted definition applies from active v2 truth."""
+
+        state = self.service._toolbox_state_v2.read()
+        snapshots = dict(state.get("toolboxes") or {})
+        active_engine_ids = {
+            str(dict(route or {}).get("engine_id") or "").strip()
+            for snapshot in snapshots.values()
+            for route in dict(dict(snapshot or {}).get("tool_routes") or {}).values()
+        } - {""}
+        activated: list[str] = []
+        retired: list[str] = []
+        candidates_removed: list[str] = []
+        for reg in list(self.service._read_engines()):
+            if str(reg.get("executor_kind") or "") != "toolbox_executor":
+                continue
+            engine_id = str(reg.get("engine_id") or "").strip()
+            routing_state = str(reg.get("routing_state") or "active")
+            if engine_id in active_engine_ids:
+                if routing_state != "active":
+                    self.service.set_toolbox_registration_routing_states({engine_id: "active"})
+                    activated.append(engine_id)
+                continue
+            if routing_state == "candidate":
+                self.service._retire_toolbox_registration(engine_id)
+                candidates_removed.append(engine_id)
+                continue
+            toolbox_id = self.service._registration_toolbox_id(reg)
+            if toolbox_id in snapshots and routing_state != "retired":
+                self.service.set_toolbox_registration_routing_states({engine_id: "retired"})
+                retired.append(engine_id)
+                environment_key = self.service._toolbox_registration_environment_key(reg)
+                resources = self.service._toolbox_runtime_base().resources(environment_key) if environment_key else {}
+                if int(dict(resources.get("metrics") or {}).get("active_calls") or 0) == 0:
+                    self.service._retire_toolbox_registration(engine_id)
+
+        recovered_operations: list[str] = []
+        failed_operations: list[str] = []
+        for row in self.service._hosted_operations.active_records(
+            execution_kind="toolbox_definition_apply"
+        ):
+            operation = dict(row.get("operation") or {})
+            metadata = dict(row.get("metadata") or {})
+            operation_id = str(operation.get("operation_id") or "")
+            toolbox_id = str(metadata.get("toolbox_id") or "")
+            revision = str(metadata.get("definition_revision") or "")
+            snapshot = dict(snapshots.get(toolbox_id) or {})
+            progress_phase = str(dict(row.get("progress") or {}).get("phase") or "")
+            if (
+                revision
+                and snapshot.get("active_revision") == revision
+                and progress_phase in TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES
+            ):
+                self.service._hosted_operations.finish(
+                    operation_id=operation_id,
+                    lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                    envelope={
+                        "contract": "hosting.toolbox.definition_apply_result",
+                        "status": "ok",
+                        "code": "definition_apply_recovered_after_publication",
+                        "toolbox_id": toolbox_id,
+                        "active_revision": revision,
+                        "active_tool_names": sorted(dict(snapshot.get("tool_routes") or {})),
+                        "user_projection": {
+                            "code": "definition_apply_recovered_after_publication",
+                            "summary": "The published toolbox definition was recovered.",
+                        },
+                    },
+                )
+                recovered_operations.append(operation_id)
+            else:
+                self.service._cleanup_toolbox_definition_apply_candidates(record=row)
+                self.service._hosted_operations.finish(
+                    operation_id=operation_id,
+                    lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                    envelope={
+                        "contract": "hosting.toolbox.definition_apply_result",
+                        "status": "error",
+                        "code": "definition_apply_interrupted_before_publication",
+                        "toolbox_id": toolbox_id,
+                        "active_revision": snapshot.get("active_revision"),
+                        "diagnostics": [
+                            {
+                                "code": "definition_apply_interrupted_before_publication",
+                                "summary": "An interrupted candidate rollout was cleaned up.",
+                            }
+                        ],
+                    },
+                    reason="definition_apply_interrupted_before_publication",
+                )
+                failed_operations.append(operation_id)
+        return {
+            "status": "ok",
+            "activated_engine_ids": sorted(activated),
+            "retired_engine_ids": sorted(retired),
+            "removed_candidate_engine_ids": sorted(candidates_removed),
+            "recovered_operation_ids": sorted(recovered_operations),
+            "failed_operation_ids": sorted(failed_operations),
+        }
 
 
 __all__ = ["ToolboxDefinitionRolloutCoordinator"]

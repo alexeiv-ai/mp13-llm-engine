@@ -103,7 +103,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_required_python_abi = str(toolbox_required_python_abi or "").strip()
         self._toolbox_required_platform = str(toolbox_required_platform or "").strip()
         self._toolbox_state_v2 = AtomicJsonToolboxStateV2Repository(
-            self.hosting_root / "state" / "toolbox_sandboxes_v2.json"
+            self.hosting_root / "state" / "toolbox_sandboxes_v2.json",
+            legacy_path=self.hosting_root / "state" / "toolbox_sandboxes.json",
         )
         self._model_runtime_identity = (
             model_runtime_identity

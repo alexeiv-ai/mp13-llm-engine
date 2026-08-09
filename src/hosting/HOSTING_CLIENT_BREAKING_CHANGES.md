@@ -501,6 +501,7 @@ running replacement code against an existing hosting root, stop the daemon and
 run the release command locally as the hosting-root owner:
 
 ```powershell
+$env:MP13_RELEASE_COMMIT = "<40-lowercase-hex-release-commit>"
 @'{"hosting_root":"O:\\exact\\hosting-root","expected_state_sha256":"sha256:<64-lowercase-hex>","acknowledge_version_1_archive":true}'@ |
   python -m hosting.engine_host_cli --payload-stdin toolbox-state-archive-v1
 ```
@@ -524,6 +525,13 @@ fsyncs the archive and parent directories, writes a completion receipt, and
 only then initializes an empty strict version-2 state. Any validation or move
 failure leaves version 2 uninitialized and reports a stable operator error.
 
+`MP13_RELEASE_COMMIT` is mandatory and is written into both inventory and
+receipt; use the exact 40-character parent commit for the installed release.
+The command is local-only: dependent code must not invoke it through a channel,
+SSH target, or running daemon. The replacement state is
+`state/toolbox_sandboxes_v2.json`; dependent projects must never open either
+state file directly.
+
 Store the archive inventory, receipt, parent release artifact, and command
 output together. Do not hand-edit the version number, copy rows into version 2,
 or run a dual-schema reader. Rollback means stopping the daemon, reinstalling
@@ -532,6 +540,13 @@ digest, removing the empty version-2 state only through the release rollback
 command, and atomically restoring the matching archived state/bundles. Do not
 restore an archive under different parent code or merge it with version-2
 definitions.
+
+After adoption, delete all dependent serializers, fixtures, repair scripts, and
+tests that read or write `toolbox_sandboxes.json`, `version: 1`, global
+`environment_descriptions`, derived `profiles`, or runtime-selected engine/
+environment fields. Do not retain a dormant translator or fallback reader for
+rollback; rollback restores the archived file only after the matching old code
+has been reinstalled.
 
 ### Inventory-to-adoption matrix
 

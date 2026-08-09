@@ -13,6 +13,21 @@ from .constants import LIFECYCLE_PROFILE_DETACHED
 
 
 class StateMixin:
+    @staticmethod
+    def toolbox_state_archive_v1(
+        *,
+        hosting_root: str,
+        expected_state_sha256: str,
+        acknowledge_version_1_archive: bool,
+    ) -> Dict[str, Any]:
+        from .toolbox_state_cutover import archive_toolbox_state_v1
+
+        return archive_toolbox_state_v1(
+            hosting_root=hosting_root,
+            expected_state_sha256=expected_state_sha256,
+            acknowledge_version_1_archive=acknowledge_version_1_archive,
+        )
+
     def _ensure_engine_runtime_state(self) -> None:
         if hasattr(self, "_runtime_engines"):
             return

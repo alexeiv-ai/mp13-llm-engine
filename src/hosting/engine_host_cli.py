@@ -105,6 +105,9 @@ EXAMPLES_BY_COMMAND = {
     "hosting-receipt-ledger-cutover": [
         "'{\"acknowledge_replay_window_clear\":true}' | python -m hosting.engine_host_cli --payload-stdin hosting-receipt-ledger-cutover",
     ],
+    "toolbox-state-archive-v1": [
+        "Get-Content toolbox-state-archive-v1.json | python -m hosting.engine_host_cli --payload-stdin toolbox-state-archive-v1",
+    ],
     "toolbox-gc": [
         "python -m hosting.engine_host_cli toolbox-gc",
     ],
@@ -866,6 +869,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "hosted-operation-result",
         "hosted-operation-cancel",
         "hosting-receipt-ledger-cutover",
+        "toolbox-state-archive-v1",
         "toolbox-gc",
         "toolbox-template-list",
         "toolbox-template-describe",
@@ -1127,6 +1131,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(ch.force_restart_daemon())
         return 0
 
+    if cmd_name == "toolbox-state-archive-v1" and _has_explicit_channel_target(args):
+        print(json.dumps({"ok": False, "error": "toolbox_state_archive_v1_local_only"}, ensure_ascii=False))
+        return 2
+
     if _has_explicit_channel_target(args):
         from .engine_host_channel import EngineHostControlChannel
 
@@ -1140,7 +1148,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
 
     # Try sending the command to the running daemon first
     pid_file_arg = getattr(args, "pid_file", None)
-    if cmd_name and _try_daemon_invoke(cmd_name, effective_payload, pid_file=pid_file_arg):
+    if cmd_name and cmd_name != "toolbox-state-archive-v1" and _try_daemon_invoke(cmd_name, effective_payload, pid_file=pid_file_arg):
         return 0
 
     if cmd_name == "toolbox-template-prewarm":
@@ -1891,6 +1899,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(
                 svc.hosting_receipt_ledger_cutover(
                     acknowledge_replay_window_clear=bool(payload.get("acknowledge_replay_window_clear", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-state-archive-v1":
+            _print_ok(
+                svc.toolbox_state_archive_v1(
+                    hosting_root=str(payload.get("hosting_root") or ""),
+                    expected_state_sha256=str(payload.get("expected_state_sha256") or ""),
+                    acknowledge_version_1_archive=bool(
+                        payload.get("acknowledge_version_1_archive", False)
+                    ),
                 )
             )
             return 0

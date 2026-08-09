@@ -96,6 +96,8 @@ class HostedOperationRepository(Protocol):
 
     def get_by_operation_id(self, operation_id: str) -> Optional[Dict[str, Any]]: ...
 
+    def active_records(self, *, execution_kind: HostedExecutionKind | str | None = None) -> list[Dict[str, Any]]: ...
+
     def get_by_request(self, *, owner_actor_id: str, namespace: str, request_id: str) -> Optional[Dict[str, Any]]: ...
 
     def wait_for_terminal(self, *, operation_id: str, timeout_seconds: float) -> Dict[str, Any]: ...
@@ -783,6 +785,23 @@ class AtomicJsonHostedOperationRepository:
             if location is None:
                 return None
             return copy.deepcopy(self._data[location[0]][oid])
+
+    def active_records(self, *, execution_kind: HostedExecutionKind | str | None = None) -> list[Dict[str, Any]]:
+        kind = (
+            execution_kind.value
+            if isinstance(execution_kind, HostedExecutionKind)
+            else str(execution_kind or "").strip()
+        )
+        with self._state_lock():
+            rows = []
+            for row in self._data["receipts"].values():
+                lifecycle = HostedOperationLifecycle(str(row.get("lifecycle") or ""))
+                if lifecycle in TERMINAL_OPERATION_LIFECYCLES:
+                    continue
+                if kind and str(dict(row.get("operation") or {}).get("execution_kind") or "") != kind:
+                    continue
+                rows.append(copy.deepcopy(row))
+            return sorted(rows, key=lambda item: str(dict(item.get("operation") or {}).get("operation_id") or ""))
 
     def get_by_request(self, *, owner_actor_id: str, namespace: str, request_id: str) -> Optional[Dict[str, Any]]:
         key = self._request_key(str(owner_actor_id or "").strip(), str(namespace or "").strip(), str(request_id or "").strip())

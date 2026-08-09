@@ -1021,28 +1021,44 @@ toolbox regressions passed 161; compile and diff checks passed.
 
 ### Phase 5 - Version-2 state and transaction safety
 
-- [ ] **P5-01** Replace version-1 toolbox state with a strict version-2 schema:
+- [x] **P5-01** Replace version-1 toolbox state with a strict version-2 schema:
   active definition revision, canonical desired definition, resolved profiles,
   explicit tool routes, bounded rollout history, and environment references.
-- [ ] **P5-02** Add a toolbox-specific strict reader. Invalid JSON, wrong schema,
+- [x] **P5-02** Add a toolbox-specific strict reader. Invalid JSON, wrong schema,
   wrong version, and digest mismatch must fail closed; do not inherit
   `_read_json()` behavior that returns empty defaults on corruption.
-- [ ] **P5-03** Replace direct toolbox state writes with temp-file write, flush,
+- [x] **P5-03** Replace direct toolbox state writes with temp-file write, flush,
   fsync, and atomic replace under a process-safe file lock.
-- [ ] **P5-04** Keep the current per-toolbox in-process lock for local
+- [x] **P5-04** Keep the current per-toolbox in-process lock for local
   serialization, and add expected-revision compare-and-swap inside the
   process-safe state transaction.
-- [ ] **P5-05** Write candidate intent only if restart recovery needs it; never
+- [x] **P5-05** Write candidate intent only if restart recovery needs it; never
   expose candidate routes as active. Define recovery for crashes before publish,
   during atomic replace, and after publish but before old-worker retirement.
-- [ ] **P5-06** Reject version-1 `toolbox_sandboxes.json` without translation.
+- [x] **P5-06** Reject version-1 `toolbox_sandboxes.json` without translation.
   Add an operator command that validates the exact path and archives version-1
   state/bundles before initializing version 2.
-- [ ] **P5-07** Define rollback as code rollback plus restoration of matching
+- [x] **P5-07** Define rollback as code rollback plus restoration of matching
   archived state. Do not implement dual-schema reads or writes.
 
 Exit gate: corruption and concurrent writers cannot silently reset, merge, or
 partially publish toolbox state.
+
+Evidence (2026-08-08): the version-2 repository strictly validates schema,
+version, canonical definition/profile/route relations, bounded history, and a
+whole-state digest; malformed/truncated/legacy/digest-mismatched files failed
+closed. File and parent-directory durability plus a process lock protected
+atomic replace, and two spawned writers produced one CAS winner and one revision
+conflict. An injected interrupted replace preserved the prior file byte-for-
+byte. Recovery removed orphan candidates before publication, activated
+published route targets, retired non-routed workers, and completed operations
+only when both committed progress and active revision matched. The local-only
+archive command verified exact resolved root, state digest/version, stopped
+daemon, release commit and bundle containment; it inventoried/fsynced and moved
+version-1 state/bundles before initializing empty version 2. Focused state/
+routing tests passed 10; full toolbox and CLI regressions passed 187 after the
+temporary procedural adapter was explicitly isolated from strict definition
+state reads; compile and diff checks passed.
 
 ### Phase 6 - Replace service, transport, client, and admin paths
 

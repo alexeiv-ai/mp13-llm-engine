@@ -59,6 +59,15 @@ receive new routed calls. A failed or canceled pre-publication rollout removes
 its candidates and leaves the prior snapshot unchanged. An empty definition is
 a normal new revision with empty profiles/routes and retained bounded history.
 
+Restart recovery treats the version-2 snapshot as the only routing truth.
+Unpublished candidate registrations are removed; engines named by published
+routes are activated; non-routed registrations are retired and removed once
+idle. An interrupted apply is recovered as success only when its persisted
+progress crossed publication and its pinned definition revision is the active
+revision. Otherwise candidate cleanup completes it as a pre-publication
+failure. Corrupt, wrong-version, digest-mismatched, or unarchived version-1
+state fails closed for definition APIs.
+
 ### Sandbox Profile
 
 `SandboxProfileSpec` contains:
