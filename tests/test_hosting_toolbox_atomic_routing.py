@@ -272,6 +272,64 @@ def test_candidate_warmup_and_failed_readiness_leave_old_routes_untouched(tmp_pa
     assert all(row["routing_state"] != "candidate" for row in service._toolbox_executor_registrations("demo"))
 
 
+def test_continuous_routing_observes_only_complete_old_or_new_definition(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _install_fake_rollout(service)
+    first = _draft("Alpha", "a", None)
+    service._apply_resolved_toolbox_definition(
+        draft=first,
+        profile_changes=_changes(first, "added"),
+        operation_id=_prepare(service, first, "continuous-first"),
+    )
+    second = _draft("Beta", "b", first.definition.revision)
+    warmup = threading.Event()
+    release = threading.Event()
+
+    def block_readiness(assignments, timeout_seconds=8.0):
+        warmup.set()
+        assert release.wait(3)
+        return {
+            item.registration["engine_id"]: {"ready": True}
+            for item in assignments
+            if item.registration
+        }
+
+    service._ensure_toolbox_assignments_ready = block_readiness  # type: ignore[method-assign]
+    result: list[dict] = []
+    writer = threading.Thread(
+        target=lambda: result.append(
+            service._apply_resolved_toolbox_definition(
+                draft=second,
+                profile_changes=_changes(second, "replaced", first.profiles[0].profile_id),
+                operation_id=_prepare(service, second, "continuous-second"),
+            )
+        )
+    )
+    writer.start()
+    assert warmup.wait(2)
+    observed: list[frozenset[str]] = []
+    stop = threading.Event()
+
+    def read_routes() -> None:
+        while not stop.is_set():
+            observed.append(frozenset(service._toolbox_state_v2.get("demo")["tool_routes"]))
+
+    reader = threading.Thread(target=read_routes)
+    reader.start()
+    release.set()
+    writer.join(3)
+    assert not writer.is_alive()
+    for _ in range(100):
+        observed.append(frozenset(service._toolbox_state_v2.get("demo")["tool_routes"]))
+    stop.set()
+    reader.join(2)
+
+    assert result[0]["lifecycle"] == "terminal_success"
+    assert frozenset({"Alpha"}) in observed
+    assert frozenset({"Beta"}) in observed
+    assert set(observed) <= {frozenset({"Alpha"}), frozenset({"Beta"})}
+
+
 def test_published_replacement_marks_busy_old_worker_retired_without_killing_inflight_work(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _install_fake_rollout(service)

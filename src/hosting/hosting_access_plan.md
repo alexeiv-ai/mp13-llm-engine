@@ -1161,20 +1161,33 @@ version-1 toolbox state path.
 
 ### Phase 7 - Tests and dependent-project cutover
 
-- [ ] **P7-01** Replace current register/unregister/builder tests with complete
+- [x] **P7-01** Replace current register/unregister/builder tests with complete
   definition create, code update, add/remove combination, intrinsic update, and
   empty-definition tests. Include a mixed auto/manual/intrinsic toolbox and
   prove that changing each category independently preserves the other two,
   their dependencies, profile membership, inventory, and routes. Also reject
   conflicting profile identities and duplicate advertised tool names.
-- [ ] **P7-02** Add profile-diff tests proving unchanged profiles and
+- [x] **P7-02** Add profile-diff tests proving unchanged profiles and
   environments are reused while only changed profiles are staged and spawned.
-- [ ] **P7-03** Add routing-concurrency tests that execute continuously during
+- [x] **P7-03** Add routing-concurrency tests that execute continuously during
   candidate warmup and publication and never observe ambiguity, missing tools,
   or a partial definition.
-- [ ] **P7-04** Add dependency tests for template hits, import/distribution
+- [x] **P7-04** Add dependency tests for template hits, import/distribution
   aliases, custom fallback, denied online build, lock mismatch, failed import
   probe, and top-level missing imports before worker spawn.
+
+  Evidence (2026-08-08): the new mixed auto/manual/intrinsic matrix proves
+  code-only, add/remove, intrinsic, and empty-definition updates preserve exact
+  unaffected manifests, dependency roots, environments, membership, and
+  inventory; profile classification reuses two untouched profiles and replaces
+  only the changed one. Duplicate active profile identities and duplicate
+  advertised names fail closed. A continuous state reader during candidate
+  warmup/publication observed only the complete old or complete new route map.
+  Planner/rollout/routing tests passed 21. Dependency/policy/hermetic tests
+  passed 43, covering smallest template hits, aliases, deterministic custom
+  fallback, offline denial, lock/artifact completeness, failed import probes,
+  and unresolved top-level imports before rollout. The exact complete suite
+  passed 1,096 with three skips; compile and diff checks passed.
 - [ ] **P7-05** Add hermeticity tests proving packages available only in the
   host interpreter are unavailable to toolbox workers unless present in the
   resolved template/custom lock.
