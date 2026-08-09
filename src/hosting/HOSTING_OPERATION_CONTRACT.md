@@ -44,7 +44,8 @@ All digests use `sha256:<lowercase-hex>`. All sizes use `size_bytes`. Reasons
 are limited to 512 UTF-8 bytes. Timestamps are non-negative Unix milliseconds.
 
 `HostedExecutionKind` also includes `toolbox_definition_apply`, selected by a
-`toolbox_id`. `HostedOperationStatus` contains optional strict `progress` with
+`toolbox_id`, and `toolbox_template_prewarm`, selected by a `template_id`.
+`HostedOperationStatus` contains optional strict `progress` with
 exactly `phase`, `code`, nullable `completed_units`, nullable `total_units`,
 `updated_at_ms`, `summary`, and `cancellable`. Phase is limited to 64 bytes,
 code to 128 bytes, and summary to 512 bytes. Counts are non-negative and
@@ -56,6 +57,14 @@ Definition-apply phases are `validation`, `environment_build`, `staging`,
 before publication. Once a persisted progress record has `cancellable: false`,
 later progress cannot restore it to true. Status/result/request recovery returns
 the latest persisted bounded progress without starting or probing work.
+
+Template-prewarm phases are `validation`, `artifact_verification`,
+`environment_build`, `import_probe`, and `receipt_commit`. The commit phase is
+non-cancellable. A template becomes consumer-visible as `ready` only after the
+exact template digest, target ABI/platform, complete artifact digest set, and
+complete exposed-import probe set have been validated and the receipt is
+atomically persisted. Dispatch success, builder return, or partial progress is
+never readiness.
 
 ## Result retention policy
 
@@ -130,6 +139,14 @@ approval identity digest
 catalog revision and package-policy revision
 ```
 
+Toolbox template prewarm fingerprint input:
+
+```text
+execution kind and template selector
+exact template digest and target ABI/platform
+catalog revision
+```
+
 Test vectors live in `tests/test_hosting_operation_contract.py` and are the
 authority for canonical serialization changes.
 
@@ -182,6 +199,12 @@ operation, `hosted_operation_resolve_request` performs an authenticated indexed
 lookup by execution kind, resolved selector, and request ID and returns the
 stored canonical ref/status. It never probes or starts workers. Once recovered,
 all status, result, and cancel calls remain ref-only.
+
+Prewarm uses receipt namespace `toolbox_template_prewarm:<template_id>` so
+authenticated request-ID recovery is unambiguous. Reusing a request ID with a
+different revision, target, or catalog fingerprint is an idempotency conflict.
+The command is daemon-owned: the short-lived CLI does not fall back to an
+in-process background thread when the daemon is unavailable.
 
 For definition apply, cancellation before publication finishes with bounded
 candidate-cleanup diagnostics. Publication is the commit boundary. A cancel

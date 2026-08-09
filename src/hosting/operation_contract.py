@@ -85,11 +85,15 @@ TOOLBOX_DEFINITION_APPLY_PHASES = frozenset(
     }
 )
 TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES = frozenset({"publication", "draining", "cleanup"})
+TOOLBOX_TEMPLATE_PREWARM_PHASES = frozenset(
+    {"validation", "artifact_verification", "environment_build", "import_probe", "receipt_commit"}
+)
 
 
 class HostedExecutionKind(StrEnum):
     TOOLBOX = "toolbox"
     TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
+    TOOLBOX_TEMPLATE_PREWARM = "toolbox_template_prewarm"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -167,7 +171,7 @@ class HostedOperationSelector:
     id: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"toolbox_id", "engine_id"}:
+        if self.kind not in {"toolbox_id", "engine_id", "template_id"}:
             raise ValueError("operation_selector_kind_invalid")
         _bounded_text(self.id, label="operation_selector_id", max_bytes=MAX_SELECTOR_ID_BYTES)
 
@@ -471,6 +475,9 @@ class HostedOperationStatus:
                     and self.progress.cancellable
                 ):
                     raise ValueError("toolbox_definition_apply_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
+                if self.progress.phase not in TOOLBOX_TEMPLATE_PREWARM_PHASES:
+                    raise ValueError("toolbox_template_prewarm_progress_phase_invalid")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -550,6 +557,7 @@ __all__ = [
     "TERMINAL_OPERATION_LIFECYCLES",
     "TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES",
     "TOOLBOX_DEFINITION_APPLY_PHASES",
+    "TOOLBOX_TEMPLATE_PREWARM_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
     "HostedOperationProgress",

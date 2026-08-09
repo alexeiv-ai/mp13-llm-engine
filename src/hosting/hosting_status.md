@@ -57,6 +57,7 @@ None.
 | 2026-08-08 | P1-04, P1-05, P1-06 | Added deterministic staged-source AST evidence, reviewed/explicit PEP 440 requirement resolution, and smallest exact template or minimal custom-delta selection. | Dependency pipeline -> 15 passed; catalog/identity regressions -> 21 passed; Poetry lock, compile, and diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure planning). | `feat: add toolbox dependency planner (P1-04 P1-05 P1-06)` |
 | 2026-08-08 | P1-07 | Added strict fail-closed target/template, package allow/deny, custom approval, HTTPS index, intrinsic-completeness, and payload-authority validation. | Policy -> 11 passed; dependency/catalog regressions -> 31 passed; compile/diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure policy). | `feat: add toolbox dependency policy (P1-07)` |
 | 2026-08-08 | P1-08 | Added an atomic immutable catalog with signed manifest/artifact references, lifecycle/active revisions, bounded consumer projections/audit, and end-to-end authorized service/daemon/channel/CLI controls. | Catalog control -> 11 passed including multi-process/restart/auth/transport; existing channel/CLI/auth regressions -> 95 passed; compile/diff checks passed. Environment materialization: not applicable until P1-09. | `feat: add toolbox catalog control (P1-08)` |
+| 2026-08-08 | P1-09 | Added admin-only durable target-host prewarm orchestration, strict materializer/receipt boundaries, persisted bounded verification progress, and exact-receipt-gated consumer readiness. | Prewarm -> 6 passed; operation/catalog -> 58 passed; channel/CLI/auth -> 95 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared command named two nonexistent test files and failed before collection; it was corrected in the active ledger to the repository's actual CLI/auth suites before closeout. | `feat: add durable template prewarm (P1-09)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -84,5 +85,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Add durable operator prewarm/materialize control and its progress/verification
-tests from P1-09/P1-10.
+Ship and verify the initial `core`/`py-compute` environment resources and
+shared resolver/materialization integration from P1-10 through P1-12.

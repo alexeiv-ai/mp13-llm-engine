@@ -123,6 +123,9 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-template-revoke": [
         "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-revoke",
     ],
+    "toolbox-template-prewarm": [
+        "Get-Content template-prewarm.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-prewarm",
+    ],
     "toolbox-references": [
         "python -m hosting.engine_host_cli toolbox-references",
     ],
@@ -866,6 +869,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-template-publish",
         "toolbox-template-deprecate",
         "toolbox-template-revoke",
+        "toolbox-template-prewarm",
         "toolbox-references",
         "toolbox-consistency",
         "toolbox-review-snapshot",
@@ -1134,6 +1138,19 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     pid_file_arg = getattr(args, "pid_file", None)
     if cmd_name and _try_daemon_invoke(cmd_name, effective_payload, pid_file=pid_file_arg):
         return 0
+
+    if cmd_name == "toolbox-template-prewarm":
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "template_prewarm_requires_daemon",
+                    "error_code": "template_prewarm_requires_daemon",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
 
     # Fallback: direct EngineHostService call (original behavior)
     svc = EngineHostService(
@@ -1910,6 +1927,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.toolbox_template_revoke(
                     template_id=str(payload.get("template_id") or ""),
                     template_digest=str(payload.get("template_digest") or ""),
+                )
+            )
+            return 0
+        if cmd == "toolbox-template-prewarm":
+            _print_ok(
+                svc.toolbox_template_prewarm(
+                    template_id=str(payload.get("template_id") or ""),
+                    template_digest=str(payload.get("template_digest") or "").strip() or None,
+                    python_abi=str(payload.get("python_abi") or ""),
+                    platform=str(payload.get("platform") or ""),
+                    request_id=str(payload.get("request_id") or ""),
                 )
             )
             return 0

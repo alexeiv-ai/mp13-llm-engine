@@ -72,6 +72,7 @@ _TOOLBOX_TEMPLATE_ADMIN_COMMANDS = {
     "toolbox-template-publish",
     "toolbox-template-deprecate",
     "toolbox-template-revoke",
+    "toolbox-template-prewarm",
 }
 
 _WORKFLOW_JS_COMMANDS = {

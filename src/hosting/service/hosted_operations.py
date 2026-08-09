@@ -39,6 +39,10 @@ class HostedOperationsMixin:
         target = selector if isinstance(selector, HostedOperationSelector) else HostedOperationSelector.from_dict(selector)
         if kind == HostedExecutionKind.TOOLBOX:
             namespace = f"toolbox:{target.id}" if target.kind == "toolbox_id" else f"engine:{target.id}"
+        elif kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
+            if target.kind != "template_id":
+                raise ValueError("template_prewarm_selector_must_be_template_id")
+            namespace = f"toolbox_template_prewarm:{target.id}"
         else:
             if target.kind != "engine_id":
                 raise ValueError("workflow_operation_selector_must_be_engine_id")
@@ -86,6 +90,14 @@ class HostedOperationsMixin:
                 timeout_seconds=float(timeout_seconds or 8.0),
                 respawn=bool(respawn),
             )
+        if operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
+            canceled = self._hosted_operations.cancel_before_dispatch(
+                operation_id=operation.operation_id,
+                reason=str(reason or "client_requested"),
+            )
+            if canceled is not None:
+                return canceled
+            return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
         return self._cancel_workflow_operation(record=record, reason=str(reason or "client_requested"))
 
     def hosting_receipt_ledger_cutover(

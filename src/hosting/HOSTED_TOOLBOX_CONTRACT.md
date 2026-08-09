@@ -333,6 +333,25 @@ authenticated daemon control transport as other host administration. Prewarm
 returns a durable hosted-operation ref. Role checks are distinct even when one
 actor holds multiple roles.
 
+`toolbox-template-prewarm` accepts exactly the logical `template_id`, optional
+exact `template_digest`, target `python_abi`, target `platform`, and a stable
+caller `request_id`. It accepts no path, interpreter, installer command,
+artifact bytes, credential, role, or readiness assertion. If the digest is
+omitted, dispatch pins the current active revision before persisting the
+operation. The returned `hosting.operation_status` contains a
+`toolbox_template_prewarm` operation selected by `template_id`; operators use
+the generic hosted-operation status/result/cancel/recovery APIs thereafter.
+
+The target-host materializer reports bounded checkpoints but only an exact,
+complete verification receipt can change the descriptor from
+`not_materialized`/`setup_needed` to `ready`. The receipt binds the template
+revision, ABI/platform, derived environment digest, complete artifact digests,
+complete exposed-import probes, verifier identity, and verification time.
+Failures remain terminal diagnostics on the operation and do not create or
+replace a ready receipt. The default unconfigured builder fails closed with
+`template_materializer_unconfigured`; shipped builders and normal setup are
+defined by P1-11/P2.
+
 ### Immutable manifests and artifacts
 
 A published revision contains a stable logical template ID, complete resolved

@@ -205,6 +205,16 @@ dependency intent, then consume plan/build diagnostics. Template publication,
 lifecycle, artifact sources, offline preseeding, and prewarm belong to the
 authenticated hosting-administration channel.
 
+Dependent projects must not add `toolbox-template-prewarm` to their deployment
+sequence or call the physical builder as a substitute for definition apply.
+That command is `hosting_template_admin` behavior and returns a durable
+operation for host provisioning. Consumer logic must only read the bounded
+template descriptor and react to `user_projection.state/code`: show
+`setup_needed`, preserve the desired definition, and retry plan/apply after an
+administrator restores readiness. Remove any client-side "prewarm", "install
+now", environment-repair, or direct operation-polling branch that was used to
+make a template ready.
+
 Do not add compatibility shims for these behaviors. Code that still needs an
 old field must be changed to construct dependency intent or consume the
 authoritative definition/apply projection.

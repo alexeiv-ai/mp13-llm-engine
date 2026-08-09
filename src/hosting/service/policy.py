@@ -161,6 +161,7 @@ class PolicyMixin:
             "toolbox-template-publish",
             "toolbox-template-deprecate",
             "toolbox-template-revoke",
+            "toolbox-template-prewarm",
             "toolbox-references",
             "toolbox-consistency",
             "toolbox-review-snapshot",

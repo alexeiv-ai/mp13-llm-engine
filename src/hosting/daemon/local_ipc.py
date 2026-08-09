@@ -3149,6 +3149,15 @@ class EngineHostDaemon:
                 template_digest=str(payload.get("template_digest") or ""),
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
+        if cmd == "toolbox-template-prewarm":
+            return svc.toolbox_template_prewarm(
+                template_id=str(payload.get("template_id") or ""),
+                template_digest=str(payload.get("template_digest") or "").strip() or None,
+                python_abi=str(payload.get("python_abi") or ""),
+                platform=str(payload.get("platform") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "toolbox-references":
             return svc.toolbox_references()
         if cmd == "toolbox-consistency":

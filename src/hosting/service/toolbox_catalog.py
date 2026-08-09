@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,21 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from ..toolbox.identity import identity_digest, require_digest
+from ..operation_contract import (
+    HostedExecutionKind,
+    HostedOperationLifecycle,
+    HostedOperationProgress,
+    HostedOperationSelector,
+    hosted_execution_fingerprint,
+)
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
+from .toolbox_materialization import (
+    AtomicJsonToolboxMaterializationReceipts,
+    ToolboxTemplateMaterializationError,
+    ToolboxTemplateMaterializationReceipt,
+    derived_environment_digest,
+    materialization_target,
+)
 
 
 CATALOG_STATE_CONTRACT = "hosting.toolbox.template_catalog_state.v1"
@@ -426,10 +441,17 @@ class AtomicJsonToolboxTemplateCatalog:
             return {"entry": dict(entry), "catalog_revision": state["catalog_revision"], "outcome": outcome}
 
 
-def _consumer_descriptor(entry: Mapping[str, Any], *, catalog_revision: str, active: Mapping[str, str]) -> dict[str, Any]:
+def _consumer_descriptor(
+    entry: Mapping[str, Any],
+    *,
+    catalog_revision: str,
+    active: Mapping[str, str],
+    receipts: Sequence[ToolboxTemplateMaterializationReceipt] = (),
+) -> dict[str, Any]:
     template = ToolboxEnvironmentTemplateSpec.from_dict(entry["template"])
     lifecycle = str(entry["lifecycle"])
     is_active = active.get(template.template_id) == entry["template_digest"]
+    verified = bool(receipts) and lifecycle != "revoked"
     return {
         "contract": "hosting.toolbox.environment_template",
         "template_id": template.template_id,
@@ -441,11 +463,15 @@ def _consumer_descriptor(entry: Mapping[str, Any], *, catalog_revision: str, act
         "import_roots": list(template.exposed_import_roots),
         "lifecycle": lifecycle,
         "active_revision": is_active,
-        "materialization": "not_materialized",
+        "materialization": "ready" if verified else "not_materialized",
         "user_projection": {
-            "state": "setup_needed",
-            "code": "template_not_materialized",
-            "summary": "The template revision is published but has not been verified on this runtime.",
+            "state": "ready" if verified else "setup_needed",
+            "code": "template_ready" if verified else "template_not_materialized",
+            "summary": (
+                "The template is ready on this tool runtime."
+                if verified
+                else "The template revision is published but has not been verified on this runtime."
+            ),
         },
     }
 
@@ -457,6 +483,17 @@ class ToolboxTemplateCatalogMixin:
             (self.hosting_root / "state" / "toolbox_template_catalog.json").resolve()
         )
 
+    @property
+    def _toolbox_materialization_receipts(self) -> AtomicJsonToolboxMaterializationReceipts:
+        return AtomicJsonToolboxMaterializationReceipts(
+            (self.hosting_root / "state" / "toolbox_template_materializations.json").resolve()
+        )
+
+    def _template_receipts(self, template_digest: str) -> tuple[ToolboxTemplateMaterializationReceipt, ...]:
+        return self._toolbox_materialization_receipts.list_for_template(
+            template_digest=template_digest
+        )
+
     def toolbox_template_list(self) -> dict[str, Any]:
         state = self._toolbox_template_catalog.read()
         descriptors = [
@@ -464,6 +501,7 @@ class ToolboxTemplateCatalogMixin:
                 item,
                 catalog_revision=state["catalog_revision"],
                 active=state["active"],
+                receipts=self._template_receipts(item["template_digest"]),
             )
             for item in state["entries"]
         ]
@@ -502,7 +540,206 @@ class ToolboxTemplateCatalogMixin:
             entry,
             catalog_revision=state["catalog_revision"],
             active=state["active"],
+            receipts=self._template_receipts(entry["template_digest"]),
         )
+
+    def toolbox_template_prewarm(
+        self,
+        *,
+        template_id: str,
+        python_abi: str,
+        platform: str,
+        request_id: str,
+        template_digest: str | None = None,
+        owner_actor_id: str = "service:local",
+    ) -> dict[str, Any]:
+        """Persist and dispatch exact-revision materialization on this runtime host."""
+
+        state = self._toolbox_template_catalog.read()
+        target_id = _bounded_id(template_id, label="template_id")
+        target_digest = (
+            require_digest(template_digest, label="template_digest")
+            if template_digest is not None
+            else state["active"].get(target_id)
+        )
+        if target_digest is None:
+            raise ValueError("template_active_revision_not_found")
+        entry = next(
+            (
+                item for item in state["entries"]
+                if item["template_id"] == target_id and item["template_digest"] == target_digest
+            ),
+            None,
+        )
+        if entry is None:
+            raise ValueError("template_revision_not_found")
+        if entry["lifecycle"] == "revoked":
+            raise ValueError("template_revision_revoked")
+        target = materialization_target(python_abi=python_abi, platform=platform)
+        template = ToolboxEnvironmentTemplateSpec.from_dict(entry["template"])
+        if python_abi not in template.python_abis or platform not in template.platforms:
+            raise ValueError("template_target_unsupported")
+        rid = str(request_id or "").strip()
+        if not rid:
+            raise ValueError("template_prewarm_request_id_required")
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM.value,
+                "template_id": target_id,
+                "template_digest": target_digest,
+                "target": target,
+                "catalog_revision": state["catalog_revision"],
+            }
+        )
+        owner = self._operation_owner(owner_actor_id)
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=owner,
+            execution_kind=HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM,
+            selector=HostedOperationSelector(kind="template_id", id=target_id),
+            namespace=f"toolbox_template_prewarm:{target_id}",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={"template_digest": target_digest, "target": target},
+        )
+        if prepared["action"] != "dispatch":
+            status = prepared.get("status")
+            if status is None:
+                raise RuntimeError("hosted_operation_capacity")
+            return dict(status)
+        operation_id = str(prepared["status"]["operation"]["operation_id"])
+        thread = threading.Thread(
+            target=self._run_toolbox_template_prewarm,
+            kwargs={
+                "operation_id": operation_id,
+                "entry": dict(entry),
+                "python_abi": python_abi,
+                "platform": platform,
+            },
+            name=f"toolbox-template-prewarm-{operation_id[-8:]}",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": "template_prewarm_dispatch_failed",
+                    "summary": "The target-host materialization task could not be started.",
+                },
+                reason="template_prewarm_dispatch_failed",
+            )
+            raise
+        return dict(prepared["status"])
+
+    def _run_toolbox_template_prewarm(
+        self,
+        *,
+        operation_id: str,
+        entry: Mapping[str, Any],
+        python_abi: str,
+        platform: str,
+    ) -> None:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+
+        def checkpoint(
+            phase: str,
+            code: str,
+            completed_units: int | None,
+            total_units: int | None,
+            summary: str,
+            cancellable: bool,
+        ) -> None:
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase=phase,
+                    code=code,
+                    completed_units=completed_units,
+                    total_units=total_units,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary=summary,
+                    cancellable=cancellable,
+                ),
+            )
+
+        try:
+            checkpoint("validation", "template_revision_validated", 1, 1, "The exact template revision and target were validated.", True)
+            receipt = self._toolbox_template_materializer.materialize(
+                catalog_entry=dict(entry),
+                python_abi=python_abi,
+                platform=platform,
+                progress=checkpoint,
+            )
+            if not isinstance(receipt, ToolboxTemplateMaterializationReceipt):
+                raise ToolboxTemplateMaterializationError(
+                    "template_materialization_receipt_invalid",
+                    "The target-host materializer returned an invalid verification receipt.",
+                )
+            if (
+                receipt.template_id != entry["template_id"]
+                or receipt.template_digest != entry["template_digest"]
+                or receipt.python_abi != python_abi
+                or receipt.platform != platform
+            ):
+                raise ToolboxTemplateMaterializationError(
+                    "template_materialization_receipt_mismatch",
+                    "The verification receipt did not match the requested template revision and target.",
+                )
+            expected_artifacts = sorted(item["sha256"] for item in entry["artifacts"])
+            expected_roots = sorted(entry["template"]["exposed_import_roots"])
+            expected_environment_digest = derived_environment_digest(
+                template_digest=entry["template_digest"],
+                python_abi=python_abi,
+                platform=platform,
+                artifact_digests=expected_artifacts,
+            )
+            if (
+                sorted(receipt.artifact_digests) != expected_artifacts
+                or sorted(receipt.verified_import_roots) != expected_roots
+                or receipt.environment_digest != expected_environment_digest
+            ):
+                raise ToolboxTemplateMaterializationError(
+                    "template_materialization_verification_incomplete",
+                    "The verification receipt did not cover the complete artifact lock and import probes.",
+                )
+            checkpoint("receipt_commit", "verification_receipt_committing", 0, 1, "The verified materialization receipt is being committed.", False)
+            self._toolbox_materialization_receipts.put(receipt)
+            checkpoint("receipt_commit", "verification_receipt_committed", 1, 1, "The verified materialization receipt was committed.", False)
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "status": "ok",
+                    "code": "template_materialization_verified",
+                    "template_id": receipt.template_id,
+                    "template_digest": receipt.template_digest,
+                    "python_abi": receipt.python_abi,
+                    "platform": receipt.platform,
+                    "environment_digest": receipt.environment_digest,
+                    "verified_at_ms": receipt.verified_at_ms,
+                },
+            )
+        except ToolboxTemplateMaterializationError as exc:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={"status": "error", "code": exc.code, "summary": exc.summary},
+                reason=exc.code,
+            )
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": "template_materialization_failed",
+                    "summary": "The target-host materialization failed verification.",
+                },
+                reason="template_materialization_failed",
+            )
 
     def toolbox_template_publish(
         self,

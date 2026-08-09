@@ -34,6 +34,7 @@ from .sandbox_api import SandboxApiMixin
 from .state import StateMixin
 from .toolbox_env import ToolboxEnvironmentMixin
 from .toolbox_catalog import ToolboxTemplateCatalogMixin
+from .toolbox_materialization import ToolboxTemplateMaterializer, UnconfiguredToolboxTemplateMaterializer
 from .toolbox_runtime import ToolboxRuntimeMixin
 from .workflow_helpers import WorkflowHelperMixin
 
@@ -57,6 +58,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         operation_max_count: Optional[int] = None,
         operation_max_tombstones: Optional[int] = None,
         operation_max_inline_result_bytes: Optional[int] = None,
+        toolbox_template_materializer: Optional[ToolboxTemplateMaterializer] = None,
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
         raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
@@ -68,6 +70,9 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self.control_state_file = self.hosting_root / "access_control.json"
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
+        self._toolbox_template_materializer = (
+            toolbox_template_materializer or UnconfiguredToolboxTemplateMaterializer()
+        )
 
         def _float_setting(value: Optional[float], env_name: str, default: float) -> float:
             if value is not None:

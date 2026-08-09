@@ -3545,6 +3545,27 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def toolbox_template_prewarm(
+        self,
+        *,
+        template_id: str,
+        python_abi: str,
+        platform: str,
+        request_id: str,
+        template_digest: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-template-prewarm",
+            {
+                "template_id": str(template_id or "").strip(),
+                "template_digest": str(template_digest or "").strip() or None,
+                "python_abi": str(python_abi or "").strip(),
+                "platform": str(platform or "").strip(),
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def toolbox_references(self) -> Dict[str, Any]:
         res = self._invoke("toolbox-references", {})
         return dict(res or {})

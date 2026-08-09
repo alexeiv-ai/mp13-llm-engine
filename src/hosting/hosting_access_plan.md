@@ -784,9 +784,19 @@ call path found in the inventory.
   passed 11 cases including multi-process/restart/corruption/role/transport
   coverage; existing channel/CLI/auth regressions passed 95 tests; compile and
   diff checks passed. Materialization remains P1-09.
-- [ ] **P1-09** Add an operator prewarm/materialize operation that executes on
+- [x] **P1-09** Add an operator prewarm/materialize operation that executes on
   the target runtime host and returns a durable operation ref with progress and
   terminal verification diagnostics. Apply may invoke the same builder lazily.
+  Evidence (2026-08-08): added the administrator-only daemon/channel/CLI
+  `toolbox-template-prewarm` path, `toolbox_template_prewarm` hosted-operation
+  kind and template selector, strict target-host materializer interface,
+  process-safe exact-revision verification receipts, bounded phase progress,
+  terminal diagnostics, request idempotency/recovery identity, and fail-closed
+  unconfigured-builder behavior. Consumer readiness changes only after exact
+  template/target, complete artifact/import coverage, and derived environment
+  identity are verified and atomically committed. Focused tests passed 6 cases;
+  operation/catalog regressions passed 58, channel/CLI/auth regressions passed
+  95, contract documentation passed 12, and compile/diff checks passed.
 - [ ] **P1-10** Add strict tests for relative/local imports, alias mappings such
   as import name versus distribution name, optional imports, dynamic imports,
   duplicate staged paths, intrinsic requirements, role separation, immutable
