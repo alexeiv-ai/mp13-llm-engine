@@ -913,19 +913,19 @@ focused legacy toolbox environment regressions passed 3 with 135 deselected.
 
 ### Phase 3 - Definition planner and resolved profile model
 
-- [ ] **P3-01** Add strict `ToolboxDefinitionSpec` parsing and canonicalization
+- [x] **P3-01** Add strict `ToolboxDefinitionSpec` parsing and canonicalization
   to `bundle_models.py`; reject unknown version-1 profile/dependency fields.
-- [ ] **P3-02** Replace public `SandboxProfileSpec` use with an internal
+- [x] **P3-02** Replace public `SandboxProfileSpec` use with an internal
   `ResolvedToolboxProfileSpec` containing host-derived profile ID, resolved
   environment key/lock digest, canonical sandbox policy, and assigned tool keys.
-- [ ] **P3-03** Group requests only after dependency resolution. Functions with
+- [x] **P3-03** Group requests only after dependency resolution. Functions with
   different import subsets share a profile when the resolved environment and
   sandbox policy are identical.
-- [ ] **P3-04** Validate advertised tool names as unique within one toolbox
+- [x] **P3-04** Validate advertised tool names as unique within one toolbox
   definition before grouping so `_route_toolbox_registration()` cannot face a
   legitimate duplicate route. Duplicate names in different toolboxes are
   valid and must not be compared.
-- [ ] **P3-05** Continue producing `ToolboxBundleSpec`, but set
+- [x] **P3-05** Continue producing `ToolboxBundleSpec`, but set
   `dependency_lock_hash` from the resolved environment and serialize the new
   resolved profile shape into the manifest.
 - [ ] **P3-06** Compare proposed profiles with persisted active profiles by

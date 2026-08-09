@@ -39,8 +39,8 @@ environment builder work is next.
 
 ## Active slice
 
-None. The next slice will predeclare Phase 3 planner/model work before changing
-files.
+None. The next slice will predeclare persisted comparison/plan storage before
+changing files.
 
 ## Completed slices
 
@@ -65,6 +65,7 @@ files.
 | 2026-08-08 | P1-13, Phase 1 exit | Added exact bounded model-runtime status plus generic selection denials, including healthy-installed denial; proved deterministic restart-safe resolution without worker/ledger mutation. | Model boundary -> 12 passed; resolver/policy/catalog -> 32 passed; channel/CLI/auth/security -> 133 passed; docs/shipped templates -> 18 passed; Phase 1 resolver audit -> 10 passed; compile/diff checks passed. | `feat: enforce exclusive model runtime (P1-13)` |
 | 2026-08-08 | Phase 2 groundwork (no items checked) | Added the strict host-derived resolved environment input and frozen `hosting.toolbox.environment.v2` cache identity, removed environment-description service lookup from worker orchestration, and isolated no-bootstrap toolbox interpreter selection while preserving workflow fallback. P2 remains open until the physical builder replaces the legacy inheriting path. | Hermetic contract -> 6 passed; workflow/runtime regressions -> 29 passed; focused toolbox environment regressions -> 3 passed, 135 deselected; compile/diff checks passed. | `refactor: establish hermetic toolbox environment contract` |
 | 2026-08-08 | P2-01 through P2-10, Phase 2 exit | Added the target-host offline hermetic builder, exact wheel/lock/probe receipts, atomic publication/quarantine, thread/process deduplication, reference/grace GC, complete independent derived locks, receipt-gated readiness, catalog prewarm adaptation, and configured-orchestrator verified interpreter routing. | Hermetic builder -> 11 passed including real venvs, two fresh processes, service configuration, quarantine, ambient exclusion, complete base-plus-delta, and GC; environment/prewarm/shipped templates -> 19 passed; workflow/runtime -> 29 passed; focused toolbox environment -> 3 passed, 135 deselected; compile/diff checks passed. | `feat: build hermetic toolbox environments (P2-01..P2-10)` |
+| 2026-08-08 | P3-01 through P3-05 | Added strict canonical version-2 definition/request/dependency models, host-derived resolved profiles, per-toolbox advertised-name and file conflict validation, post-resolution grouping, and resolved-profile bundle manifests. | Definition planner -> 11 passed; dependency/identity -> 20 passed; focused bundle/profile/duplicate regressions -> 18 passed, 120 deselected; docs/compile/diff checks passed. The initially predeclared dependency-pipeline filename did not exist and was corrected to the repository's dependency-analysis suite before execution. | `feat: add toolbox definition planner (P3-01..P3-05)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -92,6 +93,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Begin Phase 3 with strict public definition parsing, internal resolved profile
-models, post-resolution grouping, and duplicate-name validation (P3-01 through
-P3-04).
+Complete Phase 3 with active-profile comparison/classification and bounded,
+expiring, catalog/policy-pinned persisted plans (P3-06 and P3-07).

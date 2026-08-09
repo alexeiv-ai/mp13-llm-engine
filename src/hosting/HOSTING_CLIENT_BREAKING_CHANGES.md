@@ -269,6 +269,27 @@ tracking and grace-period GC decide when a physical environment can be
 deleted. A failed definition mutation must not delete a shared environment or
 its artifact bytes.
 
+Remove construction of version-1 `sandbox_profile` objects from auto/manual
+requests. Do not copy `environment_name`, `profile_id`, or `required_imports`
+into a compatibility object. Each version-2 request instead has exactly one
+`dependency` object and one `sandbox_policy`; all remaining fields must be
+present with null/empty values where the contract says so. Unknown fields are
+errors, not forward-compatible bags.
+
+Also remove dependent grouping by import list, environment label, request
+category, or locally computed profile ID. Submit the complete ungrouped
+definition. The host resolves each request first and returns profiles grouped
+by authoritative environment identity plus sandbox policy. Dependent UI may
+display the bounded profile summary but must not recreate groups, persist the
+resolved profile ID as desired state, or split a definition into separate
+auto/manual/intrinsic mutations.
+
+Before submission, dependent code should validate advertised-name uniqueness
+only inside that toolbox across auto/manual/intrinsic/guide names. Delete any
+application-global uniqueness check: identical names in different toolbox IDs
+are valid. The parent remains authoritative and rejects duplicates before
+package work or staging.
+
 ### Required environment-selection and readiness changes
 
 Dependent deployment code may request only the logical template IDs `core` and

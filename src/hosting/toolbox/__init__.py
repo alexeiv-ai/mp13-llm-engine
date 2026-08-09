@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 from .bundle_models import (
+    ResolvedToolboxProfileSpec,
     SandboxProfileSpec,
     ToolboxAutoAssignmentRequest,
     ToolboxBundleAutoTool,
     ToolboxBundleFile,
     ToolboxBundleSpec,
+    ToolboxDefinitionSpec,
+    ToolboxDependencyRequest,
     ToolboxBundleTool,
     ToolboxEnvironmentSpec,
     ToolboxHarnessConfig,
     ToolboxManualAssignmentRequest,
+    ToolboxManualAssignmentRequestV2,
+    ToolboxAutoAssignmentRequestV2,
+    ToolboxIntrinsicSelection,
     ToolboxSandboxAssignment,
     ToolboxWorkerStartupSpec,
 )
@@ -23,6 +29,7 @@ from .catalog import (
     ToolboxLockedDistributionSpec,
     ToolboxTemplateProvenance,
 )
+from .definition_planner import ToolboxDefinitionPlanDraft, plan_toolbox_definition
 from .cancellation import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from .dependency_analysis import (
     ToolboxDependencyAnalysisError,
@@ -80,6 +87,14 @@ __all__ = [
     "ToolboxManualAssignmentRequest",
     "ToolboxSandboxAssignment",
     "ToolboxBundleSpec",
+    "ToolboxDefinitionSpec",
+    "ToolboxDependencyRequest",
+    "ToolboxAutoAssignmentRequestV2",
+    "ToolboxManualAssignmentRequestV2",
+    "ToolboxIntrinsicSelection",
+    "ResolvedToolboxProfileSpec",
+    "ToolboxDefinitionPlanDraft",
+    "plan_toolbox_definition",
     "ToolboxWorkerStartupSpec",
     "ToolboxEnvironmentSpec",
     "ToolboxEnvironmentManager",

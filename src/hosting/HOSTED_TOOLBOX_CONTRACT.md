@@ -276,6 +276,37 @@ requirements; and sandbox-policy denial.
 Name uniqueness is per toolbox. Definitions for separate toolboxes are never
 compared for this rule.
 
+The implementation parses these objects through strict frozen
+`ToolboxDefinitionSpec`, `ToolboxAutoAssignmentRequestV2`,
+`ToolboxManualAssignmentRequestV2`, `ToolboxDependencyRequest`, and intrinsic
+selection models. Every listed field is required even when its value is null
+or empty; any additional field fails. In particular, `sandbox_profile`,
+`environment_name`, `required_imports`, approval booleans, runtime overrides,
+and old procedural request fields are not aliases for definition dependency or
+sandbox inputs.
+
+Planning analyzes and resolves each request before grouping. The internal
+`ResolvedToolboxProfileSpec` contains the host-derived profile digest,
+environment identity, template and effective lock digests, canonical sandbox
+policy, assigned stable tool keys, and the union of verification import roots.
+Its identity is only environment identity plus sandbox policy. Consequently,
+two functions with different raw import subsets share one profile when they
+resolve to the same complete lock and policy; matching import text cannot
+merge different environments or permissions.
+
+Duplicate advertised-name validation covers auto, manual, intrinsic, and
+derived intrinsic-guide names within the one submitted toolbox before any
+resolution or staging. No process-global name registry participates, so the
+same advertised name remains valid in two separate toolbox definitions.
+Conflicting content at one normalized file path also fails before resolution.
+
+The pure planner emits one `ToolboxBundleSpec` per resolved profile. Its
+`dependency_lock_hash` is the effective immutable template/custom lock, and
+the manifest includes the strict resolved-profile projection. The legacy
+`SandboxProfileSpec` portion of that internal bundle is only a worker adapter;
+it is not accepted from the public definition and is removed at the breaking
+cutover.
+
 ## Environment template descriptor
 
 Consumer template list/describe responses contain bounded
