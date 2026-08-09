@@ -354,21 +354,7 @@ class ToolboxSandboxOrchestrator:
                     environment_consumer_kind="toolbox_executor",
                 )
             else:
-                # Deprecated version-1 mutations remain on the legacy adapter
-                # until Phase 7 removes those public commands. Configured v2
-                # hosts never reach this ambient-capable path.
-                environment_description = None
-                effective_get = getattr(self.service, "toolbox_environment_description_effective_get", None)
-                if callable(effective_get):
-                    environment_name = str(item.sandbox_profile.environment_name or "base").strip() or "base"
-                    environment_description = effective_get(environment_name)
-                environment_spec = self.environment_manager.ensure_for_bundle(
-                    staged,
-                    environment_description=environment_description,
-                )
-                environment_spec.python_executable = self.environment_manager.toolbox_runtime_python_executable(
-                    environment_spec
-                )
+                raise RuntimeError("hermetic_toolbox_environment_builder_required")
             registration_environment = self.runtime_base.registration_environment(
                 environment=staged.registration_environment(environment_spec),
                 toolbox_id=toolbox_id,

@@ -141,5 +141,5 @@ def test_orchestrator_has_no_environment_description_or_bootstrap_selection() ->
     source = inspect.getsource(ToolboxSandboxOrchestrator.spawn_assignments)
     assert "toolbox_environment_description" not in source
     assert ".runtime_python_executable(" not in source
-    assert ".toolbox_runtime_python_executable(" in source
+    assert "hermetic_toolbox_environment_builder_required" in source
     assert "fallback_python_executable" not in source

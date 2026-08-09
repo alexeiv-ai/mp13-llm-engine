@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import HostedToolBoxRef
@@ -51,8 +51,6 @@ def attach_existing_hosted_toolbox(
     control_state_file: Any,
     timeout_seconds: float = 15.0,
     auto_bootstrap: bool = True,
-    python_executable: Optional[str] = None,
-    worker_profile_class: str = "generic",
 ) -> HostedToolboxAttachment:
     """
     Public app/helper entry point for attaching to an existing hosted toolbox
@@ -72,8 +70,6 @@ def attach_existing_hosted_toolbox(
     toolbox_ref = create_hosted_toolbox_ref(
         host=control_channel,
         toolbox_id=tid,
-        python_executable=python_executable,
-        worker_profile_class=worker_profile_class,
     )
     router = HostedToolExecutionRouter()
     executor = router.configure_hosted_execution(
@@ -93,8 +89,6 @@ def create_hosted_toolbox_ref(
     *,
     host: Any,
     toolbox_id: str,
-    python_executable: Optional[str] = None,
-    worker_profile_class: str = "generic",
 ) -> HostedToolBoxRef:
     """
     Public helper for wrappers/automation that want the hosted toolbox-ref API
@@ -103,47 +97,6 @@ def create_hosted_toolbox_ref(
     return HostedToolBoxRef(
         toolbox_id=str(toolbox_id or "").strip(),
         host=host,
-        python_executable=python_executable,
-        worker_profile_class=worker_profile_class,
-    )
-
-
-def register_hosted_tool_callable(
-    func: Callable[..., Any],
-    *,
-    host: Any,
-    toolbox_id: str,
-    environment_name: str = "base",
-    required_imports: Optional[Sequence[str]] = None,
-    sandbox_policy: Optional[Dict[str, Any]] = None,
-    python_executable: Optional[str] = None,
-    worker_profile_class: str = "generic",
-    activate: bool = True,
-    non_restartable: bool = False,
-    guide_content: Optional[Dict[str, List[str]]] = None,
-    guide_description: Optional[str] = None,
-    callback_signature: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    Convenience wrapper for registering a Python callable into hosted toolbox
-    sandbox management without forcing callers to instantiate the ref directly.
-    """
-    hosted_ref = create_hosted_toolbox_ref(
-        host=host,
-        toolbox_id=toolbox_id,
-        python_executable=python_executable,
-        worker_profile_class=worker_profile_class,
-    )
-    return hosted_ref.register_python_callable(
-        func,
-        environment_name=environment_name,
-        required_imports=required_imports,
-        sandbox_policy=sandbox_policy,
-        activate=activate,
-        non_restartable=non_restartable,
-        guide_content=guide_content,
-        guide_description=guide_description,
-        callback_signature=callback_signature,
     )
 
 

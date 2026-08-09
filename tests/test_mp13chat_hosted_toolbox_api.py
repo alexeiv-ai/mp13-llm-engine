@@ -16,7 +16,6 @@ from app.hosted_toolbox_api import (
     create_hosted_toolbox_executor,
     create_hosted_toolbox_ref,
     is_hosted_tool_call_canceled,
-    register_hosted_tool_callable,
     should_resubmit_hosted_tool_call,
 )
 from app.hosted_tool_runtime import execute_tool_round_on_cursor, summarize_canceled_tool_calls
@@ -37,7 +36,7 @@ def test_app_package_exports_hosted_attach_helpers() -> None:
     assert app.create_hosted_control_channel is create_hosted_control_channel
     assert app.create_hosted_toolbox_ref is create_hosted_toolbox_ref
     assert app.create_hosted_toolbox_executor is create_hosted_toolbox_executor
-    assert app.register_hosted_tool_callable is register_hosted_tool_callable
+    assert not hasattr(app, "register_hosted_tool_callable")
     assert app.HostedToolboxAttachment is HostedToolboxAttachment
 
 
@@ -48,50 +47,11 @@ def test_create_hosted_toolbox_ref_returns_public_hosted_ref() -> None:
     ref = create_hosted_toolbox_ref(
         host=_FakeHost(),
         toolbox_id="user-tools",
-        python_executable="python.exe",
     )
 
     assert isinstance(ref, HostedToolBoxRef)
     assert ref.toolbox_id == "user-tools"
     assert ref.ref_name == "user-tools"
-    assert ref.python_executable == "python.exe"
-
-
-def test_register_hosted_tool_callable_delegates_through_hosted_ref() -> None:
-    class _FakeHost:
-        def __init__(self) -> None:
-            self.calls: List[tuple[str, Dict[str, Any]]] = []
-
-        def toolbox_register_auto(self, **kwargs):
-            self.calls.append(("toolbox_register_auto", dict(kwargs)))
-            return {"status": "ok", "toolbox_id": kwargs.get("toolbox_id")}
-
-    def demo_tool(name: str = "world") -> dict:
-        return {"name": name}
-
-    host = _FakeHost()
-    result = register_hosted_tool_callable(
-        demo_tool,
-        host=host,
-        toolbox_id="user-tools",
-        environment_name="math-env",
-        required_imports=["numpy"],
-        sandbox_policy={"sandbox": {"enabled": True}},
-        python_executable="python.exe",
-    )
-
-    assert result["status"] == "ok"
-    assert result["toolbox_id"] == "user-tools"
-    assert host.calls
-    call_name, payload = host.calls[0]
-    assert call_name == "toolbox_register_auto"
-    assert payload["toolbox_id"] == "user-tools"
-    assert payload["python_executable"] == "python.exe"
-    request = list(payload["requests"])[0]
-    assert request["module_name"] == __name__
-    assert request["callable_name"] == "demo_tool"
-    assert request["sandbox_profile"]["environment_name"] == "math-env"
-    assert request["sandbox_profile"]["required_imports"] == ["numpy"]
 
 
 def test_create_hosted_toolbox_executor_returns_sandbox_harness() -> None:
@@ -132,7 +92,6 @@ def test_attach_existing_hosted_toolbox_returns_wrapper_ready_attachment() -> No
         control_state_file="access_control.json",
         timeout_seconds=9.5,
         auto_bootstrap=False,
-        python_executable="python.exe",
     )
 
     assert isinstance(attachment, HostedToolboxAttachment)
@@ -140,7 +99,6 @@ def test_attach_existing_hosted_toolbox_returns_wrapper_ready_attachment() -> No
     assert isinstance(attachment.toolbox_ref, HostedToolBoxRef)
     assert isinstance(attachment.executor, ToolboxExecutionHarness)
     assert attachment.toolbox_ref.toolbox_id == "user-tools"
-    assert attachment.toolbox_ref.python_executable == "python.exe"
     assert attachment.executor.config.mode == "sandbox"
     assert attachment.executor.config.sandbox_toolbox_id == "user-tools"
     assert attachment.summary["mode"] == "sandbox"

@@ -54,7 +54,7 @@ from .dependency_policy import (
 )
 from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
 from .execution import ToolboxExecutionHarness
-from .hosted_ref import HostedToolBoxRef, PendingHostedToolboxRef, SandboxedToolboxFacade
+from .hosted_ref import HostedToolBoxRef, SandboxedToolboxFacade
 from .hermetic_environment import (
     HermeticToolboxEnvironmentBuildError,
     HermeticToolboxEnvironmentBuilder,
@@ -122,7 +122,6 @@ __all__ = [
     "ToolboxHarnessConfig",
     "ToolboxExecutionHarness",
     "HostedToolBoxRef",
-    "PendingHostedToolboxRef",
     "SandboxedToolboxFacade",
     "serialize_tools_view",
     "is_canceled_tool_error",

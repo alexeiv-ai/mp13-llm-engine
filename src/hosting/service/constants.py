@@ -18,7 +18,6 @@ DEFAULT_STATE_DIR = _default_state_dir()
 DEFAULT_HOSTING_ROOT = _default_hosting_root()
 DEFAULT_ENGINES_STATE_FILE = DEFAULT_STATE_DIR / "managed_engines.json"
 DEFAULT_CONTROL_STATE_FILE = DEFAULT_HOSTING_ROOT / "access_control.json"
-DEFAULT_TOOLBOXES_STATE_FILE = (DEFAULT_STATE_DIR / "toolbox_sandboxes.json").expanduser().resolve()
 DAEMON_VERSION = "2.1.0"
 
 ROLE_ADMIN = "admin"
@@ -59,4 +58,3 @@ EMERGENCY_FORCE_OVERRIDE_REASONS = {
     "owner_malicious",
     "security_incident",
 }
-

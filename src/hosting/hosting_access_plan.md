@@ -1101,25 +1101,39 @@ state reads; compile and diff checks passed.
   remain the sole apply observation/recovery path. Transport/channel/CLI and
   catalog authorization tests passed 108; definition/atomic-routing/operation
   regressions passed 38; compile and diff checks passed.
-- [ ] **P6-04** Remove `register_auto_callable`, `register_python_callable`,
+- [x] **P6-04** Remove `register_auto_callable`, `register_python_callable`,
   `register_manual_tool`, intrinsic register methods, every unregister/remove
   method, aliases, `mutate()`, `PendingHostedToolboxRef`, and
   `resolve_sandbox()`.
-- [ ] **P6-05** Remove service/channel/daemon/CLI/auth/policy support for
+- [x] **P6-05** Remove service/channel/daemon/CLI/auth/policy support for
   `toolbox-register-*` and `toolbox-unregister-*` commands.
-- [ ] **P6-06** Remove hosted-ref and transport APIs for environment list,
+- [x] **P6-06** Remove hosted-ref and transport APIs for environment list,
   upsert, clone, resolve, apply, realize, sync, install planning, lock,
   resolution, verification, execution, and receipt verification.
-- [ ] **P6-07** Remove `ToolboxEnvironmentMixin` methods and version-1
+- [x] **P6-07** Remove `ToolboxEnvironmentMixin` methods and version-1
   environment-description state once workflow/shared callers are proven not to
   depend on them.
-- [ ] **P6-08** Remove `environment_name`, `required_imports`, consumer
+- [x] **P6-08** Remove `environment_name`, `required_imports`, consumer
   `profile_id`, and toolbox `python_executable` from runtime payloads and tests.
   Reject these legacy fields rather than ignoring them.
-- [ ] **P6-09** Update hosted chat/demo setup to submit one complete definition;
+- [x] **P6-09** Update hosted chat/demo setup to submit one complete definition;
   update teardown to apply an empty definition instead of unregistering tools.
-- [ ] **P6-10** Rewrite consistency, review, repair, reconcile, references, and
+- [x] **P6-10** Rewrite consistency, review, repair, reconcile, references, and
   GC against active revisions/routes and candidate/retired registrations.
+
+  Evidence (2026-08-08): the legacy hosted-reference builder/mutation and
+  sandbox-resolution methods, mutation and mutable-environment transport
+  commands, authorization/policy entries, version-1 environment mixin/state,
+  selector fallbacks, and ambient interpreter fallback were removed. Hosted
+  chat now applies a complete definition and tears down with an empty one.
+  Consistency, repair, reconcile, reference, and GC maintenance now derives
+  exclusively from version-2 definitions, active routes, and registration
+  lifecycle state. Removal/definition tests passed 16; channel, CLI, sandbox,
+  and authorization regressions passed 222; maintenance/demo/API/hermetic
+  tests passed 43; the complete suite passed 1,090 with three skips; compile
+  and diff checks passed. The first complete-suite run exposed six stale-test
+  or timing assumptions; after correcting those expectations, the final run
+  passed.
 - [ ] **P6-11** Add host project configuration for the exact required standard
   base template and compute-only policy IDs, startup materialization/prewarm,
   readiness reporting, and administrative replacement with a new immutable

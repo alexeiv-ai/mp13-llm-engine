@@ -61,7 +61,13 @@ from dataclasses import dataclass
 #         host=svc,
 #         toolbox_id="user-tools",
 #     )
-#     hosted_ref.register_python_callable(get_weather, required_imports=["requests"])
+#     current = hosted_ref.get_definition()
+#     plan = hosted_ref.plan_definition(complete_definition)
+#     status = hosted_ref.apply_definition(
+#         definition=complete_definition,
+#         plan_id=plan["plan_id"],
+#         request_id="weather-tools-v2",
+#     )
 #
 # Custom command workflows currently require wrapping or delegating to
 # `handle_command()` directly; there is no dedicated plug-in interface for new
@@ -127,7 +133,6 @@ from .hosted_toolbox_api import (
     HostedToolExecutionRouter,
     attach_existing_hosted_toolbox,
     create_hosted_toolbox_ref,
-    register_hosted_tool_callable,
 )
 
 # --- Constants and globals ---

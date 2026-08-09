@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import math
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -335,8 +336,6 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs
                 "module_name": "hosted_demo_math",
                 "callable_name": "SimpleCalc",
                 "non_restartable": False,
-                "environment_name": "base",
-                "required_imports": [],
                 "sandbox_policy": {
                     "sandbox": {
                         "enabled": True,
@@ -349,8 +348,6 @@ def ProjectFilePeek(relative_path='src/app/mp13chat.py', max_chars=400, **kwargs
                 "module_name": "hosted_demo_fs",
                 "callable_name": "ProjectFilePeek",
                 "non_restartable": False,
-                "environment_name": "project-read",
-                "required_imports": [],
                 "sandbox_policy": {
                     "sandbox": {
                         "enabled": True,
@@ -396,8 +393,6 @@ def ExampleHttpPeek(url='https://example.com/', max_chars=300, **kwargs):
                 "module_name": "hosted_demo_http",
                 "callable_name": "ExampleHttpPeek",
                 "non_restartable": False,
-                "environment_name": "brokered-http",
-                "required_imports": [],
                 "sandbox_policy": {
                     "sandbox": {
                         "enabled": True,
@@ -455,8 +450,6 @@ def setup_hosted_chat_demo(
     toolbox_id: str,
     project_file_peek_scope_root: Optional[str] = None,
     host_api_approval: Optional[Dict[str, Any]] = None,
-    python_executable: Optional[str] = None,
-    worker_profile_class: str = "generic",
     control_tool_handlers: Optional[Dict[str, Callable[..., Any]]] = None,
     control_callback_context: Optional[Dict[str, Any]] = None,
     control_callback_binding: Optional[Dict[str, Any]] = None,
@@ -477,26 +470,61 @@ def setup_hosted_chat_demo(
         engines_state_file=root / "managed_engines.json",
         control_state_file=root / "access_control.json",
     )
-    toolbox_ref = HostedToolBoxRef(
-        toolbox_id=plan.toolbox_id,
-        host=service,
-        python_executable=python_executable,
-        worker_profile_class=worker_profile_class,
+    toolbox_ref = HostedToolBoxRef(toolbox_id=plan.toolbox_id, host=service)
+    current = toolbox_ref.get_definition()
+    definition = {
+        "contract": "hosting.toolbox.definition",
+        "toolbox_id": plan.toolbox_id,
+        "expected_revision": current.get("active_revision"),
+        "auto_requests": [
+            {
+                "files": [
+                    {
+                        "relative_path": str(request["relative_path"]),
+                        "content": str(request["content"]),
+                    }
+                ],
+                "module_name": str(request["module_name"]),
+                "callable_name": str(request["callable_name"]),
+                "dependency": {
+                    "mode": "auto",
+                    "template_id": None,
+                    "declared_imports": [],
+                    "package_requirements": [],
+                },
+                "sandbox_policy": dict(request.get("sandbox_policy") or {}),
+                "activate": True,
+                "hidden": False,
+                "non_restartable": bool(request.get("non_restartable", False)),
+                "guide_content": None,
+                "guide_description": None,
+                "callback_signature": None,
+                "concurrency": None,
+            }
+            for request in list(plan.auto_requests or [])
+        ],
+        "manual_requests": [],
+        "intrinsics": {"names": [], "include_guides": False, "sandbox_policy": {}},
+    }
+    definition_plan = toolbox_ref.plan_definition(definition)
+    status = toolbox_ref.apply_definition(
+        definition=definition,
+        plan_id=str(definition_plan["plan_id"]),
+        request_id=f"hosted-chat-demo-setup:{definition_plan['plan_id']}",
     )
-    builder = toolbox_ref.mutate()
-    for request in list(plan.auto_requests or []):
-        builder.register_auto_callable(
-            relative_path=str(request["relative_path"]),
-            content=str(request["content"]),
-            module_name=str(request["module_name"]),
-            callable_name=str(request["callable_name"]),
-            environment_name=str(request["environment_name"]),
-            required_imports=list(request.get("required_imports") or []),
-            sandbox_policy=dict(request.get("sandbox_policy") or {}),
-            activate=True,
-            non_restartable=bool(request.get("non_restartable", False)),
-        )
-    builder.resolve_sandbox()
+    operation = dict(status.get("operation") or {})
+    deadline = time.monotonic() + 15.0
+    while str(status.get("lifecycle") or "") not in {
+        "terminal_success",
+        "terminal_failure",
+        "canceled",
+    }:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("hosted_chat_demo_definition_apply_timeout")
+        time.sleep(0.02)
+        status = service.hosted_operation_status(ref=operation)
+    if str(status.get("lifecycle") or "") != "terminal_success":
+        raise RuntimeError(str(dict(status.get("error") or {}).get("code") or "hosted_chat_demo_definition_apply_failed"))
     callback_processor = None
     if project_file_peek_scope_root is not None or isinstance(host_api_approval, dict):
         callback_processor = make_hosted_demo_callback_processor(
@@ -518,14 +546,20 @@ def shutdown_hosted_chat_demo(runtime: Optional[HostedChatDemoRuntime]) -> None:
     if runtime is None:
         return
     try:
-        runtime.service.toolbox_unregister_auto(
-            toolbox_id=runtime.plan.toolbox_id,
-            tool_keys=[
-                f"{str(item.get('module_name') or '').strip()}:{str(item.get('callable_name') or '').strip()}"
-                for item in list(runtime.plan.auto_requests or [])
-            ],
-            python_executable=runtime.toolbox_ref.python_executable,
-            worker_profile_class=runtime.toolbox_ref.worker_profile_class,
+        current = runtime.toolbox_ref.get_definition()
+        definition = {
+            "contract": "hosting.toolbox.definition",
+            "toolbox_id": runtime.plan.toolbox_id,
+            "expected_revision": current.get("active_revision"),
+            "auto_requests": [],
+            "manual_requests": [],
+            "intrinsics": {"names": [], "include_guides": False, "sandbox_policy": {}},
+        }
+        plan = runtime.toolbox_ref.plan_definition(definition)
+        runtime.toolbox_ref.apply_definition(
+            definition=definition,
+            plan_id=str(plan["plan_id"]),
+            request_id=f"hosted-chat-demo-teardown:{plan['plan_id']}",
         )
     except Exception:
         pass

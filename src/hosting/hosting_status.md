@@ -34,12 +34,24 @@ Status: In progress
 Phases 0 through 5 are complete. The public contract/migration handoff, strict
 dependency pipeline, hermetic environment builder, definition planner, and
 durable plan/state repositories plus atomic rollout/routing are implemented and
-audited. Phase 6 API/transport replacement is next.
+audited. Phase 6 API/transport replacement is in progress; the legacy public
+mutation and mutable-environment surface has been removed.
 
 ## Active slice
 
-None. The next slice will predeclare Phase 6 legacy mutation and environment
-surface removal (P6-04 through P6-08) before changing files.
+P6-11: add host-owned exact standard-template and compute-policy configuration,
+startup materialization/prewarm and readiness, plus administrative immutable
+replacement. Keep these settings absent from per-toolbox definitions.
+
+Predeclared verification:
+
+```powershell
+python -m pytest tests/test_hosting_toolbox_host_config.py tests/test_hosting_toolbox_prewarm.py tests/test_hosting_toolbox_shipped_templates.py -q
+python -m pytest tests/test_engine_host_channel.py tests/test_engine_host_cli_remote_args.py tests/test_engine_host_cli_interactive.py tests/test_hosting_auth_roles.py -q
+python -m compileall -q src/hosting tests/test_hosting_toolbox_host_config.py
+python -m pytest tests -q
+git diff --check
+```
 
 ## Completed slices
 
@@ -72,6 +84,7 @@ surface removal (P6-04 through P6-08) before changing files.
 | 2026-08-08 | P5-01 through P5-07, Phase 5 exit | Hardened strict digest-bound version-2 state, atomic process-safe CAS, crash recovery, and a local exact-digest version-1 state/bundle archival cutover with code-matched rollback instructions and no translation. | State/atomic routing -> 10 passed including two fresh writers and interrupted replace; full toolbox/CLI -> 187 passed. The first full run exposed 11 temporary legacy routing calls hitting strict definition state; the adapter was explicitly isolated and all 11 focused failures plus the complete regression command passed. The initially named `tests/test_engine_host_cli.py` did not exist; closeout used the actual remote-argument and interactive suites. Compile/diff checks passed. | `feat: harden toolbox state cutover (P5-01..P5-07)` |
 | 2026-08-08 | P6-01 | Added actor/authority-owned authoritative read and immutable planning, exact parent-minted custom approval, and immediate idempotent durable apply with background atomic rollout. | Definition service/plan/atomic routing -> 17 passed; operation service/repository -> 31 passed; compile/diff checks passed. | `feat: add toolbox definition service (P6-01)` |
 | 2026-08-08 | P6-02, P6-03 | Exposed the four definition calls through authenticated daemon/channel/CLI routing and added the frozen definition plus read-only template helpers to the hosted reference while retaining admin controls separately. | Transport/channel/CLI/catalog authorization -> 108 passed; definition/routing/operation -> 38 passed; compile/diff checks passed. The predeclared operation filename was corrected before the regression run to the repository's actual service/repository suites. | `feat: expose toolbox definition transport (P6-02 P6-03)` |
+| 2026-08-08 | P6-04 through P6-10 | Removed every legacy builder/mutation, mutable-environment, version-1 state, selector fallback, and ambient-interpreter path; migrated hosted chat to complete/empty definitions; rewrote maintenance against version-2 routes and registration lifecycle. | Removal/definition -> 16 passed; channel/CLI/sandbox/auth -> 222 passed; maintenance/demo/API/hermetic -> 43 passed; complete suite -> 1,090 passed, 3 skipped; compile/diff checks passed. The first complete run found six stale expectations or timing assumptions; all were corrected before the final passing run. | `refactor: remove legacy toolbox mutation surface (P6-04..P6-10)` |
 
 P0-01/P0-02 exact verification commands:
 

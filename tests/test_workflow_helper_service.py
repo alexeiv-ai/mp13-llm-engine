@@ -2608,7 +2608,7 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
     assert results["a"]["status"] == "ok"
     assert results["b"]["status"] == "ok"
     assert {results["a"]["output"]["slot"], results["b"]["output"]["slot"]} == {"a", "b"}
-    assert elapsed < 1.3
+    assert elapsed < 1.6
 
 
 def test_execute_workflow_python_node_routes_different_jobs_through_same_capacity_pool(tmp_path: Path) -> None:

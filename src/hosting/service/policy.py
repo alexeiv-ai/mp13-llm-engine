@@ -23,7 +23,6 @@ class PolicyMixin:
         if (
             c.startswith("workflow-python-")
             or c.startswith("toolbox-template-")
-            or c.startswith("toolbox-environment-")
         ):
             row = dict(payload or {})
             selection = {
@@ -193,25 +192,6 @@ class PolicyMixin:
             "toolbox-review-snapshot",
             "toolbox-repair",
             "toolbox-reconcile",
-            "toolbox-register-auto",
-            "toolbox-unregister-auto",
-            "toolbox-register-intrinsics",
-            "toolbox-unregister-intrinsics",
-            "toolbox-register-manual",
-            "toolbox-unregister-manual",
-            "toolbox-environment-list",
-            "toolbox-environment-upsert",
-            "toolbox-environment-clone",
-            "toolbox-environment-resolve",
-            "toolbox-environment-apply",
-            "toolbox-environment-realize",
-            "toolbox-environment-sync",
-            "toolbox-environment-prepare-install",
-            "toolbox-environment-lock-install",
-            "toolbox-environment-resolve-install-lock",
-            "toolbox-environment-verify-install-lock",
-            "toolbox-environment-verify-install-receipt",
-            "toolbox-environment-execute-install",
         }:
             try:
                 session = self._validate_session(

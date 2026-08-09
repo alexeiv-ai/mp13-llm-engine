@@ -194,35 +194,34 @@ The caller-side hosted execution harness processes callbacks concurrently. A blo
 
 ## Host/Public APIs
 
-Host service and channel APIs include:
+Consumer definition and execution APIs include:
 
-1. `toolbox-describe`
-2. `toolbox-gate`
-3. `toolbox-execute`
-4. `toolbox-cancel`
-5. `toolbox-register-auto`
-6. `toolbox-unregister-auto`
-7. `toolbox-register-manual`
-8. `toolbox-unregister-manual`
-9. `toolbox-register-intrinsics`
-10. `toolbox-unregister-intrinsics`
-11. `toolbox-references`
-12. `toolbox-consistency`
-13. `toolbox-review-snapshot`
-14. `toolbox-repair`
-15. `toolbox-reconcile`
-16. `toolbox-gc`
+1. `toolbox-get-definition`
+2. `toolbox-plan-definition`
+3. `toolbox-approve-definition-plan`
+4. `toolbox-apply-definition`
+5. `toolbox-template-list`
+6. `toolbox-template-describe`
+7. `toolbox-describe`
+8. `toolbox-gate`
+9. `toolbox-execute`
 
-Environment APIs include description list/upsert/clone, requirement resolution, apply, realize, install plan/lock/verify/execute flows, and receipt verification.
+Generic hosted-operation APIs provide durable apply observation, cancellation,
+and recovery. Administrative channels separately expose immutable template
+publication/lifecycle/prewarm and the `toolbox-references`,
+`toolbox-consistency`, `toolbox-review-snapshot`, `toolbox-repair`,
+`toolbox-reconcile`, and `toolbox-gc` maintenance calls.
+
+There is no public mutable environment-description or install-sequence API.
+Definitions declare tool behavior and dependency intent; the host resolves
+exact templates, policies, environments, registrations, and active routes.
 
 App-facing helpers include:
 
 1. `create_hosted_control_channel(...)`
 2. `attach_existing_hosted_toolbox(...)`
 3. `create_hosted_toolbox_ref(...)`
-4. `register_hosted_tool_callable(...)`
-5. `create_hosted_toolbox_executor(...)`
-6. `execute_tool_round_on_cursor(...)`
+4. `create_hosted_toolbox_executor(...)`
 
 `HostedToolBoxRef.mutate()` returns a pending builder so multiple registrations can be resolved with one backend sandbox rebuild.
 

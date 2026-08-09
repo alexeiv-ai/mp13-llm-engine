@@ -11,7 +11,10 @@ from app.hosted_chat_demo import (
     hosted_demo_non_restartable_tool_names,
     hosted_demo_tool_round_options,
     make_hosted_demo_callback_processor,
+    setup_hosted_chat_demo,
+    shutdown_hosted_chat_demo,
 )
+from mp13_engine.mp13_toolbox import Toolbox
 
 
 def test_build_hosted_chat_demo_plan_produces_two_distinct_profiles() -> None:
@@ -62,6 +65,61 @@ def test_build_hosted_chat_demo_plan_produces_two_distinct_profiles() -> None:
         assert hosted_demo_tool_round_options(plan) == {"non_restartable_tool_names": []}
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_setup_and_shutdown_apply_complete_definitions(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeService:
+        active_revision = None
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def toolbox_get_definition(self, **payload):
+            calls.append(("get", dict(payload)))
+            return {"active_revision": self.active_revision}
+
+        def toolbox_plan_definition(self, **payload):
+            calls.append(("plan", dict(payload)))
+            return {"plan_id": f"plan-{len(calls)}"}
+
+        def toolbox_apply_definition(self, **payload):
+            calls.append(("apply", dict(payload)))
+            definition = dict(payload["definition"])
+            self.active_revision = "sha256:" + "a" * 64
+            return {
+                "lifecycle": "terminal_success",
+                "operation": {
+                    "contract": "hosting.operation_ref",
+                    "operation_id": "op-test",
+                    "request_id": payload["request_id"],
+                    "execution_kind": "toolbox_definition_apply",
+                    "selector": {"kind": "toolbox_id", "id": definition["toolbox_id"]},
+                    "fingerprint": "sha256:" + "b" * 64,
+                    "receipt_namespace": f"toolbox-definition:{definition['toolbox_id']}",
+                },
+            }
+
+    monkeypatch.setattr("app.hosted_chat_demo.EngineHostService", FakeService)
+    runtime = setup_hosted_chat_demo(
+        toolbox=Toolbox(),
+        hosting_root=tmp_path,
+        project_root=tmp_path,
+        toolbox_id="demo",
+    )
+    created = [payload["definition"] for name, payload in calls if name == "apply"][0]
+    assert len(created["auto_requests"]) == 3
+    assert all("sandbox_profile" not in request for request in created["auto_requests"])
+    assert all("environment_name" not in request for request in created["auto_requests"])
+    assert all("required_imports" not in request for request in created["auto_requests"])
+
+    shutdown_hosted_chat_demo(runtime)
+    emptied = [payload["definition"] for name, payload in calls if name == "apply"][-1]
+    assert emptied["expected_revision"] == "sha256:" + "a" * 64
+    assert emptied["auto_requests"] == []
+    assert emptied["manual_requests"] == []
+    assert emptied["intrinsics"]["names"] == []
 
 
 def test_hosted_project_file_peek_source_executes_with_context_fs() -> None:

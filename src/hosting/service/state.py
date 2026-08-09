@@ -154,43 +154,6 @@ class StateMixin:
             record.setdefault("canonical_config_path", canonical_config_path)
         return record
 
-    def _toolboxes_state_file(self) -> Path:
-        return (self.hosting_root / "state" / "toolbox_sandboxes.json").resolve()
-
-    def _read_toolboxes(self) -> Dict[str, Any]:
-        return self._read_json(
-            self._toolboxes_state_file(),
-            {
-                "version": 1,
-                "toolboxes": {},
-                "environment_descriptions": {
-                    "base": {
-                        "name": "base",
-                        "base_env_name": None,
-                        "extra_packages": [],
-                        "allow_online_install": False,
-                    }
-                },
-            },
-        )
-
-    def _write_toolboxes(self, payload: Dict[str, Any]) -> None:
-        row = dict(payload or {})
-        row["version"] = 1
-        row.setdefault(
-            "environment_descriptions",
-            {
-                "base": {
-                    "name": "base",
-                    "base_env_name": None,
-                    "extra_packages": [],
-                    "allow_online_install": False,
-                }
-            },
-        )
-        row["updated_at"] = time.time()
-        self._write_json(self._toolboxes_state_file(), row)
-
     @staticmethod
     def _default_control_payload() -> Dict[str, Any]:
         return {

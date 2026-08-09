@@ -34,7 +34,7 @@ from .policy import PolicyMixin
 from .proxy import ProxyMixin
 from .sandbox_api import SandboxApiMixin
 from .state import StateMixin
-from .toolbox_env import ToolboxEnvironmentMixin
+from .toolbox_env import ToolboxMaintenanceMixin
 from .toolbox_catalog import ToolboxTemplateCatalogMixin
 from ..toolbox.hermetic_environment import HermeticToolboxEnvironmentBuilder
 from .toolbox_materialization import (
@@ -50,7 +50,7 @@ from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from .workflow_helpers import WorkflowHelperMixin
 
 
-class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxTemplateCatalogMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin, ModelRuntimeMixin):
+class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxMaintenanceMixin, ToolboxTemplateCatalogMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin, ModelRuntimeMixin):
     """Engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
