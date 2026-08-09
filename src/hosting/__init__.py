@@ -156,9 +156,12 @@ from .operation_contract import (
     HostedResultRef,
     hosted_execution_fingerprint,
 )
+from .model_runtime_contract import ModelRuntimeIdentity, ModelRuntimeStatus
 
 __all__ = [
     "EngineHostService",
+    "ModelRuntimeIdentity",
+    "ModelRuntimeStatus",
     "EngineHostDaemon",
     "DaemonPidFile",
     "DEFAULT_DAEMON_PORT",

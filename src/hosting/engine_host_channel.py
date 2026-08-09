@@ -3481,6 +3481,10 @@ class EngineHostControlChannel:
         res = self._invoke("toolbox-gc", {})
         return dict(res or {})
 
+    def model_runtime_status(self) -> Dict[str, Any]:
+        res = self._invoke("model-runtime-status", {})
+        return dict(res or {})
+
     def toolbox_template_list(self) -> Dict[str, Any]:
         res = self._invoke("toolbox-template-list", {})
         return dict(res or {})

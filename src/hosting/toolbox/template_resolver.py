@@ -6,6 +6,7 @@ from typing import Any, Mapping, Sequence
 
 from mp13_engine.mp13_intrinsics_metadata import intrinsic_dependency_metadata
 
+from ..model_runtime_contract import reject_model_runtime_selection
 from .bundle_models import ToolboxBundleFile
 from .catalog import ToolboxEnvironmentTemplateSpec
 from .dependency_analysis import (
@@ -109,6 +110,9 @@ def resolve_verified_template_environment(
     allowed_template_ids: Sequence[str] | None = None,
     sandbox_policy: Mapping[str, Any] | None = None,
 ) -> HostedTemplateResolution:
+    for template_id in list(allowed_template_ids or []):
+        reject_model_runtime_selection({"template_id": template_id})
+    reject_model_runtime_selection({"sandbox_policy": dict(sandbox_policy or {})})
     consumer = str(consumer_kind or "").strip()
     if consumer not in SUPPORTED_TEMPLATE_CONSUMERS:
         raise ValueError("template_consumer_kind_invalid")

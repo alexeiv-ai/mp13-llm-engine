@@ -273,6 +273,17 @@ arbitrary-code route. Only model-operation status UI may display its bounded
 readiness/capability projection; never persist or render its activation path,
 environment key, interpreter path, package path, or raw lock.
 
+Dependent model-status logic must branch only as follows: `state == "ready"`
+may enable already-authorized model operations; `degraded` or `unavailable`
+shows the bounded `code`/`summary` and keeps model operations gated. It must
+never copy `python_abi`, platform, artifact/lock digests, optional package set,
+or materialization revision into toolbox/workflow dependency intent. Remove
+any branch that turns model readiness into a generic Python readiness signal,
+template candidate, custom-environment base, interpreter override, or fallback
+for a missing `core`/`py-compute` receipt. The `model-runtime-status` response
+is read-only; polling it must not trigger discovery, activation, installation,
+or repair.
+
 ### Current parent removal inventory
 
 The following public `HostedToolBoxRef` methods and aliases disappear:

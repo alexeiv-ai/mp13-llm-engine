@@ -836,14 +836,27 @@ call path found in the inventory.
   every shipped compute intrinsic/guide. Focused tests passed 9; dependency and
   shipped-template regressions passed 32; existing workflow/helper/operation
   regressions passed 37; contract docs passed 12; compile/diff checks passed.
-- [ ] **P1-13** Add the read-only model-runtime status projection and enforce
+- [x] **P1-13** Add the read-only model-runtime status projection and enforce
   that generic template planning, custom environment building, Python worker
   launch, and control-channel requests cannot select or reveal the exclusive
   model environment. Test denial even when its venv is already installed and
   healthy.
+  Evidence (2026-08-08): added the exact strict ten-field bounded
+  `ModelRuntimeStatus`, read-only authorized daemon/channel/CLI routing, and a
+  central generic-selection guard covering template, dependency/custom-build,
+  workflow Python environment/launch, and control inputs without intercepting
+  legitimate model commands. Paths/interpreters/raw locks are never projected;
+  every explicit/alias selector is denied even with a verified healthy model
+  identity. Focused tests passed 12; shared resolver/policy/catalog passed 32;
+  channel/CLI/auth/model-service regressions passed 133; docs/shipped-template
+  tests passed 18; compile/diff checks passed.
 
 Exit gate: the same source/metadata/catalog inputs produce the same resolved
 environment request and diagnostics without starting a worker.
+Evidence (2026-08-08): a fresh service over persisted catalog/materialization
+receipts returned an identical `core` resolution/binding for the same staged
+relative/local source; engine registrations remained empty and hosted-operation
+checkpoint bytes were unchanged. The shared resolver suite passed 10 tests.
 
 ### Phase 2 - Toolbox-specific hermetic environment builder
 

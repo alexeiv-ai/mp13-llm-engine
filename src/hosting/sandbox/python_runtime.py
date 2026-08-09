@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+from ..model_runtime_contract import reject_model_runtime_selection
 from ..toolbox.environment import RuntimeEnvironmentManager
 from ..toolbox.bundle_models import ToolboxEnvironmentSpec
 from .process_base import HostedProcessSandboxBase
@@ -142,6 +143,13 @@ class HostedPythonRuntimeBase(HostedProcessSandboxBase):
         runtime_hash: str = "workflow-python-v1",
         runtime_version: Optional[str] = None,
     ) -> HostedEnvironmentKeySpec:
+        reject_model_runtime_selection(
+            {
+                "environment_name": environment_name,
+                "profile": profile,
+                "python": dict(python_policy or {}),
+            }
+        )
         runtime = HostedRuntimeIdentity(
             runtime_kind="workflow_python",
             profile=_clean(profile) or "helper",
@@ -520,6 +528,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         return self._with_install_summary(status="ok", environment=self._environment_with_uv(spec, metadata), metadata=metadata)
 
     def lock_install(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
+        reject_model_runtime_selection(environment)
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.lock_install_plan(spec)
         ensured, env_root, metadata = self._spec_and_metadata(environment)
@@ -527,6 +536,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         return self._with_install_summary(status="ok", environment=self._environment_with_uv(ensured, metadata), metadata=metadata)
 
     def verify_install_lock(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
+        reject_model_runtime_selection(environment)
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.verify_install_lock(spec)
         ensured, env_root, metadata = self._spec_and_metadata(environment)
@@ -539,6 +549,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         return self._with_install_summary(status="ok", environment=spec.to_dict(), metadata=metadata)
 
     def execute_install(self, *, environment: Dict[str, Any], allow_execution: bool = False) -> Dict[str, Any]:
+        reject_model_runtime_selection(environment)
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.execute_install_plan(spec, allow_execution=bool(allow_execution))
         ensured, env_root, metadata = self._spec_and_metadata(environment)
@@ -546,6 +557,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         return self._with_install_summary(status="ok", environment=self._environment_with_uv(ensured, metadata), metadata=metadata)
 
     def verify_install_receipt(self, *, environment: Dict[str, Any]) -> Dict[str, Any]:
+        reject_model_runtime_selection(environment)
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.verify_install_receipt(spec)
         ensured, env_root, metadata = self._spec_and_metadata(environment)
@@ -560,6 +572,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
         bootstrap_python_executable: Optional[str] = None,
         fallback_python_executable: Optional[str] = None,
     ) -> Dict[str, Any]:
+        reject_model_runtime_selection(environment)
         spec = ToolboxEnvironmentSpec.from_dict(dict(environment or {}))
         metadata = self.environment_manager.read_environment_metadata(spec)
         uv_receipt_verification = dict(metadata.get("uv_install_receipt_verification") or {})

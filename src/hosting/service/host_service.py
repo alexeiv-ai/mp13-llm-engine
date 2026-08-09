@@ -25,6 +25,8 @@ from .engines import EnginesMixin
 from .errors import ToolboxRolloutError
 from .logs import LogsMixin
 from .metrics import MetricsMixin
+from .model_runtime import ModelRuntimeMixin
+from ..model_runtime_contract import ModelRuntimeIdentity
 from .hosted_operations import HostedOperationsMixin
 from .operation_repository import AtomicJsonHostedOperationRepository, LegacyOperationRepositoryError
 from .result_artifacts import TerminalResultArtifactStore
@@ -39,7 +41,7 @@ from .toolbox_runtime import ToolboxRuntimeMixin
 from .workflow_helpers import WorkflowHelperMixin
 
 
-class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxTemplateCatalogMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin):
+class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxEnvironmentMixin, ToolboxTemplateCatalogMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin, ModelRuntimeMixin):
     """Engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None
@@ -61,6 +63,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         toolbox_template_materializer: Optional[ToolboxTemplateMaterializer] = None,
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
+        model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
         raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
@@ -77,6 +80,13 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         )
         self._toolbox_required_python_abi = str(toolbox_required_python_abi or "").strip()
         self._toolbox_required_platform = str(toolbox_required_platform or "").strip()
+        self._model_runtime_identity = (
+            model_runtime_identity
+            if isinstance(model_runtime_identity, ModelRuntimeIdentity)
+            else ModelRuntimeIdentity.from_dict(model_runtime_identity)
+            if model_runtime_identity is not None
+            else None
+        )
 
         def _float_setting(value: Optional[float], env_name: str, default: float) -> float:
             if value is not None:

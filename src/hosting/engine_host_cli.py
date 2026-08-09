@@ -158,6 +158,9 @@ EXAMPLES_BY_COMMAND = {
     "hosting-setup-status": [
         "python -m hosting.engine_host_cli hosting-setup-status",
     ],
+    "model-runtime-status": [
+        "python -m hosting.engine_host_cli model-runtime-status",
+    ],
     "hosting-secure-state-status": [
         "python -m hosting.engine_host_cli hosting-secure-state-status",
     ],
@@ -880,6 +883,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "auth-status",
         "daemon-status",
         "hosting-setup-status",
+        "model-runtime-status",
         "hosting-secure-state-status",
         "auth-list-keys",
         "auth-list-sessions",
@@ -2290,6 +2294,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 1
         if cmd == "hosting-setup-status":
             _print_ok(svc.hosting_setup_summary())
+            return 0
+        if cmd == "model-runtime-status":
+            _print_ok(svc.model_runtime_status())
             return 0
         if cmd == "hosting-secure-state-status":
             _print_ok(svc.hosting_secure_state_status())

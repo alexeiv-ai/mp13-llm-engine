@@ -619,6 +619,16 @@ worker owner. Model-runtime failure affects model-operation readiness and does
 not cause toolbox catalog fallback, template substitution, or ambient-package
 use.
 
+The read command is `model-runtime-status`. It is side-effect-free and returns
+exactly the ten `ModelRuntimeStatus` fields above. Generic template,
+dependency/custom-build, workflow-Python environment, and template-control
+inputs are checked by one fail-closed selection guard. Explicit model-runtime
+keys and model aliases in template, runtime, profile, environment, worker, or
+interpreter selectors fail with `model_runtime_selection_denied` before build
+or launch. This remains true when the exclusive model materialization is
+installed, verified, and healthy. Legitimate authenticated model commands and
+their `model_path` inputs do not pass through the generic guard.
+
 ## Planning
 
 `plan_definition(definition)` is actor-authorized and side-effect-free with

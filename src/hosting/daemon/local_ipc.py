@@ -3399,6 +3399,8 @@ class EngineHostDaemon:
             )
         if cmd == "hosting-setup-status":
             return svc.hosting_setup_summary()
+        if cmd == "model-runtime-status":
+            return svc.model_runtime_status()
         if cmd == "hosting-secure-state-status":
             return svc.hosting_secure_state_status()
         if cmd == "auth-list-keys":

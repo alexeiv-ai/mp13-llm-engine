@@ -198,3 +198,24 @@ def test_isolated_process_probes_core_and_every_shipped_compute_intrinsic(tmp_pa
     )
     assert compute.returncode == 0, compute.stderr
     assert compute.stdout.strip() == "all-intrinsics-ok"
+
+
+def test_phase1_exit_same_inputs_are_deterministic_across_restart_without_worker_start(tmp_path: Path) -> None:
+    first = _ready_service(tmp_path)
+    request = {
+        "consumer_kind": "workflow_python_helper",
+        "files": [{"relative_path": "pkg/main.py", "content": "import json\nfrom .local import VALUE\n"}, {"relative_path": "pkg/local.py", "content": "VALUE = 7\n"}],
+        "python_abi": "cp312",
+        "platform": "win_amd64",
+    }
+    before_operations = (tmp_path / "state" / "hosted_operations.json").read_bytes()
+    first_result = first.resolve_hosted_template_environment(**request)
+    restarted = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    second_result = restarted.resolve_hosted_template_environment(**request)
+    assert first_result == second_result
+    assert first_result["binding"]["template_id"] == "core"
+    assert restarted._read_engines() == []  # noqa: SLF001
+    assert (tmp_path / "state" / "hosted_operations.json").read_bytes() == before_operations

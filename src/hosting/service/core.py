@@ -33,6 +33,7 @@ class CoreMixin:
             "auth_session_list": True,
             "auth_audit_list": True,
             "hosting_setup_status_v1": True,
+            "model_runtime_status_v1": True,
             "secure_state_status_v1": True,
             "hosted_operations_v1": True,
             "hosted_result_artifacts_v1": True,

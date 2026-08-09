@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ..model_runtime_contract import reject_model_runtime_selection
 from .constants import (
     EMERGENCY_FORCE_OVERRIDE_REASONS,
     ROLE_ADMIN,
@@ -19,6 +20,26 @@ class PolicyMixin:
         if not c:
             self._metrics_auth_denied("empty_command")
             raise PermissionError("empty_command")
+        if (
+            c.startswith("workflow-python-")
+            or c.startswith("toolbox-template-")
+            or c.startswith("toolbox-environment-")
+        ):
+            row = dict(payload or {})
+            selection = {
+                key: row[key]
+                for key in (
+                    "environment", "environment_name", "profile", "python",
+                    "python_executable", "runtime", "template", "template_id",
+                    "worker_profile_class",
+                )
+                if key in row
+            }
+            try:
+                reject_model_runtime_selection(selection)
+            except ValueError as exc:
+                self._metrics_auth_denied("model_runtime_selection_denied")
+                raise PermissionError("model_runtime_selection_denied") from exc
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
         require_auth = bool(cfg.get("require_auth", False))
@@ -126,6 +147,7 @@ class PolicyMixin:
             "auth-status",
             "hosting-setup-status",
             "hosting-secure-state-status",
+            "model-runtime-status",
             "auth-revoke-key",
             "auth-list-keys",
             "auth-list-sessions",

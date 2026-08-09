@@ -383,6 +383,7 @@ class AuthMixin:
             "auth-status",
             "hosting-setup-status",
             "hosting-secure-state-status",
+            "model-runtime-status",
             "auth-list-keys",
             "auth-list-sessions",
             "list-live-consumers",
@@ -494,6 +495,7 @@ class AuthMixin:
                 "auth-status",
                 "hosting-setup-status",
                 "hosting-secure-state-status",
+                "model-runtime-status",
             }
         if r == ROLE_WORKER_USER:
             return {
@@ -571,6 +573,7 @@ class AuthMixin:
                 "proxy-stream-close",
                 *_HOST_CAPABILITY_SESSION_COMMANDS,
                 "auth-status",
+                "model-runtime-status",
             }
         if r == ROLE_MODEL_USER_WITH_MODEL_CONTROL:
             return {
@@ -587,6 +590,7 @@ class AuthMixin:
                 "proxy-stream-recv",
                 "proxy-stream-close",
                 "auth-status",
+                "model-runtime-status",
             }
         if r == ROLE_MODEL_USER:
             return {
@@ -601,6 +605,7 @@ class AuthMixin:
                 "proxy-stream-recv",
                 "proxy-stream-close",
                 "auth-status",
+                "model-runtime-status",
             }
         if r == ROLE_DIAGNOSTIC_USER:
             return {
@@ -633,6 +638,7 @@ class AuthMixin:
                 "auth-status",
                 "hosting-setup-status",
                 "hosting-secure-state-status",
+                "model-runtime-status",
             }
         return set()
 
