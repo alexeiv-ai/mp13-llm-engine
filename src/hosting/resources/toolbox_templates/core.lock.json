@@ -1,0 +1,13 @@
+{
+  "contract": "hosting.toolbox.distribution_lock.v1",
+  "template_id": "core",
+  "distributions": [
+    {"name": "annotated-types", "version": "0.7.0", "extras": []},
+    {"name": "mp13-engine", "version": "0.9.0", "extras": []},
+    {"name": "packaging", "version": "26.0", "extras": []},
+    {"name": "pydantic", "version": "2.12.5", "extras": []},
+    {"name": "pydantic-core", "version": "2.41.5", "extras": []},
+    {"name": "typing-extensions", "version": "4.15.0", "extras": []},
+    {"name": "typing-inspection", "version": "0.4.2", "extras": []}
+  ]
+}

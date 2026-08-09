@@ -449,6 +449,15 @@ logical template ID, template manifest digest, complete lock digest, catalog
 revision, Python ABI, platform tag, parent worker artifact digest, and isolation
 policy version. Changing any tuple member creates a different revision.
 
+The initial package resource is implemented at
+`hosting.resources.toolbox_templates/catalog.json`, with complete independent
+`core.lock.json` and `py-compute.lock.json` resources. The strict loader
+recomputes lock, manifest, parent-worker, and resource-artifact identities and
+rejects unknown or capability-bearing package metadata before constructing a
+template. Normal host setup publishes both through the immutable catalog,
+starts both prewarms through the durable target-host materializer, and reports
+standard readiness only after both exact target receipts exist.
+
 `core` contains the installed hosting/worker artifact and only its complete
 protocol, serialization, validation, and sandbox-harness dependency closure.
 It contains no optional mathematics, data, document, network-client, or model
@@ -460,6 +469,13 @@ third-party distribution imported by a shipped parent compute intrinsic.
 `py-compute` is not constructed by copying, layering, or inheriting the
 `core` site-packages directory. Sharing digest-addressed artifact bytes is
 allowed; sharing a mutable installation is not.
+
+For the initial lock, `core` contains `mp13-engine` 0.9.0, `packaging` 26.0,
+Pydantic 2.12.5, and the exact Pydantic validation closure (`pydantic-core`
+2.41.5, `annotated-types` 0.7.0, `typing-extensions` 4.15.0, and
+`typing-inspection` 0.4.2). `py-compute` repeats that complete lock and adds
+NumPy 2.4.3, SymPy 1.14.0, NumExpr 2.14.1, and mpmath 1.3.0. These versions are
+release-owned immutable inputs, not consumer-selectable constraints.
 
 The host project configuration namespace is `toolbox_environment_catalog` and
 has these exact keys:

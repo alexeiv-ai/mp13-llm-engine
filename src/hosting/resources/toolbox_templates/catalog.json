@@ -1,0 +1,24 @@
+{
+  "contract": "hosting.toolbox.shipped_catalog.v1",
+  "revision": "2026.08.08.1",
+  "python_requires": ">=3.12,<3.13",
+  "python_abis": ["cp312"],
+  "platforms": ["manylinux_2_28_x86_64", "win_amd64"],
+  "runtime_kind": "toolbox_python",
+  "worker_protocol_version": "1.0",
+  "isolation_policy_version": "compute-only-v1",
+  "artifact_source_id": "parent-release-resources",
+  "signing_key_id": "parent-release-toolbox-v1",
+  "templates": [
+    {
+      "template_id": "core",
+      "lock_resource": "core.lock.json",
+      "exposed_import_roots": ["hosting", "mp13_engine", "packaging", "pydantic"]
+    },
+    {
+      "template_id": "py-compute",
+      "lock_resource": "py-compute.lock.json",
+      "exposed_import_roots": ["hosting", "mp13_engine", "mpmath", "numexpr", "numpy", "packaging", "pydantic", "sympy"]
+    }
+  ]
+}

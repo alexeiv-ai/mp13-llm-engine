@@ -298,7 +298,7 @@ class StateMixin:
             if str(key_id).strip() and str((meta or {}).get("role") or "").strip().lower() == "admin"
         )
         access_profile = dict(cfg.get("access_profile") or {})
-        return {
+        summary = {
             "status": "ok",
             "hosting_root": str(self.hosting_root),
             "configured": bool((self.hosting_root / "access_control.json").exists() or keys),
@@ -316,6 +316,14 @@ class StateMixin:
             "sessions_count": len(dict(auth.get("sessions") or {})),
             "secure_state": self.hosting_secure_state_status(),
         }
+        required_abi = str(getattr(self, "_toolbox_required_python_abi", "") or "").strip()
+        required_platform = str(getattr(self, "_toolbox_required_platform", "") or "").strip()
+        if required_abi and required_platform:
+            summary["toolbox_environment_catalog"] = self.toolbox_required_template_status(
+                python_abi=required_abi,
+                platform=required_platform,
+            )
+        return summary
 
     def _read_control(self) -> Dict[str, Any]:
         default_payload = self._default_control_payload()

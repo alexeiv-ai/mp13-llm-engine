@@ -226,6 +226,14 @@ Dependent deployment code may request only the logical template IDs `core` and
 for planning. It must not append version suffixes, persist a resolved revision
 as a user choice, or synthesize a template from a local environment name.
 
+Do not copy the parent's shipped `core`/`py-compute` distribution lists into a
+dependent lockfile, UI model, or compatibility table. They are parent release
+resources and may change under the same stable logical IDs by publishing a new
+immutable revision. Dependent persistence stores desired dependency intent and
+the authoritative definition/operation refs needed for recovery; it does not
+store Pydantic, NumPy, SymPy, NumExpr, or transitive versions as deployment
+logic. Remove any version-comparison branch that selects a template locally.
+
 Use `core` for source limited to the standard library, staged local modules,
 and the parent worker closure. Use `py-compute` only when source requires the
 shipped NumPy/SymPy/NumExpr compute set. For any other import, including

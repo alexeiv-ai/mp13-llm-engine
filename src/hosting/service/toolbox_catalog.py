@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from ..toolbox.identity import identity_digest, require_digest
+from ..toolbox.shipped_templates import SHIPPED_TEMPLATE_IDS, load_shipped_toolbox_catalog
 from ..operation_contract import (
     HostedExecutionKind,
     HostedOperationLifecycle,
@@ -511,6 +512,117 @@ class ToolboxTemplateCatalogMixin:
                 descriptors,
                 key=lambda item: (item["template_id"], item["template_digest"]),
             ),
+        }
+
+    def toolbox_required_template_status(
+        self, *, python_abi: str, platform: str
+    ) -> dict[str, Any]:
+        target = materialization_target(python_abi=python_abi, platform=platform)
+        shipped = load_shipped_toolbox_catalog()
+        state = self._toolbox_template_catalog.read()
+        diagnostics: list[dict[str, str]] = []
+        templates: list[dict[str, Any]] = []
+        for release in shipped.releases:
+            entry = next(
+                (
+                    item for item in state["entries"]
+                    if item["template_id"] == release.template.template_id
+                    and item["template"] == release.template.to_dict()
+                ),
+                None,
+            )
+            if entry is None:
+                code = "required_template_missing"
+                ready = False
+                template_digest = None
+            elif entry["lifecycle"] == "revoked":
+                code = "required_template_lock_invalid"
+                ready = False
+                template_digest = entry["template_digest"]
+            else:
+                template_digest = entry["template_digest"]
+                receipt = self._toolbox_materialization_receipts.get(
+                    template_digest=template_digest,
+                    python_abi=python_abi,
+                    platform=platform,
+                )
+                ready = receipt is not None
+                code = "required_template_ready" if ready else "required_template_materialization_failed"
+            templates.append(
+                {
+                    "template_id": release.template.template_id,
+                    "template_digest": template_digest,
+                    "manifest_digest": release.template.provenance.manifest_digest,
+                    "lock_digest": release.template.lock_digest,
+                    "target": target,
+                    "ready": ready,
+                    "code": code,
+                }
+            )
+            if not ready:
+                diagnostics.append(
+                    {
+                        "code": code,
+                        "summary": f"Required template {release.template.template_id} is not ready on target {target}.",
+                    }
+                )
+        ready = all(item["ready"] for item in templates) and tuple(
+            item["template_id"] for item in templates
+        ) == SHIPPED_TEMPLATE_IDS
+        return {
+            "status": "ready" if ready else "degraded",
+            "code": "required_templates_ready" if ready else diagnostics[0]["code"],
+            "resource": shipped.resource,
+            "catalog_revision": state["catalog_revision"],
+            "target": target,
+            "templates": templates,
+            "diagnostics": diagnostics,
+        }
+
+    def initialize_shipped_toolbox_templates(
+        self,
+        *,
+        python_abi: str,
+        platform: str,
+        request_id_prefix: str,
+        actor_id: str = "service:setup",
+    ) -> dict[str, Any]:
+        """Publish and prewarm both required resources through normal durable paths."""
+
+        prefix = str(request_id_prefix or "").strip()
+        if not prefix:
+            raise ValueError("template_setup_request_id_prefix_required")
+        materialization_target(python_abi=python_abi, platform=platform)
+        shipped = load_shipped_toolbox_catalog()
+        operations: list[dict[str, Any]] = []
+        published: list[dict[str, Any]] = []
+        for release in shipped.releases:
+            if python_abi not in release.template.python_abis or platform not in release.template.platforms:
+                raise ValueError("required_template_target_unsupported")
+            result = self.toolbox_template_publish(
+                template=release.template.to_dict(),
+                artifact_references=[release.artifact_reference()],
+                manifest_signature=release.manifest_signature,
+                activate=True,
+                actor_id=actor_id,
+            )
+            published.append(result)
+            operations.append(
+                self.toolbox_template_prewarm(
+                    template_id=release.template.template_id,
+                    template_digest=result["template_digest"],
+                    python_abi=python_abi,
+                    platform=platform,
+                    request_id=f"{prefix}:{release.template.template_id}:{result['template_digest']}",
+                    owner_actor_id=actor_id,
+                )
+            )
+        return {
+            "status": "started",
+            "resource": shipped.resource,
+            "target": materialization_target(python_abi=python_abi, platform=platform),
+            "published": published,
+            "operations": operations,
         }
 
     def toolbox_template_describe(

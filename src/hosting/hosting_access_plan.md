@@ -808,11 +808,21 @@ call path found in the inventory.
   explicit prewarm exclusions to every non-admin catalog role and an exact SSH
   prewarm payload assertion. Required matrices passed 26, 18, and 95 tests;
   diff checks passed.
-- [ ] **P1-11** Add shipped `core` and `py-compute` descriptors and complete
+- [x] **P1-11** Add shipped `core` and `py-compute` descriptors and complete
   immutable locks plus the compute-only sandbox policy preset. Materialize and
   probe both during normal host setup, advertise only verified templates, make
   the planner choose the smallest compatible template, and reject package
   metadata that attempts to grant sandbox capabilities.
+  Evidence (2026-08-08): shipped strict package resources for exactly `core`
+  and `py-compute` with independent complete locks derived from the parent
+  validation closure and exact intrinsic metadata/Poetry versions. Added
+  canonical lock/manifest/worker/resource identity validation, recursive
+  capability-metadata denial, the exact enforceable compute-only preset,
+  normal setup publication/prewarm through the shared durable materializer,
+  bounded required-template readiness, and smallest exact planner assertions.
+  Focused tests passed 6; planner/policy/catalog passed 42;
+  catalog/prewarm/setup-state passed 21; contract docs passed 12; compile and
+  diff checks passed. Physical artifact installation remains Phase 2.
 - [ ] **P1-12** Use the same template resolver and materialization receipts for
   toolbox, Python node, snippet, and helper worker classes without merging their
   worker processes or public contracts. Probe standard-library execution on

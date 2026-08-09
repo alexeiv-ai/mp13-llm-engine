@@ -59,6 +59,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         operation_max_tombstones: Optional[int] = None,
         operation_max_inline_result_bytes: Optional[int] = None,
         toolbox_template_materializer: Optional[ToolboxTemplateMaterializer] = None,
+        toolbox_required_python_abi: Optional[str] = None,
+        toolbox_required_platform: Optional[str] = None,
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
         raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
@@ -73,6 +75,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_template_materializer = (
             toolbox_template_materializer or UnconfiguredToolboxTemplateMaterializer()
         )
+        self._toolbox_required_python_abi = str(toolbox_required_python_abi or "").strip()
+        self._toolbox_required_platform = str(toolbox_required_platform or "").strip()
 
         def _float_setting(value: Optional[float], env_name: str, default: float) -> float:
             if value is not None:
