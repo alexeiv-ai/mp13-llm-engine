@@ -39,8 +39,8 @@ environment builder work is next.
 
 ## Active slice
 
-None. The next slice will predeclare the physical hermetic builder work before
-changing files.
+None. The next slice will predeclare Phase 3 planner/model work before changing
+files.
 
 ## Completed slices
 
@@ -64,6 +64,7 @@ changing files.
 | 2026-08-08 | P1-12 | Unified verified-template resolution/receipts across toolbox, node, snippet, and helper while deriving distinct consumer bindings and preserving runtime/API boundaries. | Shared resolver/isolated probes -> 9 passed; dependency/shipped-template -> 32 passed; workflow/helper/operation -> 37 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared workflow filename did not exist and failed before collection; the active ledger was corrected to the actual contract/node/helper suites before closeout. | `feat: share verified template resolution (P1-12)` |
 | 2026-08-08 | P1-13, Phase 1 exit | Added exact bounded model-runtime status plus generic selection denials, including healthy-installed denial; proved deterministic restart-safe resolution without worker/ledger mutation. | Model boundary -> 12 passed; resolver/policy/catalog -> 32 passed; channel/CLI/auth/security -> 133 passed; docs/shipped templates -> 18 passed; Phase 1 resolver audit -> 10 passed; compile/diff checks passed. | `feat: enforce exclusive model runtime (P1-13)` |
 | 2026-08-08 | Phase 2 groundwork (no items checked) | Added the strict host-derived resolved environment input and frozen `hosting.toolbox.environment.v2` cache identity, removed environment-description service lookup from worker orchestration, and isolated no-bootstrap toolbox interpreter selection while preserving workflow fallback. P2 remains open until the physical builder replaces the legacy inheriting path. | Hermetic contract -> 6 passed; workflow/runtime regressions -> 29 passed; focused toolbox environment regressions -> 3 passed, 135 deselected; compile/diff checks passed. | `refactor: establish hermetic toolbox environment contract` |
+| 2026-08-08 | P2-01 through P2-10, Phase 2 exit | Added the target-host offline hermetic builder, exact wheel/lock/probe receipts, atomic publication/quarantine, thread/process deduplication, reference/grace GC, complete independent derived locks, receipt-gated readiness, catalog prewarm adaptation, and configured-orchestrator verified interpreter routing. | Hermetic builder -> 11 passed including real venvs, two fresh processes, service configuration, quarantine, ambient exclusion, complete base-plus-delta, and GC; environment/prewarm/shipped templates -> 19 passed; workflow/runtime -> 29 passed; focused toolbox environment -> 3 passed, 135 deselected; compile/diff checks passed. | `feat: build hermetic toolbox environments (P2-01..P2-10)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -91,7 +92,6 @@ and the condition required to resume it.
 
 ## Next slice
 
-Implement and wire the physical toolbox-only hermetic builder, approved
-artifact installation, final-interpreter verification, publication/quarantine,
-deduplication/reference GC, and independent base-plus-delta readiness, then
-close P2-01 through P2-10 only after the exit gate passes.
+Begin Phase 3 with strict public definition parsing, internal resolved profile
+models, post-resolution grouping, and duplicate-name validation (P3-01 through
+P3-04).

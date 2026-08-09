@@ -13,6 +13,7 @@ from hosting.toolbox.environment import RuntimeEnvironmentManager, ToolboxEnviro
 from hosting.toolbox.hermetic_environment import (
     HermeticToolboxEnvironmentResolver,
     ResolvedToolboxEnvironmentInput,
+    ToolboxLockedArtifactSpec,
 )
 from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 
@@ -33,6 +34,24 @@ def _resolved(**overrides: object) -> ResolvedToolboxEnvironmentInput:
         "complete_lock": (
             ToolboxLockedDistributionSpec(name="mp13-engine", version="0.9.0"),
             ToolboxLockedDistributionSpec(name="pydantic", version="2.12.5"),
+        ),
+        "locked_artifacts": (
+            ToolboxLockedArtifactSpec(
+                distribution_name="mp13-engine",
+                version="0.9.0",
+                source_id="approved",
+                filename="mp13_engine-0.9.0-py3-none-any.whl",
+                sha256=_digest("8"),
+                size_bytes=100,
+            ),
+            ToolboxLockedArtifactSpec(
+                distribution_name="pydantic",
+                version="2.12.5",
+                source_id="approved",
+                filename="pydantic-2.12.5-py3-none-any.whl",
+                sha256=_digest("9"),
+                size_bytes=100,
+            ),
         ),
         "custom_resolved_lock_digest": None,
         "isolation_policy_version": "toolbox-isolation-v1",

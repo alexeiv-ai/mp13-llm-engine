@@ -213,6 +213,14 @@ complete immutable lock, optional custom resolved-lock, and isolation policy.
 Import roots are retained as verification obligations but do not split the
 physical cache by per-function import subset.
 
+Its durable build order is validation, approved-artifact verification,
+non-inheriting venv creation, offline complete-lock install, exact distribution
+receipt verification, final-interpreter import probes, atomic publication, and
+public receipt commit. Publication is forbidden before every verification
+step passes. A failed candidate is quarantined, and retry with the same
+environment key is serialized by a process-safe lock. Consumer teardown drops
+only its reference; grace-period GC owns physical deletion.
+
 For definition apply, cancellation before publication finishes with bounded
 candidate-cleanup diagnostics. Publication is the commit boundary. A cancel
 request after the persisted boundary returns

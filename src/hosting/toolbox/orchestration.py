@@ -1,6 +1,7 @@
 """Sandboxed toolbox assignment orchestration."""
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -9,6 +10,7 @@ from .bundle_models import (
     ToolboxAutoAssignmentRequest,
     ToolboxBundleFile,
     ToolboxBundleSpec,
+    ToolboxEnvironmentSpec,
     ToolboxManualAssignmentRequest,
     ToolboxSandboxAssignment,
 )
@@ -176,13 +178,42 @@ class ToolboxSandboxOrchestrator:
             staged = item.staged_bundle
             revision = str(staged.manifest.get("bundle_revision") or "")
             engine_id = self._engine_id(toolbox_id, item.sandbox_profile, revision)
-            # Environment-description inheritance is not an input to toolbox
-            # execution. The legacy bundle adapter remains only until the
-            # resolved template input is wired to the physical builder.
-            environment_spec = self.environment_manager.ensure_for_bundle(staged)
-            environment_spec.python_executable = self.environment_manager.toolbox_runtime_python_executable(
-                environment_spec
-            )
+            if getattr(self.service, "_hermetic_toolbox_environment_builder", None) is not None:
+                python_abi = str(getattr(self.service, "_toolbox_required_python_abi", "") or "").strip()
+                platform = str(getattr(self.service, "_toolbox_required_platform", "") or "").strip()
+                python_abi = python_abi or f"cp{sys.version_info.major}{sys.version_info.minor}"
+                platform = platform or ("win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64")
+                hermetic = self.service.materialize_toolbox_environment_for_bundle(
+                    files=list(staged.manifest.get("files") or []),
+                    python_abi=python_abi,
+                    platform=platform,
+                    declared_imports=item.sandbox_profile.normalized_required_imports(),
+                    intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
+                    sandbox_policy=dict(item.sandbox_profile.sandbox_policy or {}),
+                    reference_id=f"toolbox:{toolbox_id}:{item.sandbox_profile.normalized_profile_id()}:{revision}",
+                )
+                environment_spec = ToolboxEnvironmentSpec(
+                    venv_key=hermetic.environment_key,
+                    venv_path=hermetic.environment_root,
+                    python_executable=hermetic.python_executable,
+                    environment_name=hermetic.resolved.template_id,
+                    environment_description_hash="",
+                    venv_lock_hash=hermetic.resolved.complete_lock_digest,
+                    toolbox_runtime_hash=hermetic.resolved.runtime_artifact_digest,
+                    intrinsics_profile_id="resolved",
+                    required_imports=list(hermetic.resolved.resolved_import_roots),
+                    dependency_lock_hash=hermetic.resolved.complete_lock_digest,
+                    environment_root_kind="toolbox_environment_cache",
+                    environment_consumer_kind="toolbox_executor",
+                )
+            else:
+                # Deprecated version-1 mutations remain on the legacy adapter
+                # until Phase 7 removes those public commands. Configured v2
+                # hosts never reach this ambient-capable path.
+                environment_spec = self.environment_manager.ensure_for_bundle(staged)
+                environment_spec.python_executable = self.environment_manager.toolbox_runtime_python_executable(
+                    environment_spec
+                )
             registration_environment = self.runtime_base.registration_environment(
                 environment=staged.registration_environment(environment_spec),
                 toolbox_id=toolbox_id,

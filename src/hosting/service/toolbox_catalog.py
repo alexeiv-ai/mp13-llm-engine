@@ -28,6 +28,7 @@ from ..operation_contract import (
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 from .toolbox_materialization import (
     AtomicJsonToolboxMaterializationReceipts,
+    HermeticToolboxTemplateMaterializer,
     ToolboxTemplateMaterializationError,
     ToolboxTemplateMaterializationReceipt,
     derived_environment_digest,
@@ -636,6 +637,49 @@ class ToolboxTemplateCatalogMixin:
             sandbox_policy=sandbox_policy,
         )
         return resolution.to_dict()
+
+    def materialize_toolbox_environment_for_bundle(
+        self,
+        *,
+        files: Sequence[Mapping[str, Any]],
+        python_abi: str,
+        platform: str,
+        declared_imports: Sequence[str] = (),
+        package_requirements: Sequence[str] = (),
+        intrinsic_names: Sequence[str] = (),
+        allowed_template_ids: Sequence[str] | None = None,
+        sandbox_policy: Mapping[str, Any] | None = None,
+        reference_id: str,
+    ):
+        """Resolve and acquire a receipt-verified physical toolbox environment."""
+
+        builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+        if builder is None:
+            raise ToolboxTemplateMaterializationError(
+                "template_materializer_unconfigured",
+                "This runtime host has no configured hermetic toolbox environment builder.",
+            )
+        resolution = self.resolve_hosted_template_environment(
+            consumer_kind="toolbox",
+            files=files,
+            python_abi=python_abi,
+            platform=platform,
+            declared_imports=declared_imports,
+            package_requirements=package_requirements,
+            intrinsic_names=intrinsic_names,
+            allowed_template_ids=allowed_template_ids,
+            sandbox_policy=sandbox_policy,
+        )
+        template_digest = resolution["binding"]["template_digest"]
+        state = self._toolbox_template_catalog.read()
+        entry = next(
+            item for item in state["entries"]
+            if item["template_digest"] == template_digest and item["lifecycle"] == "active"
+        )
+        resolved = HermeticToolboxTemplateMaterializer._resolved_input(
+            entry, python_abi=python_abi, platform=platform
+        )
+        return builder.materialize_environment(resolved, reference_id=reference_id)
 
     def initialize_shipped_toolbox_templates(
         self,

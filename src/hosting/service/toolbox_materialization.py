@@ -6,11 +6,21 @@ import os
 import re
 import tempfile
 import time
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
+
 from ..toolbox.identity import identity_digest, require_digest
+from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec, normalize_distribution_name
+from ..toolbox.hermetic_environment import (
+    HermeticToolboxEnvironmentBuildError,
+    HermeticToolboxEnvironmentBuilder,
+    ResolvedToolboxEnvironmentInput,
+    ToolboxLockedArtifactSpec,
+)
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 
 
@@ -159,6 +169,115 @@ class UnconfiguredToolboxTemplateMaterializer:
         )
 
 
+class HermeticToolboxTemplateMaterializer:
+    """Adapt catalog prewarm to the target-host hermetic environment builder."""
+
+    def __init__(self, builder: HermeticToolboxEnvironmentBuilder):
+        if not isinstance(builder, HermeticToolboxEnvironmentBuilder):
+            raise ValueError("hermetic_toolbox_builder_required")
+        self.builder = builder
+
+    @staticmethod
+    def _resolved_input(
+        catalog_entry: Mapping[str, Any], *, python_abi: str, platform: str
+    ) -> ResolvedToolboxEnvironmentInput:
+        entry = dict(catalog_entry or {})
+        template = ToolboxEnvironmentTemplateSpec.from_dict(entry.get("template"))
+        template_digest = require_digest(entry.get("template_digest"), label="template_digest")
+        artifact_rows = list(entry.get("artifacts") or [])
+        artifacts_by_distribution: dict[tuple[str, str], dict[str, Any]] = {}
+        for raw in artifact_rows:
+            row = dict(raw or {})
+            try:
+                name, version, _build, _tags = parse_wheel_filename(str(row.get("filename") or ""))
+            except InvalidWheelFilename as exc:
+                raise ToolboxTemplateMaterializationError(
+                    "template_artifact_not_installable",
+                    "A template artifact is not an immutable installable wheel.",
+                ) from exc
+            key = (normalize_distribution_name(str(name)), str(version))
+            if key in artifacts_by_distribution:
+                raise ToolboxTemplateMaterializationError(
+                    "template_artifact_ambiguous", "The template has multiple artifacts for one locked distribution."
+                )
+            artifacts_by_distribution[key] = row
+        locked_artifacts: list[ToolboxLockedArtifactSpec] = []
+        for distribution in template.locked_distributions:
+            row = artifacts_by_distribution.get((distribution.name, distribution.version))
+            if row is None:
+                raise ToolboxTemplateMaterializationError(
+                    "template_artifact_lock_incomplete",
+                    "The template artifact set does not cover its complete distribution lock.",
+                )
+            locked_artifacts.append(
+                ToolboxLockedArtifactSpec(
+                    distribution_name=distribution.name,
+                    version=distribution.version,
+                    source_id=row.get("source_id"),
+                    filename=row.get("filename"),
+                    sha256=row.get("sha256"),
+                    size_bytes=row.get("size_bytes"),
+                )
+            )
+        if len(locked_artifacts) != len(artifact_rows):
+            raise ToolboxTemplateMaterializationError(
+                "template_artifact_lock_incomplete",
+                "The template artifact set is not an exact complete distribution lock.",
+            )
+        return ResolvedToolboxEnvironmentInput(
+            template_id=template.template_id,
+            template_digest=template_digest,
+            runtime_version=".".join(str(item) for item in sys.version_info[:3]),
+            runtime_artifact_digest=template.parent_worker_artifact_digest,
+            python_abi=python_abi,
+            platform=platform,
+            complete_lock_digest=template.lock_digest,
+            complete_lock=template.locked_distributions,
+            locked_artifacts=tuple(sorted(locked_artifacts)),
+            custom_resolved_lock_digest=None,
+            isolation_policy_version=template.isolation_policy_version,
+            resolved_import_roots=template.exposed_import_roots,
+        )
+
+    def materialize(
+        self,
+        *,
+        catalog_entry: Mapping[str, Any],
+        python_abi: str,
+        platform: str,
+        progress: MaterializationProgress,
+    ) -> ToolboxTemplateMaterializationReceipt:
+        try:
+            resolved = self._resolved_input(catalog_entry, python_abi=python_abi, platform=platform)
+            progress("environment_build", "hermetic_environment_building", 0, 1, "The independent environment is being built and verified.", True)
+            spec = self.builder.materialize_environment(
+                resolved,
+                reference_id=f"template:{resolved.template_digest.removeprefix('sha256:')}",
+            )
+            progress("environment_build", "hermetic_environment_verified", 1, 1, "The independent environment passed lock and import verification.", False)
+        except ToolboxTemplateMaterializationError:
+            raise
+        except HermeticToolboxEnvironmentBuildError as exc:
+            raise ToolboxTemplateMaterializationError(exc.code, exc.summary) from exc
+        artifact_digests = tuple(sorted(item.sha256 for item in resolved.locked_artifacts))
+        return ToolboxTemplateMaterializationReceipt(
+            template_id=resolved.template_id,
+            template_digest=resolved.template_digest,
+            python_abi=resolved.python_abi,
+            platform=resolved.platform,
+            environment_digest=derived_environment_digest(
+                template_digest=resolved.template_digest,
+                python_abi=resolved.python_abi,
+                platform=resolved.platform,
+                artifact_digests=artifact_digests,
+            ),
+            artifact_digests=artifact_digests,
+            verified_import_roots=resolved.resolved_import_roots,
+            verified_at_ms=int(time.time() * 1000),
+            verifier="hermetic-toolbox-builder-v1",
+        )
+
+
 class AtomicJsonToolboxMaterializationReceipts:
     """Process-safe exact-revision receipt store; failed builds never become ready."""
 
@@ -270,6 +389,7 @@ __all__ = [
     "ToolboxTemplateMaterializationReceipt",
     "ToolboxTemplateMaterializer",
     "UnconfiguredToolboxTemplateMaterializer",
+    "HermeticToolboxTemplateMaterializer",
     "derived_environment_digest",
     "materialization_target",
 ]

@@ -42,9 +42,12 @@ from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
 from .execution import ToolboxExecutionHarness
 from .hosted_ref import HostedToolBoxRef, PendingHostedToolboxRef, SandboxedToolboxFacade
 from .hermetic_environment import (
+    HermeticToolboxEnvironmentBuildError,
+    HermeticToolboxEnvironmentBuilder,
     HermeticToolboxEnvironmentResolver,
     HermeticToolboxEnvironmentSpec,
     ResolvedToolboxEnvironmentInput,
+    ToolboxLockedArtifactSpec,
 )
 from .manifest import load_toolbox_from_manifest
 from .orchestration import ToolboxSandboxOrchestrator
@@ -83,7 +86,10 @@ __all__ = [
     "RuntimeEnvironmentManager",
     "HermeticToolboxEnvironmentResolver",
     "HermeticToolboxEnvironmentSpec",
+    "HermeticToolboxEnvironmentBuildError",
+    "HermeticToolboxEnvironmentBuilder",
     "ResolvedToolboxEnvironmentInput",
+    "ToolboxLockedArtifactSpec",
     "StagedToolboxBundle",
     "ToolboxBundleStager",
     "ToolboxSandboxOrchestrator",

@@ -498,6 +498,41 @@ workers can use only that verified environment interpreter, while the legacy
 workflow helper fallback remains governed by its independent workflow
 contract.
 
+### Physical materialization and publication
+
+The target host maps every locked distribution to exactly one immutable wheel
+in an administrator-configured artifact source. Artifact references contain a
+source ID, basename-only filename, canonical SHA-256 digest, and byte length;
+the builder rejects missing, extra, ambiguous, non-wheel, path-escaping, or
+digest/size-mismatched artifacts. Network resolution is never an installation
+fallback. Built-in prewarm and lazy acquisition use the same builder and the
+same resolved input. A dependent cannot supply an artifact source, wheel,
+lockfile, venv, or filesystem path.
+
+Each cache miss creates a new candidate with `venv` configured as
+`with_pip=True` and `system_site_packages=False`. The candidate's own Python
+runs pip with `--no-index --no-deps` against the approved exact wheel set. The
+same final interpreter then verifies every distribution/version in the
+complete lock and imports every resolved root with user site and `PYTHONPATH`
+disabled. A custom environment repeats the complete base-plus-delta lock into
+a new venv; it never copies or references the base venv's `site-packages`.
+
+Only a candidate with a byte-for-byte matching strict verification receipt,
+non-inheriting `pyvenv.cfg`, complete installed lock, and successful probes is
+atomically renamed to its digest-addressed published path. Failed candidates
+are moved under the quarantine namespace with a bounded code and are never
+returned as ready. Per-environment OS file locks plus in-process locks
+deduplicate concurrent builders. Reference IDs are persisted separately;
+release removes only a reference, and deletion occurs only in grace-period GC.
+
+Catalog prewarm commits the public materialization receipt only after this
+physical publication succeeds. A service configured with artifact sources
+routes toolbox worker launch through `materialize_toolbox_environment_for_bundle`
+and uses only the published environment Python. There is no bootstrap
+interpreter branch on that path. The setup summary continues to report the
+required `core` and `py-compute` target receipts; absence or mismatch is a
+degraded setup state and prevents resolved acquisition.
+
 For the initial lock, `core` contains `mp13-engine` 0.9.0, `packaging` 26.0,
 Pydantic 2.12.5, and the exact Pydantic validation closure (`pydantic-core`
 2.41.5, `annotated-types` 0.7.0, `typing-extensions` 4.15.0, and

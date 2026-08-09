@@ -252,6 +252,23 @@ deployment groups; the host groups by the complete resolved lock and sandbox
 policy. Workflow-specific fallback logic may remain only in workflow code and
 must never be reused for a toolbox executor.
 
+Remove any dependent code that downloads wheels, invokes pip/uv/Poetry/conda,
+uploads a prebuilt venv, sends a lockfile path, checks `pyvenv.cfg`, scans
+`site-packages`, probes imports, or interprets a build/quarantine receipt as
+permission to launch. Those are target-host responsibilities. The client-side
+replacement is only to display the bounded plan/apply or setup diagnostic and
+retry the authorized definition operation after the host reports readiness.
+Do not add a local repair button or fall back to the application's Python when
+the code is `template_artifact_lock_incomplete`,
+`environment_artifact_verification_failed`, `environment_lock_receipt_failed`,
+or `environment_import_probe_failed`.
+
+Dependent teardown must likewise remove venv deletion and cache-pruning logic.
+It closes/releases the toolbox through the definition API; host reference
+tracking and grace-period GC decide when a physical environment can be
+deleted. A failed definition mutation must not delete a shared environment or
+its artifact bytes.
+
 ### Required environment-selection and readiness changes
 
 Dependent deployment code may request only the logical template IDs `core` and

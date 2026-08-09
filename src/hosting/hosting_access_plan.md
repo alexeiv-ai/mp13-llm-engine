@@ -860,39 +860,56 @@ checkpoint bytes were unchanged. The shared resolver suite passed 10 tests.
 
 ### Phase 2 - Toolbox-specific hermetic environment builder
 
-- [ ] **P2-01** Split toolbox-specific environment behavior from the shared
+- [x] **P2-01** Split toolbox-specific environment behavior from the shared
   runtime environment code in `src/hosting/toolbox/environment.py`. Preserve or
   relocate primitives still used by `RuntimeEnvironmentManager` and workflow
   Python/JavaScript.
-- [ ] **P2-02** Replace toolbox environment-description lookup with a resolved
+- [x] **P2-02** Replace toolbox environment-description lookup with a resolved
   template/custom-lock input. Remove environment-name inheritance from toolbox
   environment identity.
-- [ ] **P2-03** Derive toolbox `venv_key` from runtime/ABI/platform identity,
+- [x] **P2-03** Derive toolbox `venv_key` from runtime/ABI/platform identity,
   immutable template lock digest, optional custom resolved-lock digest, and
   isolation policy. Do not include each function's raw import subset.
-- [ ] **P2-04** Create toolbox venvs without `system_site_packages`; ensure pip
+- [x] **P2-04** Create toolbox venvs without `system_site_packages`; ensure pip
   or the selected installer exists inside the build environment explicitly.
-- [ ] **P2-05** Remove `runtime_python_executable()` bootstrap fallback for
+- [x] **P2-05** Remove `runtime_python_executable()` bootstrap fallback for
   toolbox executors. Do not alter workflow fallback behavior unless separately
   required by workflow contracts.
-- [ ] **P2-06** On the target runtime host, materialize built-in templates from
+- [x] **P2-06** On the target runtime host, materialize built-in templates from
   policy-approved locked artifacts and resolve, lock, install, and receipt-
   verify approved custom deltas before worker spawn. Never accept a client-
   supplied venv or execute installation on the dependent-project machine.
-- [ ] **P2-07** Run import probes with the final environment interpreter for all
+- [x] **P2-07** Run import probes with the final environment interpreter for all
   resolved import roots before staging a candidate worker.
-- [ ] **P2-08** Publish a cache entry only after lock, receipt, and import-probe
+- [x] **P2-08** Publish a cache entry only after lock, receipt, and import-probe
   verification. Quarantine partial/failed builds.
-- [ ] **P2-09** Deduplicate concurrent builds by environment key using a
+- [x] **P2-09** Deduplicate concurrent builds by environment key using a
   process-safe lock. Track references and defer deletion to GC with a grace
   period instead of deleting immediately in mutation failure paths.
-- [ ] **P2-10** Materialize and verify derived environments from the complete
+- [x] **P2-10** Materialize and verify derived environments from the complete
   base-plus-delta resolved lock. Prove that they do not read or inherit another
   venv's `site-packages`, and report required-base readiness during daemon
   startup/configuration checks.
 
 Exit gate: no toolbox worker can start with ambient host packages, a bootstrap
 interpreter, an unverified lock, or a failed import probe.
+
+Evidence (2026-08-08): the toolbox-only builder created real venvs with
+in-environment pip and `include-system-site-packages = false`, installed only
+digest/size-verified administrator-source wheels with `--no-index --no-deps`,
+verified the exact complete distribution lock and all import roots under the
+final interpreter, and atomically published a strict receipt. An ambient
+parent-only `pytest` probe was absent. Failed final-interpreter probes produced
+one quarantined candidate and no published path. Four concurrent threads and
+two fresh spawned processes converged on one physical environment and retained
+all references; grace-period GC removed it only after release. A complete
+base-plus-delta build imported both packages while its `sys.path` excluded the
+base venv. Catalog prewarm used the same builder, required-template readiness
+was receipt-gated, and a configured orchestrator launched only the resolved
+published Python rather than its deliberately invalid bootstrap executable.
+The hermetic builder suite passed 11 tests; environment/prewarm/shipped
+template regressions passed 19; workflow/runtime regressions passed 29; and
+focused legacy toolbox environment regressions passed 3 with 135 deselected.
 
 ### Phase 3 - Definition planner and resolved profile model
 

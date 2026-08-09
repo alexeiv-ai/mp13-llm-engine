@@ -36,7 +36,12 @@ from .sandbox_api import SandboxApiMixin
 from .state import StateMixin
 from .toolbox_env import ToolboxEnvironmentMixin
 from .toolbox_catalog import ToolboxTemplateCatalogMixin
-from .toolbox_materialization import ToolboxTemplateMaterializer, UnconfiguredToolboxTemplateMaterializer
+from ..toolbox.hermetic_environment import HermeticToolboxEnvironmentBuilder
+from .toolbox_materialization import (
+    HermeticToolboxTemplateMaterializer,
+    ToolboxTemplateMaterializer,
+    UnconfiguredToolboxTemplateMaterializer,
+)
 from .toolbox_runtime import ToolboxRuntimeMixin
 from .workflow_helpers import WorkflowHelperMixin
 
@@ -61,6 +66,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         operation_max_tombstones: Optional[int] = None,
         operation_max_inline_result_bytes: Optional[int] = None,
         toolbox_template_materializer: Optional[ToolboxTemplateMaterializer] = None,
+        toolbox_artifact_sources: Optional[Dict[str, Path]] = None,
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
@@ -75,9 +81,24 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self.control_state_file = self.hosting_root / "access_control.json"
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
-        self._toolbox_template_materializer = (
-            toolbox_template_materializer or UnconfiguredToolboxTemplateMaterializer()
+        if toolbox_template_materializer is not None and toolbox_artifact_sources is not None:
+            raise ValueError("toolbox_materializer_configuration_conflict")
+        self._hermetic_toolbox_environment_builder = (
+            HermeticToolboxEnvironmentBuilder(
+                self.hosting_root,
+                artifact_sources=toolbox_artifact_sources,
+            )
+            if toolbox_artifact_sources is not None
+            else None
         )
+        if toolbox_template_materializer is not None:
+            self._toolbox_template_materializer = toolbox_template_materializer
+        elif self._hermetic_toolbox_environment_builder is not None:
+            self._toolbox_template_materializer = HermeticToolboxTemplateMaterializer(
+                self._hermetic_toolbox_environment_builder
+            )
+        else:
+            self._toolbox_template_materializer = UnconfiguredToolboxTemplateMaterializer()
         self._toolbox_required_python_abi = str(toolbox_required_python_abi or "").strip()
         self._toolbox_required_platform = str(toolbox_required_platform or "").strip()
         self._model_runtime_identity = (
