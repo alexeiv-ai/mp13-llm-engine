@@ -14,6 +14,10 @@ from typing import Any, Callable, Mapping, Sequence
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from ..toolbox.identity import identity_digest, require_digest
 from ..toolbox.shipped_templates import SHIPPED_TEMPLATE_IDS, load_shipped_toolbox_catalog
+from ..toolbox.template_resolver import (
+    VerifiedTemplateCandidate,
+    resolve_verified_template_environment,
+)
 from ..operation_contract import (
     HostedExecutionKind,
     HostedOperationLifecycle,
@@ -578,6 +582,60 @@ class ToolboxTemplateCatalogMixin:
             "templates": templates,
             "diagnostics": diagnostics,
         }
+
+    def resolve_hosted_template_environment(
+        self,
+        *,
+        consumer_kind: str,
+        files: Sequence[Mapping[str, Any]],
+        python_abi: str,
+        platform: str,
+        declared_imports: Sequence[str] = (),
+        package_requirements: Sequence[str] = (),
+        intrinsic_names: Sequence[str] = (),
+        allowed_template_ids: Sequence[str] | None = None,
+        sandbox_policy: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one consumer against active exact receipts without starting work."""
+
+        materialization_target(python_abi=python_abi, platform=platform)
+        state = self._toolbox_template_catalog.read()
+        candidates: list[VerifiedTemplateCandidate] = []
+        for template_id, template_digest in sorted(state["active"].items()):
+            entry = next(
+                item for item in state["entries"]
+                if item["template_id"] == template_id
+                and item["template_digest"] == template_digest
+            )
+            receipt = self._toolbox_materialization_receipts.get(
+                template_digest=template_digest,
+                python_abi=python_abi,
+                platform=platform,
+            )
+            if receipt is None:
+                continue
+            candidates.append(
+                VerifiedTemplateCandidate(
+                    template=ToolboxEnvironmentTemplateSpec.from_dict(entry["template"]),
+                    template_digest=template_digest,
+                    environment_digest=receipt.environment_digest,
+                    python_abi=receipt.python_abi,
+                    platform=receipt.platform,
+                )
+            )
+        resolution = resolve_verified_template_environment(
+            consumer_kind=consumer_kind,
+            files=files,
+            candidates=candidates,
+            python_abi=python_abi,
+            platform=platform,
+            declared_imports=declared_imports,
+            package_requirements=package_requirements,
+            intrinsic_names=intrinsic_names,
+            allowed_template_ids=allowed_template_ids,
+            sandbox_policy=sandbox_policy,
+        )
+        return resolution.to_dict()
 
     def initialize_shipped_toolbox_templates(
         self,

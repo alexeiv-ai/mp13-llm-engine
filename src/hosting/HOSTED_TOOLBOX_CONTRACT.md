@@ -546,6 +546,16 @@ template when one exists; otherwise they form an exact custom delta subject to
 package policy and, when required, dependency approval. A caller cannot force a
 larger template merely because it is installed.
 
+Toolbox, workflow Python node, workflow Python snippet, and workflow Python
+helper resolution all call the same pure dependency/template resolver and read
+the same exact target materialization receipts. The resulting binding contains
+the logical template/lock, verified physical environment digest, target, and
+effective sandbox-policy digest. It also contains a consumer-specific binding
+identity. Thus consumers may share immutable artifact bytes and one verified
+physical environment while toolbox, node, snippet, and helper identities,
+worker pools, protocols, lifecycle, authorization, and public methods remain
+separate. Resolution is read-only and never starts or discovers a worker.
+
 ## Cross-worker use of core
 
 The catalog resolver may select the same immutable `core` revision for:

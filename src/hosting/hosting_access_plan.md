@@ -823,10 +823,19 @@ call path found in the inventory.
   Focused tests passed 6; planner/policy/catalog passed 42;
   catalog/prewarm/setup-state passed 21; contract docs passed 12; compile and
   diff checks passed. Physical artifact installation remains Phase 2.
-- [ ] **P1-12** Use the same template resolver and materialization receipts for
+- [x] **P1-12** Use the same template resolver and materialization receipts for
   toolbox, Python node, snippet, and helper worker classes without merging their
   worker processes or public contracts. Probe standard-library execution on
   `core` and every shipped built-in on `py-compute` in clean environments.
+  Evidence (2026-08-08): added a shared pure resolver over staged-source
+  analysis, intrinsic requirements, active templates, and exact verified target
+  receipts. It produces consumer-specific binding identities for toolbox, node,
+  snippet, and helper while preserving existing runtime families, worker pools,
+  protocols, and APIs; resolution performs no worker discovery/start or state
+  mutation. Isolated interpreter processes executed standard-library work and
+  every shipped compute intrinsic/guide. Focused tests passed 9; dependency and
+  shipped-template regressions passed 32; existing workflow/helper/operation
+  regressions passed 37; contract docs passed 12; compile/diff checks passed.
 - [ ] **P1-13** Add the read-only model-runtime status projection and enforce
   that generic template planning, custom environment building, Python worker
   launch, and control-channel requests cannot select or reveal the exclusive

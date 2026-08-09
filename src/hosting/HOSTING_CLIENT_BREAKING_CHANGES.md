@@ -257,6 +257,15 @@ but must retain the workflow protocol, allowlist, sandbox policy, pool,
 authorization, limits, and lifecycle. Do not route workflow execution through
 a toolbox worker merely because both resolved to the same immutable template.
 
+Remove dependent cache keys or dispatch shortcuts that equate a template ID or
+environment digest with a worker kind. A node, snippet, helper, and toolbox may
+report the same verified template/environment while retaining different
+consumer binding IDs and runtime contracts. Dependent code chooses the existing
+workflow/toolbox API first and submits dependency intent within that API. The
+internal physical binding is not a dependent persistence or dispatch input;
+clients must not dispatch by template ID, environment digest, interpreter
+path, or another consumer's binding.
+
 The model runtime is not a toolbox template or consumer-selectable Python
 runtime. Remove dependent fields, UI choices, fallbacks, and dispatch branches
 that expose it as an environment name, template/base, interpreter, or

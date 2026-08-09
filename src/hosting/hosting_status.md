@@ -60,6 +60,7 @@ None.
 | 2026-08-08 | P1-09 | Added admin-only durable target-host prewarm orchestration, strict materializer/receipt boundaries, persisted bounded verification progress, and exact-receipt-gated consumer readiness. | Prewarm -> 6 passed; operation/catalog -> 58 passed; channel/CLI/auth -> 95 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared command named two nonexistent test files and failed before collection; it was corrected in the active ledger to the repository's actual CLI/auth suites before closeout. | `feat: add durable template prewarm (P1-09)` |
 | 2026-08-08 | P1-10 | Closed the strict Phase 1 behavior matrix with explicit prewarm role exclusion and exact SSH CLI payload routing on top of direct dependency/catalog/offline tests. | Dependency analysis/policy -> 26 passed; catalog/prewarm -> 18 passed; channel/CLI/auth -> 95 passed; diff checks passed. | `test: close toolbox dependency matrix (P1-10)` |
 | 2026-08-08 | P1-11 | Shipped exact independent `core`/`py-compute` locks, strict resource identities, compute-only policy, normal setup/prewarm and receipt-gated readiness, and smallest-template planning. | Shipped templates -> 6 passed; planner/policy/catalog -> 42 passed; catalog/prewarm/setup-state -> 21 passed; contract docs -> 12 passed; compile/diff checks passed. Physical installation remains Phase 2. | `feat: ship initial toolbox templates (P1-11)` |
+| 2026-08-08 | P1-12 | Unified verified-template resolution/receipts across toolbox, node, snippet, and helper while deriving distinct consumer bindings and preserving runtime/API boundaries. | Shared resolver/isolated probes -> 9 passed; dependency/shipped-template -> 32 passed; workflow/helper/operation -> 37 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared workflow filename did not exist and failed before collection; the active ledger was corrected to the actual contract/node/helper suites before closeout. | `feat: share verified template resolution (P1-12)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -87,5 +88,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Unify toolbox, Python node/snippet, and helper environment resolution and
-receipt consumption without merging their runtimes (P1-12).
+Add the read-only exclusive model-runtime projection and selection denials
+(P1-13), then audit the Phase 1 exit gate.
