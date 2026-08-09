@@ -25,7 +25,166 @@ from .dependency_analysis import (
     resolve_toolbox_dependencies,
     select_toolbox_environment_template,
 )
-from .identity import custom_lock_digest, environment_identity
+from .identity import custom_lock_digest, environment_identity, identity_digest, require_digest
+
+
+@dataclass(frozen=True)
+class ActiveToolboxProfileSnapshot:
+    profile_id: str
+    manifest_hash: str
+    environment_key: str
+    sandbox_policy_digest: str
+    assigned_tool_keys: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not str(self.profile_id or "").strip():
+            raise ValueError("active_profile_id_required")
+        manifest = str(self.manifest_hash or "").strip()
+        if not (
+            manifest.startswith("sha256:") and len(manifest) == 71
+            or len(manifest) == 64 and all(character in "0123456789abcdef" for character in manifest)
+        ):
+            raise ValueError("active_profile_manifest_hash_invalid")
+        require_digest(self.environment_key, label="active_profile_environment_key")
+        require_digest(self.sandbox_policy_digest, label="active_profile_policy_digest")
+        assigned = tuple(sorted(str(item or "").strip() for item in self.assigned_tool_keys))
+        if not assigned or any(not item for item in assigned) or len(set(assigned)) != len(assigned):
+            raise ValueError("active_profile_assigned_tool_keys_invalid")
+        object.__setattr__(self, "profile_id", str(self.profile_id).strip())
+        object.__setattr__(self, "manifest_hash", manifest)
+        object.__setattr__(self, "assigned_tool_keys", assigned)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "profile_id": self.profile_id,
+            "manifest_hash": self.manifest_hash,
+            "environment_key": self.environment_key,
+            "sandbox_policy_digest": self.sandbox_policy_digest,
+            "assigned_tool_keys": list(self.assigned_tool_keys),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ActiveToolboxProfileSnapshot":
+        row = dict(payload or {})
+        fields = {"profile_id", "manifest_hash", "environment_key", "sandbox_policy_digest", "assigned_tool_keys"}
+        if set(row) != fields:
+            raise ValueError("active_profile_snapshot_fields_invalid")
+        return cls(**{**row, "assigned_tool_keys": tuple(row["assigned_tool_keys"])})
+
+
+def profile_snapshots_from_draft(
+    draft: "ToolboxDefinitionPlanDraft",
+) -> tuple[ActiveToolboxProfileSnapshot, ...]:
+    snapshots: list[ActiveToolboxProfileSnapshot] = []
+    for profile, bundle in zip(draft.profiles, draft.bundles, strict=True):
+        manifest = bundle.manifest_payload()
+        snapshots.append(
+            ActiveToolboxProfileSnapshot(
+                profile_id=profile.profile_id,
+                manifest_hash=manifest["manifest_hash"],
+                environment_key=profile.environment_key,
+                sandbox_policy_digest=identity_digest(
+                    "hosting.toolbox.sandbox_policy.v1", profile.sandbox_policy
+                ),
+                assigned_tool_keys=profile.assigned_tool_keys,
+            )
+        )
+    return tuple(sorted(snapshots, key=lambda item: item.profile_id))
+
+
+def classify_toolbox_profiles(
+    draft: "ToolboxDefinitionPlanDraft",
+    active_profiles: Sequence[ActiveToolboxProfileSnapshot | Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Classify without staging by exact runtime identity and stable ownership."""
+
+    proposed = list(profile_snapshots_from_draft(draft))
+    active = sorted([
+        item if isinstance(item, ActiveToolboxProfileSnapshot) else ActiveToolboxProfileSnapshot.from_dict(item)
+        for item in active_profiles
+    ], key=lambda item: item.profile_id)
+    if len({item.profile_id for item in active}) != len(active):
+        raise ValueError("active_profile_snapshot_duplicate")
+    remaining_active = {item.profile_id: item for item in active}
+    remaining_proposed = {item.profile_id: item for item in proposed}
+    out: list[dict[str, Any]] = []
+
+    for proposed_item in proposed:
+        exact = next(
+            (
+                active_item for active_item in remaining_active.values()
+                if active_item.manifest_hash == proposed_item.manifest_hash
+                and active_item.environment_key == proposed_item.environment_key
+                and active_item.sandbox_policy_digest == proposed_item.sandbox_policy_digest
+            ),
+            None,
+        )
+        if exact is None:
+            continue
+        out.append(
+            {
+                "classification": "reused",
+                "active_profile_id": exact.profile_id,
+                "proposed_profile_id": proposed_item.profile_id,
+                "changed_fields": [],
+            }
+        )
+        remaining_active.pop(exact.profile_id)
+        remaining_proposed.pop(proposed_item.profile_id)
+
+    for proposed_item in list(remaining_proposed.values()):
+        proposed_keys = set(proposed_item.assigned_tool_keys)
+        candidates = [
+            (len(proposed_keys & set(active_item.assigned_tool_keys)), active_item.profile_id, active_item)
+            for active_item in remaining_active.values()
+        ]
+        overlap, _profile_id, matched = max(candidates, default=(0, "", None), key=lambda item: (item[0], item[1]))
+        if overlap <= 0 or matched is None:
+            continue
+        changed = [
+            field for field in ("manifest_hash", "environment_key", "sandbox_policy_digest")
+            if getattr(matched, field) != getattr(proposed_item, field)
+        ]
+        out.append(
+            {
+                "classification": "replaced",
+                "active_profile_id": matched.profile_id,
+                "proposed_profile_id": proposed_item.profile_id,
+                "changed_fields": changed,
+            }
+        )
+        remaining_active.pop(matched.profile_id)
+        remaining_proposed.pop(proposed_item.profile_id)
+
+    out.extend(
+        {
+            "classification": "added",
+            "active_profile_id": None,
+            "proposed_profile_id": item.profile_id,
+            "changed_fields": [],
+        }
+        for item in remaining_proposed.values()
+    )
+    out.extend(
+        {
+            "classification": "removed",
+            "active_profile_id": item.profile_id,
+            "proposed_profile_id": None,
+            "changed_fields": [],
+        }
+        for item in remaining_active.values()
+    )
+    order = {"reused": 0, "replaced": 1, "added": 2, "removed": 3}
+    return tuple(
+        sorted(
+            out,
+            key=lambda item: (
+                order[item["classification"]],
+                str(item["proposed_profile_id"] or ""),
+                str(item["active_profile_id"] or ""),
+            ),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -333,4 +492,10 @@ def plan_toolbox_definition(
     )
 
 
-__all__ = ["ToolboxDefinitionPlanDraft", "plan_toolbox_definition"]
+__all__ = [
+    "ActiveToolboxProfileSnapshot",
+    "ToolboxDefinitionPlanDraft",
+    "classify_toolbox_profiles",
+    "plan_toolbox_definition",
+    "profile_snapshots_from_draft",
+]

@@ -39,7 +39,7 @@ environment builder work is next.
 
 ## Active slice
 
-None. The next slice will predeclare persisted comparison/plan storage before
+None. The next slice will predeclare Phase 4 rollout/atomic-routing work before
 changing files.
 
 ## Completed slices
@@ -66,6 +66,7 @@ changing files.
 | 2026-08-08 | Phase 2 groundwork (no items checked) | Added the strict host-derived resolved environment input and frozen `hosting.toolbox.environment.v2` cache identity, removed environment-description service lookup from worker orchestration, and isolated no-bootstrap toolbox interpreter selection while preserving workflow fallback. P2 remains open until the physical builder replaces the legacy inheriting path. | Hermetic contract -> 6 passed; workflow/runtime regressions -> 29 passed; focused toolbox environment regressions -> 3 passed, 135 deselected; compile/diff checks passed. | `refactor: establish hermetic toolbox environment contract` |
 | 2026-08-08 | P2-01 through P2-10, Phase 2 exit | Added the target-host offline hermetic builder, exact wheel/lock/probe receipts, atomic publication/quarantine, thread/process deduplication, reference/grace GC, complete independent derived locks, receipt-gated readiness, catalog prewarm adaptation, and configured-orchestrator verified interpreter routing. | Hermetic builder -> 11 passed including real venvs, two fresh processes, service configuration, quarantine, ambient exclusion, complete base-plus-delta, and GC; environment/prewarm/shipped templates -> 19 passed; workflow/runtime -> 29 passed; focused toolbox environment -> 3 passed, 135 deselected; compile/diff checks passed. | `feat: build hermetic toolbox environments (P2-01..P2-10)` |
 | 2026-08-08 | P3-01 through P3-05 | Added strict canonical version-2 definition/request/dependency models, host-derived resolved profiles, per-toolbox advertised-name and file conflict validation, post-resolution grouping, and resolved-profile bundle manifests. | Definition planner -> 11 passed; dependency/identity -> 20 passed; focused bundle/profile/duplicate regressions -> 18 passed, 120 deselected; docs/compile/diff checks passed. The initially predeclared dependency-pipeline filename did not exist and was corrected to the repository's dependency-analysis suite before execution. | `feat: add toolbox definition planner (P3-01..P3-05)` |
+| 2026-08-08 | P3-06, P3-07, Phase 3 exit | Added exact active/proposed profile classification and a strict atomic expiring plan repository pinned to definition/expected/catalog/policy and resolved bundle identities. | Plan repository -> 10 passed including restart, expiry/no-refresh, pin identity, corruption, two-process writes, and no side effects; planner/identity -> 16 passed; operation repository -> 23 passed; docs/compile/diff checks passed. | `feat: persist toolbox definition plans (P3-06 P3-07)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -93,5 +94,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Complete Phase 3 with active-profile comparison/classification and bounded,
-expiring, catalog/policy-pinned persisted plans (P3-06 and P3-07).
+Begin Phase 4 candidate rollout, readiness validation, atomic active routing,
+draining, rollback, and cancellation-boundary work (P4-01 onward).

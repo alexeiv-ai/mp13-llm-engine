@@ -290,6 +290,19 @@ application-global uniqueness check: identical names in different toolbox IDs
 are valid. The parent remains authoritative and rejects duplicates before
 package work or staging.
 
+Remove client-side diff engines that label profiles reused/added/replaced/
+removed from saved environment or worker data. Consume the classifications in
+the authoritative plan; they compare parent manifest, environment, and policy
+identities. Do not use a classification as permission to skip apply or mutate
+one profile independently.
+
+Do not persist a local editable copy of a definition plan or extend its expiry.
+Keep only the returned opaque `plan_id` for the immediate approval/apply flow.
+On `plan_expired`, `plan_stale`, catalog change, package-policy change, or
+expected-revision change, discard that reference and request a new plan from
+the complete desired definition. Remove branches that patch pins or resolved
+profiles inside an old plan.
+
 ### Required environment-selection and readiness changes
 
 Dependent deployment code may request only the logical template IDs `core` and

@@ -29,7 +29,13 @@ from .catalog import (
     ToolboxLockedDistributionSpec,
     ToolboxTemplateProvenance,
 )
-from .definition_planner import ToolboxDefinitionPlanDraft, plan_toolbox_definition
+from .definition_planner import (
+    ActiveToolboxProfileSnapshot,
+    ToolboxDefinitionPlanDraft,
+    classify_toolbox_profiles,
+    plan_toolbox_definition,
+    profile_snapshots_from_draft,
+)
 from .cancellation import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from .dependency_analysis import (
     ToolboxDependencyAnalysisError,
@@ -94,7 +100,10 @@ __all__ = [
     "ToolboxIntrinsicSelection",
     "ResolvedToolboxProfileSpec",
     "ToolboxDefinitionPlanDraft",
+    "ActiveToolboxProfileSnapshot",
+    "classify_toolbox_profiles",
     "plan_toolbox_definition",
+    "profile_snapshots_from_draft",
     "ToolboxWorkerStartupSpec",
     "ToolboxEnvironmentSpec",
     "ToolboxEnvironmentManager",

@@ -928,14 +928,25 @@ focused legacy toolbox environment regressions passed 3 with 135 deselected.
 - [x] **P3-05** Continue producing `ToolboxBundleSpec`, but set
   `dependency_lock_hash` from the resolved environment and serialize the new
   resolved profile shape into the manifest.
-- [ ] **P3-06** Compare proposed profiles with persisted active profiles by
+- [x] **P3-06** Compare proposed profiles with persisted active profiles by
   manifest hash, environment key, and policy digest. Classify each as reused,
   added, replaced, or removed.
-- [ ] **P3-07** Persist bounded expiring plans keyed by `plan_id`, definition
+- [x] **P3-07** Persist bounded expiring plans keyed by `plan_id`, definition
   hash, expected revision, catalog revision, and package-policy revision.
 
 Exit gate: planning identifies unchanged profiles without staging, spawning, or
 changing registrations.
+
+Evidence (2026-08-08): exact manifest/environment/policy triples classified as
+reused; source and policy changes retaining assigned tool ownership classified
+as replaced; unrelated profiles classified as added/removed. Strict plan IDs
+changed independently with expected active, catalog, and package-policy pins.
+Atomic records survived repository recreation, expired without refresh, failed
+closed on corrupt/truncated/wrong-contract JSON, and retained two distinct
+plans written by fresh concurrent processes. Planning/persistence created no
+bundle directory or engine state. The plan-repository suite passed 10 tests;
+planner/identity regressions passed 16; operation-repository regressions passed
+23; compile/diff checks passed.
 
 ### Phase 4 - Candidate rollout and atomic active routing
 

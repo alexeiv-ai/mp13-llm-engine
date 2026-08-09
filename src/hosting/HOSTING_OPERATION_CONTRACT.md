@@ -221,6 +221,14 @@ step passes. A failed candidate is quarantined, and retry with the same
 environment key is serialized by a process-safe lock. Consumer teardown drops
 only its reference; grace-period GC owns physical deletion.
 
+Definition planning persists an immutable expiring record before returning a
+plan reference. The record pins the definition and expected active revision,
+catalog revision, package-policy revision, resolved profiles, and bundle
+manifest/lock identities. Reuse of the same identity returns the original
+record and expiry; it never extends approval time. Planning and repository
+recovery do not stage bundles, acquire environments, start workers, change
+registrations, or write active routing.
+
 For definition apply, cancellation before publication finishes with bounded
 candidate-cleanup diagnostics. Publication is the commit boundary. A cancel
 request after the persisted boundary returns

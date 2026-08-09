@@ -497,6 +497,23 @@ class ResolvedToolboxProfileSpec:
             "resolved_import_roots": list(self.resolved_import_roots),
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ResolvedToolboxProfileSpec":
+        row = dict(payload or {})
+        fields = {
+            "profile_id", "environment_key", "template_id", "template_lock_digest",
+            "custom_resolved_lock_digest", "sandbox_policy", "assigned_tool_keys",
+            "resolved_import_roots",
+        }
+        _strict_model_fields(row, fields, label="resolved_toolbox_profile")
+        return cls(
+            **{
+                **row,
+                "assigned_tool_keys": tuple(row["assigned_tool_keys"]),
+                "resolved_import_roots": tuple(row["resolved_import_roots"]),
+            }
+        )
+
 
 @dataclass
 class ToolboxBundleSpec:

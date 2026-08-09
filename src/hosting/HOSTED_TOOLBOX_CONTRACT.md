@@ -307,6 +307,22 @@ the manifest includes the strict resolved-profile projection. The legacy
 it is not accepted from the public definition and is removed at the breaking
 cutover.
 
+Before persistence, proposed profiles are compared with authoritative active
+snapshots using manifest hash, environment key, and canonical sandbox-policy
+digest. An exact triple is `reused`. A proposed profile that retains assigned
+tool ownership but changes any triple field is `replaced`; unmatched proposed
+and active profiles are `added` and `removed`. The comparison is deterministic
+and performs no staging, environment acquisition, registration, or routing.
+
+The resulting plan is stored in the process-safe atomic definition-plan
+repository. Its ID binds toolbox ID, definition revision, expected active
+revision, catalog revision, package-policy revision, resolved profiles, and
+bundle manifest/lock identities. Records have a strict 15-minute maximum TTL,
+a 4 MiB encoded maximum, and a 256-record repository maximum. Expired records
+are pruned and cannot be refreshed by repeating the same plan request. A
+restart reloads and revalidates the complete record; corrupt, truncated,
+unknown-field, over-capacity, or pin-mismatched state fails closed.
+
 ## Environment template descriptor
 
 Consumer template list/describe responses contain bounded
