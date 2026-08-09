@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping, Sequence
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from ..toolbox.identity import identity_digest, require_digest
 from ..toolbox.shipped_templates import SHIPPED_TEMPLATE_IDS, load_shipped_toolbox_catalog
+from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
 from ..toolbox.template_resolver import (
     VerifiedTemplateCandidate,
     resolve_verified_template_environment,
@@ -524,15 +525,22 @@ class ToolboxTemplateCatalogMixin:
     ) -> dict[str, Any]:
         target = materialization_target(python_abi=python_abi, platform=platform)
         shipped = load_shipped_toolbox_catalog()
+        configured = getattr(self, "_toolbox_host_project_config", None)
+        required_ids = (
+            configured.required_template_ids
+            if isinstance(configured, ToolboxHostProjectConfiguration)
+            else SHIPPED_TEMPLATE_IDS
+        )
+        resource = configured.resource if isinstance(configured, ToolboxHostProjectConfiguration) else shipped.resource
         state = self._toolbox_template_catalog.read()
         diagnostics: list[dict[str, str]] = []
         templates: list[dict[str, Any]] = []
-        for release in shipped.releases:
+        for template_id in required_ids:
             entry = next(
                 (
                     item for item in state["entries"]
-                    if item["template_id"] == release.template.template_id
-                    and item["template"] == release.template.to_dict()
+                    if item["template_id"] == template_id
+                    and state["active"].get(template_id) == item["template_digest"]
                 ),
                 None,
             )
@@ -540,12 +548,28 @@ class ToolboxTemplateCatalogMixin:
                 code = "required_template_missing"
                 ready = False
                 template_digest = None
+                manifest_digest = None
+                lock_digest = None
             elif entry["lifecycle"] == "revoked":
                 code = "required_template_lock_invalid"
                 ready = False
                 template_digest = entry["template_digest"]
+                manifest_digest = entry["template"]["provenance"]["manifest_digest"]
+                lock_digest = entry["template"]["lock_digest"]
+            elif (
+                isinstance(configured, ToolboxHostProjectConfiguration)
+                and entry["template"]["provenance"]["signing_key_id"]
+                not in configured.trusted_signing_key_ids
+            ):
+                code = "required_template_signature_invalid"
+                ready = False
+                template_digest = entry["template_digest"]
+                manifest_digest = entry["template"]["provenance"]["manifest_digest"]
+                lock_digest = entry["template"]["lock_digest"]
             else:
                 template_digest = entry["template_digest"]
+                manifest_digest = entry["template"]["provenance"]["manifest_digest"]
+                lock_digest = entry["template"]["lock_digest"]
                 receipt = self._toolbox_materialization_receipts.get(
                     template_digest=template_digest,
                     python_abi=python_abi,
@@ -555,10 +579,10 @@ class ToolboxTemplateCatalogMixin:
                 code = "required_template_ready" if ready else "required_template_materialization_failed"
             templates.append(
                 {
-                    "template_id": release.template.template_id,
+                    "template_id": template_id,
                     "template_digest": template_digest,
-                    "manifest_digest": release.template.provenance.manifest_digest,
-                    "lock_digest": release.template.lock_digest,
+                    "manifest_digest": manifest_digest,
+                    "lock_digest": lock_digest,
                     "target": target,
                     "ready": ready,
                     "code": code,
@@ -568,16 +592,16 @@ class ToolboxTemplateCatalogMixin:
                 diagnostics.append(
                     {
                         "code": code,
-                        "summary": f"Required template {release.template.template_id} is not ready on target {target}.",
+                        "summary": f"Required template {template_id} is not ready on target {target}.",
                     }
                 )
         ready = all(item["ready"] for item in templates) and tuple(
             item["template_id"] for item in templates
-        ) == SHIPPED_TEMPLATE_IDS
+        ) == required_ids
         return {
             "status": "ready" if ready else "degraded",
             "code": "required_templates_ready" if ready else diagnostics[0]["code"],
-            "resource": shipped.resource,
+            "resource": resource,
             "catalog_revision": state["catalog_revision"],
             "target": target,
             "templates": templates,
@@ -723,6 +747,76 @@ class ToolboxTemplateCatalogMixin:
             "status": "started",
             "resource": shipped.resource,
             "target": materialization_target(python_abi=python_abi, platform=platform),
+            "published": published,
+            "operations": operations,
+        }
+
+    def initialize_configured_toolbox_templates(
+        self,
+        *,
+        configuration: ToolboxHostProjectConfiguration,
+        request_id_prefix: str,
+        actor_id: str = "service:startup",
+    ) -> dict[str, Any]:
+        """Ensure required IDs exist, then prewarm their exact active revisions."""
+
+        if not isinstance(configuration, ToolboxHostProjectConfiguration):
+            raise ValueError("toolbox_host_project_configuration_required")
+        prefix = str(request_id_prefix or "").strip()
+        if not prefix:
+            raise ValueError("template_setup_request_id_prefix_required")
+        python_abi, platform = configuration.target
+        materialization_target(python_abi=python_abi, platform=platform)
+        shipped = load_shipped_toolbox_catalog()
+        published: list[dict[str, Any]] = []
+        operations: list[dict[str, Any]] = []
+        for template_id in configuration.required_template_ids:
+            state = self._toolbox_template_catalog.read()
+            active_digest = state["active"].get(template_id)
+            if active_digest is None:
+                release = shipped.release(template_id)
+                result = self.toolbox_template_publish(
+                    template=release.template.to_dict(),
+                    artifact_references=[release.artifact_reference()],
+                    manifest_signature=release.manifest_signature,
+                    activate=True,
+                    actor_id=actor_id,
+                )
+                published.append(result)
+                active_digest = result["template_digest"]
+                state = self._toolbox_template_catalog.read()
+            entry = next(
+                item for item in state["entries"]
+                if item["template_id"] == template_id
+                and item["template_digest"] == active_digest
+            )
+            if entry["template"]["provenance"]["signing_key_id"] not in configuration.trusted_signing_key_ids:
+                raise ValueError("required_template_signature_invalid")
+            if any(
+                artifact["source_id"] not in configuration.artifact_source_ids
+                for artifact in entry["artifacts"]
+            ):
+                raise ValueError("required_template_artifact_unavailable")
+            receipt = self._toolbox_materialization_receipts.get(
+                template_digest=active_digest,
+                python_abi=python_abi,
+                platform=platform,
+            )
+            if configuration.prewarm_required and receipt is None:
+                operations.append(
+                    self.toolbox_template_prewarm(
+                        template_id=template_id,
+                        template_digest=active_digest,
+                        python_abi=python_abi,
+                        platform=platform,
+                        request_id=f"{prefix}:{template_id}:{active_digest}",
+                        owner_actor_id=actor_id,
+                    )
+                )
+        return {
+            "status": "started" if operations else "configured",
+            "resource": configuration.resource,
+            "target": configuration.required_target,
             "published": published,
             "operations": operations,
         }

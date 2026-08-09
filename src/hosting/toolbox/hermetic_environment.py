@@ -327,6 +327,7 @@ class HermeticToolboxEnvironmentBuilder:
         *,
         artifact_sources: Mapping[str, Path],
         gc_grace_ms: int = 24 * 60 * 60 * 1000,
+        build_timeout_seconds: int = 300,
     ) -> None:
         self.resolver = HermeticToolboxEnvironmentResolver(hosting_root)
         self.environments_root = self.resolver.environments_root
@@ -344,6 +345,14 @@ class HermeticToolboxEnvironmentBuilder:
         if isinstance(gc_grace_ms, bool) or not isinstance(gc_grace_ms, int) or gc_grace_ms < 1:
             raise ValueError("environment_gc_grace_ms_invalid")
         self.gc_grace_ms = gc_grace_ms
+        if (
+            isinstance(build_timeout_seconds, bool)
+            or not isinstance(build_timeout_seconds, int)
+            or build_timeout_seconds < 60
+            or build_timeout_seconds > 1_800
+        ):
+            raise ValueError("environment_build_timeout_seconds_invalid")
+        self.build_timeout_seconds = build_timeout_seconds
 
     @staticmethod
     def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -374,8 +383,7 @@ class HermeticToolboxEnvironmentBuilder:
             )
         return payload
 
-    @staticmethod
-    def _run(python: Path, arguments: Sequence[str], *, code: str, summary: str) -> subprocess.CompletedProcess[str]:
+    def _run(self, python: Path, arguments: Sequence[str], *, code: str, summary: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PYTHONNOUSERSITE"] = "1"
         environment.pop("PYTHONPATH", None)
@@ -384,7 +392,7 @@ class HermeticToolboxEnvironmentBuilder:
             check=False,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=self.build_timeout_seconds,
             env=environment,
             **hidden_subprocess_kwargs(),
         )

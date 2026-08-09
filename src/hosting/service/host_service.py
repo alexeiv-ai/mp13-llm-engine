@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from .auth import AuthMixin
 from .claims import ClaimsMixin
@@ -47,6 +47,10 @@ from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from .toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from ..toolbox.dependency_policy import ToolboxDependencyPolicy
+from ..toolbox.host_project_config import (
+    ToolboxHostProjectConfiguration,
+    validate_toolbox_sandbox_policies,
+)
 from .workflow_helpers import WorkflowHelperMixin
 
 
@@ -73,6 +77,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         toolbox_artifact_sources: Optional[Dict[str, Path]] = None,
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
+        toolbox_environment_catalog: Optional[Mapping[str, Any]] = None,
+        toolbox_sandbox_policies: Optional[Mapping[str, Any]] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
         toolbox_dependency_policy: Optional[Dict[str, Any] | ToolboxDependencyPolicy] = None,
     ):
@@ -86,12 +92,46 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self.control_state_file = self.hosting_root / "access_control.json"
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
+        if (toolbox_environment_catalog is None) != (toolbox_sandbox_policies is None):
+            raise ValueError("toolbox_host_project_configuration_incomplete")
+        self._toolbox_host_project_config = (
+            ToolboxHostProjectConfiguration.from_dict(toolbox_environment_catalog)
+            if toolbox_environment_catalog is not None
+            else None
+        )
+        self._toolbox_sandbox_policies = (
+            validate_toolbox_sandbox_policies(toolbox_sandbox_policies)
+            if toolbox_sandbox_policies is not None
+            else None
+        )
+        configured_abi = ""
+        configured_platform = ""
+        if self._toolbox_host_project_config is not None:
+            configured_abi, configured_platform = self._toolbox_host_project_config.target
+            if toolbox_required_python_abi and toolbox_required_python_abi != configured_abi:
+                raise ValueError("toolbox_required_python_abi_conflict")
+            if toolbox_required_platform and toolbox_required_platform != configured_platform:
+                raise ValueError("toolbox_required_platform_conflict")
+            if toolbox_artifact_sources is not None:
+                configured_sources = set(self._toolbox_host_project_config.artifact_source_ids)
+                if not configured_sources.issubset(set(toolbox_artifact_sources)):
+                    raise ValueError("toolbox_artifact_sources_incomplete")
         if toolbox_template_materializer is not None and toolbox_artifact_sources is not None:
             raise ValueError("toolbox_materializer_configuration_conflict")
         self._hermetic_toolbox_environment_builder = (
             HermeticToolboxEnvironmentBuilder(
                 self.hosting_root,
                 artifact_sources=toolbox_artifact_sources,
+                gc_grace_ms=(
+                    self._toolbox_host_project_config.cache_grace_seconds * 1000
+                    if self._toolbox_host_project_config is not None
+                    else 24 * 60 * 60 * 1000
+                ),
+                build_timeout_seconds=(
+                    self._toolbox_host_project_config.build_timeout_seconds
+                    if self._toolbox_host_project_config is not None
+                    else 300
+                ),
             )
             if toolbox_artifact_sources is not None
             else None
@@ -104,8 +144,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             )
         else:
             self._toolbox_template_materializer = UnconfiguredToolboxTemplateMaterializer()
-        self._toolbox_required_python_abi = str(toolbox_required_python_abi or "").strip()
-        self._toolbox_required_platform = str(toolbox_required_platform or "").strip()
+        self._toolbox_required_python_abi = str(configured_abi or toolbox_required_python_abi or "").strip()
+        self._toolbox_required_platform = str(configured_platform or toolbox_required_platform or "").strip()
         self._toolbox_state_v2 = AtomicJsonToolboxStateV2Repository(
             self.hosting_root / "state" / "toolbox_sandboxes_v2.json",
             legacy_path=self.hosting_root / "state" / "toolbox_sandboxes.json",
@@ -171,6 +211,12 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             ),
         }
         self._ensure_metrics_initialized()
+        self._toolbox_startup = None
+        if self._toolbox_host_project_config is not None:
+            self._toolbox_startup = self.initialize_configured_toolbox_templates(
+                configuration=self._toolbox_host_project_config,
+                request_id_prefix=f"host-startup-{self._toolbox_host_project_config.required_target}",
+            )
 
     @property
     def _hosted_operations(self) -> AtomicJsonHostedOperationRepository:

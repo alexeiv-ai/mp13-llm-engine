@@ -301,6 +301,18 @@ class StateMixin:
                 python_abi=required_abi,
                 platform=required_platform,
             )
+        host_project = getattr(self, "_toolbox_host_project_config", None)
+        if host_project is not None:
+            compute_policy = dict(
+                dict(getattr(self, "_toolbox_sandbox_policies", {}) or {}).get("compute_only") or {}
+            )
+            summary["toolbox_host_project"] = {
+                "resource": host_project.resource,
+                "required_template_ids": list(host_project.required_template_ids),
+                "required_target": host_project.required_target,
+                "prewarm_required": host_project.prewarm_required,
+                "compute_only_policy_id": compute_policy.get("policy_id"),
+            }
         return summary
 
     def _read_control(self) -> Dict[str, Any]:

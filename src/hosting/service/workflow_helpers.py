@@ -46,6 +46,8 @@ WORKFLOW_ACTION_DISCOVERY_CONTRACT = "hosting.sandbox.action_discovery.v1"
 
 
 class WorkflowHelperMixin:
+    _workflow_registry_initialization_guard = threading.Lock()
+
     def _workflow_python_runtime_manager(self) -> HostedPythonRuntimeManager:
         return HostedPythonRuntimeManager(self.hosting_root)
 
@@ -55,8 +57,11 @@ class WorkflowHelperMixin:
     def _workflow_python_pool_registry(self) -> HostedProcessPoolRegistry:
         registry = getattr(self, "_workflow_python_runtime_pools", None)
         if registry is None:
-            registry = HostedProcessPoolRegistry()
-            setattr(self, "_workflow_python_runtime_pools", registry)
+            with self._workflow_registry_initialization_guard:
+                registry = getattr(self, "_workflow_python_runtime_pools", None)
+                if registry is None:
+                    registry = HostedProcessPoolRegistry()
+                    setattr(self, "_workflow_python_runtime_pools", registry)
         return registry
 
     def _workflow_python_stream_base(self) -> HostedPythonRuntimeBase:
@@ -78,15 +83,21 @@ class WorkflowHelperMixin:
     def _workflow_python_node_runtime_registry(self) -> WorkflowPythonNodeRuntimeRegistry:
         registry = getattr(self, "_workflow_python_node_runtime_registry_instance", None)
         if registry is None:
-            registry = WorkflowPythonNodeRuntimeRegistry()
-            setattr(self, "_workflow_python_node_runtime_registry_instance", registry)
+            with self._workflow_registry_initialization_guard:
+                registry = getattr(self, "_workflow_python_node_runtime_registry_instance", None)
+                if registry is None:
+                    registry = WorkflowPythonNodeRuntimeRegistry()
+                    setattr(self, "_workflow_python_node_runtime_registry_instance", registry)
         return registry
 
     def _workflow_js_node_runtime_registry(self) -> WorkflowJsNodeRuntimeRegistry:
         registry = getattr(self, "_workflow_js_node_runtime_registry_instance", None)
         if registry is None:
-            registry = WorkflowJsNodeRuntimeRegistry()
-            setattr(self, "_workflow_js_node_runtime_registry_instance", registry)
+            with self._workflow_registry_initialization_guard:
+                registry = getattr(self, "_workflow_js_node_runtime_registry_instance", None)
+                if registry is None:
+                    registry = WorkflowJsNodeRuntimeRegistry()
+                    setattr(self, "_workflow_js_node_runtime_registry_instance", registry)
         return registry
 
     def _append_host_capability_audit_event(self, event: Dict[str, Any]) -> None:

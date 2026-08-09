@@ -1134,11 +1134,26 @@ state reads; compile and diff checks passed.
   and diff checks passed. The first complete-suite run exposed six stale-test
   or timing assumptions; after correcting those expectations, the final run
   passed.
-- [ ] **P6-11** Add host project configuration for the exact required standard
+- [x] **P6-11** Add host project configuration for the exact required standard
   base template and compute-only policy IDs, startup materialization/prewarm,
   readiness reporting, and administrative replacement with a new immutable
   version. Do not expose these settings as mutable per-toolbox environment
   descriptions.
+
+  Evidence (2026-08-08): a strict host-owned catalog configuration now pins
+  the shipped resource, trusted signing IDs, exact `core`/`py-compute` IDs,
+  supported target, artifact sources, cache/build limits, and eager-prewarm
+  policy alongside the exact `compute-only` sandbox preset. Explicitly
+  configured hosts publish missing shipped revisions, prewarm and receipt-gate
+  readiness at startup, and preserve an administrator-activated immutable
+  replacement across restart. Readiness remains a bounded digest/status
+  projection and the hermetic builder consumes the configured cache grace and
+  build timeout. Host configuration/template tests passed 16; transport/auth
+  regressions passed 134; the final complete suite passed 1,093 with three
+  skips. One complete run exposed a workflow registry initialization race,
+  fixed with guarded first access; a later run had two transient worker startup
+  timeouts that passed immediately in isolation, followed by the clean exact
+  full-suite run. Compile and diff checks passed.
 
 Exit gate: repository search finds no old toolbox mutation command, public
 method, environment-description API, install sequence, field fallback, or

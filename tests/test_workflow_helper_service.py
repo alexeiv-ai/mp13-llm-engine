@@ -2566,7 +2566,7 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    source = "import time\n\ndef run(payload):\n    progress({'slot': payload['slot']})\n    time.sleep(0.35)\n    return {'output': {'slot': payload['slot']}}\n"
+    source = "import time\n\ndef run(payload):\n    progress({'slot': payload['slot']})\n    time.sleep(0.75)\n    return {'output': {'slot': payload['slot']}}\n"
     base_request = {
         "module_source": source,
         "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
@@ -2575,7 +2575,7 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
         "package_source_digest": "digest",
         "operation": "run",
         "python": {"import_allowlist": ["time"]},
-        "limits": {"timeout_ms": 2000},
+        "limits": {"timeout_ms": 5000},
     }
     results: dict[str, dict] = {}
 
@@ -2588,10 +2588,9 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
 
     first = threading.Thread(target=call, args=("a",))
     second = threading.Thread(target=call, args=("b",))
-    started_at = time.monotonic()
     first.start()
     second.start()
-    deadline = time.time() + 2.0
+    deadline = time.time() + 5.0
     active_snapshot = {}
     while time.time() < deadline:
         resources = svc.workflow_python_resources(profile="node", python={"import_allowlist": ["time"]})
@@ -2599,16 +2598,14 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
             active_snapshot = resources
             break
         time.sleep(0.02)
-    first.join(timeout=3.0)
-    second.join(timeout=3.0)
-    elapsed = time.monotonic() - started_at
+    first.join(timeout=6.0)
+    second.join(timeout=6.0)
 
-    assert active_snapshot["workflow_python_active_calls"] == 2
-    assert active_snapshot["workflow_python_active_process_count"] == 2
     assert results["a"]["status"] == "ok"
     assert results["b"]["status"] == "ok"
     assert {results["a"]["output"]["slot"], results["b"]["output"]["slot"]} == {"a", "b"}
-    assert elapsed < 1.6
+    assert active_snapshot["workflow_python_active_calls"] == 2
+    assert active_snapshot["workflow_python_active_process_count"] == 2
 
 
 def test_execute_workflow_python_node_routes_different_jobs_through_same_capacity_pool(tmp_path: Path) -> None:
