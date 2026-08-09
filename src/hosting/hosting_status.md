@@ -39,15 +39,15 @@ host-owned standard template/policy startup configuration.
 
 ## Active slice
 
-P7-09 through P7-12: close exact approval binding, durable apply/recovery,
-multi-toolbox isolation/concurrency, and user/operator projection matrices.
+P7-13 and P7-14: finalize the supported durable contract and worker
+architecture, then complete the exact dependent-project migration handoff.
 
 Predeclared verification:
 
 ```powershell
-python -m pytest tests/test_hosting_toolbox_public_guarantees.py tests/test_hosting_toolbox_definition_service.py tests/test_hosted_toolbox_plan_repository.py -q
-python -m pytest tests/test_hosting_definition_apply_operation.py tests/test_hosting_operation_repository.py tests/test_hosting_toolbox_atomic_routing.py tests/test_hosting_toolbox_definition_transport.py -q
-python -m compileall -q src/hosting tests/test_hosting_toolbox_public_guarantees.py
+python -m pytest tests/test_hosting_toolbox_docs_final.py tests/test_hosted_toolbox_contract_docs.py -q
+rg -n "get_definition|plan_definition|approve_definition_plan|apply_definition|expected_revision|dependency_approval_ref|execution_request_id|empty definition|remove" src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md
+python -m compileall -q src/hosting tests/test_hosting_toolbox_docs_final.py
 python -m pytest tests -q
 git diff --check
 ```
@@ -87,6 +87,7 @@ git diff --check
 | 2026-08-08 | P6-11, Phase 6 exit | Added strict host-owned standard catalog/compute-only policy configuration, eager publish/prewarm and bounded readiness, configured hermetic cache/build limits, and restart-safe administrator immutable revision replacement. | Host configuration/template -> 16 passed; channel/CLI/auth -> 134 passed; workflow concurrency -> 5 consecutive fresh runs; complete suite -> 1,093 passed, 3 skipped; compile/diff checks passed. The first complete run exposed and corrected a registry first-access race; a later run had two transient worker startup timeouts that passed in isolation before the clean exact full run. The initially named prewarm test file was corrected to the repository's actual `test_hosted_toolbox_template_prewarm.py` before closeout. | `feat: configure standard toolbox host startup (P6-11)` |
 | 2026-08-08 | P7-01 through P7-04 | Added mixed-category complete-definition preservation/profile-diff coverage and continuous atomic-route observation; closed the template/alias/custom/offline/lock/probe/missing-import dependency matrix. | Definition/planner/rollout/routing -> 21 passed; dependency/policy/real hermetic build -> 43 passed; complete suite -> 1,096 passed, 3 skipped; compile/diff checks passed. | `test: close definition rollout matrix (P7-01..P7-04)` |
 | 2026-08-08 | P7-05 through P7-08 | Closed real ambient-package hermeticity, every rollout recovery phase, strict v2 state/archive behavior, candidate/active/retired/orphan/grace GC ownership, and removed API/command/payload/state/bootstrap absence. | Hermetic/absence -> 20 passed; state/routing/maintenance/removal -> 25 passed; complete suite -> 1,105 passed, 3 skipped; compile/diff checks passed. One broad absence assertion initially included a generic non-toolbox channel method and was narrowed before the clean focused/full runs. | `test: close toolbox cutover matrix (P7-05..P7-08)` |
+| 2026-08-08 | P7-09 through P7-12 | Closed exact approval authority/pin/evidence binding, durable read/apply/recovery behavior, concurrent same-named multi-toolbox isolation, and stable redacted consumer projections. | Approval/plan -> 17 passed; operation/routing -> 37 passed; toolbox/channel -> 130 passed; complete suite -> 1,109 passed, 3 skipped; compile/diff checks passed. The first full run had one unrelated workflow resource-sampling miss after 1,108 passes; it passed three fresh runs before the clean exact rerun. | `feat: enforce toolbox consumer projections (P7-09..P7-12)` |
 
 P0-01/P0-02 exact verification commands:
 

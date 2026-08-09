@@ -1117,13 +1117,11 @@ class ToolboxRuntimeMixin:
             return {
                 "status": "ok",
                 "toolbox_id": tid,
-                "engine_ids": [eid for eid in engine_ids if eid],
                 "all_registered_tool_names": sorted(tool_names),
                 "allowed_tool_names": sorted(tool_names),
                 "advertised_tool_names": sorted(advertised_tool_names or tool_names),
                 "hidden_allowed_tool_names": sorted(hidden_allowed_tool_names),
                 "tool_metadata": self._definition_tool_metadata(snapshot),
-                "sandbox_profile_ids": sorted([pid for pid in sandbox_profile_ids if pid]),
                 "executor_kind": "toolbox_executor",
                 "mode": "sandbox",
                 "parallel_execution": {
@@ -1153,7 +1151,11 @@ class ToolboxRuntimeMixin:
                     ),
                     "execution_model": "threaded_worker",
                 },
-                "hosted_pools": hosted_pools,
+                "user_projection": {
+                    "state": "ready",
+                    "code": "toolbox_runtime_ready",
+                    "summary": "The toolbox runtime is ready.",
+                },
             }
         reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-describe")
         out = self._ipc_call(
@@ -1450,6 +1452,32 @@ class ToolboxRuntimeMixin:
         base = self._toolbox_runtime_base()
 
         def _persist_terminal(envelope: Dict[str, Any], lifecycle: str) -> Dict[str, Any]:
+            if tid:
+                envelope = dict(envelope)
+                for key in (
+                    "engine_id",
+                    "environment_key",
+                    "worker_id",
+                    "request",
+                    "diagnostics",
+                    "hosted_pool",
+                    "toolbox_pool",
+                    "profile_id",
+                    "sandbox_profile_id",
+                    "package_path",
+                    "installer_output",
+                ):
+                    envelope.pop(key, None)
+                outcome = str(envelope.get("outcome") or envelope.get("status") or "").strip().lower()
+                if lifecycle == HostedOperationLifecycle.TERMINAL_SUCCESS.value:
+                    state, code, summary = "succeeded", "toolbox_execution_succeeded", "The toolbox call succeeded."
+                elif lifecycle == HostedOperationLifecycle.TERMINAL_CANCELLATION.value or outcome == "canceled":
+                    state, code, summary = "canceled", "toolbox_execution_canceled", "The toolbox call was canceled."
+                elif outcome == "timeout":
+                    state, code, summary = "failed", "toolbox_execution_timeout", "The toolbox call timed out."
+                else:
+                    state, code, summary = "failed", "toolbox_execution_failed", "The toolbox call failed."
+                envelope["user_projection"] = {"state": state, "code": code, "summary": summary}
             return self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=lifecycle,

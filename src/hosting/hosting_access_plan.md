@@ -1214,20 +1214,37 @@ version-1 toolbox state path.
   toolbox-specific channel surface; state/routing/maintenance/removal tests
   passed 25. The complete suite passed 1,105 with three skips; compile and diff
   checks passed.
-- [ ] **P7-09** Add approval tests for cross-actor denial, wrong plan/definition/
+- [x] **P7-09** Add approval tests for cross-actor denial, wrong plan/definition/
   delta, changed catalog/policy revision, expiry, retry, duplicate apply, and
   rejection of client-fabricated Boolean or mapping evidence.
-- [ ] **P7-10** Add authoritative-read and durable-apply tests for side-effect-
+- [x] **P7-10** Add authoritative-read and durable-apply tests for side-effect-
   free snapshots, revision-conflict recovery, immediate operation return,
   progress persistence, reconnect/request recovery, idempotent retry, terminal
   diagnostics, safe pre-publication cancellation, denied post-publication
   cancellation, and daemon restart in every phase.
-- [ ] **P7-11** Add multi-toolbox tests proving duplicate names across toolboxes
+- [x] **P7-11** Add multi-toolbox tests proving duplicate names across toolboxes
   are valid, references execute concurrently, updates are atomic only within
   the target toolbox, and routing always includes toolbox identity.
-- [ ] **P7-12** Add projection tests proving stable user codes/summaries and no
+- [x] **P7-12** Add projection tests proving stable user codes/summaries and no
   engine IDs, profile IDs, environment keys, package paths, or installer output
   leak without operator authorization.
+
+  Evidence (2026-08-08): approval tests cover cross-actor concealment, exact
+  plan/definition/custom-delta binding, changed catalog and policy pins,
+  expiry, duplicate retry, and rejection of Boolean/mapping evidence. Existing
+  operation suites cover side-effect-free reads, revision recovery, immediate
+  apply refs, persisted progress/reconnect/request recovery, idempotency,
+  cancellation boundaries, diagnostics, and restart. Two same-named toolboxes
+  executed concurrently through real toolbox-identity route selectors and an
+  update to one left the other snapshot byte-for-byte unchanged. Consumer
+  toolbox-ID describe/execute projections now redact engine/profile/environment
+  placement, pools, paths, installer output, requests, and internal diagnostics
+  while emitting stable user codes/summaries; direct engine-ID diagnostics stay
+  internal/operator-facing. Approval/plan tests passed 17; operation/routing
+  tests passed 37; toolbox/channel regressions passed 130. The first complete
+  run passed 1,108 tests before one unrelated workflow resource sampling miss;
+  that test passed three fresh runs, followed by the clean exact complete suite
+  at 1,109 passed and three skipped. Compile and diff checks passed.
 - [ ] **P7-13** Finalize `HOSTED_TOOLBOX_CONTRACT.md` against the implemented
   public models and behavior. Rewrite
   `src/hosting/sandbox/TOOLBOX_WORKER.md` to describe the new internal worker,
