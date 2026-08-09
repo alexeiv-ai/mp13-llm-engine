@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .bundle_models import (
     ResolvedToolboxProfileSpec,
+    ResolvedToolboxSandboxAssignment,
     SandboxProfileSpec,
     ToolboxAutoAssignmentRequest,
     ToolboxBundleAutoTool,
@@ -99,6 +100,7 @@ __all__ = [
     "ToolboxManualAssignmentRequestV2",
     "ToolboxIntrinsicSelection",
     "ResolvedToolboxProfileSpec",
+    "ResolvedToolboxSandboxAssignment",
     "ToolboxDefinitionPlanDraft",
     "ActiveToolboxProfileSnapshot",
     "classify_toolbox_profiles",

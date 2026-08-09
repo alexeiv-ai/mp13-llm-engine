@@ -965,14 +965,24 @@ planner/identity regressions passed 16; operation-repository regressions passed
   contract, and repository tests passed 51 including the cancellation/
   publication race; operation/workflow regressions passed 28; compile and diff
   checks passed.
-- [ ] **P4-02** Refactor `ToolboxSandboxOrchestrator` to accept resolved profile
+- [x] **P4-02** Refactor `ToolboxSandboxOrchestrator` to accept resolved profile
   assignments and skip staging/spawn for profiles classified as reused.
-- [ ] **P4-03** Spawn added/replaced workers as non-routable candidates. Add an
+- [x] **P4-03** Spawn added/replaced workers as non-routable candidates. Add an
   explicit candidate/active registration state or ensure routing never scans
   candidate registrations.
-- [ ] **P4-04** Reuse `_ensure_toolbox_assignments_ready()` to verify RPC
+- [x] **P4-04** Reuse `_ensure_toolbox_assignments_ready()` to verify RPC
   readiness, exact expected tool inventory, environment receipt status, and
   candidate metadata before publication.
+
+  Evidence (2026-08-08): the resolved orchestrator matched every proposed
+  profile to its pinned bundle/change classification, skipped all stage/
+  materialize/spawn work for reused profiles, and registered added/replaced
+  workers only as candidates. Candidate registrations were excluded from
+  scan-based routing. Readiness rejected extra inventory and a corrupt/mismatched
+  hermetic receipt, and required exact resolved profile/environment metadata.
+  Focused rollout/planner/hermetic tests passed 25; the complete toolbox sandbox
+  suite passed 138 after correcting its legacy environment-description rebuild
+  adapter; compile and diff checks passed.
 - [ ] **P4-05** Persist an explicit active `tool_routes` map from tool name to
   profile ID/engine ID in toolbox state. Change execute/describe/gate/cancel
   routing to use that map instead of scanning all live registrations.

@@ -340,6 +340,8 @@ class ToolboxRuntimeMixin:
             raise ValueError("tool_name is required")
         matches: List[Dict[str, Any]] = []
         for reg in self._toolbox_executor_registrations(tid):
+            if str(reg.get("routing_state") or "active") != "active":
+                continue
             allowed = self._registration_allowed_tool_names(reg)
             if allowed is not None and name in allowed:
                 matches.append(reg)
@@ -1458,7 +1460,58 @@ class ToolboxRuntimeMixin:
             environment = dict(reg.get("environment") or {})
             receipt_verification_status = None
             install_execution_status = None
-            if environment:
+            if str(reg.get("routing_state") or "") == "candidate":
+                expected_names = [
+                    str(name or "").strip()
+                    for name in list(dict(reg.get("tool_access") or {}).get("allowed_tool_names") or [])
+                    if str(name or "").strip()
+                ]
+                if len(tool_names) != len(set(tool_names)) or set(tool_names) != set(expected_names):
+                    raise ToolboxRolloutError(
+                        f"toolbox inventory mismatch for {engine_id}",
+                        code="toolbox_candidate_inventory_mismatch",
+                        details={"engine_id": engine_id, "failure_phase": "inventory"},
+                    )
+                bundle = dict(reg.get("bundle") or {})
+                profile = getattr(item, "resolved_profile", None)
+                expected_profile_id = str(getattr(profile, "profile_id", "") or "")
+                expected_environment_key = str(getattr(profile, "environment_key", "") or "")
+                if (
+                    not expected_profile_id
+                    or bundle.get("resolved_profile_id") != expected_profile_id
+                    or environment.get("environment_key") != expected_environment_key
+                    or environment.get("verification_state") != "verified"
+                    or environment.get("verification_receipt_contract")
+                    != "hosting.toolbox.hermetic_environment_receipt.v1"
+                ):
+                    raise ToolboxRolloutError(
+                        f"toolbox candidate metadata mismatch for {engine_id}",
+                        code="toolbox_candidate_metadata_mismatch",
+                        details={"engine_id": engine_id, "failure_phase": "metadata"},
+                    )
+                receipt_path = Path(str(environment.get("venv_path") or "")) / "verification-receipt.json"
+                try:
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ToolboxRolloutError(
+                        f"toolbox environment receipt unavailable for {engine_id}",
+                        code="toolbox_environment_receipt_unverified",
+                        details={"engine_id": engine_id, "failure_phase": "environment_receipt"},
+                    ) from exc
+                if (
+                    not isinstance(receipt, dict)
+                    or receipt.get("contract") != "hosting.toolbox.hermetic_environment_receipt.v1"
+                    or receipt.get("state") != "verified"
+                    or receipt.get("environment_key") != expected_environment_key
+                ):
+                    raise ToolboxRolloutError(
+                        f"toolbox environment receipt mismatch for {engine_id}",
+                        code="toolbox_environment_receipt_unverified",
+                        details={"engine_id": engine_id, "failure_phase": "environment_receipt"},
+                    )
+                receipt_verification_status = "ok"
+                install_execution_status = "ok"
+            elif environment:
                 spec = ToolboxEnvironmentSpec.from_dict(environment)
                 metadata = environment_manager.read_environment_metadata(spec)
                 install_execution_status = str(dict(metadata.get("install_execution") or {}).get("status") or "").strip() or None

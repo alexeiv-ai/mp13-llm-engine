@@ -41,6 +41,14 @@ Routing is toolbox-scoped:
 2. host resolves which sandbox profile owns that tool
 3. host forwards to the active executor registration for that profile
 
+Version-2 definition rollout supplies host-resolved profile assignments. An
+exactly reused profile is neither staged nor spawned. Added and replaced
+profiles are staged and registered with `routing_state="candidate"`; scan-based
+routing excludes that state. Before a candidate can be published, the host
+requires successful RPC readiness, an exact (not subset) tool inventory, the
+planned resolved-profile and environment identities, and the matching verified
+hermetic-environment receipt.
+
 ### Sandbox Profile
 
 `SandboxProfileSpec` contains:

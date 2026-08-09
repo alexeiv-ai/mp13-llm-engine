@@ -38,8 +38,8 @@ rollout and routing work is in progress.
 
 ## Active slice
 
-None. The next slice will predeclare resolved candidate rollout and atomic
-routing work (P4-02 onward) before changing files.
+None. The next slice will predeclare explicit active routes and atomic
+publication/draining work (P4-05 onward) before changing files.
 
 ## Completed slices
 
@@ -67,6 +67,7 @@ routing work (P4-02 onward) before changing files.
 | 2026-08-08 | P3-01 through P3-05 | Added strict canonical version-2 definition/request/dependency models, host-derived resolved profiles, per-toolbox advertised-name and file conflict validation, post-resolution grouping, and resolved-profile bundle manifests. | Definition planner -> 11 passed; dependency/identity -> 20 passed; focused bundle/profile/duplicate regressions -> 18 passed, 120 deselected; docs/compile/diff checks passed. The initially predeclared dependency-pipeline filename did not exist and was corrected to the repository's dependency-analysis suite before execution. | `feat: add toolbox definition planner (P3-01..P3-05)` |
 | 2026-08-08 | P3-06, P3-07, Phase 3 exit | Added exact active/proposed profile classification and a strict atomic expiring plan repository pinned to definition/expected/catalog/policy and resolved bundle identities. | Plan repository -> 10 passed including restart, expiry/no-refresh, pin identity, corruption, two-process writes, and no side effects; planner/identity -> 16 passed; operation repository -> 23 passed; docs/compile/diff checks passed. | `feat: persist toolbox definition plans (P3-06 P3-07)` |
 | 2026-08-08 | P4-01 | Completed durable definition-apply recovery and cancellation dispatch with an atomic persisted publication boundary and bounded candidate-cleanup terminal diagnostics. | Definition apply/contract/repository -> 51 passed including the cancel/publication race; operation/workflow regressions -> 28 passed; compile/diff checks passed. The initially named `tests/test_hosting_workflow_contract.py` did not exist and failed before collection; closeout used the repository's actual workflow operation and Python contract suites. | `feat: add durable definition apply operations (P4-01)` |
+| 2026-08-08 | P4-02, P4-03, P4-04 | Added resolved assignment orchestration with zero work for reuse, explicit non-routable candidate registrations, and exact inventory/profile/environment/receipt readiness. Also restored effective environment-description input in the temporary legacy rebuild adapter. | Resolved rollout/planner/hermetic -> 25 passed; complete toolbox sandbox -> 138 passed; compile/diff checks passed. The first full regression run found two legacy environment-description rebuild failures; both passed after the adapter correction, followed by the clean 138-test run. | `feat: stage verified toolbox candidates (P4-02 P4-03 P4-04)` |
 
 P0-01/P0-02 exact verification commands:
 

@@ -1558,11 +1558,17 @@ class EnginesMixin:
         environment: Optional[Dict[str, Any]] = None,
         tool_access: Optional[Dict[str, Any]] = None,
         capabilities: Optional[Dict[str, Any]] = None,
+        routing_state: Optional[str] = None,
         source: str = "engine_host_spawned",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
+        route_state = str(routing_state or "").strip() or (
+            "active" if str(executor_kind or "").strip() == "toolbox_executor" else None
+        )
+        if route_state not in {None, "candidate", "active", "retired"}:
+            raise ValueError("routing_state_invalid")
         record = {
             "engine_id": eid,
             "pid": int(pid or 0),
@@ -1586,6 +1592,7 @@ class EnginesMixin:
             "environment": dict(environment or {}) if isinstance(environment, dict) else None,
             "tool_access": dict(tool_access or {}) if isinstance(tool_access, dict) else None,
             "capabilities": dict(capabilities or {}) if isinstance(capabilities, dict) else None,
+            "routing_state": route_state,
             "log_path": str(self._engine_log_path(eid)),
         }
         rows = [r for r in self._read_engines() if str(r.get("engine_id") or "") != eid]
@@ -1633,6 +1640,7 @@ class EnginesMixin:
         environment: Optional[Dict[str, Any]] = None,
         tool_access: Optional[Dict[str, Any]] = None,
         capabilities: Optional[Dict[str, Any]] = None,
+        routing_state: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not list(command or []):
             raise ValueError("command is required")
@@ -1725,6 +1733,7 @@ class EnginesMixin:
             environment=environment,
             tool_access=tool_access,
             capabilities=capabilities,
+            routing_state=routing_state,
         )
 
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:

@@ -516,6 +516,30 @@ class ResolvedToolboxProfileSpec:
 
 
 @dataclass
+class ResolvedToolboxSandboxAssignment:
+    toolbox_id: str
+    resolved_profile: ResolvedToolboxProfileSpec
+    bundle_spec: "ToolboxBundleSpec"
+    classification: str
+    active_profile_id: str | None = None
+    staged_bundle: Optional["StagedToolboxBundle"] = None
+    registration: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        self.toolbox_id = str(self.toolbox_id or "").strip()
+        if not self.toolbox_id:
+            raise ValueError("resolved_assignment_toolbox_id_required")
+        if self.classification not in {"reused", "added", "replaced"}:
+            raise ValueError("resolved_assignment_classification_invalid")
+        if self.bundle_spec.normalized_toolbox_id() != self.toolbox_id:
+            raise ValueError("resolved_assignment_toolbox_mismatch")
+        if self.bundle_spec.resolved_profile != self.resolved_profile:
+            raise ValueError("resolved_assignment_profile_mismatch")
+        if self.classification == "replaced" and not str(self.active_profile_id or "").strip():
+            raise ValueError("resolved_assignment_active_profile_required")
+
+
+@dataclass
 class ToolboxBundleSpec:
     bundle_id: str
     toolbox_id: Optional[str] = None

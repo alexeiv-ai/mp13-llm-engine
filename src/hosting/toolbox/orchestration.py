@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from .bundle_models import (
     SandboxProfileSpec,
+    ResolvedToolboxProfileSpec,
+    ResolvedToolboxSandboxAssignment,
     ToolboxAutoAssignmentRequest,
     ToolboxBundleFile,
     ToolboxBundleSpec,
@@ -49,6 +51,151 @@ class ToolboxSandboxOrchestrator:
             "brokered_http": bool(dict(brokered or {}).get("http", False)),
             "dynamic_reload": False,
         }
+
+    @staticmethod
+    def build_resolved_assignments(
+        *,
+        toolbox_id: str,
+        profiles: Sequence[ResolvedToolboxProfileSpec],
+        bundles: Sequence[ToolboxBundleSpec],
+        profile_changes: Sequence[Dict[str, Any]],
+    ) -> List[ResolvedToolboxSandboxAssignment]:
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id_required")
+        if len(profiles) != len(bundles):
+            raise ValueError("resolved_assignment_bundle_count_mismatch")
+        profile_map = {item.profile_id: (item, bundle) for item, bundle in zip(profiles, bundles, strict=True)}
+        if len(profile_map) != len(profiles):
+            raise ValueError("resolved_assignment_profile_duplicate")
+        changes = {
+            str(item.get("proposed_profile_id") or "").strip(): dict(item)
+            for item in profile_changes
+            if str(item.get("proposed_profile_id") or "").strip()
+        }
+        if set(changes) != set(profile_map):
+            raise ValueError("resolved_assignment_profile_changes_mismatch")
+        assignments: List[ResolvedToolboxSandboxAssignment] = []
+        for profile_id in sorted(profile_map):
+            profile, bundle = profile_map[profile_id]
+            change = changes[profile_id]
+            assignments.append(
+                ResolvedToolboxSandboxAssignment(
+                    toolbox_id=tid,
+                    resolved_profile=profile,
+                    bundle_spec=bundle,
+                    classification=str(change.get("classification") or ""),
+                    active_profile_id=(
+                        str(change.get("active_profile_id") or "").strip() or None
+                    ),
+                )
+            )
+        return assignments
+
+    def spawn_resolved_assignments(
+        self,
+        *,
+        toolbox_id: str,
+        definition_revision: str,
+        assignments: Sequence[ResolvedToolboxSandboxAssignment],
+        worker_profile_class: str = "generic",
+    ) -> List[ResolvedToolboxSandboxAssignment]:
+        """Stage and spawn only added/replaced profiles as non-routable candidates."""
+
+        tid = str(toolbox_id or "").strip()
+        revision = str(definition_revision or "").strip()
+        if not tid or not revision:
+            raise ValueError("resolved_rollout_identity_required")
+        out = list(assignments or [])
+        for item in out:
+            if item.toolbox_id != tid:
+                raise ValueError("resolved_assignment_toolbox_mismatch")
+            if item.classification == "reused":
+                continue
+            profile = item.resolved_profile
+            item.staged_bundle = self.stager.stage_bundle(item.bundle_spec)
+            staged = item.staged_bundle
+            bundle_revision = str(staged.manifest.get("bundle_revision") or "")
+            engine_id = f"{tid}-{profile.profile_id.removeprefix('sha256:')[:20]}-{bundle_revision[:8]}"
+            hermetic = self.service.materialize_toolbox_environment_for_bundle(
+                files=list(staged.manifest.get("files") or []),
+                python_abi=str(getattr(self.service, "_toolbox_required_python_abi", "") or "").strip()
+                or f"cp{sys.version_info.major}{sys.version_info.minor}",
+                platform=str(getattr(self.service, "_toolbox_required_platform", "") or "").strip()
+                or ("win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64"),
+                declared_imports=profile.resolved_import_roots,
+                intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
+                allowed_template_ids=(profile.template_id,),
+                sandbox_policy=profile.sandbox_policy,
+                reference_id=f"toolbox:{tid}:{profile.profile_id}:{revision}",
+            )
+            if (
+                hermetic.environment_key != profile.environment_key
+                or hermetic.resolved.complete_lock_digest != profile.effective_lock_digest
+            ):
+                raise RuntimeError("resolved_environment_identity_mismatch")
+            environment_spec = ToolboxEnvironmentSpec(
+                venv_key=hermetic.environment_key,
+                venv_path=hermetic.environment_root,
+                python_executable=hermetic.python_executable,
+                environment_name=profile.template_id,
+                venv_lock_hash=profile.effective_lock_digest,
+                toolbox_runtime_hash=hermetic.resolved.runtime_artifact_digest,
+                intrinsics_profile_id="resolved",
+                required_imports=list(profile.resolved_import_roots),
+                dependency_lock_hash=profile.effective_lock_digest,
+                environment_root_kind="toolbox_environment_cache",
+                environment_consumer_kind="toolbox_executor",
+            )
+            registration_environment = self.runtime_base.registration_environment(
+                environment=staged.registration_environment(environment_spec),
+                toolbox_id=tid,
+                sandbox_profile_id=profile.profile_id,
+                bundle_revision=bundle_revision,
+                sandbox_policy=dict(profile.sandbox_policy),
+            )
+            registration_environment.update(
+                {
+                    "environment_key": profile.environment_key,
+                    "verification_receipt_contract": "hosting.toolbox.hermetic_environment_receipt.v1",
+                    "verification_state": "verified",
+                }
+            )
+            registration_bundle = staged.registration_bundle()
+            registration_bundle.update(
+                {
+                    "sandbox_profile_id": profile.profile_id,
+                    "resolved_profile_id": profile.profile_id,
+                    "definition_revision": revision,
+                }
+            )
+            legacy_profile = SandboxProfileSpec(
+                profile_id=profile.profile_id.removeprefix("sha256:"),
+                required_imports=list(profile.resolved_import_roots),
+                sandbox_policy=dict(profile.sandbox_policy),
+            )
+            item.registration = self.service.spawn(
+                engine_id=engine_id,
+                command=staged.worker_command(python_executable=hermetic.python_executable),
+                env=staged.worker_env_with_startup_spec(
+                    worker_id=engine_id,
+                    sandbox_id=f"{tid}-{profile.profile_id.removeprefix('sha256:')[:20]}",
+                    scratch_root=self.stager.hosting_root / "toolbox_scratch" / engine_id,
+                    engines_state_file=self.service.engines_state_file,
+                    control_state_file=self.service.control_state_file,
+                    venv_path=hermetic.environment_root,
+                    policy=dict(profile.sandbox_policy),
+                ),
+                worker_profile_class=worker_profile_class,
+                sandbox_policy=dict(profile.sandbox_policy),
+                executor_kind="toolbox_executor",
+                bundle=registration_bundle,
+                environment=registration_environment,
+                tool_access=staged.registration_tool_access(),
+                capabilities=self._capabilities_for_profile(legacy_profile),
+                routing_state="candidate",
+            )
+        return out
 
     def build_assignments(
         self,
@@ -210,7 +357,15 @@ class ToolboxSandboxOrchestrator:
                 # Deprecated version-1 mutations remain on the legacy adapter
                 # until Phase 7 removes those public commands. Configured v2
                 # hosts never reach this ambient-capable path.
-                environment_spec = self.environment_manager.ensure_for_bundle(staged)
+                environment_description = None
+                effective_get = getattr(self.service, "toolbox_environment_description_effective_get", None)
+                if callable(effective_get):
+                    environment_name = str(item.sandbox_profile.environment_name or "base").strip() or "base"
+                    environment_description = effective_get(environment_name)
+                environment_spec = self.environment_manager.ensure_for_bundle(
+                    staged,
+                    environment_description=environment_description,
+                )
                 environment_spec.python_executable = self.environment_manager.toolbox_runtime_python_executable(
                     environment_spec
                 )
