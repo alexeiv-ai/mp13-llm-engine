@@ -75,6 +75,13 @@ _TOOLBOX_TEMPLATE_ADMIN_COMMANDS = {
     "toolbox-template-prewarm",
 }
 
+_TOOLBOX_DEFINITION_COMMANDS = {
+    "toolbox-get-definition",
+    "toolbox-plan-definition",
+    "toolbox-approve-definition-plan",
+    "toolbox-apply-definition",
+}
+
 _WORKFLOW_JS_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-ensure",
@@ -352,6 +359,7 @@ class AuthMixin:
             "hosted-operation-result",
             "hosted-operation-cancel",
             "toolbox-gc",
+            *_TOOLBOX_DEFINITION_COMMANDS,
             *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
             *_TOOLBOX_TEMPLATE_ADMIN_COMMANDS,
             "toolbox-references",
@@ -459,6 +467,7 @@ class AuthMixin:
                 "hosted-operation-result",
                 "hosted-operation-cancel",
                 "toolbox-gc",
+                *_TOOLBOX_DEFINITION_COMMANDS,
                 *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
                 "toolbox-consistency",
@@ -533,6 +542,7 @@ class AuthMixin:
                 "hosted-operation-result",
                 "hosted-operation-cancel",
                 "toolbox-gc",
+                *_TOOLBOX_DEFINITION_COMMANDS,
                 *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
                 "toolbox-consistency",
@@ -624,6 +634,7 @@ class AuthMixin:
                 "sandbox-fs-stat",
                 "toolbox-describe",
                 "toolbox-gate",
+                "toolbox-get-definition",
                 *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
                 "toolbox-consistency",

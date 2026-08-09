@@ -3481,6 +3481,61 @@ class EngineHostControlChannel:
         res = self._invoke("toolbox-gc", {})
         return dict(res or {})
 
+    def toolbox_get_definition(
+        self, *, toolbox_id: str, operator_details: bool = False
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-get-definition",
+            {
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "operator_details": bool(operator_details),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_plan_definition(
+        self,
+        *,
+        definition: Dict[str, Any],
+        operator_details: bool = False,
+        ttl_ms: int = 15 * 60 * 1000,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-plan-definition",
+            {
+                "definition": dict(definition or {}),
+                "operator_details": bool(operator_details),
+                "ttl_ms": int(ttl_ms),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_approve_definition_plan(self, *, plan_id: str) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-approve-definition-plan",
+            {"plan_id": str(plan_id or "").strip()},
+        )
+        return dict(res or {})
+
+    def toolbox_apply_definition(
+        self,
+        *,
+        definition: Dict[str, Any],
+        plan_id: str,
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-apply-definition",
+            {
+                "definition": dict(definition or {}),
+                "plan_id": str(plan_id or "").strip(),
+                "request_id": str(request_id or "").strip(),
+                "dependency_approval_ref": dependency_approval_ref,
+            },
+        )
+        return dict(res or {})
+
     def model_runtime_status(self) -> Dict[str, Any]:
         res = self._invoke("model-runtime-status", {})
         return dict(res or {})

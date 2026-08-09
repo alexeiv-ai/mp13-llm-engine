@@ -138,6 +138,7 @@ class ToolboxRuntimeMixin:
         self,
         *,
         toolbox_id: str,
+        operator_details: bool = False,
         owner_actor_id: str = "service:local",
         authority_id: str = "authority:local",
     ) -> Dict[str, Any]:
@@ -195,6 +196,7 @@ class ToolboxRuntimeMixin:
         self,
         *,
         definition: Dict[str, Any],
+        operator_details: bool = False,
         owner_actor_id: str = "service:local",
         authority_id: str = "authority:local",
         ttl_ms: int = 15 * 60 * 1000,

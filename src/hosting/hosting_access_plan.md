@@ -1078,19 +1078,29 @@ state reads; compile and diff checks passed.
   immediately, dispatched once in background, and replayed the same request.
   Definition/plan/rollout tests passed 17; operation service/repository
   regressions passed 31; compile and diff checks passed.
-- [ ] **P6-02** Add `toolbox-get-definition`, `toolbox-plan-definition`,
+- [x] **P6-02** Add `toolbox-get-definition`, `toolbox-plan-definition`,
   `toolbox-approve-definition-plan`, and `toolbox-apply-definition` to daemon
   dispatch, subprocess CLI dispatch, `EngineHostControlChannel`, authorization,
   audit, and policy routing. Add template list/describe for authorized consumers
   and template publish/deprecate/revoke/prewarm for hosting administrators over
   the same control transport, with distinct role/policy checks.
-- [ ] **P6-03** Add `HostedToolBoxRef.get_definition()`, `plan_definition()`,
+- [x] **P6-03** Add `HostedToolBoxRef.get_definition()`, `plan_definition()`,
   `approve_definition_plan()`, and `apply_definition()`. Apply returns a durable
   operation status/ref; observation and recovery use generic hosted-operation
   methods. Expose template list/describe as read-only client helpers; keep
   publication/lifecycle/prewarm on an administrative channel surface. Keep
   execution/describe/gate/cancel methods unchanged except for their internal
   use of active routes.
+
+  Evidence (2026-08-08): the four definition commands were added to the
+  authenticated daemon, direct/remote CLI, policy, role authorization, and
+  control-channel surfaces with the authenticated actor retained as the plan
+  authority. `HostedToolBoxRef` now exposes the frozen definition methods and
+  read-only environment-template helpers, while lifecycle/publish/prewarm
+  remain only on the administrative channel. Generic hosted-operation methods
+  remain the sole apply observation/recovery path. Transport/channel/CLI and
+  catalog authorization tests passed 108; definition/atomic-routing/operation
+  regressions passed 38; compile and diff checks passed.
 - [ ] **P6-04** Remove `register_auto_callable`, `register_python_callable`,
   `register_manual_tool`, intrinsic register methods, every unregister/remove
   method, aliases, `mutate()`, `PendingHostedToolboxRef`, and

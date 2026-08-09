@@ -109,6 +109,69 @@ class HostedToolBoxRef:
     def mutate(self) -> "PendingHostedToolboxRef":
         return PendingHostedToolboxRef(self)
 
+    def get_definition(self, *, operator_details: bool = False) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_get_definition(
+                toolbox_id=self.toolbox_id,
+                operator_details=bool(operator_details),
+            )
+            or {}
+        )
+
+    def plan_definition(
+        self,
+        definition: Dict[str, Any],
+        *,
+        operator_details: bool = False,
+        ttl_ms: int = 15 * 60 * 1000,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_plan_definition(
+                definition=dict(definition or {}),
+                operator_details=bool(operator_details),
+                ttl_ms=int(ttl_ms),
+            )
+            or {}
+        )
+
+    def approve_definition_plan(self, *, plan_id: str) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_approve_definition_plan(plan_id=str(plan_id or "").strip())
+            or {}
+        )
+
+    def apply_definition(
+        self,
+        *,
+        plan_id: str,
+        definition: Dict[str, Any],
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_apply_definition(
+                definition=dict(definition or {}),
+                plan_id=str(plan_id or "").strip(),
+                request_id=str(request_id or "").strip(),
+                dependency_approval_ref=dependency_approval_ref,
+            )
+            or {}
+        )
+
+    def list_environment_templates(self) -> Dict[str, Any]:
+        return dict(self.host.toolbox_template_list() or {})
+
+    def describe_environment_template(
+        self, *, template_id: str, template_digest: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return dict(
+            self.host.toolbox_template_describe(
+                template_id=str(template_id or "").strip(),
+                template_digest=str(template_digest or "").strip() or None,
+            )
+            or {}
+        )
+
     def register_auto_callable(
         self,
         *,

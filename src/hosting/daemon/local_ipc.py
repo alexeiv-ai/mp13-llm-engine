@@ -3069,6 +3069,7 @@ class EngineHostDaemon:
             return svc.toolbox_describe(
                 engine_id=str(payload.get("engine_id") or ""),
                 toolbox_id=str(payload.get("toolbox_id") or ""),
+                operator_details=bool(payload.get("operator_details", False)),
                 timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
             )
         if cmd == "workflow-python-stream-status":
@@ -3119,6 +3120,39 @@ class EngineHostDaemon:
             )
         if cmd == "toolbox-gc":
             return svc.toolbox_gc()
+        if cmd == "toolbox-get-definition":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_get_definition(
+                toolbox_id=str(payload.get("toolbox_id") or ""),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd == "toolbox-plan-definition":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_plan_definition(
+                definition=dict(payload.get("definition") or {}),
+                operator_details=bool(payload.get("operator_details", False)),
+                owner_actor_id=actor,
+                authority_id=actor,
+                ttl_ms=int(payload.get("ttl_ms") or 15 * 60 * 1000),
+            )
+        if cmd == "toolbox-approve-definition-plan":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_approve_definition_plan(
+                plan_id=str(payload.get("plan_id") or ""),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd == "toolbox-apply-definition":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_apply_definition(
+                definition=dict(payload.get("definition") or {}),
+                plan_id=str(payload.get("plan_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                dependency_approval_ref=payload.get("dependency_approval_ref"),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
         if cmd == "toolbox-template-list":
             return svc.toolbox_template_list()
         if cmd == "toolbox-template-describe":

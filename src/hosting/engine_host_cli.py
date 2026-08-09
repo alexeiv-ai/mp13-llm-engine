@@ -111,6 +111,18 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-gc": [
         "python -m hosting.engine_host_cli toolbox-gc",
     ],
+    "toolbox-get-definition": [
+        "'{\"toolbox_id\":\"toolbox-demo\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-get-definition",
+    ],
+    "toolbox-plan-definition": [
+        "Get-Content toolbox-definition.json | python -m hosting.engine_host_cli --payload-stdin toolbox-plan-definition",
+    ],
+    "toolbox-approve-definition-plan": [
+        "'{\"plan_id\":\"plan-id\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-approve-definition-plan",
+    ],
+    "toolbox-apply-definition": [
+        "Get-Content toolbox-apply.json | python -m hosting.engine_host_cli --payload-stdin toolbox-apply-definition",
+    ],
     "toolbox-template-list": [
         "python -m hosting.engine_host_cli toolbox-template-list",
     ],
@@ -871,6 +883,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "hosting-receipt-ledger-cutover",
         "toolbox-state-archive-v1",
         "toolbox-gc",
+        "toolbox-get-definition",
+        "toolbox-plan-definition",
+        "toolbox-approve-definition-plan",
+        "toolbox-apply-definition",
         "toolbox-template-list",
         "toolbox-template-describe",
         "toolbox-template-publish",
@@ -1915,6 +1931,40 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "toolbox-gc":
             _print_ok(svc.toolbox_gc())
+            return 0
+        if cmd == "toolbox-get-definition":
+            _print_ok(
+                svc.toolbox_get_definition(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    operator_details=bool(payload.get("operator_details", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-plan-definition":
+            _print_ok(
+                svc.toolbox_plan_definition(
+                    definition=dict(payload.get("definition") or {}),
+                    operator_details=bool(payload.get("operator_details", False)),
+                    ttl_ms=int(payload.get("ttl_ms") or 15 * 60 * 1000),
+                )
+            )
+            return 0
+        if cmd == "toolbox-approve-definition-plan":
+            _print_ok(
+                svc.toolbox_approve_definition_plan(
+                    plan_id=str(payload.get("plan_id") or ""),
+                )
+            )
+            return 0
+        if cmd == "toolbox-apply-definition":
+            _print_ok(
+                svc.toolbox_apply_definition(
+                    definition=dict(payload.get("definition") or {}),
+                    plan_id=str(payload.get("plan_id") or ""),
+                    request_id=str(payload.get("request_id") or ""),
+                    dependency_approval_ref=payload.get("dependency_approval_ref"),
+                )
+            )
             return 0
         if cmd == "toolbox-template-list":
             _print_ok(svc.toolbox_template_list())
