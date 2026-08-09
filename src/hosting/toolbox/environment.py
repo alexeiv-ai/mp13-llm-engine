@@ -232,6 +232,17 @@ class ToolboxEnvironmentManager:
             return env_python
         return bootstrap_python
 
+    def toolbox_runtime_python_executable(self, spec: ToolboxEnvironmentSpec) -> str:
+        """Select only the toolbox environment interpreter; never bootstrap.
+
+        Workflow consumers continue to use ``runtime_python_executable`` and
+        retain their separately contracted fallback behavior.
+        """
+
+        ensured = self.ensure_environment(spec)
+        env_root = Path(ensured.venv_path).expanduser().resolve()
+        return str(ensured.python_executable or self.python_executable_path(env_root)).strip()
+
     def workflow_python_helper_environment_spec(
         self,
         *,

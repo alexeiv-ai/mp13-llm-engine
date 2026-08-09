@@ -39,7 +39,8 @@ environment builder work is next.
 
 ## Active slice
 
-None.
+None. The next slice will predeclare the physical hermetic builder work before
+changing files.
 
 ## Completed slices
 
@@ -62,6 +63,7 @@ None.
 | 2026-08-08 | P1-11 | Shipped exact independent `core`/`py-compute` locks, strict resource identities, compute-only policy, normal setup/prewarm and receipt-gated readiness, and smallest-template planning. | Shipped templates -> 6 passed; planner/policy/catalog -> 42 passed; catalog/prewarm/setup-state -> 21 passed; contract docs -> 12 passed; compile/diff checks passed. Physical installation remains Phase 2. | `feat: ship initial toolbox templates (P1-11)` |
 | 2026-08-08 | P1-12 | Unified verified-template resolution/receipts across toolbox, node, snippet, and helper while deriving distinct consumer bindings and preserving runtime/API boundaries. | Shared resolver/isolated probes -> 9 passed; dependency/shipped-template -> 32 passed; workflow/helper/operation -> 37 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared workflow filename did not exist and failed before collection; the active ledger was corrected to the actual contract/node/helper suites before closeout. | `feat: share verified template resolution (P1-12)` |
 | 2026-08-08 | P1-13, Phase 1 exit | Added exact bounded model-runtime status plus generic selection denials, including healthy-installed denial; proved deterministic restart-safe resolution without worker/ledger mutation. | Model boundary -> 12 passed; resolver/policy/catalog -> 32 passed; channel/CLI/auth/security -> 133 passed; docs/shipped templates -> 18 passed; Phase 1 resolver audit -> 10 passed; compile/diff checks passed. | `feat: enforce exclusive model runtime (P1-13)` |
+| 2026-08-08 | Phase 2 groundwork (no items checked) | Added the strict host-derived resolved environment input and frozen `hosting.toolbox.environment.v2` cache identity, removed environment-description service lookup from worker orchestration, and isolated no-bootstrap toolbox interpreter selection while preserving workflow fallback. P2 remains open until the physical builder replaces the legacy inheriting path. | Hermetic contract -> 6 passed; workflow/runtime regressions -> 29 passed; focused toolbox environment regressions -> 3 passed, 135 deselected; compile/diff checks passed. | `refactor: establish hermetic toolbox environment contract` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -89,6 +91,7 @@ and the condition required to resume it.
 
 ## Next slice
 
-Begin Phase 2 by splitting toolbox-only builder behavior from shared runtime
-primitives and defining the immutable environment/build contracts (P2-01 to
-P2-03).
+Implement and wire the physical toolbox-only hermetic builder, approved
+artifact installation, final-interpreter verification, publication/quarantine,
+deduplication/reference GC, and independent base-plus-delta readiness, then
+close P2-01 through P2-10 only after the exit gate passes.

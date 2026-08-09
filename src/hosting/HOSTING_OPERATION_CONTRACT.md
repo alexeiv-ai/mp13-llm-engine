@@ -206,6 +206,13 @@ different revision, target, or catalog fingerprint is an idempotency conflict.
 The command is daemon-owned: the short-lived CLI does not fall back to an
 in-process background thread when the daemon is unavailable.
 
+The target-host materializer receives a strict resolved toolbox environment
+input, never an environment-description name or dependent-supplied
+interpreter. Its durable fingerprint binds the runtime artifact, ABI/platform,
+complete immutable lock, optional custom resolved-lock, and isolation policy.
+Import roots are retained as verification obligations but do not split the
+physical cache by per-function import subset.
+
 For definition apply, cancellation before publication finishes with bounded
 candidate-cleanup diagnostics. Publication is the commit boundary. A cancel
 request after the persisted boundary returns

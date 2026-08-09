@@ -176,25 +176,12 @@ class ToolboxSandboxOrchestrator:
             staged = item.staged_bundle
             revision = str(staged.manifest.get("bundle_revision") or "")
             engine_id = self._engine_id(toolbox_id, item.sandbox_profile, revision)
-            environment_name = str(item.sandbox_profile.environment_name or "base").strip() or "base"
-            environment_description = None
-            if hasattr(self.service, "toolbox_environment_description_effective_get"):
-                try:
-                    environment_description = self.service.toolbox_environment_description_effective_get(environment_name)
-                except Exception:
-                    environment_description = None
-            elif hasattr(self.service, "toolbox_environment_description_get"):
-                try:
-                    environment_description = self.service.toolbox_environment_description_get(environment_name)
-                except Exception:
-                    environment_description = None
-            environment_spec = self.environment_manager.ensure_for_bundle(
-                staged,
-                environment_description=environment_description,
-            )
-            environment_spec.python_executable = self.environment_manager.runtime_python_executable(
-                environment_spec,
-                fallback_python_executable=self.python_executable,
+            # Environment-description inheritance is not an input to toolbox
+            # execution. The legacy bundle adapter remains only until the
+            # resolved template input is wired to the physical builder.
+            environment_spec = self.environment_manager.ensure_for_bundle(staged)
+            environment_spec.python_executable = self.environment_manager.toolbox_runtime_python_executable(
+                environment_spec
             )
             registration_environment = self.runtime_base.registration_environment(
                 environment=staged.registration_environment(environment_spec),

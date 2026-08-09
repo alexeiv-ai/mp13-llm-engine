@@ -219,6 +219,39 @@ Do not add compatibility shims for these behaviors. Code that still needs an
 old field must be changed to construct dependency intent or consume the
 authoritative definition/apply projection.
 
+Remove all dependent environment-description and interpreter-selection code,
+including persisted `environment_name` / `base_env_name` values, inheritance
+walks, environment-description hashes, per-function import-list cache keys,
+local venv paths, `python_executable`, and bootstrap/fallback interpreter
+branches. Do not translate those values into new fields. The replacement
+logic submits only source plus dependency intent to definition planning, keeps
+the returned plan/operation references, and waits for the authoritative
+readiness projection before applying or executing.
+
+In particular, dependent code shaped like this must be deleted:
+
+```python
+env = resolve_environment_description(saved_environment_name)
+venv_key = hash((env, tuple(function_imports)))
+python = env_python if receipt_ok else sys.executable
+register_tool(..., environment_name=env["name"], python_executable=python)
+```
+
+The replacement has no environment or interpreter choice:
+
+```python
+plan = toolbox_definition_plan(definition_with_dependency_intent)
+operation = toolbox_definition_apply(plan_ref=plan.plan_ref, request_id=request_id)
+active = wait_for_terminal_and_read_active_projection(operation)
+```
+
+Do not persist or inspect the resolved environment key to recreate the removed
+cache. It is host-derived diagnostic identity, not a dependent dispatch key.
+Different functions' raw import subsets must not cause dependent-side venvs or
+deployment groups; the host groups by the complete resolved lock and sandbox
+policy. Workflow-specific fallback logic may remain only in workflow code and
+must never be reused for a toolbox executor.
+
 ### Required environment-selection and readiness changes
 
 Dependent deployment code may request only the logical template IDs `core` and

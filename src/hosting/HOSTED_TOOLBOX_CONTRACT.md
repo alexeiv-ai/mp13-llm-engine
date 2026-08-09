@@ -470,6 +470,34 @@ third-party distribution imported by a shipped parent compute intrinsic.
 `core` site-packages directory. Sharing digest-addressed artifact bytes is
 allowed; sharing a mutable installation is not.
 
+### Hermetic environment input and identity
+
+Toolbox environment construction consumes one strict
+`ResolvedToolboxEnvironmentInput` minted by the host after template and custom
+dependency resolution. It contains the exact runtime version and artifact
+digest, Python ABI, platform, complete immutable distribution lock and digest,
+nullable custom resolved-lock digest, isolation-policy version, and the full
+set of import roots that the final interpreter must probe. Unknown or missing
+fields fail closed. It contains no environment name, base-environment name,
+client path, interpreter override, or online-install switch.
+
+The toolbox environment key uses the published
+`hosting.toolbox.environment.v2` identity. Its runtime portion is exactly the
+runtime version, runtime artifact digest, ABI, and platform; its remaining
+inputs are the complete template-lock digest, nullable custom resolved-lock
+digest, and isolation-policy version. Logical template labels, manifest
+labels, profile IDs, function names, and each function's raw import subset do
+not participate. Therefore two functions with different import subsets share
+one physical environment when their complete resolved lock, runtime target,
+and isolation policy are identical.
+
+The resolved import roots are verification obligations, not cache-key input.
+Every root still has to pass a probe under the final environment interpreter
+before publication. Toolbox and workflow selection are separate: toolbox
+workers can use only that verified environment interpreter, while the legacy
+workflow helper fallback remains governed by its independent workflow
+contract.
+
 For the initial lock, `core` contains `mp13-engine` 0.9.0, `packaging` 26.0,
 Pydantic 2.12.5, and the exact Pydantic validation closure (`pydantic-core`
 2.41.5, `annotated-types` 0.7.0, `typing-extensions` 4.15.0, and
