@@ -39,16 +39,18 @@ host-owned standard template/policy startup configuration.
 
 ## Active slice
 
-P7-13 and P7-14: finalize the supported durable contract and worker
-architecture, then complete the exact dependent-project migration handoff.
+P7-15 and P7-16: migrate and repin `O:/repos/mp13-docs`, then verify its
+complete toolbox/workflow/sandbox surface against the replacement parent.
+P7-14 will close afterward with the actual parent and dependent commit IDs.
 
 Predeclared verification:
 
 ```powershell
-python -m pytest tests/test_hosting_toolbox_docs_final.py tests/test_hosted_toolbox_contract_docs.py -q
-rg -n "get_definition|plan_definition|approve_definition_plan|apply_definition|expected_revision|dependency_approval_ref|execution_request_id|empty definition|remove" src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md
-python -m compileall -q src/hosting tests/test_hosting_toolbox_docs_final.py
+python -m pytest tests/backend_infra/test_hosted_store_state.py tests/backend_infra/test_toolbox_operations_v2.py tests/backend_infra/test_generated_tool_sandbox_service.py tests/backend_infra/test_llm_tool_parser.py -q
+python -m pytest tests/backend_infra -q
 python -m pytest tests -q
+rg -n 'register_auto_callable|register_python_callable|register_manual_tool|register_intrinsics|unregister_|resolve_sandbox|environment_(description|resolve|apply|realize|sync|lock|verify|execute)|toolbox-(register|unregister|environment)' src tests
+python -m compileall -q src tests
 git diff --check
 ```
 
@@ -88,6 +90,7 @@ git diff --check
 | 2026-08-08 | P7-01 through P7-04 | Added mixed-category complete-definition preservation/profile-diff coverage and continuous atomic-route observation; closed the template/alias/custom/offline/lock/probe/missing-import dependency matrix. | Definition/planner/rollout/routing -> 21 passed; dependency/policy/real hermetic build -> 43 passed; complete suite -> 1,096 passed, 3 skipped; compile/diff checks passed. | `test: close definition rollout matrix (P7-01..P7-04)` |
 | 2026-08-08 | P7-05 through P7-08 | Closed real ambient-package hermeticity, every rollout recovery phase, strict v2 state/archive behavior, candidate/active/retired/orphan/grace GC ownership, and removed API/command/payload/state/bootstrap absence. | Hermetic/absence -> 20 passed; state/routing/maintenance/removal -> 25 passed; complete suite -> 1,105 passed, 3 skipped; compile/diff checks passed. One broad absence assertion initially included a generic non-toolbox channel method and was narrowed before the clean focused/full runs. | `test: close toolbox cutover matrix (P7-05..P7-08)` |
 | 2026-08-08 | P7-09 through P7-12 | Closed exact approval authority/pin/evidence binding, durable read/apply/recovery behavior, concurrent same-named multi-toolbox isolation, and stable redacted consumer projections. | Approval/plan -> 17 passed; operation/routing -> 37 passed; toolbox/channel -> 130 passed; complete suite -> 1,109 passed, 3 skipped; compile/diff checks passed. The first full run had one unrelated workflow resource-sampling miss after 1,108 passes; it passed three fresh runs before the clean exact rerun. | `feat: enforce toolbox consumer projections (P7-09..P7-12)` |
+| 2026-08-08 | P7-13 | Reconciled the durable public contract and replaced the worker document with complete supported planning, hermetic environment, candidate rollout, atomic routing, durable recovery, execution/callback, projection, and GC architecture linked to the normative contract. | Final docs -> 16 passed; forbidden transition vocabulary -> no matches; complete suite -> 1,113 passed, 3 skipped; compile/diff checks passed. | `docs: finalize toolbox runtime contract (P7-13)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -115,5 +118,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Begin Phase 6 complete definition service, transport/client replacement, old
-mutation/environment removal, setup conversion, and route-based maintenance.
+After the dependent cutover, close P7-14 with exact release/adoption commits,
+then complete the standard-base matrix in P7-17 and the final acceptance audit.

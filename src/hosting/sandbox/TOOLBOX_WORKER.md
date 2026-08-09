@@ -1,292 +1,269 @@
-# Toolbox Worker
-
-Date: 2026-05-21
-Scope: sandboxed toolbox executor implementation and APIs. Shared sandbox policy, launch, and broker APIs are described in [SANDBOX_ARCHITECTURE.md](SANDBOX_ARCHITECTURE.md).
-
-## Purpose
-
-Toolbox workers run staged tool code in host-managed worker processes. They preserve the native toolbox programming model while allowing the host to route each tool through a sandbox profile, broker filesystem and HTTP access, and rebuild executors from persisted logical toolbox state.
-
-Important distinction:
-
-1. a logical toolbox is user-facing state
-2. a toolbox worker is one live executor for one staged bundle/profile
-3. one logical toolbox can span multiple toolbox workers
-
-## Main Implementation
-
-Primary files:
-
-1. [../toolbox_executor_ipc.py](../toolbox_executor_ipc.py): toolbox worker process and RPC handlers
-2. [../toolbox/bundle_models.py](../toolbox/bundle_models.py): bundle/profile/startup/environment dataclasses
-3. [../toolbox/staging.py](../toolbox/staging.py): bundle staging
-4. [../toolbox/manifest.py](../toolbox/manifest.py): staged manifest loading
-5. [../toolbox/orchestration.py](../toolbox/orchestration.py): grouping, staging, environment selection, and spawn orchestration
-6. [../toolbox/hosted_ref.py](../toolbox/hosted_ref.py): hosted toolbox ref and builder API
-7. [../toolbox/execution.py](../toolbox/execution.py): hosted execution harness
-8. [../service/toolbox_runtime.py](../service/toolbox_runtime.py): host service registration, routing, gate, execute, and cancel APIs
-9. [../service/toolbox_env.py](../service/toolbox_env.py): environment descriptions, repair, reconcile, GC, and reference reporting
-
-`hosting.toolbox_harness` is a compatibility import path that re-exports the public `hosting.toolbox` package API.
-
-## Data Model
-
-### Logical Toolbox
-
-A logical toolbox is keyed by `toolbox_id`. Persisted logical toolbox state is the source of truth. Live executor registrations are derived runtime state.
-
-Routing is toolbox-scoped:
-
-1. host receives `toolbox_id + tool_name`
-2. host resolves which sandbox profile owns that tool
-3. host forwards to the active executor registration for that profile
-
-Version-2 definition rollout supplies host-resolved profile assignments. An
-exactly reused profile is neither staged nor spawned. Added and replaced
-profiles are staged and registered with `routing_state="candidate"`; scan-based
-routing excludes that state. Before a candidate can be published, the host
-requires successful RPC readiness, an exact (not subset) tool inventory, the
-planned resolved-profile and environment identities, and the matching verified
-hermetic-environment receipt.
-
-Publication writes the active definition revision, resolved profiles, and the
-complete `tool_routes` map in one version-2 state transaction. Execute,
-toolbox-wide describe/gate, and cancellation routing use that map; live
-registration scans are not active truth. Only after the map is durable are new
-registrations marked active and replaced/removed registrations marked retired.
-Busy retired workers remain alive until their in-flight calls drain, but cannot
-receive new routed calls. A failed or canceled pre-publication rollout removes
-its candidates and leaves the prior snapshot unchanged. An empty definition is
-a normal new revision with empty profiles/routes and retained bounded history.
-
-Restart recovery treats the version-2 snapshot as the only routing truth.
-Unpublished candidate registrations are removed; engines named by published
-routes are activated; non-routed registrations are retired and removed once
-idle. An interrupted apply is recovered as success only when its persisted
-progress crossed publication and its pinned definition revision is the active
-revision. Otherwise candidate cleanup completes it as a pre-publication
-failure. Corrupt, wrong-version, digest-mismatched, or unarchived version-1
-state fails closed for definition APIs.
-
-### Sandbox Profile
-
-`SandboxProfileSpec` contains:
-
-1. `profile_id`
-2. `environment_name`
-3. `required_imports`
-4. `sandbox_policy`
-
-If `profile_id` is absent, the profile id is derived from a stable fingerprint of environment name, required imports, and sandbox policy.
-
-### Bundle And Manifest
-
-`ToolboxBundleSpec` produces a staged manifest with:
-
-1. `executor_kind="toolbox_executor"`
-2. `bundle_id`
-3. `toolbox_id`
-4. `sandbox_profile`
-5. `bundle_revision`
-6. `manifest_hash`
-7. staged source file hashes
-8. manual tool definitions
-9. auto-callable entries
-10. intrinsic tool activation
-11. hidden tool state
-12. callback signatures and `non_restartable` metadata
-
-The executor loads only the staged manifest and staged bundle contents. It does not discover tools from ambient host process state.
-
-### Startup Spec
-
-`ToolboxWorkerStartupSpec` is the structured worker startup contract. It carries:
-
-1. `worker_id`
-2. `sandbox_id`
-3. `toolbox_revision`
-4. `manifest_path`
-5. `scratch_root`
-6. optional `engines_state_file`
-7. optional `control_state_file`
-8. optional `venv_path`
-9. `ipc_family`
-10. `ipc_address`
-11. `auth_token_env`
-12. `execution_contract`
-13. `callback_contract`
-14. `policy`
-
-The host writes this spec under hosting state and passes its path through `MP13_TOOLBOX_WORKER_SPEC_PATH`. Legacy manifest/env fallbacks still exist but should not be treated as the preferred contract.
-
-## Worker RPC API
-
-Toolbox workers speak the common hosting IPC message shape with `kind="hello"` and `kind="rpc_call"`.
-
-Supported RPC methods:
-
-1. `rpc.describe`, `describe`, `capabilities`: returns protocol metadata, executor kind, registered tool names, and tool metadata
-2. `toolbox.describe`: returns bundle identity, registered tool names, metadata, and parallel-execution notes
-3. `toolbox.execute`: executes one staged `ToolCall`
-4. `host.call`: invokes supported host callbacks directly
-
-`toolbox.execute` rejects unstaged tool names inside the executor even if the host should normally route before dispatch.
-
-## Execution Context API
-
-Tool code can receive context/helper objects through normal toolbox execution injection:
-
-1. `context.host.call(method, arguments)`
-2. `context.fs.list_dir/read_text/write_text/mkdir/stat`
-3. `context.http.fetch`
-4. `context.callbacks.invoke(callback_name, payload)`
-
-Host callback methods supported by the worker:
-
-1. `fs.list`
-2. `fs.read_text`
-3. `fs.write_text`
-4. `fs.mkdir`
-5. `fs.stat`
-6. `http.fetch`
-7. `callback.invoke`
-
-Brokered filesystem and HTTP calls use the shared Host Capability
-`provider_kind="service_broker"` route. `context.host.call(...)`,
-`context.fs.*`, and `context.http.*` all dispatch through a local Host
-Capability broker, then into the shared service-broker registry/dispatcher.
-The daemon-owned broker still authorizes the actual IO from the persisted
-sandbox policy for the worker `engine_id`.
-
-`context.host.describe()` returns the same Host Capability discovery shape used
-by node workers. Worker `rpc.describe` / `toolbox.describe` responses also
-include `host_capabilities` for the advertised service-broker host-call
-surface.
-
-Toolbox host API approval is independent from toolbox tool gating. Public
-toolbox execution entrypoints may provide `host_api_approval` with a Host
-Capability approval policy. When that policy requires approval, service-broker
-`fs.*` / `http.fetch` calls request approval through the hosted callback
-binding before brokered IO executes. Approval denial prevents the brokered IO
-call. Approval does not widen sandbox filesystem or network policy.
-Approval callbacks receive normalized
-`hosting.sandbox.host_capability_approval.v1` payloads. Use
-`argument_preview` for bounded policy-relevant values such as `root_id`,
-`relative_path`, `url`, and `method`; do not depend on raw `arguments` in
-client approval code.
-
-The worker also attaches shared callable-surface metadata to callback context
-under `callable_surface`. That metadata uses
-`hosting.toolbox.brokered_io.call_surface.v1` and includes method identity,
-schema/method/policy digests, safe correlation fields, and the effective
-bridge-policy intersection. Approval/audit events use the Host Capability
-approval/audit shape.
-
-## Hosted Callback Relay
-
-Generic hosted callbacks use a per-execute callback binding. The worker connects to that binding and sends:
-
-1. `callback_name`
-2. callback payload
-3. context with `engine_id`, `toolbox_id`, `tool_name`, `tool_call_id`, `tool_arguments`, optional `callback_signature`, and `callable_surface`
-
-The caller-side hosted execution harness processes callbacks concurrently. A blocked callback processor blocks only that callback response, not the entire worker callback path.
-
-## Host/Public APIs
-
-Consumer definition and execution APIs include:
-
-1. `toolbox-get-definition`
-2. `toolbox-plan-definition`
-3. `toolbox-approve-definition-plan`
-4. `toolbox-apply-definition`
-5. `toolbox-template-list`
-6. `toolbox-template-describe`
-7. `toolbox-describe`
-8. `toolbox-gate`
-9. `toolbox-execute`
-
-Generic hosted-operation APIs provide durable apply observation, cancellation,
-and recovery. Administrative channels separately expose immutable template
-publication/lifecycle/prewarm and the `toolbox-references`,
-`toolbox-consistency`, `toolbox-review-snapshot`, `toolbox-repair`,
-`toolbox-reconcile`, and `toolbox-gc` maintenance calls.
-
-There is no public mutable environment-description or install-sequence API.
-Definitions declare tool behavior and dependency intent; the host resolves
-exact templates, policies, environments, registrations, and active routes.
-
-App-facing helpers include:
-
-1. `create_hosted_control_channel(...)`
-2. `attach_existing_hosted_toolbox(...)`
-3. `create_hosted_toolbox_ref(...)`
-4. `create_hosted_toolbox_executor(...)`
-
-`HostedToolBoxRef.mutate()` returns a pending builder so multiple registrations can be resolved with one backend sandbox rebuild.
-
-## Gate And Scope Semantics
-
-Hosted toolbox execution follows the native `Toolbox` semantics first:
-
-1. registered vs missing
-2. advertised vs hidden
-3. allowed vs gated or blocked by scope
-4. static guide tools are separate tools and can be gated independently
-
-The hosted layer then adds backend outcomes such as missing executor, sandbox-policy denial, and cancellation.
-
-Current dynamic constraints live in `ToolsScope` / `ToolsView`, not in sandbox policy. The implemented shared subset supports:
-
-1. `argument_policy.implied_args`
-2. `argument_policy.locked_args`
-3. `path_under_implied_root`
-4. `url_under_implied_prefix`
-5. kwargs injection of `tool_constraints`, `tools_view`, and `tool_constraints_view`
-
-Sandbox policy remains the hard outer boundary. Scope constraints narrow a call within that boundary.
-
-## Environment And Rollout
-
-Toolbox environments are one consumer of the shared host-managed runtime environment model.
-
-Existing toolbox executor environments remain under:
-
-```text
-<hosting_root>/toolbox_venvs/<venv_key>
-```
-
-New non-toolbox runtime environments use:
-
-```text
-<hosting_root>/runtime_envs/<venv_key>
-```
-
-Environment identity is based on runtime hash, consumer kind, intrinsic dependency profile where applicable, required imports, environment description identity, and optional dependency-lock identity. Metadata includes `environment_root_kind` and `environment_consumer_kind`.
-
-Workers use a bootstrap/preverified Python only while a dependency-bearing environment has not been verified. No-package/no-op environments can activate the realized venv immediately. Dependency-bearing environments switch to the realized venv after install execution and receipt verification are both recorded as ok.
-
-Rollout is intentionally simple:
-
-1. stage bundle
-2. realize/select environment
-3. spawn replacement executor
-4. wait for readiness
-5. verify registered tool inventory
-6. persist new profile registration
-7. retire old registrations
-8. rollback on failed warmup
-
-Repair/reconcile rebuild from persisted logical toolbox state and serialize per targeted `toolbox_id`.
-
-## Cancellation
-
-`toolbox.cancel` is coarse executor-level cancellation. It kills the targeted sandbox worker and can respawn replacement workers from persisted toolbox state. Harness boundaries normalize worker loss into canceled tool-call errors, and wrappers can consult `should_resubmit_canceled_tool_call(...)` plus persisted `non_restartable` metadata before resubmitting.
-
-## Current Limits
-
-1. Chat integration supports parallel tool calls for a single response. Batch tool rounds currently invoke the executor serially; the underlying toolbox and hosted/non-chat harness support parallel calls, but cross-prompt batch tool parallelism is not enabled by the chat batch path.
-2. One worker process serves one staged profile; there is no sandbox worker pool or replica set.
-3. Rollout has no percentage cutover or soak window.
-4. Static sandbox policy is not mutated for per-request approvals; use scope constraints.
-5. Environment locking is usable but not a fully mature package-management platform.
+# Toolbox Worker Architecture
+
+Scope: host-managed toolbox planning, environment materialization, worker
+execution, routing, recovery, and resource collection.
+
+The normative public models, limits, methods, error codes, authorization rules,
+and client algorithm are defined in the
+[Hosted Toolbox Definition Contract](../HOSTED_TOOLBOX_CONTRACT.md). This
+document describes the internal implementation and does not redefine that
+contract. Shared sandbox launch and broker behavior is described in
+[Sandbox Architecture](SANDBOX_ARCHITECTURE.md).
+
+## Runtime model
+
+A logical toolbox is identified by `toolbox_id` and has one authoritative
+active definition revision. One complete definition contains every desired
+automatic tool, manual tool, and intrinsic selection. A logical toolbox may be
+served by several isolated worker processes because tools with different
+resolved environments or sandbox policies belong to different resolved
+profiles.
+
+The durable version-2 toolbox state is authoritative for:
+
+- the canonical active definition and revision;
+- resolved profile and bundle identities;
+- the complete `tool_routes` map;
+- active, candidate, and retired executor records; and
+- bounded rollout and resource-reference data.
+
+Live process discovery is diagnostic input only. Describe, gate, execute, and
+cancel resolve a toolbox-scoped tool through the durable active route map.
+Routing always includes `toolbox_id`, so equal advertised tool names in
+different toolboxes remain independent.
+
+## Implementation map
+
+The primary implementation is split by responsibility:
+
+- [definition_planner.py](../toolbox/definition_planner.py) validates complete
+  definitions, resolves dependency and sandbox intent, groups tools into
+  profiles, and computes the deterministic profile diff.
+- [dependency_analysis.py](../toolbox/dependency_analysis.py),
+  [dependency_policy.py](../toolbox/dependency_policy.py), and
+  [template_resolver.py](../toolbox/template_resolver.py) analyze staged source,
+  map imports to distributions, select a template or custom delta, and enforce
+  host package policy.
+- [catalog.py](../toolbox/catalog.py),
+  [shipped_templates.py](../toolbox/shipped_templates.py), and
+  [service/toolbox_catalog.py](../service/toolbox_catalog.py) provide the
+  immutable signed template catalog and administrative lifecycle controls.
+- [hermetic_environment.py](../toolbox/hermetic_environment.py) creates and
+  verifies digest-addressed Python environments.
+- [bundle_models.py](../toolbox/bundle_models.py),
+  [staging.py](../toolbox/staging.py), and [manifest.py](../toolbox/manifest.py)
+  build and validate immutable staged worker bundles.
+- [service/toolbox_plans.py](../service/toolbox_plans.py) persists immutable,
+  expiring plans; [service/toolbox_approvals.py](../service/toolbox_approvals.py)
+  persists exact actor- and plan-bound custom dependency approvals.
+- [service/toolbox_rollout.py](../service/toolbox_rollout.py) prepares
+  candidates, publishes routes, drains replaced workers, and recovers applies.
+- [service/toolbox_state_v2.py](../service/toolbox_state_v2.py) provides strict,
+  digest-bound, process-safe compare-and-swap state transactions.
+- [service/toolbox_runtime.py](../service/toolbox_runtime.py) exposes definition,
+  execution, routing, and maintenance service operations.
+- [service/hosted_operations.py](../service/hosted_operations.py) and
+  [service/operation_repository.py](../service/operation_repository.py) own
+  durable operation dispatch, progress, request recovery, results, and
+  cancellation.
+- [toolbox_executor_ipc.py](../toolbox_executor_ipc.py) is the isolated worker
+  process and RPC server; [execution.py](../toolbox/execution.py) is the hosted
+  caller-side execution harness.
+- [service/toolbox_env.py](../service/toolbox_env.py) reports references and
+  performs consistency, repair, reconcile, and garbage collection against
+  version-2 ownership.
+
+## Definition planning
+
+Planning is a pure control-plane operation. Strict frozen definition models
+reject unknown fields, invalid dependency intent, duplicate stable keys,
+duplicate advertised names within one toolbox, conflicting normalized bundle
+paths, unresolved imports, and policy violations before any build, staging, or
+worker start.
+
+For each request, the host combines source evidence with explicit declared
+imports and distribution requirements. It then selects the smallest allowed
+complete template or an exact custom delta. Sandbox capability is resolved
+independently of package availability; an installed package never authorizes
+filesystem, network, brokered I/O, artifact, host API, or subprocess access.
+
+Requests are grouped only after dependency and sandbox resolution. A
+`ResolvedToolboxProfileSpec` binds the verified environment key, complete lock
+identity, canonical sandbox policy, assigned stable tool keys, and import-probe
+obligations. Profile identity is derived from environment identity plus sandbox
+policy. The planner classifies profiles as reused, added, replaced, or removed
+without mutating state or processes.
+
+The plan repository binds each immutable plan to the authenticated owner,
+toolbox, definition hash, expected active revision, catalog revision, package
+policy revision, resolved profiles, bundle manifests, and expiry. Custom
+dependency approval stores only a parent-minted opaque approval reference bound
+to the same identities and actor authority.
+
+## Template and custom package environments
+
+The initial catalog provides independent `core` and `py-compute` templates.
+Each selected template revision is pinned by its signed manifest, complete lock,
+runtime artifact, Python ABI, platform, and isolation policy. A custom delta is
+resolved into a new complete base-plus-delta lock; it never layers onto or
+imports from another virtual environment.
+
+Environment construction accepts only host-derived
+`ResolvedToolboxEnvironmentInput`. The digest-addressed key covers the runtime
+artifact and target, complete template lock, optional custom lock, and isolation
+policy. Tool names and raw per-function import subsets do not affect the key,
+so compatible profiles reuse one verified physical environment.
+
+On a cache miss, the target host creates a candidate venv with
+`system_site_packages=False`, installs the exact approved wheel set with
+`--no-index --no-deps`, verifies every locked distribution, and probes every
+resolved import root with user site and `PYTHONPATH` disabled. Publication is an
+atomic rename and requires an exact verification receipt. Failed or partial
+candidates are quarantined and never become selectable. Prewarm and lazy
+materialization use this same path.
+
+Toolbox workers launch only with the verified environment interpreter selected
+by the resolved profile. The host interpreter and another venv are never
+dependency fallbacks.
+
+## Bundle and worker startup
+
+Each resolved profile produces one immutable `ToolboxBundleSpec`. Its manifest
+contains the toolbox and bundle identities, resolved profile projection,
+dependency lock hash, exact staged files and hashes, automatic and manual tool
+entries, intrinsic selections, visibility, guide, callback, concurrency, and
+`non_restartable` metadata. The executor reads only the staged manifest and
+bundle contents; it does not discover tools from ambient parent process state.
+
+The host writes a `ToolboxWorkerStartupSpec` and passes its path through
+`MP13_TOOLBOX_WORKER_SPEC_PATH`. The spec binds worker and sandbox identity,
+toolbox revision, manifest and scratch paths, optional engine/control state
+paths, the verified venv path, IPC family/address, authentication token variable,
+execution and callback contracts, and effective policy. The worker validates
+the spec, loads the manifest, and serves authenticated local IPC.
+
+Supported worker RPC methods are:
+
+- `rpc.describe`, `describe`, and `capabilities` for protocol and bounded
+  inventory metadata;
+- `toolbox.describe` for the staged bundle and tool inventory;
+- `toolbox.execute` for one staged `ToolCall`; and
+- `host.call` for an authorized host callback.
+
+The executor rejects a tool name absent from its own immutable inventory even
+when the host should have rejected it during route resolution.
+
+## Candidate rollout and active routing
+
+Applying a definition creates no worker for an exactly reused profile. For each
+added or replaced profile, rollout acquires the exact verified environment,
+stages the bundle, starts a candidate executor, waits for RPC readiness, and
+checks all of the following before publication:
+
+- exact tool inventory rather than subset membership;
+- planned bundle manifest and resolved profile identity;
+- exact environment identity and verification receipt; and
+- enforceable sandbox policy.
+
+Candidates are explicitly non-routable. When every candidate is ready, one
+process-safe state transaction writes the canonical definition revision,
+resolved profiles, complete route map, executor states, and resource references.
+Readers therefore observe either the complete previous revision or the complete
+new revision, never a category-by-category mixture.
+
+After publication, new executors become active and replaced or removed
+executors become retired. Retired executors accept no new routed calls. Busy
+ones remain alive until in-flight calls finish; idle ones are stopped and their
+bundle ownership is released. An empty definition follows the same transaction
+and publishes empty profiles and routes.
+
+Any preparation or warmup failure removes candidates and leaves the prior
+active snapshot unchanged. Candidate teardown is idempotent so retry and restart
+cannot expose a partially prepared revision.
+
+## Durable apply and recovery
+
+Definition apply returns a durable hosted-operation status immediately. The
+operation fingerprint binds the toolbox, complete definition, expected
+revision, plan, exact approval identity when required, and catalog/policy pins.
+The stable request ID makes an identical retry resolve to the same operation;
+a different fingerprint is rejected.
+
+Progress advances through validation, environment build, staging, warmup,
+publication, draining, and cleanup. Each checkpoint is persisted before its
+side effects are considered complete. On daemon restart, recovery revalidates
+the pinned inputs and resumes the phase idempotently.
+
+The version-2 snapshot is the routing source during reconciliation.
+Unpublished candidates are removed. Executors named by published routes are
+made active; non-routed executors are retired and stopped after they become
+idle. An interrupted apply is recovered as success only when publication was
+persisted and its pinned definition revision is authoritative. Otherwise it
+terminates before publication after candidate cleanup, preserving the prior
+revision.
+
+State parsing, digest validation, and compare-and-swap are fail-closed. A
+malformed, truncated, unknown-field, wrong-version, or digest-mismatched state
+cannot become an empty toolbox or trigger worker repair.
+
+## Execution, gates, callbacks, and cancellation
+
+The host resolves `toolbox_id + tool_name` through the active route, obtains
+the routed executor, and applies native toolbox visibility/scope semantics plus
+the sandbox boundary. `ToolsScope` and `ToolsView` may narrow arguments and
+visibility; they cannot widen the static sandbox policy.
+
+Tool code may receive context helpers for host calls, brokered filesystem and
+HTTP operations, and named callbacks. All brokered calls traverse the local Host
+Capability broker and the daemon-owned service broker. The persisted worker
+sandbox policy authorizes the actual I/O. Optional per-execution approval may
+narrow a brokered call but never widens sandbox capability.
+
+The hosted callback relay binds callbacks to one execution and attaches bounded
+toolbox, tool, call, signature, and callable-surface correlation data. Callback
+processing is concurrent so one blocked callback does not serialize unrelated
+callback responses.
+
+Tool execution cancellation targets the routed executor and normalizes worker
+loss into a canceled call result. Resubmission policy considers persisted
+`non_restartable` metadata. Definition-apply cancellation is separate: it is
+allowed only before the persisted publication boundary. From publication
+through cleanup the operation is non-cancellable and continues to its durable
+terminal result.
+
+## Projections and authorization
+
+Read, plan, approval, apply, execute, maintenance, template administration, and
+operator-detail permissions are independently authorized against the
+authenticated actor and authority. Payload data cannot assert a role.
+
+Normal toolbox-ID describe, gate, execution, plan, progress, and terminal
+responses expose stable user states, codes, summaries, and bounded safe
+diagnostics. Engine IDs, resolved profile IDs, environment keys, pools, host or
+package paths, raw locks, installer output, request internals, and physical
+placement stay in separately authorized bounded operator projections. Direct
+engine-ID diagnostics are an internal/operator surface.
+
+## Maintenance and garbage collection
+
+Consistency and review compare durable routes, executor inventory, bundle
+manifests, environment receipts, and operation checkpoints without changing
+active truth. Repair and reconcile are toolbox-scoped, serialized with apply,
+and rebuild only from the authoritative definition and resolved state.
+
+Reference reporting distinguishes candidate, active, retired, bounded retained
+revision, operation, and prewarm ownership. Garbage collection never removes a
+referenced bundle, environment, artifact, or busy retired executor. Unreferenced
+verified environments become eligible only after the configured grace period;
+failed candidates follow their quarantine retention. Collection is
+deterministic and process-safe.
+
+## Operational limits
+
+One worker process serves one resolved profile; there is no replica pool or
+percentage rollout. Parallel calls are supported by the hosted execution layer,
+subject to per-tool and sandbox constraints. Sandbox policy is immutable for a
+worker lifetime, and per-request scope or approval can only narrow it. Template
+administration and physical materialization remain host-operator concerns;
+toolbox consumers submit definitions and observe bounded readiness and durable
+operation results.

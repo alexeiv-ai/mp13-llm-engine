@@ -282,8 +282,8 @@ The implementation parses these objects through strict frozen
 selection models. Every listed field is required even when its value is null
 or empty; any additional field fails. In particular, `sandbox_profile`,
 `environment_name`, `required_imports`, approval booleans, runtime overrides,
-and old procedural request fields are not aliases for definition dependency or
-sandbox inputs.
+and any fields outside the strict model are not aliases for definition
+dependency or sandbox inputs.
 
 Planning analyzes and resolves each request before grouping. The internal
 `ResolvedToolboxProfileSpec` contains the host-derived profile digest,
@@ -302,10 +302,9 @@ Conflicting content at one normalized file path also fails before resolution.
 
 The pure planner emits one `ToolboxBundleSpec` per resolved profile. Its
 `dependency_lock_hash` is the effective immutable template/custom lock, and
-the manifest includes the strict resolved-profile projection. The legacy
-`SandboxProfileSpec` portion of that internal bundle is only a worker adapter;
-it is not accepted from the public definition and is removed at the breaking
-cutover.
+the manifest includes the strict resolved-profile projection. The internal
+`SandboxProfileSpec` portion of that bundle is derived exclusively by the host
+and is never accepted from the public definition.
 
 Before persistence, proposed profiles are compared with authoritative active
 snapshots using manifest hash, environment key, and canonical sandbox-policy
@@ -541,9 +540,8 @@ and isolation policy are identical.
 The resolved import roots are verification obligations, not cache-key input.
 Every root still has to pass a probe under the final environment interpreter
 before publication. Toolbox and workflow selection are separate: toolbox
-workers can use only that verified environment interpreter, while the legacy
-workflow helper fallback remains governed by its independent workflow
-contract.
+workers can use only that verified environment interpreter, while workflow
+helper interpreter selection is governed by its independent workflow contract.
 
 ### Physical materialization and publication
 

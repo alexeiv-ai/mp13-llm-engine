@@ -1245,7 +1245,7 @@ version-1 toolbox state path.
   run passed 1,108 tests before one unrelated workflow resource sampling miss;
   that test passed three fresh runs, followed by the clean exact complete suite
   at 1,109 passed and three skipped. Compile and diff checks passed.
-- [ ] **P7-13** Finalize `HOSTED_TOOLBOX_CONTRACT.md` against the implemented
+- [x] **P7-13** Finalize `HOSTED_TOOLBOX_CONTRACT.md` against the implemented
   public models and behavior. Rewrite
   `src/hosting/sandbox/TOOLBOX_WORKER.md` to describe the new internal worker,
   template/custom package environment, candidate rollout, active routing,
@@ -1253,6 +1253,14 @@ version-1 toolbox state path.
   only the supported implementation, contain no migration/history sections,
   and remain complete after the transient breaking-changes file is deleted.
   Link the worker document to the normative contract instead of duplicating it.
+
+  Evidence (2026-08-08): the durable contract was reconciled with the final
+  strict public models and projections, and the worker document was replaced
+  with supported-only planning, environment, candidate rollout, route,
+  operation recovery, execution/callback, authorization, and GC architecture
+  linked to that contract. Final documentation tests passed 16 and the exact
+  forbidden transition-vocabulary audit returned no matches. The complete
+  parent suite passed 1,113 with three skips; compile and diff checks passed.
 - [ ] **P7-14** Complete `HOSTING_CLIENT_BREAKING_CHANGES.md` with final method
   signatures, models, template catalog, custom-build approval semantics,
   authoritative read, durable apply/progress/cancellation behavior, projection
