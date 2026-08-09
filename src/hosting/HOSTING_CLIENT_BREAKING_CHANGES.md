@@ -141,6 +141,13 @@ started = hosted.apply_definition(
 deployment_store.save_operation_ref(toolbox_id, request_id, started["operation"])
 ```
 
+`can_apply` is false while `approval_required` is true. This is not a denial:
+request approval for that exact plan, then apply with the returned opaque
+string. Never replace `dependency_approval_ref` with a Boolean, mapping, cached
+approval from another plan, actor, workspace authority, catalog revision, or
+package-policy revision. First use is bound to the stable apply `request_id`;
+only an identical retry may reuse it.
+
 If the apply response is lost after dispatch, recover the same operation; do
 not create a new request ID:
 

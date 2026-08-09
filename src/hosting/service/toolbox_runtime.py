@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +27,465 @@ from .errors import ToolboxRolloutError
 
 
 class ToolboxRuntimeMixin:
+    def _toolbox_definition_planning_context(self) -> Dict[str, Any]:
+        from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec, normalize_distribution_name
+        from ..toolbox.dependency_policy import ToolboxDependencyPolicy
+        from ..toolbox.identity import identity_digest
+        from ..toolbox.shipped_templates import load_shipped_toolbox_catalog
+
+        catalog = self._toolbox_template_catalog.read()
+        active_templates = []
+        for template_id, template_digest in sorted(dict(catalog.get("active") or {}).items()):
+            entry = next(
+                (
+                    item for item in list(catalog.get("entries") or [])
+                    if item["template_id"] == template_id
+                    and item["template_digest"] == template_digest
+                    and item["lifecycle"] == "active"
+                ),
+                None,
+            )
+            if entry is not None:
+                active_templates.append(ToolboxEnvironmentTemplateSpec.from_dict(entry["template"]))
+        if active_templates:
+            templates = tuple(active_templates)
+            catalog_revision = str(catalog["catalog_revision"])
+        else:
+            shipped = load_shipped_toolbox_catalog()
+            templates = shipped.templates
+            catalog_revision = identity_digest(
+                "hosting.toolbox.builtin_catalog.v1", [item.to_dict() for item in templates]
+            )
+        python_abi = self._toolbox_required_python_abi or f"cp{sys.version_info.major}{sys.version_info.minor}"
+        platform = self._toolbox_required_platform or (
+            "win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64"
+        )
+        configured = getattr(self, "_configured_toolbox_dependency_policy", None)
+        if configured is None:
+            allowed_packages = sorted(
+                {
+                    normalize_distribution_name(distribution.name)
+                    for template in templates
+                    for distribution in template.locked_distributions
+                }
+            )
+            policy_payload = {
+                "allowed_template_ids": sorted(template.template_id for template in templates),
+                "allowed_targets": [f"{python_abi}-{platform}"],
+                "package_allowlist": allowed_packages,
+                "package_denylist": [],
+                "allow_custom": False,
+                "custom_requires_approval": True,
+                "online_resolution_allowed": False,
+                "allowed_index_origins": [],
+            }
+            configured = ToolboxDependencyPolicy(
+                revision=identity_digest("hosting.toolbox.package_policy.v1", policy_payload),
+                **policy_payload,
+            )
+        return {
+            "templates": templates,
+            "catalog_revision": catalog_revision,
+            "policy": configured,
+            "python_abi": python_abi,
+            "platform": platform,
+            "runtime_identity": {
+                "version": ".".join(str(item) for item in sys.version_info[:3]),
+                "artifact_digest": templates[0].parent_worker_artifact_digest,
+            },
+        }
+
+    @staticmethod
+    def _toolbox_custom_delta_digest(draft: Any) -> str:
+        from ..toolbox.identity import identity_digest
+
+        return identity_digest(
+            "hosting.toolbox.custom_delta_set.v1",
+            sorted(
+                item.custom_resolved_lock_digest
+                for item in draft.profiles
+                if item.custom_resolved_lock_digest is not None
+            ),
+        )
+
+    @staticmethod
+    def _validate_definition_policy(draft: Any, context: Dict[str, Any]) -> None:
+        from packaging.requirements import Requirement
+        from ..toolbox.catalog import normalize_distribution_name
+        from ..toolbox.dependency_policy import ToolboxDependencyPolicyError
+
+        policy = context["policy"]
+        target = f"{context['python_abi']}-{context['platform']}"
+        if target not in policy.allowed_targets:
+            raise ToolboxDependencyPolicyError("target_denied", "The runtime target is not allowed.")
+        for profile in draft.profiles:
+            if profile.template_id not in policy.allowed_template_ids:
+                raise ToolboxDependencyPolicyError("template_denied", "The selected template is not allowed.")
+        requirements = [
+            requirement
+            for request in (*draft.definition.auto_requests, *draft.definition.manual_requests)
+            for requirement in request.dependency.package_requirements
+        ]
+        distributions = {normalize_distribution_name(Requirement(item).name) for item in requirements}
+        if distributions & set(policy.package_denylist):
+            raise ToolboxDependencyPolicyError("package_denied", "A requested package is denied.")
+        if policy.package_allowlist and not distributions <= set(policy.package_allowlist):
+            raise ToolboxDependencyPolicyError("package_not_allowlisted", "A requested package is not allowlisted.")
+        if draft.custom_environment_count and not policy.allow_custom:
+            raise ToolboxDependencyPolicyError("custom_environment_denied", "Custom environments are disabled.")
+
+    def toolbox_get_definition(
+        self,
+        *,
+        toolbox_id: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        from ..toolbox.bundle_models import ToolboxDefinitionSpec
+
+        tid = str(toolbox_id or "").strip()
+        if not tid:
+            raise ValueError("toolbox_id_required")
+        snapshot = self._toolbox_state_v2.get(tid)
+        if snapshot is None:
+            definition = ToolboxDefinitionSpec.from_dict(
+                {
+                    "contract": "hosting.toolbox.definition",
+                    "toolbox_id": tid,
+                    "expected_revision": None,
+                    "auto_requests": [],
+                    "manual_requests": [],
+                    "intrinsics": {"names": [], "include_guides": False, "sandbox_policy": {}},
+                }
+            ).to_dict()
+            active_revision = None
+            routes: Dict[str, Any] = {}
+            history: List[Dict[str, Any]] = []
+        else:
+            definition = dict(snapshot["definition"])
+            definition["expected_revision"] = None
+            active_revision = snapshot["active_revision"]
+            routes = dict(snapshot["tool_routes"])
+            history = [
+                {
+                    "revision": item["revision"],
+                    "published_at_ms": item["published_at_ms"],
+                    "profile_count": item["profile_count"],
+                    "tool_count": item["tool_count"],
+                }
+                for item in list(snapshot["rollout_history"])[-32:]
+            ]
+        return {
+            "contract": "hosting.toolbox.definition_snapshot",
+            "tool_runtime_id": "runtime-local",
+            "toolbox_id": tid,
+            "active_revision": active_revision,
+            "definition": definition,
+            "active_tools": sorted(routes),
+            "rollout": history,
+            "diagnostics": [],
+            "user_projection": {
+                "state": "ready",
+                "code": "toolbox_definition_active",
+                "summary": "The active toolbox definition is available.",
+            },
+        }
+
+    def toolbox_plan_definition(
+        self,
+        *,
+        definition: Dict[str, Any],
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+        ttl_ms: int = 15 * 60 * 1000,
+    ) -> Dict[str, Any]:
+        from ..toolbox.bundle_models import ToolboxDefinitionSpec
+        from ..toolbox.definition_planner import ActiveToolboxProfileSnapshot, plan_toolbox_definition
+        from ..toolbox.identity import identity_digest
+
+        model = ToolboxDefinitionSpec.from_dict(definition)
+        active = self._toolbox_state_v2.get(model.toolbox_id)
+        active_revision = dict(active or {}).get("active_revision")
+        if model.expected_revision != active_revision:
+            from .toolbox_state_v2 import ToolboxRevisionConflictError
+
+            raise ToolboxRevisionConflictError("toolbox_revision_conflict")
+        context = self._toolbox_definition_planning_context()
+        draft = plan_toolbox_definition(
+            model,
+            templates=context["templates"],
+            python_abi=context["python_abi"],
+            platform=context["platform"],
+            runtime_identity=context["runtime_identity"],
+        )
+        self._validate_definition_policy(draft, context)
+        active_profiles = []
+        for profile_id, row in dict(dict(active or {}).get("profiles") or {}).items():
+            profile = dict(row["profile"])
+            active_profiles.append(
+                ActiveToolboxProfileSnapshot(
+                    profile_id=profile_id,
+                    manifest_hash=row["manifest_hash"],
+                    environment_key=profile["environment_key"],
+                    sandbox_policy_digest=identity_digest(
+                        "hosting.toolbox.sandbox_policy.v1", profile["sandbox_policy"]
+                    ),
+                    assigned_tool_keys=tuple(profile["assigned_tool_keys"]),
+                )
+            )
+        now_ms = int(time.time() * 1000)
+        record = self._toolbox_definition_plans.create(
+            draft,
+            active_profiles=active_profiles,
+            catalog_revision=context["catalog_revision"],
+            package_policy_revision=context["policy"].revision,
+            now_ms=now_ms,
+            ttl_ms=int(ttl_ms),
+            owner_actor_id=str(owner_actor_id or "").strip(),
+            authority_id=str(authority_id or "").strip(),
+        )
+        approval_required = bool(
+            draft.custom_environment_count and context["policy"].custom_requires_approval
+        )
+        imports = sorted(
+            {
+                root
+                for request in (*model.auto_requests, *model.manual_requests)
+                for root in request.dependency.declared_imports
+            }
+        )
+        environments = [
+            {
+                "request_keys": list(profile.assigned_tool_keys),
+                "mode": "custom" if profile.custom_resolved_lock_digest else "template",
+                "template_id": profile.template_id,
+                "package_requirements": sorted(
+                    {
+                        requirement
+                        for request in (*model.auto_requests, *model.manual_requests)
+                        if request.stable_key in set(profile.assigned_tool_keys)
+                        for requirement in request.dependency.package_requirements
+                    }
+                ),
+                "approval_required": bool(profile.custom_resolved_lock_digest and approval_required),
+                "diagnostics": [],
+            }
+            for profile in draft.profiles
+        ]
+        state = "approval_required" if approval_required else "ready"
+        code = "custom_dependency_approval_required" if approval_required else "toolbox_definition_plan_ready"
+        return {
+            "contract": "hosting.toolbox.definition_plan",
+            "plan_id": record.plan_id,
+            "toolbox_id": record.toolbox_id,
+            "definition_hash": record.definition_revision,
+            "expected_revision": record.expected_revision,
+            "catalog_revision": record.catalog_revision,
+            "package_policy_revision": record.package_policy_revision,
+            "expires_at_ms": record.expires_at_ms,
+            "can_apply": not approval_required,
+            "approval_required": approval_required,
+            "custom_delta_digest": self._toolbox_custom_delta_digest(draft),
+            "imports": [
+                {
+                    "import_root": root,
+                    "classification": "declared_dynamic",
+                    "distribution": None,
+                    "evidence": [],
+                }
+                for root in imports
+            ],
+            "environments": environments,
+            "profile_diff": {
+                classification: sum(
+                    item["classification"] == classification for item in record.profile_changes
+                )
+                for classification in ("reused", "added", "replaced", "removed")
+            },
+            "diagnostics": [],
+            "user_projection": {
+                "state": state,
+                "code": code,
+                "summary": (
+                    "Review is required for additional packages."
+                    if approval_required
+                    else "The toolbox definition is ready to apply."
+                ),
+            },
+        }
+
+    def toolbox_approve_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        from ..toolbox.bundle_models import ResolvedToolboxProfileSpec
+
+        now_ms = int(time.time() * 1000)
+        record = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
+        if (
+            record.owner_actor_id != str(owner_actor_id or "").strip()
+            or record.authority_id != str(authority_id or "").strip()
+        ):
+            raise PermissionError("toolbox_definition_plan_not_found")
+        context = self._toolbox_definition_planning_context()
+        if (
+            context["catalog_revision"] != record.catalog_revision
+            or context["policy"].revision != record.package_policy_revision
+            or not context["policy"].allow_custom
+            or not context["policy"].custom_requires_approval
+        ):
+            raise PermissionError("dependency_approval_invalid")
+        pinned = type(
+            "PinnedDraft",
+            (),
+            {"profiles": tuple(ResolvedToolboxProfileSpec.from_dict(item) for item in record.plan["profiles"])},
+        )()
+        custom_delta_digest = self._toolbox_custom_delta_digest(pinned)
+        if int(record.plan["custom_environment_count"]) < 1:
+            raise ValueError("dependency_approval_not_required")
+        return self._toolbox_dependency_approvals.mint(
+            owner_actor_id=record.owner_actor_id,
+            authority_id=record.authority_id,
+            toolbox_id=record.toolbox_id,
+            plan_id=record.plan_id,
+            definition_revision=record.definition_revision,
+            custom_delta_digest=custom_delta_digest,
+            catalog_revision=record.catalog_revision,
+            package_policy_revision=record.package_policy_revision,
+            now_ms=now_ms,
+            expires_at_ms=min(record.expires_at_ms, now_ms + 60 * 60 * 1000),
+        )
+
+    def toolbox_apply_definition(
+        self,
+        *,
+        definition: Dict[str, Any],
+        plan_id: str,
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        from ..toolbox.bundle_models import ToolboxDefinitionSpec
+        from ..toolbox.definition_planner import plan_toolbox_definition
+        from ..toolbox.identity import identity_digest
+
+        if dependency_approval_ref is not None and not isinstance(dependency_approval_ref, str):
+            raise ValueError("dependency_approval_ref_must_be_opaque_string")
+        rid = str(request_id or "").strip()
+        if not rid or len(rid) > 128 or any(ord(character) < 32 or ord(character) > 126 for character in rid):
+            raise ValueError("toolbox_apply_request_id_invalid")
+        now_ms = int(time.time() * 1000)
+        record = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
+        actor = str(owner_actor_id or "").strip()
+        authority = str(authority_id or "").strip()
+        if record.owner_actor_id != actor or record.authority_id != authority:
+            raise PermissionError("toolbox_definition_plan_not_found")
+        model = ToolboxDefinitionSpec.from_dict(definition)
+        if model.to_dict() != record.plan["definition"] or model.revision != record.definition_revision:
+            raise ValueError("toolbox_definition_plan_mismatch")
+        active = self._toolbox_state_v2.get(model.toolbox_id)
+        if dict(active or {}).get("active_revision") != model.expected_revision:
+            from .toolbox_state_v2 import ToolboxRevisionConflictError
+
+            raise ToolboxRevisionConflictError("toolbox_revision_conflict")
+        context = self._toolbox_definition_planning_context()
+        if (
+            context["catalog_revision"] != record.catalog_revision
+            or context["policy"].revision != record.package_policy_revision
+        ):
+            raise ValueError("toolbox_definition_plan_pins_changed")
+        draft = plan_toolbox_definition(
+            model,
+            templates=context["templates"],
+            python_abi=context["python_abi"],
+            platform=context["platform"],
+            runtime_identity=context["runtime_identity"],
+        )
+        self._validate_definition_policy(draft, context)
+        if draft.to_dict() != record.plan:
+            raise ValueError("toolbox_definition_plan_resolution_changed")
+        custom_delta_digest = self._toolbox_custom_delta_digest(draft)
+        approval_identity = None
+        if draft.custom_environment_count and context["policy"].custom_requires_approval:
+            if not dependency_approval_ref:
+                raise PermissionError("dependency_approval_required")
+            self._toolbox_dependency_approvals.validate_and_consume(
+                approval_ref=dependency_approval_ref,
+                owner_actor_id=actor,
+                authority_id=authority,
+                toolbox_id=model.toolbox_id,
+                plan_id=record.plan_id,
+                definition_revision=model.revision,
+                custom_delta_digest=custom_delta_digest,
+                catalog_revision=record.catalog_revision,
+                package_policy_revision=record.package_policy_revision,
+                request_id=rid,
+                now_ms=now_ms,
+            )
+            approval_identity = identity_digest(
+                "hosting.toolbox.dependency_approval_ref.v1", dependency_approval_ref
+            )
+        elif dependency_approval_ref:
+            raise ValueError("dependency_approval_not_required")
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "toolbox_id": model.toolbox_id,
+                "definition_revision": model.revision,
+                "expected_revision": model.expected_revision,
+                "plan_id": record.plan_id,
+                "custom_delta_digest": custom_delta_digest,
+                "approval_identity": approval_identity,
+                "catalog_revision": record.catalog_revision,
+                "package_policy_revision": record.package_policy_revision,
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=actor,
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_APPLY,
+            selector={"kind": "toolbox_id", "id": model.toolbox_id},
+            namespace=f"toolbox-definition:{model.toolbox_id}",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "toolbox_id": model.toolbox_id,
+                "definition_revision": model.revision,
+                "plan_id": record.plan_id,
+            },
+        )
+        action = str(prepared.get("action") or "")
+        status = dict(prepared.get("status") or {})
+        if action != "dispatch":
+            return status
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        self._hosted_operations.update_progress(
+            operation_id=operation_id,
+            progress={
+                "phase": "validation",
+                "code": "definition_apply_queued",
+                "completed_units": 0,
+                "total_units": None,
+                "updated_at_ms": int(time.time() * 1000),
+                "summary": "The toolbox definition is queued for validation.",
+                "cancellable": True,
+            },
+        )
+        worker = threading.Thread(
+            target=self._apply_resolved_toolbox_definition,
+            kwargs={
+                "draft": draft,
+                "profile_changes": [dict(item) for item in record.profile_changes],
+                "operation_id": operation_id,
+            },
+            name=f"toolbox-definition-apply-{operation_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        return status
+
     def _apply_resolved_toolbox_definition(
         self,
         *,

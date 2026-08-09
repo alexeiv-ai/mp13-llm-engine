@@ -1062,10 +1062,22 @@ state reads; compile and diff checks passed.
 
 ### Phase 6 - Replace service, transport, client, and admin paths
 
-- [ ] **P6-01** Add service methods `toolbox_get_definition()`,
+- [x] **P6-01** Add service methods `toolbox_get_definition()`,
   `toolbox_plan_definition()`, `toolbox_approve_definition_plan()`, and
   `toolbox_apply_definition()` in `toolbox_runtime.py`. Consolidate mutation
   logic there and route apply through the hosted-operation repository.
+
+  Evidence (2026-08-08): authoritative read returned a canonical empty or
+  active snapshot without creating state/locks or contacting workers. Planning
+  revalidated active revision, host catalog/target/package policy and persisted
+  an actor/authority-owned immutable plan while projecting no profile or
+  environment identities. Custom deltas required an opaque parent-minted,
+  exact-plan approval whose first use bound one request ID; fabricated mappings,
+  cross-actor access, and a second request were denied generically. Apply
+  re-resolved every pin, persisted queued progress, returned the durable ref
+  immediately, dispatched once in background, and replayed the same request.
+  Definition/plan/rollout tests passed 17; operation service/repository
+  regressions passed 31; compile and diff checks passed.
 - [ ] **P6-02** Add `toolbox-get-definition`, `toolbox-plan-definition`,
   `toolbox-approve-definition-plan`, and `toolbox-apply-definition` to daemon
   dispatch, subprocess CLI dispatch, `EngineHostControlChannel`, authorization,

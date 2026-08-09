@@ -38,6 +38,8 @@ class PersistedToolboxDefinitionPlan:
     expires_at_ms: int
     plan: Mapping[str, Any]
     profile_changes: tuple[Mapping[str, Any], ...]
+    owner_actor_id: str = "service:local"
+    authority_id: str = "authority:local"
     contract: str = TOOLBOX_PLAN_CONTRACT
 
     def __post_init__(self) -> None:
@@ -51,6 +53,10 @@ class PersistedToolboxDefinitionPlan:
         require_digest(self.package_policy_revision, label="toolbox_plan_package_policy_revision")
         if not str(self.toolbox_id or "").strip():
             raise ValueError("toolbox_plan_toolbox_id_required")
+        owner = str(self.owner_actor_id or "").strip()
+        authority = str(self.authority_id or "").strip()
+        if not owner or not authority:
+            raise ValueError("toolbox_plan_owner_required")
         if (
             isinstance(self.created_at_ms, bool)
             or not isinstance(self.created_at_ms, int)
@@ -93,6 +99,8 @@ class PersistedToolboxDefinitionPlan:
         if len(encoded) > MAX_TOOLBOX_PLAN_BYTES:
             raise ValueError("toolbox_plan_too_large")
         object.__setattr__(self, "toolbox_id", str(self.toolbox_id).strip())
+        object.__setattr__(self, "owner_actor_id", owner)
+        object.__setattr__(self, "authority_id", authority)
         object.__setattr__(self, "plan", plan)
         object.__setattr__(self, "profile_changes", changes)
 
@@ -109,6 +117,8 @@ class PersistedToolboxDefinitionPlan:
             "expires_at_ms": self.expires_at_ms,
             "plan": dict(self.plan),
             "profile_changes": [dict(item) for item in self.profile_changes],
+            "owner_actor_id": self.owner_actor_id,
+            "authority_id": self.authority_id,
         }
 
     @classmethod
@@ -118,6 +128,7 @@ class PersistedToolboxDefinitionPlan:
             "contract", "plan_id", "toolbox_id", "definition_revision",
             "expected_revision", "catalog_revision", "package_policy_revision",
             "created_at_ms", "expires_at_ms", "plan", "profile_changes",
+            "owner_actor_id", "authority_id",
         }
         if set(row) != fields:
             raise ValueError("toolbox_plan_fields_invalid")
@@ -190,6 +201,8 @@ class AtomicJsonToolboxDefinitionPlanRepository:
         package_policy_revision: str,
         now_ms: int,
         ttl_ms: int,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
     ) -> PersistedToolboxDefinitionPlan:
         if not isinstance(draft, ToolboxDefinitionPlanDraft):
             raise ValueError("toolbox_plan_draft_required")
@@ -204,6 +217,8 @@ class AtomicJsonToolboxDefinitionPlanRepository:
             "expected_revision": draft.definition.expected_revision,
             "catalog_revision": catalog,
             "package_policy_revision": policy,
+            "owner_actor_id": str(owner_actor_id or "").strip(),
+            "authority_id": str(authority_id or "").strip(),
             "profiles": plan_payload["profiles"],
             "bundles": [
                 {
@@ -225,6 +240,8 @@ class AtomicJsonToolboxDefinitionPlanRepository:
             expires_at_ms=now_ms + ttl_ms,
             plan=plan_payload,
             profile_changes=classify_toolbox_profiles(draft, active_profiles),
+            owner_actor_id=str(owner_actor_id or "").strip(),
+            authority_id=str(authority_id or "").strip(),
         )
         with _exclusive_process_file_lock(self.lock_path):
             state = self._read_unlocked()
@@ -237,6 +254,8 @@ class AtomicJsonToolboxDefinitionPlanRepository:
                     or existing_record.catalog_revision != record.catalog_revision
                     or existing_record.package_policy_revision != record.package_policy_revision
                     or existing_record.profile_changes != record.profile_changes
+                    or existing_record.owner_actor_id != record.owner_actor_id
+                    or existing_record.authority_id != record.authority_id
                 ):
                     raise ValueError("toolbox_plan_id_conflict")
                 if changed:

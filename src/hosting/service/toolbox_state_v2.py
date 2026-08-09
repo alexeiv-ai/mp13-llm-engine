@@ -200,6 +200,12 @@ class AtomicJsonToolboxStateV2Repository:
             return copy.deepcopy(state)
 
     def read(self) -> dict[str, Any]:
+        if not self.path.exists():
+            if self.legacy_path is not None and self.legacy_path.exists():
+                raise LegacyToolboxStateError(
+                    "toolbox_state_v1_unsupported: run toolbox-state-archive-v1 before using definition APIs"
+                )
+            return copy.deepcopy(self._payload({}))
         with _exclusive_process_file_lock(self.lock_path):
             return copy.deepcopy(self._read_unlocked())
 

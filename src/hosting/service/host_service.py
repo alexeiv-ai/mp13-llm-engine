@@ -44,6 +44,9 @@ from .toolbox_materialization import (
 )
 from .toolbox_runtime import ToolboxRuntimeMixin
 from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
+from .toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
+from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
+from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from .workflow_helpers import WorkflowHelperMixin
 
 
@@ -71,6 +74,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
+        toolbox_dependency_policy: Optional[Dict[str, Any] | ToolboxDependencyPolicy] = None,
     ):
         self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
         raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
@@ -105,6 +109,19 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_state_v2 = AtomicJsonToolboxStateV2Repository(
             self.hosting_root / "state" / "toolbox_sandboxes_v2.json",
             legacy_path=self.hosting_root / "state" / "toolbox_sandboxes.json",
+        )
+        self._toolbox_definition_plans = AtomicJsonToolboxDefinitionPlanRepository(
+            self.hosting_root / "state" / "toolbox_definition_plans.json"
+        )
+        self._toolbox_dependency_approvals = AtomicJsonToolboxDependencyApprovalRepository(
+            self.hosting_root / "state" / "toolbox_dependency_approvals.json"
+        )
+        self._configured_toolbox_dependency_policy = (
+            toolbox_dependency_policy
+            if isinstance(toolbox_dependency_policy, ToolboxDependencyPolicy)
+            else ToolboxDependencyPolicy.from_dict(toolbox_dependency_policy)
+            if toolbox_dependency_policy is not None
+            else None
         )
         self._model_runtime_identity = (
             model_runtime_identity
