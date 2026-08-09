@@ -301,6 +301,7 @@ def test_role_separation_allows_consumer_reads_and_admin_mutation() -> None:
         assert "toolbox-template-publish" not in allowed
         assert "toolbox-template-deprecate" not in allowed
         assert "toolbox-template-revoke" not in allowed
+        assert "toolbox-template-prewarm" not in allowed
     admin = EngineHostService._commands_allowed_for_role("admin")  # noqa: SLF001
     assert {
         "toolbox-template-list",
@@ -308,6 +309,7 @@ def test_role_separation_allows_consumer_reads_and_admin_mutation() -> None:
         "toolbox-template-publish",
         "toolbox-template-deprecate",
         "toolbox-template-revoke",
+        "toolbox-template-prewarm",
     } <= admin
 
 

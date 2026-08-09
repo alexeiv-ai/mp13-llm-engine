@@ -797,10 +797,17 @@ call path found in the inventory.
   identity are verified and atomically committed. Focused tests passed 6 cases;
   operation/catalog regressions passed 58, channel/CLI/auth regressions passed
   95, contract documentation passed 12, and compile/diff checks passed.
-- [ ] **P1-10** Add strict tests for relative/local imports, alias mappings such
+- [x] **P1-10** Add strict tests for relative/local imports, alias mappings such
   as import name versus distribution name, optional imports, dynamic imports,
   duplicate staged paths, intrinsic requirements, role separation, immutable
   publish conflicts, remote management, and offline artifact availability.
+  Evidence (2026-08-08): the strict dependency analysis/policy suites cover
+  relative/local, alias, optional/dynamic, duplicate-path, and intrinsic cases;
+  catalog/materialization suites cover role separation, immutable conflicts,
+  daemon/channel/SSH management, and fail-closed offline availability. Added
+  explicit prewarm exclusions to every non-admin catalog role and an exact SSH
+  prewarm payload assertion. Required matrices passed 26, 18, and 95 tests;
+  diff checks passed.
 - [ ] **P1-11** Add shipped `core` and `py-compute` descriptors and complete
   immutable locks plus the compute-only sandbox policy preset. Materialize and
   probe both during normal host setup, advertise only verified templates, make

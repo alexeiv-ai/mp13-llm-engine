@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import pytest
 
+from hosting import engine_host_cli
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.operation_contract import HostedExecutionKind, HostedOperationLifecycle
@@ -265,3 +266,39 @@ def test_daemon_dispatch_runs_target_host_service_method(tmp_path: Path) -> None
     assert response["ok"] is True
     assert response["result"]["operation"]["execution_kind"] == "toolbox_template_prewarm"
     assert _terminal(daemon.svc, response["result"])["lifecycle"] == "terminal_success"
+
+
+def test_ssh_cli_routes_complete_prewarm_request_without_local_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class RemoteChannel:
+        def __init__(self, _settings=None):
+            pass
+
+        def invoke_control_command(self, command: str, payload=None):
+            calls.append((command, dict(payload or {})))
+            return {"status": "ok"}
+
+    monkeypatch.setattr("hosting.engine_host_channel.EngineHostControlChannel", RemoteChannel)
+    payload = {
+        "template_id": "core",
+        "template_digest": _digest("f"),
+        "python_abi": "cp312",
+        "platform": "win_amd64",
+        "request_id": "ssh-prewarm-1",
+    }
+    rc = engine_host_cli.main(
+        [
+            "--ssh-target",
+            "admin@example.test",
+            "--payload-json",
+            json.dumps(payload),
+            "toolbox-template-prewarm",
+        ]
+    )
+    assert rc == 0
+    assert calls == [("toolbox-template-prewarm", payload)]
+    assert '"ok": true' in capsys.readouterr().out
