@@ -1261,18 +1261,35 @@ version-1 toolbox state path.
   linked to that contract. Final documentation tests passed 16 and the exact
   forbidden transition-vocabulary audit returned no matches. The complete
   parent suite passed 1,113 with three skips; compile and diff checks passed.
-- [ ] **P7-14** Complete `HOSTING_CLIENT_BREAKING_CHANGES.md` with final method
+- [x] **P7-14** Complete `HOSTING_CLIENT_BREAKING_CHANGES.md` with final method
   signatures, models, template catalog, custom-build approval semantics,
   authoritative read, durable apply/progress/cancellation behavior, projection
   vocabulary, operator cutover command, release commit, adoption checklist, and
   durable-contract link.
-- [ ] **P7-15** Update `mp13-docs` to build complete definitions, persist active
+- [x] **P7-15** Update `mp13-docs` to build complete definitions, persist active
   revision hashes and apply operation refs, handle user-safe plan/progress/
   terminal diagnostics, recover revision conflicts through authoritative reads,
   and remove procedural mutation/environment-management logic.
-- [ ] **P7-16** Repin `mp13-docs` and run parent focused/full suites plus the
+- [x] **P7-16** Repin `mp13-docs` and run parent focused/full suites plus the
   dependent project's complete hosted toolbox, workflow, recovery, approval,
   and sandbox suites.
+
+  Evidence (2026-08-08): the handoff now records parent release
+  `83b35e20604c8f0c2fbe27467980b6a49385d918` and dependent adoption
+  `125d20f232bf5b755d18c1b23bc1e4b8929edf21`, exact replacement signatures and
+  strict model shapes, approval/read/apply/recovery/projection behavior, the
+  operator archive command, and checked adoption/removal instructions.
+  `mp13-docs` now builds complete definitions, persists request/operation/
+  progress/revision projections, uses parent-minted approval references,
+  recovers lost responses and revision conflicts, validates generated tools in
+  isolated definitions, and retires with an empty definition while retaining
+  durable local state on failure. Its strict definition/generated/parser/
+  cursor matrix passed 99; workflow spec/compose/lifecycle passed 393 with 15
+  skips; recovery/approval/sandbox plus the complete hosting group passed 522;
+  affected Node contracts passed 126 with 15 skips. A widened workspace/
+  workflow run passed 335 with 13 skips and hit two Windows socket-buffer
+  exhaustion errors that both passed immediately in isolation. Parent final
+  docs passed 16; compilation, diff, and removed-API scans passed.
 - [ ] **P7-17** Add standard-base tests for clean-host bootstrap, project-config
   validation, eager prewarm and lazy materialization, offline preseed, missing/
   corrupt lock, unsupported sandbox enforcement, compute-only defaults,

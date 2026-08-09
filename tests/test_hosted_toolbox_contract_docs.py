@@ -285,8 +285,8 @@ def test_handoff_requires_environment_and_model_runtime_removals() -> None:
 def test_handoff_examples_and_archive_procedure_are_complete() -> None:
     text = HANDOFF.read_text(encoding="utf-8")
     prose = " ".join(text.split())
-    assert "Release commit: pending" in text
-    assert "Dependent adoption commit: pending" in text
+    assert "Release commit: `83b35e20604c8f0c2fbe27467980b6a49385d918`" in text
+    assert "Dependent adoption commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`" in text
     assert "Parent inventory baseline:" in text
     for block in re.findall(r"```python\n(.*?)\n```", text, flags=re.DOTALL):
         ast.parse(block)
@@ -296,6 +296,7 @@ def test_handoff_examples_and_archive_procedure_are_complete() -> None:
         '"expected_revision": active["active_revision"]',
         "plan = hosted.plan_definition(definition)",
         "hosted.approve_definition_plan(plan_id=plan[\"plan_id\"])",
+        'approval_ref = approval["approval_ref"]',
         "dependency_approval_ref=approval_ref",
         "deployment_store.save_operation_ref",
         'execution_kind="toolbox_definition_apply"',
@@ -304,7 +305,8 @@ def test_handoff_examples_and_archive_procedure_are_complete() -> None:
         "channel.hosted_operation_result",
         '"auto_requests": []',
         '"manual_requests": []',
-        '"intrinsics": []',
+        '"names": []',
+        '"include_guides": False',
         "On `revision_conflict`, re-read `get_definition()`",
         "### Inventory-to-adoption matrix",
     ]:

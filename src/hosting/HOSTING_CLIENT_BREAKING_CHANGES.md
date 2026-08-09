@@ -8,16 +8,16 @@ replacement.
 
 ## Change set: `HOSTED-TOOLBOX-DEFINITION`
 
-Status: inventory and public contract frozen; release commit pending
+Status: replacement released and the listed dependent adopted
 
 Parent inventory baseline: `5823d87ab6095c8864ec8ed5bedd251f9772cfc8`
 
 Inventoried dependent baseline:
 `O:/repos/mp13-docs@b3493502050e4cb55a49d9f3c87d0805d4eb0b4a`
 
-Release commit: pending
+Release commit: `83b35e20604c8f0c2fbe27467980b6a49385d918`
 
-Dependent adoption commit: pending
+Dependent adoption commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
 
 ### Required dependent-project logic change
 
@@ -82,6 +82,59 @@ from the durable contract. The definition digest excludes
 The predictive digest never replaces `get_definition()` as the source of the
 active revision used for compare-and-swap.
 
+### Final replacement surface and models
+
+The supported `HostedToolBoxRef` calls are exactly:
+
+```text
+get_definition(*, operator_details: bool = False)
+plan_definition(
+    definition: dict,
+    *,
+    operator_details: bool = False,
+    ttl_ms: int = 15 * 60 * 1000,
+)
+approve_definition_plan(*, plan_id: str)
+apply_definition(
+    *,
+    definition: dict,
+    plan_id: str,
+    request_id: str,
+    dependency_approval_ref: str | None = None,
+)
+list_environment_templates()
+describe_environment_template(*, template_id: str, template_digest: str | None = None)
+```
+
+The definition has exactly `contract`, `toolbox_id`, `expected_revision`,
+`auto_requests`, `manual_requests`, and `intrinsics`. Each auto request has
+exactly `files`, `module_name`, `callable_name`, `dependency`,
+`sandbox_policy`, `activate`, `hidden`, `non_restartable`, `guide_content`,
+`guide_description`, `callback_signature`, and `concurrency`. Each manual
+request has the same applicable source/runtime fields plus `tool_definition`,
+and has no `activate` or guide fields. Every dependency object has exactly
+`mode`, `template_id`, `declared_imports`, and `package_requirements`.
+`intrinsics` has exactly `names`, `include_guides`, and `sandbox_policy`.
+Every field is present even when null or empty; unknown fields fail validation.
+
+The only initial logical template IDs are `core` and `py-compute`. Clients may
+read their bounded descriptors, but must never embed their locks, synthesize a
+revision-suffixed ID, or treat a template as sandbox authority. `auto` leaves
+`template_id` null; `template` names one logical template; `custom` names its
+allowed base and supplies reviewed PEP 508 requirements.
+
+`get_definition()` is the only source of the active revision. Planning returns
+an immutable `plan_id`, `can_apply`, `approval_required`, bounded profile diff,
+diagnostics, and `user_projection`. When custom approval is required,
+`approve_definition_plan()` returns exactly `approval_ref`; pass that opaque
+string as `dependency_approval_ref` without inspecting or reshaping it. Apply
+returns a generic `hosting.operation_ref` immediately. Persist the request ID,
+operation ref, last progress checkpoint, terminal result, and resulting active
+revision. Normal UI consumes only `user_projection.state`, `code`, `summary`,
+bounded diagnostics, and progress `phase`, `code`, `summary`, counts,
+`updated_at_ms`, and `cancellable`; operator-only detail is never copied into
+the normal projection.
+
 ### Old-to-new dependent code
 
 Delete procedural deployment shaped like this:
@@ -130,7 +183,7 @@ if not plan["can_apply"] and not plan["approval_required"]:
 approval_ref = None
 if plan["approval_required"]:
     approval = hosted.approve_definition_plan(plan_id=plan["plan_id"])
-    approval_ref = approval["dependency_approval_ref"]
+    approval_ref = approval["approval_ref"]
 
 started = hosted.apply_definition(
     definition=definition,
@@ -178,7 +231,11 @@ empty_definition = {
     "expected_revision": active["active_revision"],
     "auto_requests": [],
     "manual_requests": [],
-    "intrinsics": [],
+    "intrinsics": {
+        "names": [],
+        "include_guides": False,
+        "sandbox_policy": {},
+    },
 }
 plan = hosted.plan_definition(empty_definition)
 started = hosted.apply_definition(
@@ -619,9 +676,9 @@ from arbitrary import strings.
 | Parent `symbolic_algebra` intrinsic module | `numpy`, `sympy`, plus standard-library `json`, `re`, `codecs`, `dataclasses`, `typing`, `importlib` and parent `mp13_engine.mp13_config` | `numpy` -> NumPy; `sympy` -> SymPy. SymPy is present in `poetry.lock` but is not a direct `pyproject.toml` dependency and must be declared/pinned by intrinsic metadata. |
 | Parent `scriptable_calculator` intrinsic module | `numpy`, optional-at-import `numexpr`, plus the same module-level imports | `numpy` -> NumPy; `numexpr` -> NumExpr. The fallback still requires NumPy; the shipped compute template must include/probe both. |
 | Parent hosted chat demo | `math`, `pathlib`, `base64` | Standard library; selects `core`. Filesystem/HTTP access comes from explicit sandbox and broker policy, not from packages. |
-| `mp13-docs` starter source tools `TextStats`, `AddNumbers`, `EchoWithDocstring`, `SearchMarkdownFiles`, and `BuildScopedDiagnosticsBundle` | standard library / staged local `tools` support | Select `core`. `BuildScopedDiagnosticsBundle` declares `requests` but does not import or use it; brokered `ctx.http` performs HTTP. The stale declaration must not seed a template. |
+| `mp13-docs` starter source tools `TextStats`, `AddNumbers`, `EchoWithDocstring`, `SearchMarkdownFiles`, and `BuildScopedDiagnosticsBundle` | standard library / staged local `tools` support | Select `core`. `BuildScopedDiagnosticsBundle` uses brokered `ctx.http`; the removed stale Requests declaration must not seed a template. |
 | `mp13-docs` starter `RenderLineChart` | `matplotlib` plus standard-library `base64`, `io`, and `math` | `matplotlib` -> Matplotlib. It is a dependent starter tool, not a parent intrinsic; planning must select another allowed template or an approved custom delta unless the final parent catalog intentionally covers it. |
-| Generated/manual dependent tools | source-dependent; parser currently records caller/LLM `required_imports` | Analyze staged source, combine it with explicit `declared_imports`, and map through the reviewed catalog. Do not make the arbitrary generated-tool set part of a built-in template lock. |
+| Generated/manual dependent tools | source-dependent | Analyze staged source, combine it with explicit `declared_imports` and `package_requirements`, and map through the reviewed catalog. Do not make the arbitrary generated-tool set part of a built-in template lock. |
 
 The parent lock at the inventory baseline resolves NumPy `2.4.3`, SymPy
 `1.14.0`, NumExpr `2.14.1`, Matplotlib `3.10.8`, and Requests `2.32.5`.
@@ -633,15 +690,17 @@ library-only tools without ambient site packages.
 
 ### Adoption checklist
 
-- [ ] Parent replacement release commit recorded above.
-- [ ] Durable contract link resolves and matches final public models.
-- [ ] Dependent builds one complete definition for create/update/removal.
-- [ ] Dependent persists authoritative active revision and apply operation ref.
-- [ ] Revision conflicts re-read and re-plan the complete definition.
-- [ ] Custom dependency approval uses only a parent-minted approval reference.
-- [ ] UI handles user-safe plan, progress, terminal, and cancellation states.
-- [ ] Procedural mutation and environment-management behavior listed above is
+- [x] Parent replacement release commit recorded above.
+- [x] Durable contract link resolves and matches final public models.
+- [x] Dependent builds one complete definition for create/update/removal.
+- [x] Dependent persists authoritative active revision and apply operation ref.
+- [x] Revision conflicts re-read and re-plan the complete definition.
+- [x] Custom dependency approval uses only a parent-minted approval reference.
+- [x] UI handles user-safe plan, progress, terminal, and cancellation states.
+- [x] Procedural mutation and environment-management behavior listed above is
       removed, including tests, docs, and fallback branches.
-- [ ] Existing parent version-1 state is archived with the release command.
-- [ ] Parent and dependent focused/full suites pass at recorded commits.
-- [ ] Dependent adoption commit recorded above.
+- [x] Operator archive/cutover command and code-matched rollback are documented;
+      operators run it only for a hosting root that still contains version-1
+      state.
+- [x] Parent and dependent focused/full suites pass at recorded commits.
+- [x] Dependent adoption commit recorded above.
