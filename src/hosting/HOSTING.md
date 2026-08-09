@@ -7,6 +7,8 @@ The `hosting` module provides the control-plane and guarded traffic bridge for m
 ## Important Documentation Links
 
 - **[Hosting Access Design](HOSTING_ACCESS.md)**: If you are building a GUI, hosting consumer backend, or integration that consumes the hosting APIs, start with Section 11, `Hosting Consumer Integration Contract`.
+- **[Durable Hosted Operations and Capabilities](HOSTING_ACCESS.md#116-durable-hosted-operation-and-capability-contract)**: Generic operation refs, lifecycle, idempotency, retention, recovery, authorization, provider sessions, callbacks, and authority leases.
+- **[Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md)**: Complete toolbox definitions, dependency planning, approval, authoritative reads, atomic apply, and toolbox projections.
 - **[Hosting Configuration Script](HOSTING_CONFIG_SCRIPT.md)**: Specification for the user-facing setup and reconfiguration script (`hosting_config`).
 - **[Sandbox Architecture](sandbox/SANDBOX_ARCHITECTURE.md)**: Shared sandbox policy, launch, and broker foundation for hosted workers.
 - **[Toolbox Worker](sandbox/TOOLBOX_WORKER.md)** and **[Generic Worker](sandbox/GENERIC_WORKER.md)**: Worker-specific sandbox and IPC contracts.
@@ -162,6 +164,11 @@ For long-running lifecycle work, especially model startup, prefer the async
 operation wrapper. It returns an `operation_id` immediately and lets a UI or
 backend poll progress without blocking its control connection:
 
+This `op-start` control wrapper is distinct from the typed durable hosted
+execution contract in [Hosting Access §11.6](HOSTING_ACCESS.md#116-durable-hosted-operation-and-capability-contract).
+Toolbox/workflow execution clients use the typed `hosting.operation_ref` APIs;
+they do not translate those refs into `op-start` IDs.
+
 ```powershell
 # Start config-driven launch as an operation
 @'{
@@ -298,7 +305,7 @@ Use `proxy-rpc-open`/`proxy-rpc-recv`/`proxy-rpc-close` for streamed
 }'@ | python -m hosting.engine_host_cli --payload-stdin proxy-rpc-recv
 ```
 
-### 2.6 Workflow Runtime Workers
+### 2.7 Workflow Runtime Workers
 
 Workflow helpers are hosted `generic` workers behind workflow runtime facades. Use these instead of backend-owned local helper subprocesses:
 

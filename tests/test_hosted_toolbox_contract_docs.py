@@ -9,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "src" / "hosting" / "HOSTED_TOOLBOX_CONTRACT.md"
 HANDOFF = ROOT / "src" / "hosting" / "HOSTING_CLIENT_BREAKING_CHANGES.md"
+ACCESS = ROOT / "src" / "hosting" / "HOSTING_ACCESS.md"
+OLD_OPERATION_CONTRACT = ROOT / "src" / "hosting" / "HOSTING_OPERATION_CONTRACT.md"
 
 
 def _contract_text() -> str:
@@ -126,6 +128,52 @@ def test_handoff_links_contract_and_keeps_client_removal_instructions() -> None:
     assert "### Deprecated behavior to remove from dependents" in text
     assert "retire_toolbox_daemon_registration()" in text
     assert "_run_environment_checks()" in text
+
+
+def test_generic_operation_contract_is_consolidated_into_hosting_access() -> None:
+    access = ACCESS.read_text(encoding="utf-8")
+    toolbox = CONTRACT.read_text(encoding="utf-8")
+    assert not OLD_OPERATION_CONTRACT.exists()
+    for section in [
+        "### 11.6 Durable hosted operation and capability contract",
+        "#### 11.6.1 Operation identity and idempotency",
+        "#### 11.6.2 Lifecycle, progress, and terminal results",
+        "#### 11.6.3 Fingerprints and request recovery",
+        "#### 11.6.4 Repository and restart behavior",
+        "#### 11.6.5 Authorization",
+        "#### 11.6.6 Provider sessions, callbacks, and capability authority",
+    ]:
+        assert section in access
+    for required in [
+        "HostedOperationRef.from_dict",
+        "(owner_actor_id, receipt_namespace, request_id)",
+        "hosted_operation_resolve_request",
+        "result_omission",
+        "provider_call_id",
+        "owner_authority_id",
+        "on_transport_loss",
+    ]:
+        assert required in access
+    assert "[Hosting Access §11.6](HOSTING_ACCESS.md#116-durable-hosted-operation-and-capability-contract)" in toolbox
+
+
+def test_handoff_records_implemented_dependent_adoption_details() -> None:
+    text = HANDOFF.read_text(encoding="utf-8")
+    prose = " ".join(text.split())
+    for required in [
+        "### Implemented `mp13-docs` adoption",
+        "`mp13-docs@125d20f232bf5b755d18c1b23bc1e4b8929edf21`",
+        "changed 28 files with 1,694 insertions and 1,496 deletions",
+        "#### Deployment and recovery store",
+        "#### Tool metadata, parsing, and dependency intent",
+        "#### Generated-tool authoring and validation",
+        "#### Workflow and application integration",
+        "#### Dependent verification added or updated",
+        "retry_empty_definition_required",
+        "No production file under `src/ui/` changed",
+        "Unrelated pre-existing `REFACTORING_*`, `TESTING.md`, and",
+    ]:
+        assert required in prose
 
 
 def test_contract_freezes_deployment_administration_policy() -> None:

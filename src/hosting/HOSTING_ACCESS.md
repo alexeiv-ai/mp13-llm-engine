@@ -1,8 +1,8 @@
 # Hosting Access Design (Security, Roles, Keys, Lifecycle)
 
-Date: 2026-03-16
+Date: 2026-08-08
 Status: Implementation-aligned architecture document
-Scope: `src/hosting` daemon/channel/auth/claim/lifecycle on Windows and Linux
+Scope: `src/hosting` daemon/channel/auth/claim/lifecycle, durable operations, and capability sessions on Windows and Linux
 
 ## 0. Design policy
 
@@ -778,40 +778,207 @@ This section is the authoritative integration contract for hosting consumers.
    - OpenSSH passphrase-protected vs unprotected private key
 9. Validate imported transport profiles with strict host-key checking before treating them as ready.
 
-### 11.6 Durable hosted operations
+### 11.6 Durable hosted operation and capability contract
 
-Toolbox, workflow Python, and workflow JavaScript executions share one durable contract:
+This section is the durable generic contract for hosted operations, provider
+sessions, approval callbacks, and capability authority. Toolbox definition
+models and toolbox-specific rollout behavior are specified separately in the
+[Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md).
 
-1. Execute requires a non-empty caller-generated request ID and returns `hosting.operation_status` containing a typed `hosting.operation_ref`.
-2. Persist that complete ref. Later status, result retrieval, and cancellation use only `hosted_operation_status(ref=...)`, `hosted_operation_result(ref=...)`, and `hosted_operation_cancel(ref=...)`. Caller-reconstructed selectors are not accepted or trusted.
-3. The durable fingerprint covers canonical family-specific dispatch inputs and effective policy. Reusing an ID with a different fingerprint returns `lifecycle=idempotency_conflict` and never dispatches.
-4. A matching duplicate attaches to queued/running work or replays persisted terminal truth without starting a worker or sandbox.
-5. The canonical `lifecycle` values are:
-   - `queued`
-   - `running`
-   - `terminal_success`
-   - `terminal_failure`
-   - `terminal_cancellation`
-   - `interrupted_before_dispatch`
-   - `interrupted_after_dispatch_unknown`
-   - `forgotten`
-   - `unknown_outside_retention`
-   - `idempotency_conflict`
-6. `interrupted_before_dispatch` may resume exactly once through another matching execute call. `interrupted_after_dispatch_unknown` is fail-closed and never grants another dispatch.
-7. Terminal payloads use exactly one of bounded inline `result`, authorized `result_ref`, or digest-only `result_omission`. Digests use `sha256:<hex>` and sizes use `size_bytes`.
-8. Receipts are stored at `<hosting_root>/state/hosted_operations.json`. Credential-shaped data is redacted before persistence. Callback bindings, lease tokens, raw worker state, queues, and stream histories are excluded.
-9. The legacy `toolbox_execution_receipts.json` schema is rejected. Stop the daemon, clear the protected replay window, and run `hosting-receipt-ledger-cutover` with explicit acknowledgement to archive it before starting this release.
-10. If transport loss hides the initial execute response, use `hosted_operation_resolve_request(execution_kind=..., selector=..., request_id=...)` once to recover the stored canonical ref/status. The lookup is owner-authorized, index-only, and never starts a worker; subsequent status/result/cancel calls remain ref-only.
+#### 11.6.1 Operation identity and idempotency
 
-Retention defaults and daemon environment overrides:
+Toolbox execution, toolbox definition apply, toolbox template prewarm,
+workflow Python, and workflow JavaScript use the same typed operation boundary.
 
-- retained receipts/results: 7 days, `MP13_HOSTED_OPERATION_RETENTION_SECONDS`
-- forgotten tombstones: 14 additional days, `MP13_HOSTED_OPERATION_TOMBSTONE_SECONDS`
-- receipt count: 10,000, `MP13_HOSTED_OPERATION_MAX_COUNT`
-- tombstone count: 20,000, `MP13_HOSTED_OPERATION_MAX_TOMBSTONES`
-- inline terminal result: 64 KiB, `MP13_HOSTED_OPERATION_MAX_INLINE_RESULT_BYTES`
+1. Execute requires a non-empty caller-generated `request_id` and returns a
+   `hosting.operation_status` containing a typed `hosting.operation_ref`.
+2. `operation_id` is a parent-minted URL-safe opaque identifier with at least
+   144 bits of randomness. It is persisted before dispatch permission returns.
+3. `(owner_actor_id, receipt_namespace, request_id)` is the idempotency key.
+   Both that tuple and `operation_id` are unique repository keys.
+4. The parent stores execution kind, resolved selector, fingerprint, and the
+   authenticated owner. A selector inside a client-supplied ref must exactly
+   match stored truth and is never used as unverified routing input.
+5. `HostedOperationRef.from_dict` is the only accepted mapping parser at public
+   boundaries. It rejects unknown fields, invalid contracts, unsupported
+   execution or selector kinds, control characters, non-canonical digests, and
+   values over the limits exported by `hosting.operation_contract`.
+6. Consumers persist the complete returned ref. Status, result retrieval, and
+   cancellation then use only `hosted_operation_status(ref=...)`,
+   `hosted_operation_result(ref=...)`, and
+   `hosted_operation_cancel(ref=...)`.
+7. Reusing an idempotency key with a different fingerprint returns
+   `idempotency_conflict` and never dispatches. An identical duplicate attaches
+   to queued/running work or replays terminal truth without starting work.
+8. A tombstone retains the complete ref, fingerprint, owner, terminal digest,
+   and forgotten time until tombstone expiry.
 
-In-process construction may override the corresponding `EngineHostService(...)` keyword arguments. Compaction is deterministic by timestamp and operation ID. Loading the repository does not route or start a worker or sandbox.
+#### 11.6.2 Lifecycle, progress, and terminal results
+
+`api_status` reports whether the status or cancellation API call succeeded;
+`lifecycle` reports durable operation truth. The canonical lifecycle values are:
+
+- `queued`
+- `running`
+- `terminal_success`
+- `terminal_failure`
+- `terminal_cancellation`
+- `interrupted_before_dispatch`
+- `interrupted_after_dispatch_unknown`
+- `forgotten`
+- `unknown_outside_retention`
+- `idempotency_conflict`
+
+`interrupted_before_dispatch` may resume exactly once through an identical
+execute call. `interrupted_after_dispatch_unknown` is fail-closed and never
+authorizes a second dispatch.
+
+Optional progress contains exactly `phase`, `code`, nullable
+`completed_units`, nullable `total_units`, `updated_at_ms`, `summary`, and
+`cancellable`. Counts are non-negative and completed cannot exceed total.
+Progress time stays within the receipt's creation/update interval. Phase is at
+most 64 bytes, code 128 bytes, and summary 512 bytes.
+
+Toolbox definition apply phases are `validation`, `environment_build`,
+`staging`, `warmup`, `publication`, `draining`, and `cleanup`. Progress is
+cancellable only before publication. Once persisted as non-cancellable, later
+progress cannot return to cancellable. Template prewarm phases are
+`validation`, `artifact_verification`, `environment_build`, `import_probe`, and
+`receipt_commit`; receipt commit is non-cancellable.
+
+Terminal payloads contain exactly one of:
+
+- bounded canonical JSON `result` no larger than 64 KiB;
+- authorized retrievable `result_ref`; or
+- `result_omission` with canonical digest, `size_bytes`, and reason.
+
+Redaction occurs before digesting or persistence. With explicit effective
+`retain_terminal_result` policy, larger redacted JSON may be retained as an
+artifact up to 16 MiB. Without that policy, for non-JSON values, for larger
+values, or when artifact storage fails, only the digest omission is retained.
+Result artifacts remain multi-read for the owning actor while the receipt is
+live and are deleted when it becomes a tombstone. Callback bindings,
+credentials, approval/lease tokens, raw worker memory, host paths, and
+unbounded arguments are never retained.
+
+All digests use `sha256:<lowercase-hex>`, sizes use `size_bytes`, and timestamps
+are non-negative Unix milliseconds. Artifact retrieval verifies authenticated
+ownership, operation/ref linkage, expiry, maximum size, and digest; public refs
+never expose host paths.
+
+#### 11.6.3 Fingerprints and request recovery
+
+Fingerprints are domain-separated SHA-256 over canonical JSON with sorted keys
+and compact separators. Generated operation IDs, timestamps, credentials,
+callback/approval bindings, and transport metadata are excluded.
+
+Family-specific fingerprints bind all dispatch-relevant inputs:
+
+- toolbox execution: resolved toolbox/tool selector, arguments, effective tools
+  view, host-API approval policy, parent-derived registration sandbox/profile
+  identity, and effective concurrency policy;
+- workflow Python: resolved engine selector, profile/environment identity,
+  normalized request and pinned instance, runtime configuration, sandbox policy,
+  and dispatch-relevant capacity;
+- workflow JavaScript: resolved engine selector, profile/environment identity,
+  normalized request and pinned instance, Node/JavaScript configuration,
+  sandbox policy, and dispatch-relevant capacity;
+- toolbox definition apply: toolbox selector, definition hash, expected active
+  revision, plan ID, exact custom delta, approval identity, catalog revision,
+  and package-policy revision; and
+- template prewarm: template selector, exact template digest, target ABI and
+  platform, and catalog revision.
+
+If transport loss hides the initial execute response,
+`hosted_operation_resolve_request(execution_kind=..., selector=...,
+request_id=...)` performs one owner-authorized indexed lookup and returns the
+stored canonical ref/status. It never probes or starts work. Subsequent status,
+result, and cancellation calls remain ref-only. Reusing a request ID for a
+different fingerprint is always a conflict.
+
+Executable serialization vectors and strict model tests live in
+`tests/test_hosting_operation_contract.py`.
+
+#### 11.6.4 Repository and restart behavior
+
+The storage-neutral repository supports prepare/attach/replay/conflict,
+dispatch claim, bounded progress update, one terminal transition,
+pre-dispatch cancellation, operation/request indexed reads, terminal waiting,
+and deterministic pruning.
+
+Production state is a process-locked JSON checkpoint at
+`<hosting_root>/state/hosted_operations.json`. Every mutation is serialized,
+written to a temporary file, flushed and fsynced, then atomically replaces the
+checkpoint. In-memory indexes are rebuilt and validated on load. Malformed or
+unknown schemas, duplicate keys, invalid rows, and unreadable checkpoints fail
+closed. Loading, status, attach, replay, and request recovery do not discover
+or start a worker or sandbox.
+
+Retention defaults and daemon environment overrides are:
+
+- receipts and retained results: 7 days,
+  `MP13_HOSTED_OPERATION_RETENTION_SECONDS`;
+- forgotten tombstones: 14 additional days,
+  `MP13_HOSTED_OPERATION_TOMBSTONE_SECONDS`;
+- receipt count: 10,000, `MP13_HOSTED_OPERATION_MAX_COUNT`;
+- tombstone count: 20,000, `MP13_HOSTED_OPERATION_MAX_TOMBSTONES`; and
+- inline terminal result: 64 KiB,
+  `MP13_HOSTED_OPERATION_MAX_INLINE_RESULT_BYTES`.
+
+In-process construction may override the corresponding
+`EngineHostService(...)` keyword arguments. Compaction is deterministic by
+timestamp and operation ID.
+
+#### 11.6.5 Authorization
+
+Authorization is derived from the actor stored with the operation, never from
+a caller-supplied owner field. Unknown and unauthorized IDs intentionally have
+the same public response.
+
+| Operation | Owning actor | Different actor | Administrative force |
+| --- | --- | --- | --- |
+| Execute, attach, replay | Allowed for identical idempotency identity | Conflict/not found without disclosure | Existing admin claim policy only |
+| Status | Allowed after exact stored-ref check | Not found without disclosure | Read allowed and audited |
+| Cancel | Allowed after exact stored-ref check | Not found without disclosure | Force cancel allowed and audited |
+| Result retrieval | Allowed while retained | Not found without disclosure | Read allowed and audited |
+| Provider session list/close | Own sessions only | Denied | Allowed and audited |
+| Authority renew/revoke | Same actor plus protected lease token | Denied | Force revoke allowed and audited |
+
+#### 11.6.6 Provider sessions, callbacks, and capability authority
+
+`provider_id` identifies a logical provider; `session_id` identifies one
+registration instance. Both are required and stay distinct through
+registration, discovery, dispatch, approval, audit, filtering, and close.
+Duplicate or contradictory provider/session identities fail registration. No
+fallback derives one identity from the other.
+
+Within one logical hosted request, retries of the same provider call reuse
+`provider_call_id`; retries of its approval reuse `approval_id`. New logical
+calls mint new IDs. An allow-once decision is keyed by those stable IDs and
+cannot authorize another logical call.
+
+A direct callable is bound before daemon invocation. A synchronous lease closes
+once on return or error. A stream owns its lease until terminal event, explicit
+close/cancel, failed open, or channel shutdown. Close is thread-safe and
+idempotent. Exactly one of callable, pre-bound binding, or lease is accepted.
+
+Capability authority leases follow these rules:
+
+- `expires_at_ms: null` means no expiry; zero is invalid.
+- `on_transport_loss` is `close` or `retain_until_expiry`.
+- `on_authority_revoked` is `close`.
+- `on_request_terminal` is `close` or `retain`.
+- Retain-on-loss requires a finite expiry or successful explicit renewal.
+- `owner_authority_id` binds to the registering authenticated actor.
+- Registration returns a protected lease token once; the parent stores only a
+  digest, and consumers never place the token in descriptors, receipts, logs,
+  or artifacts.
+- Renew/revoke requires the same actor and token. Administrative force revoke
+  uses the existing audited admin-claim path.
+
+Request terminal means durable success, failure, cancellation, or an
+interrupted terminal policy state. Provider sessions are in-memory and do not
+survive daemon restart; no persistence capability is promised.
 
 ### 11.7 Compact try-out anchor recovery
 
@@ -846,3 +1013,7 @@ Each must be documented with:
 2. Scenario-specific minimum controls and escalation triggers in Section 10 must stay current with the implemented command and policy behavior.
 3. Client-facing guidance should be maintained in Section 11 instead of being split across drifting duplicate documents.
 4. Any change to first-key bootstrap, no-auth safety rules, SSH host-key requirements, or client-realm custody rules must be reflected here at the same time as the code change.
+5. Generic hosted-operation, provider-session, callback, and authority-lease
+   changes must update Section 11.6 and its executable contract tests. Domain
+   documents such as `HOSTED_TOOLBOX_CONTRACT.md` should link here and retain
+   only their family-specific operation semantics.

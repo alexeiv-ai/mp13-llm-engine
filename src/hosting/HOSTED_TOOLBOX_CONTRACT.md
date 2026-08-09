@@ -4,6 +4,12 @@ Status: normative
 
 Contract family: `hosting.toolbox.definition`
 
+Generic hosted-operation identity, lifecycle, retention, request recovery,
+authorization, provider-session, callback, and capability-lease behavior is
+normative in [Hosting Access §11.6](HOSTING_ACCESS.md#116-durable-hosted-operation-and-capability-contract).
+This document specifies only toolbox definitions, dependency environments,
+planning, approval, rollout, and toolbox-specific operation behavior.
+
 ## Scope and vocabulary
 
 A tool runtime is one configured hosting target. A toolbox is one deployed tool

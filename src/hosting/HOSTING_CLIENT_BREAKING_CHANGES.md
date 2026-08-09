@@ -665,6 +665,132 @@ The dependent repository had unrelated uncommitted work during inventory. This
 entry records code-derived adoption requirements only; it does not claim that
 those working-tree changes are part of either baseline.
 
+### Implemented `mp13-docs` adoption
+
+The dependent replacement landed as
+`mp13-docs@125d20f232bf5b755d18c1b23bc1e4b8929edf21`, pinned to parent release
+`83b35e20604c8f0c2fbe27467980b6a49385d918`. It changed 28 files with 1,694
+insertions and 1,496 deletions. This was a behavioral migration, not only a
+parent-version pin.
+
+#### Deployment and recovery store
+
+`src/backend/platform/toolboxes/hosted_store.py` now converts the complete
+consumer-owned enabled auto/manual/intrinsic set into one strict parent
+definition. Deployment performs the following sequence:
+
+1. Read `toolbox_get_definition(toolbox_id=...)` and use its
+   `active_revision` as `expected_revision`.
+2. Build every strict auto/manual request with a `dependency` object and direct
+   `sandbox_policy`, plus the complete intrinsic selection object.
+3. Call `toolbox_plan_definition(definition=...)` and stop on a denied plan,
+   preserving its bounded diagnostics and `user_projection`.
+4. When the plan requires custom-delta approval, call
+   `toolbox_approve_definition_plan(plan_id=...)` and pass only the returned
+   `approval_ref` as `dependency_approval_ref`.
+5. Start `toolbox_apply_definition(...)` with a stable request ID and wait on
+   the generic hosted-operation ref until terminal success or failure.
+6. Persist `request_id`, `expected_revision`, `plan_id`, operation ref,
+   progress, diagnostics, user projection, active revision, and terminal state
+   in `last_deploy` so a reconnect can resume the same operation.
+
+If the apply response is lost, the store recovers it through
+`hosted_operation_resolve_request` using execution kind
+`toolbox_definition_apply`, toolbox selector, and the original request ID. A
+revision conflict causes an authoritative reread, complete-definition rebuild,
+new plan, and new changed-fingerprint request ID. The dependent never retries
+individual tool mutations or treats its local `state_revision` as parent
+active-revision truth.
+
+Retirement now applies an empty definition with empty auto/manual lists and an
+empty intrinsic selection object. `src/backend/app/routers/workspaces.py`
+passes the workspace-scoped store path into retirement. If durable empty apply
+cannot start or finish, workspace switching returns a conflict containing
+`retry_empty_definition_required` and leaves the saved toolbox authoring state
+intact. It no longer clears registrations locally and pretends teardown
+succeeded.
+
+#### Tool metadata, parsing, and dependency intent
+
+`src/tools/registry.py`, `src/backend/platform/toolboxes/source_registry.py`,
+`src/tools/examples.py`, and `src/tools/llm_tool_parser.py` replaced the old
+environment/import-list decorator shape with:
+
+- `dependency_mode` (`auto`, `template`, or `custom`);
+- optional logical `template_id`;
+- `declared_imports` for dynamic/conditional import roots;
+- `package_requirements` for PEP 508 distributions; and
+- an independent `sandbox_policy`.
+
+The parser validates mode/template combinations, declaration lists, and
+requirements, and emits exact version-2 dependency objects. The Matplotlib
+starter declares Matplotlib as package intent; the stale Requests declaration
+on the brokered-HTTP diagnostics starter was removed. No dependent-side code
+selects an interpreter, resolved environment key, worker profile, or mutable
+environment description.
+
+#### Generated-tool authoring and validation
+
+`src/tools/tool_authoring.py` and
+`src/backend/platform/toolboxes/generated_tools.py` removed procedural
+environment readiness checks and every prepare/lock/install/verify call.
+Generated/manual candidates are validated by applying an isolated complete
+definition, observing its durable operation, running the smoke calls only after
+terminal success, and cleaning up with an empty complete definition. Validation
+returns the parent plan's bounded dependency diagnostics and projection rather
+than synthesizing readiness from local install fragments.
+
+Generated-tool authority remains separate from dependency approval. Reviewed
+filesystem/network host-capability grants are compiled into the direct
+`sandbox_policy` and callable grant references; package approval neither grants
+nor widens those capabilities.
+
+#### Workflow and application integration
+
+`src/backend/workflow_os/tools/adapters.py` replaced
+`tools/environment_management` with `tools/dependency_planning`. The new
+workflow describes authoritative read, complete definition planning, exact
+approval, durable apply, and operation observation. The file-backed operation
+spec `environment_management.md` was deleted,
+`dependency_planning.md` was added, and
+`toolbox_operations_composed.md` now links to the dependency plan and its
+projection.
+
+`src/connectors/engine_contract.py`, `INSTALL.md`, and
+`HOSTING_PARENT_ADOPTION.md` pin and document the exact parent release and the
+no-compatibility adoption boundary. `src/tools/LLM_PROMPT.md` and
+`src/tools/TOOLS_DEV_GUIDE.md` now teach only source-plus-dependency intent,
+complete deployment, durable recovery, empty teardown, and bounded projection
+handling.
+
+No production file under `src/ui/` changed in this adoption. Existing generic
+backend-composed workflow cards consume the new dependency plan/progress
+projection. Unrelated pre-existing `REFACTORING_*`, `TESTING.md`, and
+`docs/refactoring/tool-management-ux/` working-tree changes were not staged or
+included in the adoption commit.
+
+#### Dependent verification added or updated
+
+The adoption added `test_hosting_definition_adoption.py` for complete
+definition shape, persistence, approval, revision conflict, lost-response
+recovery, and empty teardown. It updated generated-tool sandbox/authority,
+parser, toolbox-operation, workflow composition/lifecycle, workspace teardown,
+and cursor-contract tests.
+
+Recorded dependent results were:
+
+- strict definition, generated-tool, parser, cursor, and toolbox operations:
+  99 passed;
+- workflow specification, composition, and lifecycle: 393 passed and 15
+  skipped;
+- recovery journal, restart recovery, approvals/sessions/audit,
+  host-capability policy, and complete `tests/hosting`: 522 passed; and
+- affected Node workflow/spec contracts: 126 passed and 15 skipped.
+
+The widened workspace/workflow run passed 335 tests and skipped 13; two Windows
+socket-buffer exhaustion errors passed immediately in isolation. Python
+compilation, diff checks, and the removed-API scan also passed.
+
 ### Hosted import inventory that constrains the initial catalog
 
 This inventory distinguishes Python import roots from distributions. It is the

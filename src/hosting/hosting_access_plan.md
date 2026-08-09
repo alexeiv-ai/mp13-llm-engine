@@ -1308,7 +1308,7 @@ version-1 toolbox state path.
   and diff checks passed. The first full run's two unrelated warm workflow
   process timing failures passed together in isolation before the clean full
   rerun.
-- [ ] **P7-18** After every listed dependent project confirms adoption, remove
+- [ ] **P7-18** After every listed dependent project confirms adoption, clear
   `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` and remove any transient
   references to it. Confirm the durable contract and worker documentation are
   independently complete before deletion.
