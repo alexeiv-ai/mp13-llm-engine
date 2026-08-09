@@ -983,28 +983,41 @@ planner/identity regressions passed 16; operation-repository regressions passed
   Focused rollout/planner/hermetic tests passed 25; the complete toolbox sandbox
   suite passed 138 after correcting its legacy environment-description rebuild
   adapter; compile and diff checks passed.
-- [ ] **P4-05** Persist an explicit active `tool_routes` map from tool name to
+- [x] **P4-05** Persist an explicit active `tool_routes` map from tool name to
   profile ID/engine ID in toolbox state. Change execute/describe/gate/cancel
   routing to use that map instead of scanning all live registrations.
-- [ ] **P4-06** Publish definition revision, active profiles, and `tool_routes`
+- [x] **P4-06** Publish definition revision, active profiles, and `tool_routes`
   in one state transition. Only after publication may candidate registrations
   become active routes.
-- [ ] **P4-07** Treat publication as the operation's non-cancellable commit
+- [x] **P4-07** Treat publication as the operation's non-cancellable commit
   boundary. Persist progress before and after it so restart/cancel handling
   cannot mistake a committed revision for a candidate.
-- [ ] **P4-08** Drain and retire replaced/removed engines after publication.
+- [x] **P4-08** Drain and retire replaced/removed engines after publication.
   Preserve `non_restartable` metadata and cancellation policy for in-flight
   work.
-- [ ] **P4-09** If environment build, staging, spawn, readiness, inventory, or
+- [x] **P4-09** If environment build, staging, spawn, readiness, inventory, or
   publication fails, retire candidates and leave old active routes untouched.
-- [ ] **P4-10** Treat an empty definition as a valid active revision with no
+- [x] **P4-10** Treat an empty definition as a valid active revision with no
   routes. Do not delete all toolbox history during apply.
-- [ ] **P4-11** Persist terminal apply results through the hosted-operation
+- [x] **P4-11** Persist terminal apply results through the hosted-operation
   repository. Put stable user-safe diagnostics in the normal result and expose
   raw deployment details only through authorized operator details.
 
 Exit gate: execution sees either the complete old routing map or the complete
 new routing map and can never encounter candidate/active ambiguity.
+
+Evidence (2026-08-08): strict version-2 snapshots publish canonical definition,
+resolved profiles, environment references, and a complete tool-name route map
+under one process-safe transaction. Toolbox-scoped route, describe, and gate
+selection use only that map. Warmup failure and pre-publication cancellation
+removed candidates with byte-for-byte old active state retained; publication
+made the complete replacement visible before old retirement. Busy old workers
+were marked retired but left alive for in-flight work, including preserved
+`non_restartable` route policy. Empty teardown published a new no-route revision
+while retaining history. Normal terminal results excluded engine/profile/
+environment identities; raw rollout details required explicit operator access.
+Focused routing/apply/operation tests passed 11; operation-repository and full
+toolbox regressions passed 161; compile and diff checks passed.
 
 ### Phase 5 - Version-2 state and transaction safety
 

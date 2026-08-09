@@ -38,8 +38,8 @@ rollout and routing work is in progress.
 
 ## Active slice
 
-None. The next slice will predeclare explicit active routes and atomic
-publication/draining work (P4-05 onward) before changing files.
+None. The next slice will predeclare Phase 5 strict version-2 state transaction,
+recovery, and archival cutover work before changing files.
 
 ## Completed slices
 
@@ -68,6 +68,7 @@ publication/draining work (P4-05 onward) before changing files.
 | 2026-08-08 | P3-06, P3-07, Phase 3 exit | Added exact active/proposed profile classification and a strict atomic expiring plan repository pinned to definition/expected/catalog/policy and resolved bundle identities. | Plan repository -> 10 passed including restart, expiry/no-refresh, pin identity, corruption, two-process writes, and no side effects; planner/identity -> 16 passed; operation repository -> 23 passed; docs/compile/diff checks passed. | `feat: persist toolbox definition plans (P3-06 P3-07)` |
 | 2026-08-08 | P4-01 | Completed durable definition-apply recovery and cancellation dispatch with an atomic persisted publication boundary and bounded candidate-cleanup terminal diagnostics. | Definition apply/contract/repository -> 51 passed including the cancel/publication race; operation/workflow regressions -> 28 passed; compile/diff checks passed. The initially named `tests/test_hosting_workflow_contract.py` did not exist and failed before collection; closeout used the repository's actual workflow operation and Python contract suites. | `feat: add durable definition apply operations (P4-01)` |
 | 2026-08-08 | P4-02, P4-03, P4-04 | Added resolved assignment orchestration with zero work for reuse, explicit non-routable candidate registrations, and exact inventory/profile/environment/receipt readiness. Also restored effective environment-description input in the temporary legacy rebuild adapter. | Resolved rollout/planner/hermetic -> 25 passed; complete toolbox sandbox -> 138 passed; compile/diff checks passed. The first full regression run found two legacy environment-description rebuild failures; both passed after the adapter correction, followed by the clean 138-test run. | `feat: stage verified toolbox candidates (P4-02 P4-03 P4-04)` |
+| 2026-08-08 | P4-05 through P4-11, Phase 4 exit | Added strict active snapshots and atomic complete route publication, route-map-only toolbox selection, post-publish draining with busy-worker preservation, candidate rollback, empty revisions/history, and bounded normal versus authorized operator terminal details. | Atomic routing/apply plus definition/candidate operation suites -> 11 passed; operation repository/full toolbox regressions -> 161 passed; compile/diff checks passed. | `feat: publish atomic toolbox routes (P4-05..P4-11)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -95,5 +96,5 @@ and the condition required to resume it.
 
 ## Next slice
 
-Continue Phase 4 resolved candidate rollout, readiness validation, atomic
-active routing, draining, and rollback work (P4-02 onward).
+Begin Phase 5 strict version-2 toolbox state, process-safe CAS, recovery, and
+version-1 archival cutover work.

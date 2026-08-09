@@ -68,6 +68,13 @@ deployment truth must be represented by the active parent revision and durable
 apply operation ref. Local `state_revision` or `toolbox_definition_digest`
 values are not substitutes for the parent active revision.
 
+Dependent code must not cache, select, compare, or cancel by worker engine ID,
+resolved profile ID, or environment key. Those identities can change during an
+atomic apply while an older worker finishes an in-flight call. Start execution
+with `toolbox_id + tool_name`; retain the returned hosted-operation ref for
+status/cancellation. Toolbox describe and gating likewise consume the active
+toolbox projection, never a union of discovered worker registrations.
+
 If a dependent needs a predictive definition digest for caching or diagnostics,
 it must use the canonical identity implementation and published vectors linked
 from the durable contract. The definition digest excludes

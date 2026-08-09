@@ -1745,6 +1745,26 @@ class EnginesMixin:
             self._write_engines(kept)
         return {"engine_id": eid, "removed": changed}
 
+    def set_toolbox_registration_routing_states(self, states: Dict[str, str]) -> Dict[str, str]:
+        requested = {str(key or "").strip(): str(value or "").strip() for key, value in dict(states or {}).items()}
+        if any(not key or value not in {"candidate", "active", "retired"} for key, value in requested.items()):
+            raise ValueError("routing_state_update_invalid")
+        rows = self._read_engines()
+        found: set[str] = set()
+        for row in rows:
+            engine_id = str(row.get("engine_id") or "").strip()
+            if engine_id not in requested:
+                continue
+            if str(row.get("executor_kind") or "") != "toolbox_executor":
+                raise ValueError("routing_state_update_not_toolbox")
+            row["routing_state"] = requested[engine_id]
+            found.add(engine_id)
+        if found != set(requested):
+            raise KeyError(sorted(set(requested) - found)[0])
+        if requested:
+            self._write_engines(rows)
+        return requested
+
     def shutdown(self, engine_id: str, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         entry = self._find_registration(engine_id)
         if not entry:

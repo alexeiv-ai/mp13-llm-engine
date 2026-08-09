@@ -24,6 +24,69 @@ from .errors import ToolboxRolloutError
 
 
 class ToolboxRuntimeMixin:
+    def _apply_resolved_toolbox_definition(
+        self,
+        *,
+        draft: Any,
+        profile_changes: List[Dict[str, Any]],
+        operation_id: str,
+    ) -> Dict[str, Any]:
+        from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
+
+        return self._run_locked_toolbox_call(
+            str(draft.definition.toolbox_id),
+            ToolboxDefinitionRolloutCoordinator(self).apply,
+            draft=draft,
+            profile_changes=profile_changes,
+            operation_id=str(operation_id or "").strip(),
+        )
+
+    def _cleanup_toolbox_definition_apply_candidates(self, *, record: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = dict(dict(record or {}).get("metadata") or {})
+        candidates = sorted(
+            {
+                str(item or "").strip()
+                for item in list(metadata.get("candidate_engine_ids") or [])
+                if str(item or "").strip()
+            }
+        )
+        toolbox_id = str(metadata.get("toolbox_id") or "").strip()
+        active = self._active_toolbox_v2_snapshot(toolbox_id) if toolbox_id else None
+        active_engine_ids = {
+            str(dict(route or {}).get("engine_id") or "").strip()
+            for route in dict(dict(active or {}).get("tool_routes") or {}).values()
+        }
+        cleaned: list[str] = []
+        for engine_id in candidates:
+            if engine_id in active_engine_ids:
+                continue
+            self._retire_toolbox_registration(engine_id)
+            cleaned.append(engine_id)
+        return {"status": "complete", "candidate_count": len(cleaned)}
+
+    def toolbox_definition_apply_operator_details(
+        self,
+        *,
+        operation_id: str,
+        operator_authorized: bool,
+    ) -> Dict[str, Any]:
+        if not bool(operator_authorized):
+            raise PermissionError("toolbox_operator_details_denied")
+        oid = str(operation_id or "").strip()
+        if not oid or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-" for character in oid):
+            raise ValueError("operation_id_invalid")
+        path = (
+            self.hosting_root / "state" / "toolbox_rollout_operator_details" / f"{oid}.json"
+        ).resolve()
+        try:
+            path.relative_to((self.hosting_root / "state" / "toolbox_rollout_operator_details").resolve())
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("toolbox_operator_details_unavailable") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("toolbox_operator_details_unavailable")
+        return payload
+
     @staticmethod
     def _toolbox_operation_namespace(*, engine_id: str = "", toolbox_id: str = "") -> str:
         tid = str(toolbox_id or "").strip()
@@ -219,6 +282,31 @@ class ToolboxRuntimeMixin:
             rows.append(reg)
         return rows
 
+    def _active_toolbox_v2_snapshot(self, toolbox_id: str) -> Optional[Dict[str, Any]]:
+        repository = getattr(self, "_toolbox_state_v2", None)
+        if repository is None:
+            return None
+        return repository.get(str(toolbox_id or "").strip())
+
+    def _active_toolbox_v2_registrations(self, toolbox_id: str) -> Optional[List[Dict[str, Any]]]:
+        snapshot = self._active_toolbox_v2_snapshot(toolbox_id)
+        if snapshot is None:
+            return None
+        engine_ids = sorted(
+            {
+                str(dict(route or {}).get("engine_id") or "").strip()
+                for route in dict(snapshot.get("tool_routes") or {}).values()
+            }
+            - {""}
+        )
+        registrations: List[Dict[str, Any]] = []
+        for engine_id in engine_ids:
+            reg = dict(self._find_registration(engine_id) or {})
+            if not reg or self._registration_toolbox_id(reg) != str(toolbox_id or "").strip():
+                raise RuntimeError(f"toolbox_active_route_registration_missing:{toolbox_id}:{engine_id}")
+            registrations.append(reg)
+        return registrations
+
     def _cleanup_toolbox_bundle_root(self, reg: Dict[str, Any]) -> None:
         bundle = dict(reg.get("bundle") or {})
         raw = str(bundle.get("bundle_root") or "").strip()
@@ -338,6 +426,22 @@ class ToolboxRuntimeMixin:
             raise ValueError("toolbox_id is required")
         if not name:
             raise ValueError("tool_name is required")
+        snapshot = self._active_toolbox_v2_snapshot(tid)
+        if snapshot is not None:
+            route = dict(dict(snapshot.get("tool_routes") or {}).get(name) or {})
+            if not route:
+                raise PermissionError(f"tool_not_allowed:{name}")
+            engine_id = str(route.get("engine_id") or "").strip()
+            profile_id = str(route.get("profile_id") or "").strip()
+            reg = dict(self._find_registration(engine_id) or {})
+            bundle = dict(reg.get("bundle") or {})
+            if (
+                not reg
+                or self._registration_toolbox_id(reg) != tid
+                or str(bundle.get("resolved_profile_id") or bundle.get("sandbox_profile_id") or "") != profile_id
+            ):
+                raise RuntimeError(f"toolbox_active_route_registration_mismatch:{tid}:{name}")
+            return self._require_toolbox_executor_registration(engine_id, command_label=command_label)
         matches: List[Dict[str, Any]] = []
         for reg in self._toolbox_executor_registrations(tid):
             if str(reg.get("routing_state") or "active") != "active":
@@ -523,8 +627,10 @@ class ToolboxRuntimeMixin:
         if not eid and not tid:
             raise ValueError("engine_id or toolbox_id is required")
         if tid and not eid:
-            regs = self._toolbox_executor_registrations(tid)
-            if not regs:
+            v2_regs = self._active_toolbox_v2_registrations(tid)
+            regs = v2_regs if v2_regs is not None else self._toolbox_executor_registrations(tid)
+            snapshot = self._active_toolbox_v2_snapshot(tid) if v2_regs is not None else None
+            if not regs and snapshot is None:
                 raise ValueError(f"toolbox '{tid}' has no registered sandbox executors")
             state = self._read_toolboxes()
             toolbox_row = dict(dict(state.get("toolboxes") or {}).get(tid) or {})
@@ -570,6 +676,10 @@ class ToolboxRuntimeMixin:
                 for name in list(self._registration_hidden_allowed_tool_names(reg) or set()):
                     hidden_allowed_tool_names.add(name)
                 sandbox_profile_ids.add(str(dict(reg.get("bundle") or {}).get("sandbox_profile_id") or "default"))
+            if snapshot is not None:
+                tool_names = set(dict(snapshot.get("tool_routes") or {}))
+                advertised_tool_names.intersection_update(tool_names)
+                hidden_allowed_tool_names.intersection_update(tool_names)
             return {
                 "status": "ok",
                 "toolbox_id": tid,
@@ -687,8 +797,13 @@ class ToolboxRuntimeMixin:
         if not eid and not tid:
             raise ValueError("engine_id or toolbox_id is required")
         if tid and not eid:
-            regs = self._toolbox_executor_registrations(tid)
-            if not regs:
+            v2_snapshot = self._active_toolbox_v2_snapshot(tid)
+            regs = (
+                self._active_toolbox_v2_registrations(tid)
+                if v2_snapshot is not None
+                else self._toolbox_executor_registrations(tid)
+            )
+            if not regs and v2_snapshot is None:
                 return {
                     "status": "ok",
                     "toolbox_id": tid,
@@ -699,9 +814,14 @@ class ToolboxRuntimeMixin:
                     "requires_confirmation": False,
                     "backend": "sandbox",
                 }
-            allowed_for_toolbox: set[str] = set()
-            for item in regs:
-                allowed_for_toolbox.update(self._registration_allowed_tool_names(item) or set())
+            allowed_for_toolbox: set[str] = (
+                set(dict(v2_snapshot.get("tool_routes") or {}))
+                if v2_snapshot is not None
+                else set()
+            )
+            if v2_snapshot is None:
+                for item in regs:
+                    allowed_for_toolbox.update(self._registration_allowed_tool_names(item) or set())
             if view is not None and name in allowed_for_toolbox and view.is_gated(name):
                 return {
                     "status": "ok",
@@ -1158,7 +1278,12 @@ class ToolboxRuntimeMixin:
             )
 
         target_regs: List[Dict[str, Any]] = []
-        if tid:
+        if eid:
+            reg = dict(self._find_registration(eid) or {})
+            if not reg:
+                return _cancel_failure("engine_not_found")
+            target_regs = [reg]
+        elif tid:
             if name:
                 try:
                     target_regs = [self._route_toolbox_registration(toolbox_id=tid, tool_name=name, command_label="hosted-operation-cancel")]
@@ -1168,11 +1293,6 @@ class ToolboxRuntimeMixin:
                 target_regs = list(self._toolbox_executor_registrations(tid))
             if not target_regs:
                 return _cancel_failure("toolbox_executor_missing")
-        else:
-            reg = dict(self._find_registration(eid) or {})
-            if not reg:
-                return _cancel_failure("engine_not_found")
-            target_regs = [reg]
 
         canceled_engine_ids: List[str] = []
         failed_engine_ids: List[str] = []

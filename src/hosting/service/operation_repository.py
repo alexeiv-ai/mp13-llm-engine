@@ -81,6 +81,8 @@ class HostedOperationRepository(Protocol):
 
     def cancel_before_dispatch(self, *, operation_id: str, reason: str) -> Optional[Dict[str, Any]]: ...
 
+    def merge_metadata(self, *, operation_id: str, metadata: Mapping[str, Any]) -> Dict[str, Any]: ...
+
     def cancel_before_progress_commit(
         self,
         *,
@@ -582,6 +584,25 @@ class AtomicJsonHostedOperationRepository:
                 row["updated_at_ms"] = now_ms
                 self._persist_locked()
                 self._condition.notify_all()
+            return self._status_from_row(row)
+
+    def merge_metadata(self, *, operation_id: str, metadata: Mapping[str, Any]) -> Dict[str, Any]:
+        oid = _bounded_identity(operation_id, label="operation_id")
+        updates = _redact(copy.deepcopy(dict(metadata or {})))
+        with self._state_lock():
+            location = self._operation_index.get(oid)
+            if location is None or location[1]:
+                raise KeyError(oid)
+            row = self._data[location[0]][oid]
+            lifecycle = HostedOperationLifecycle(str(row["lifecycle"]))
+            if lifecycle in TERMINAL_OPERATION_LIFECYCLES:
+                return self._status_from_row(row)
+            merged = {**dict(row.get("metadata") or {}), **updates}
+            if len(canonical_json_bytes(merged)) > MAX_METADATA_BYTES:
+                raise ValueError("operation_metadata_too_large")
+            row["metadata"] = merged
+            row["updated_at_ms"] = self._now_ms()
+            self._persist_locked()
             return self._status_from_row(row)
 
     def update_progress(

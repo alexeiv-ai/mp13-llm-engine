@@ -49,6 +49,16 @@ requires successful RPC readiness, an exact (not subset) tool inventory, the
 planned resolved-profile and environment identities, and the matching verified
 hermetic-environment receipt.
 
+Publication writes the active definition revision, resolved profiles, and the
+complete `tool_routes` map in one version-2 state transaction. Execute,
+toolbox-wide describe/gate, and cancellation routing use that map; live
+registration scans are not active truth. Only after the map is durable are new
+registrations marked active and replaced/removed registrations marked retired.
+Busy retired workers remain alive until their in-flight calls drain, but cannot
+receive new routed calls. A failed or canceled pre-publication rollout removes
+its candidates and leaves the prior snapshot unchanged. An empty definition is
+a normal new revision with empty profiles/routes and retained bounded history.
+
 ### Sandbox Profile
 
 `SandboxProfileSpec` contains:

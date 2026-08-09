@@ -43,6 +43,7 @@ from .toolbox_materialization import (
     UnconfiguredToolboxTemplateMaterializer,
 )
 from .toolbox_runtime import ToolboxRuntimeMixin
+from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from .workflow_helpers import WorkflowHelperMixin
 
 
@@ -101,6 +102,9 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self._toolbox_template_materializer = UnconfiguredToolboxTemplateMaterializer()
         self._toolbox_required_python_abi = str(toolbox_required_python_abi or "").strip()
         self._toolbox_required_platform = str(toolbox_required_platform or "").strip()
+        self._toolbox_state_v2 = AtomicJsonToolboxStateV2Repository(
+            self.hosting_root / "state" / "toolbox_sandboxes_v2.json"
+        )
         self._model_runtime_identity = (
             model_runtime_identity
             if isinstance(model_runtime_identity, ModelRuntimeIdentity)
