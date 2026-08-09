@@ -272,6 +272,95 @@ def test_rollout_recovery_resolves_pre_and_post_publication_crash_points(tmp_pat
     assert service._hosted_operations.get_by_operation_id(after_id)["lifecycle"] == "terminal_success"
 
 
+@pytest.mark.parametrize(
+    ("phase", "committed"),
+    [
+        ("validation", False),
+        ("warmup", False),
+        ("publication", True),
+        ("draining", True),
+        ("cleanup", True),
+    ],
+)
+def test_rollout_recovery_phase_matrix_uses_active_routes_as_truth(
+    tmp_path: Path, phase: str, committed: bool
+) -> None:
+    service = EngineHostService(
+        engines_state_file=tmp_path / phase / "managed.json",
+        control_state_file=tmp_path / phase / "control.json",
+    )
+    service._require_toolbox_executor_registration = (  # type: ignore[method-assign]
+        lambda engine_id, *, command_label: service.get_registration(engine_id)
+    )
+    definition = _definition("Alpha")
+    profile, profiles, routes = _runtime("c", "Alpha", f"candidate-{phase}")
+    service.register_spawned(
+        engine_id=f"candidate-{phase}",
+        pid=1234,
+        command=["python", "worker.py"],
+        executor_kind="toolbox_executor",
+        routing_state="candidate",
+        bundle={"toolbox_id": "demo", "resolved_profile_id": profile.profile_id},
+        environment={"environment_key": profile.environment_key},
+    )
+    if committed:
+        service.register_spawned(
+            engine_id=f"old-{phase}",
+            pid=1234,
+            command=["python", "worker.py"],
+            executor_kind="toolbox_executor",
+            routing_state="active",
+            bundle={"toolbox_id": "demo", "resolved_profile_id": "old-profile"},
+            environment={"environment_key": _digest("e")},
+        )
+        service._toolbox_state_v2.publish(
+            toolbox_id="demo",
+            expected_revision=None,
+            definition=definition.to_dict(),
+            profiles=profiles,
+            tool_routes=routes,
+            environment_references=[next(iter(profiles.values()))["environment_reference"]],
+            published_at_ms=1,
+        )
+    prepared = service._hosted_operations.prepare(
+        owner_actor_id="actor:matrix",
+        execution_kind="toolbox_definition_apply",
+        selector={"kind": "toolbox_id", "id": "demo"},
+        namespace="toolbox-definition:demo",
+        request_id=f"recovery-{phase}",
+        fingerprint=hosted_execution_fingerprint({"phase": phase}),
+        metadata={
+            "toolbox_id": "demo",
+            "definition_revision": definition.revision,
+            "candidate_engine_ids": [f"candidate-{phase}"],
+        },
+    )
+    operation_id = prepared["status"]["operation"]["operation_id"]
+    service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+    service._hosted_operations.update_progress(
+        operation_id=operation_id,
+        progress={
+            "phase": phase,
+            "code": f"recovery_{phase}",
+            "completed_units": 0,
+            "total_units": 1,
+            "updated_at_ms": int(time.time() * 1000),
+            "summary": f"Recovery at {phase}.",
+            "cancellable": not committed,
+        },
+    )
+
+    recovered = service.recover_toolbox_definition_rollouts()
+    terminal = service._hosted_operations.get_by_operation_id(operation_id)
+    if committed:
+        assert terminal["lifecycle"] == "terminal_success"
+        assert f"candidate-{phase}" in recovered["activated_engine_ids"]
+        assert service.get_registration(f"old-{phase}") is None
+    else:
+        assert terminal["lifecycle"] == "terminal_failure"
+        assert f"candidate-{phase}" in recovered["removed_candidate_engine_ids"]
+
+
 def test_archive_v1_validates_digest_moves_payload_and_initializes_empty_v2(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path.resolve()
     state_root = root / "state"

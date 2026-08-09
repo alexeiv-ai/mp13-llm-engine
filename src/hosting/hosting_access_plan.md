@@ -1188,17 +1188,32 @@ version-1 toolbox state path.
   fallback, offline denial, lock/artifact completeness, failed import probes,
   and unresolved top-level imports before rollout. The exact complete suite
   passed 1,096 with three skips; compile and diff checks passed.
-- [ ] **P7-05** Add hermeticity tests proving packages available only in the
+- [x] **P7-05** Add hermeticity tests proving packages available only in the
   host interpreter are unavailable to toolbox workers unless present in the
   resolved template/custom lock.
-- [ ] **P7-06** Add state tests for stale expected revisions, concurrent
+- [x] **P7-06** Add state tests for stale expected revisions, concurrent
   processes, corrupt/truncated JSON, interrupted write, version-1 rejection,
   archival cutover, and each crash-recovery point before/during/after route
   publication and before/during/after old-worker retirement.
-- [ ] **P7-07** Update repair/GC tests for candidates, active routes, retired
+- [x] **P7-07** Update repair/GC tests for candidates, active routes, retired
   workers, environment reference grace periods, and orphaned bundles.
-- [ ] **P7-08** Add absence tests for every removed API, command, payload field,
+- [x] **P7-08** Add absence tests for every removed API, command, payload field,
   state schema, bootstrap fallback, and ambient-site-package behavior.
+
+  Evidence (2026-08-08): real offline venv tests prove system site packages
+  and host-only `pytest` are absent, base-plus-delta locks are independent, and
+  failed artifact/import verification never publishes. State tests now cover
+  stale CAS, concurrent processes, corruption/truncation, interrupted replace,
+  exact v1 rejection/archive, and validation/warmup/publication/draining/cleanup
+  recovery phases; routing tests cover busy retirement. Version-2 maintenance
+  tests distinguish active, candidate, retired, orphan bundle, and
+  grace-referenced environment ownership. Strict absence tests reject old
+  definition/state/runtime selector shapes, find no mutation/install public
+  surface, and allow the v1 filename only in explicit archival boundaries.
+  Hermetic/absence tests passed 20 after one assertion was narrowed to the
+  toolbox-specific channel surface; state/routing/maintenance/removal tests
+  passed 25. The complete suite passed 1,105 with three skips; compile and diff
+  checks passed.
 - [ ] **P7-09** Add approval tests for cross-actor denial, wrong plan/definition/
   delta, changed catalog/policy revision, expiry, retry, duplicate apply, and
   rejection of client-fabricated Boolean or mapping evidence.

@@ -39,15 +39,15 @@ host-owned standard template/policy startup configuration.
 
 ## Active slice
 
-P7-05 through P7-08: close ambient-package hermeticity, state/crash recovery,
-version-2 maintenance/GC, and complete removed-surface absence matrices.
+P7-09 through P7-12: close exact approval binding, durable apply/recovery,
+multi-toolbox isolation/concurrency, and user/operator projection matrices.
 
 Predeclared verification:
 
 ```powershell
-python -m pytest tests/test_hosting_toolbox_cutover_matrix.py tests/test_hosted_toolbox_hermetic_builder.py tests/test_hosted_toolbox_hermetic_environment_contract.py -q
-python -m pytest tests/test_hosting_toolbox_state_v2.py tests/test_hosting_toolbox_atomic_routing.py tests/test_hosting_toolbox_maintenance_v2.py tests/test_hosting_toolbox_removed_surface.py -q
-python -m compileall -q src/hosting tests/test_hosting_toolbox_cutover_matrix.py
+python -m pytest tests/test_hosting_toolbox_public_guarantees.py tests/test_hosting_toolbox_definition_service.py tests/test_hosted_toolbox_plan_repository.py -q
+python -m pytest tests/test_hosting_definition_apply_operation.py tests/test_hosting_operation_repository.py tests/test_hosting_toolbox_atomic_routing.py tests/test_hosting_toolbox_definition_transport.py -q
+python -m compileall -q src/hosting tests/test_hosting_toolbox_public_guarantees.py
 python -m pytest tests -q
 git diff --check
 ```
@@ -86,6 +86,7 @@ git diff --check
 | 2026-08-08 | P6-04 through P6-10 | Removed every legacy builder/mutation, mutable-environment, version-1 state, selector fallback, and ambient-interpreter path; migrated hosted chat to complete/empty definitions; rewrote maintenance against version-2 routes and registration lifecycle. | Removal/definition -> 16 passed; channel/CLI/sandbox/auth -> 222 passed; maintenance/demo/API/hermetic -> 43 passed; complete suite -> 1,090 passed, 3 skipped; compile/diff checks passed. The first complete run found six stale expectations or timing assumptions; all were corrected before the final passing run. | `refactor: remove legacy toolbox mutation surface (P6-04..P6-10)` |
 | 2026-08-08 | P6-11, Phase 6 exit | Added strict host-owned standard catalog/compute-only policy configuration, eager publish/prewarm and bounded readiness, configured hermetic cache/build limits, and restart-safe administrator immutable revision replacement. | Host configuration/template -> 16 passed; channel/CLI/auth -> 134 passed; workflow concurrency -> 5 consecutive fresh runs; complete suite -> 1,093 passed, 3 skipped; compile/diff checks passed. The first complete run exposed and corrected a registry first-access race; a later run had two transient worker startup timeouts that passed in isolation before the clean exact full run. The initially named prewarm test file was corrected to the repository's actual `test_hosted_toolbox_template_prewarm.py` before closeout. | `feat: configure standard toolbox host startup (P6-11)` |
 | 2026-08-08 | P7-01 through P7-04 | Added mixed-category complete-definition preservation/profile-diff coverage and continuous atomic-route observation; closed the template/alias/custom/offline/lock/probe/missing-import dependency matrix. | Definition/planner/rollout/routing -> 21 passed; dependency/policy/real hermetic build -> 43 passed; complete suite -> 1,096 passed, 3 skipped; compile/diff checks passed. | `test: close definition rollout matrix (P7-01..P7-04)` |
+| 2026-08-08 | P7-05 through P7-08 | Closed real ambient-package hermeticity, every rollout recovery phase, strict v2 state/archive behavior, candidate/active/retired/orphan/grace GC ownership, and removed API/command/payload/state/bootstrap absence. | Hermetic/absence -> 20 passed; state/routing/maintenance/removal -> 25 passed; complete suite -> 1,105 passed, 3 skipped; compile/diff checks passed. One broad absence assertion initially included a generic non-toolbox channel method and was narrowed before the clean focused/full runs. | `test: close toolbox cutover matrix (P7-05..P7-08)` |
 
 P0-01/P0-02 exact verification commands:
 

@@ -183,3 +183,29 @@ def test_gc_removes_only_unreferenced_candidate_and_retired_workers(
     assert result["removed_engine_ids"] == ["candidate-orphan", "retired-old"]
     assert removed == ["candidate-orphan", "retired-old"]
     assert active not in removed
+
+
+def test_gc_removes_orphaned_bundle_but_preserves_active_bundle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    active_engine = _install_active(service)
+    bundles_root = service.hosting_root / "toolbox_bundles"
+    active_root = bundles_root / "active"
+    orphan_root = bundles_root / "orphan"
+    active_root.mkdir(parents=True)
+    orphan_root.mkdir(parents=True)
+    (active_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (orphan_root / "manifest.json").write_text("{}", encoding="utf-8")
+    registration = service.get_registration(active_engine)
+    registration["bundle"]["bundle_root"] = str(active_root)
+    service._write_engines(
+        [registration if row["engine_id"] == active_engine else row for row in service._read_engines()]
+    )
+    monkeypatch.setattr(service, "recover_toolbox_definition_rollouts", lambda: {"status": "ok"})
+
+    result = service.toolbox_gc()
+
+    assert result["removed_bundle_roots"] == [str(orphan_root.resolve())]
+    assert active_root.is_dir()
+    assert not orphan_root.exists()
