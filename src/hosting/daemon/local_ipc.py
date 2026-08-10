@@ -18,7 +18,7 @@ import time
 from multiprocessing.connection import Client as MPClient
 from multiprocessing.connection import Listener as MPListener
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ..sandbox.host_capabilities import (
     CapabilityAuthorityLease,
@@ -54,6 +54,9 @@ class EngineHostDaemon:
         engines_state_file: Optional[Path] = None,
         control_state_file: Optional[Path] = None,
         runtime_profile: str = "foreground_terminal_bound",
+        toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
+        toolbox_artifact_sources: Optional[Mapping[str, Path]] = None,
+        toolbox_dependency_policy: Optional[Mapping[str, Any]] = None,
     ):
         self.port = int(port or DEFAULT_DAEMON_PORT)
         self.pid_file = DaemonPidFile(pid_file)
@@ -63,6 +66,17 @@ class EngineHostDaemon:
         self.svc = EngineHostService(
             engines_state_file=engines_state_file,
             control_state_file=control_state_file,
+            toolbox_host_project_configuration=toolbox_host_project_configuration,
+            toolbox_artifact_sources=(
+                {str(key): Path(value) for key, value in toolbox_artifact_sources.items()}
+                if toolbox_artifact_sources is not None
+                else None
+            ),
+            toolbox_dependency_policy=(
+                dict(toolbox_dependency_policy)
+                if toolbox_dependency_policy is not None
+                else None
+            ),
         )
         self.svc.assert_runtime_policy_safe()
         self._server: Optional[asyncio.AbstractServer] = None

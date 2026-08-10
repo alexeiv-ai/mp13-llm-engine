@@ -237,6 +237,8 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
         "`package_requirements`",
         "`credential_ref`",
         "`source_set_revision`",
+        "`toolbox_artifact_sources`",
+        "`toolbox_dependency_policy`",
         "`artifact_cache_grace_seconds`",
         "`remove_unreferenced_custom_revisions_on_apply`",
     ]:

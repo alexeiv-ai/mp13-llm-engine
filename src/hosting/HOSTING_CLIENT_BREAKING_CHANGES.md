@@ -132,6 +132,10 @@ authenticated signed-bundle administrator upload lifecycle.
 
 Administrator setup logic must change as follows:
 
+- replace `EngineHostService(toolbox_environment_catalog=...,
+  toolbox_sandbox_policies=...)` construction with normal
+  `EngineHostDaemon(toolbox_host_project_configuration=...,
+  toolbox_artifact_sources=..., toolbox_dependency_policy=...)` construction;
 - stop generating `required_target`; verify the daemon-reported detected target;
 - define built-in intent and ordered sources instead of realized locks;
 - treat configuration application as revision creation, not in-place mutation;

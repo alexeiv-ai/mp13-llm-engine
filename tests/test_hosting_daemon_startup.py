@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from hosting.daemon import EngineHostDaemon
+from hosting.toolbox.identity import identity_digest
+from hosting.toolbox.target import detect_current_toolbox_target
 
 
 class _FakePidFile:
@@ -131,3 +133,84 @@ def test_daemon_startup_recovery_stops_foreign_owner_registrations(
     assert report["foreign_attempted"] == 1
     assert report["foreign_stopped"] == 1
     assert calls == [("foreign-worker", 3.0)]
+
+
+def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
+    tmp_path: Path,
+) -> None:
+    target = detect_current_toolbox_target()
+    source_root = tmp_path / "airgap"
+    source_root.mkdir()
+    configuration = {
+        "builtins": [
+            {
+                "template_id": template_id,
+                "imports": ["hosting"],
+                "package_requirements": [],
+                "sandbox_policy": "compute-only",
+                "required": True,
+                "prewarm": False,
+                "provenance": "parent-release",
+            }
+            for template_id in ("core", "py-compute")
+        ],
+        "sources": [
+            {
+                "source_id": "parent-release-resources",
+                "kind": "airgap_store",
+                "origin": "airgap://parent-release-resources",
+                "credential_ref": None,
+                "allowed_package_namespaces": ["*"],
+                "priority": 100,
+                "trust_key_ids": ["parent-release-toolbox-v1"],
+                "maximum_download_bytes": 536_870_912,
+            }
+        ],
+        "resolution": {
+            "mode": "air_gapped",
+            "timeout_seconds": 300,
+            "maximum_bytes": 536_870_912,
+            "maximum_artifacts": 256,
+            "allowed_redirect_origins": [],
+            "wheel_only": True,
+        },
+        "retention": {
+            "artifact_cache_grace_seconds": 604_800,
+            "maximum_cache_bytes": 10_737_418_240,
+            "maximum_cache_artifacts": 4096,
+            "protected_digests": [],
+            "remove_unreferenced_custom_revisions_on_apply": False,
+        },
+    }
+    policy_body = {
+        "allowed_template_ids": ["core", "py-compute"],
+        "allowed_targets": [target.name],
+        "package_allowlist": [],
+        "package_denylist": [],
+        "allow_custom": False,
+        "custom_requires_approval": True,
+        "online_resolution_allowed": False,
+        "allowed_index_origins": [],
+    }
+    dependency_policy = {
+        "revision": identity_digest("hosting.toolbox.test.policy.v1", policy_body),
+        **policy_body,
+    }
+
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration,
+        toolbox_artifact_sources={"parent-release-resources": source_root},
+        toolbox_dependency_policy=dependency_policy,
+    )
+
+    assert daemon.svc._toolbox_target == target  # noqa: SLF001
+    assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
+    assert daemon.svc._configured_toolbox_dependency_policy.to_dict() == dependency_policy  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["status"] == "configured"  # noqa: SLF001
+    summary = daemon.svc.hosting_setup_summary()
+    assert summary["toolbox_readiness"]["status"] == "degraded"
+    assert summary["toolbox_host_project"]["target"]["platform"] == target.platform
+    assert "credential_ref" not in str(summary["toolbox_host_project"])

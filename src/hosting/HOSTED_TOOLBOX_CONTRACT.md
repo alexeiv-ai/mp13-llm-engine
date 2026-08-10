@@ -617,6 +617,13 @@ Canonical JSON of the complete configuration produces an immutable
 the detected target, built-in intent, sanitized origins, and bounds, but omit
 every `credential_ref` and daemon path.
 
+Normal daemon construction supplies `toolbox_host_project_configuration`,
+daemon-local `toolbox_artifact_sources` bindings keyed by logical source ID,
+and `toolbox_dependency_policy` to `EngineHostService`. The daemon and service
+both use the same canonical detected target. Supplying only part of the strict
+setup or omitting a required air-gap binding is invalid; the normal daemon does
+not construct an unconfigured parallel materializer.
+
 The required built-in `sandbox_policy` reference is `compute-only`. Its exact
 effective policy is:
 

@@ -572,7 +572,7 @@ boundary—not a double—passes.
 - [ ] **R2-02** Wire configuration, sources, policy, and target detection through
   `daemon/local_ipc.py::EngineHostDaemon` into `EngineHostService`; refuse
   toolbox readiness on invalid or incomplete setup.
-  - [ ] **R2-02a** Add strict daemon construction inputs for configuration,
+  - [x] **R2-02a** Add strict daemon construction inputs for configuration,
     logical source bindings, dependency policy, and detected target; prove the
     normal daemon supplies them to `EngineHostService`.
   - [ ] **R2-02b** Publish bounded not-ready diagnostics for missing, invalid, or
