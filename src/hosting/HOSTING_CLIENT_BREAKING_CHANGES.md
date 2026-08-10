@@ -151,6 +151,22 @@ receipts are committed in one receipt-store replacement, followed by one
 catalog activation replacement. An ordinary publication failure rolls back
 new receipts/references; identical retry is idempotent.
 
+The artifact-store state contract changes to
+`hosting.toolbox.artifact_store.v2` and adds a separate `https_manifests`
+collection that references the same immutable CAS objects as signed air-gap
+bundles. Hosts must not reuse or edit a v1 index in place; reacquire/reimport
+artifacts under the configured source revision.
+
+HTTPS package sources now require signed PEP 691 JSON. The exact response bytes
+are authenticated by `X-MP13-Signing-Key-Id` and the unpadded-base64url
+Ed25519 `X-MP13-Signature`; every selected file also requires a SHA-256 and
+exact byte size. Administrator wiring supplies an exact daemon-owned map from
+each configured `credential_ref` to its Authorization value. Clients and
+status projections must never return that map, forward it across an unapproved
+redirect, or parse network/parser text. Stable bounded failures cover invalid
+credentials, requests, redirects, metadata/signatures, artifact identity, and
+bounds.
+
 Administrator setup logic must change as follows:
 
 - replace `EngineHostService(toolbox_environment_catalog=...,

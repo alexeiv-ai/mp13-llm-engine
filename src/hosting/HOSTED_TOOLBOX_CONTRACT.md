@@ -646,6 +646,25 @@ Canonical JSON of the complete configuration produces an immutable
 the detected target, built-in intent, sanitized origins, and bounds, but omit
 every `credential_ref` and daemon path.
 
+HTTPS acquisition accepts PEP 691 JSON only from the configured source origin
+or an exact origin in `allowed_redirect_origins`, follows at most five explicit
+redirects, and never forwards credentials to an unapproved origin. A source
+with `credential_ref` requires one exact daemon-owned Authorization binding;
+bindings are not configuration, status, progress, or error data. Metadata must
+carry `X-MP13-Signing-Key-Id` and `X-MP13-Signature`, where the signature is
+unpadded base64url Ed25519 over the exact response bytes and the key ID is in
+that source's configured trust set.
+
+Only current-target wheel entries with a source-provided SHA-256 and exact byte
+size are eligible. Metadata and artifact responses are streamed with configured
+timeouts, redirect limits, per-source and aggregate byte bounds. The downloaded
+filename, size, digest, wheel tags, distribution/version metadata, and allowed
+namespace are verified before one atomic shared-CAS index replacement. The CAS
+contract is `hosting.toolbox.artifact_store.v2`; its `https_manifests` evidence
+is separate from signed air-gap `bundles`, while both reference the same
+immutable `objects` collection. Failure changes neither evidence nor the object
+index.
+
 The host records every applied configuration revision in one process-locked,
 atomically replaced state file and marks exactly one revision current. Applying
 the same revision is idempotent. A transition to a different revision

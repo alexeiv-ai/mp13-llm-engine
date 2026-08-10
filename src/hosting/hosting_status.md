@@ -121,22 +121,29 @@ checkpoint plus current receipts and otherwise terminally fails on that same
 record. The focused daemon/artifact/config/restart suite passed 41 tests in
 98.24s. The expanded operation-repository/service/daemon/artifact/config/docs
 suite passed 107 tests in 101.56s; `git diff --check` passed.
+R2-05a1 adds redirect-controlled signed PEP 691 metadata fetch, exact
+daemon-owned Authorization binding, streamed byte/time bounds, and verified
+wheel download into artifact-store v2. Signed HTTPS manifests and signed
+air-gap bundles share immutable CAS objects but retain distinct evidence; any
+signature, redirect, size, digest, tag, namespace, or metadata failure leaves
+the index unchanged. The HTTPS/store suite passed 31 tests; compile and
+`git diff --check` passed. The expanded HTTPS/store/config/docs suite passed 47
+tests in 97.91s.
 
 ## Active implementation slice
 
-Active slice: none. R2-04b/R2-06b (`high`) are complete. HTTPS acquisition and
-administrator upload remain R2-03b2/R2-05a/R2-05c.
+Active slice: none. R2-05a1 (`high`) is complete. Resolver/setup integration
+remains R2-05a2/R2-03b2; administrator upload remains R2-05c.
 
-Next-slice validation must be declared before implementation. R2-04b/R2-06b
+Next-slice validation must be declared before implementation. R2-05a2/R2-03b2
 must prove:
 
-- normal daemon construction starts or attaches to the canonical setup record
-  without blocking the control plane;
-- interrupted-before-dispatch and interrupted-after-dispatch records are
-  recovered or terminally reconciled after restart;
-- required/optional readiness derives only from real materialization receipts;
-  and
-- no parallel operation mirror or partial catalog publication is created.
+- bounded transitive discovery downloads only signed-hash current-target wheel
+  candidates through configured sources;
+- the offline exact resolver consumes only their verified CAS paths;
+- online and air-gap fixtures for the same closure produce the same artifact
+  and lock digests; and
+- normal daemon setup publishes nothing on a missing or corrupt online wheel.
 
 ## Status update rules
 

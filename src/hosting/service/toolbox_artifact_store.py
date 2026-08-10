@@ -28,7 +28,7 @@ from ..toolbox.target import wheel_is_compatible
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 
 
-ARTIFACT_STORE_CONTRACT = "hosting.toolbox.artifact_store.v1"
+ARTIFACT_STORE_CONTRACT = "hosting.toolbox.artifact_store.v2"
 BUNDLE_CONTRACT = "hosting.toolbox.artifact_bundle.v1"
 SIGNATURE_CONTRACT = "hosting.toolbox.artifact_bundle_signature.v1"
 _BUNDLE_ID_RE = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
@@ -56,6 +56,24 @@ class ToolboxArtifactBundleError(RuntimeError):
     def __init__(self, code: str):
         if code not in self._SUMMARIES:
             raise ValueError("artifact_bundle_error_code_invalid")
+        self.code = code
+        self.summary = self._SUMMARIES[code]
+        super().__init__(code)
+
+
+class ToolboxHttpsArtifactError(RuntimeError):
+    _SUMMARIES = {
+        "https_metadata_invalid": "The HTTPS package metadata is invalid.",
+        "https_metadata_signature_invalid": "The HTTPS package metadata signature is invalid.",
+        "https_artifact_target_invalid": "The HTTPS wheel does not match this host target.",
+        "https_artifact_invalid": "The HTTPS wheel does not match its signed metadata.",
+        "https_artifact_bounds_exceeded": "The HTTPS artifact exceeds configured bounds.",
+        "https_artifact_identity_conflict": "The HTTPS artifact conflicts with stored content.",
+    }
+
+    def __init__(self, code: str):
+        if code not in self._SUMMARIES:
+            raise ValueError("https_artifact_error_code_invalid")
         self.code = code
         self.summary = self._SUMMARIES[code]
         super().__init__(code)
@@ -109,12 +127,19 @@ class AtomicToolboxArtifactStore:
 
     @staticmethod
     def _empty() -> dict[str, Any]:
-        return {"contract": ARTIFACT_STORE_CONTRACT, "bundles": {}, "objects": {}}
+        return {
+            "contract": ARTIFACT_STORE_CONTRACT,
+            "bundles": {},
+            "https_manifests": {},
+            "objects": {},
+        }
 
     @classmethod
     def _validate_index(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
         row = dict(payload or {})
-        if set(row) != {"contract", "bundles", "objects"} or row.get("contract") != ARTIFACT_STORE_CONTRACT:
+        if set(row) != {
+            "contract", "bundles", "https_manifests", "objects"
+        } or row.get("contract") != ARTIFACT_STORE_CONTRACT:
             raise ValueError("artifact_store_index_invalid")
         if not isinstance(row["bundles"], dict) or not isinstance(row["objects"], dict):
             raise ValueError("artifact_store_index_invalid")
@@ -132,6 +157,22 @@ class AtomicToolboxArtifactStore:
                 raise ValueError("artifact_store_index_invalid")
             for digest in bundle["artifact_digests"]:
                 require_digest(digest, label="artifact_bundle_artifact_digest")
+        for manifest_id, manifest in row["https_manifests"].items():
+            if not _BUNDLE_ID_RE.fullmatch(str(manifest_id)) or not isinstance(manifest, dict):
+                raise ValueError("artifact_store_index_invalid")
+            if set(manifest) != {
+                "manifest_digest", "source_id", "source_set_revision", "target",
+                "signing_key_id", "signature", "artifact_digests",
+            }:
+                raise ValueError("artifact_store_index_invalid")
+            require_digest(manifest["manifest_digest"], label="https_manifest_digest")
+            require_digest(
+                manifest["source_set_revision"], label="https_manifest_source_set_revision"
+            )
+            if not isinstance(manifest["artifact_digests"], list) or not manifest["artifact_digests"]:
+                raise ValueError("artifact_store_index_invalid")
+            for digest in manifest["artifact_digests"]:
+                require_digest(digest, label="https_manifest_artifact_digest")
         for digest, item in row["objects"].items():
             require_digest(digest, label="artifact_store_object_digest")
             if not isinstance(item, dict) or set(item) != {
@@ -144,6 +185,9 @@ class AtomicToolboxArtifactStore:
         return {
             "contract": ARTIFACT_STORE_CONTRACT,
             "bundles": {str(key): dict(value) for key, value in row["bundles"].items()},
+            "https_manifests": {
+                str(key): dict(value) for key, value in row["https_manifests"].items()
+            },
             "objects": {str(key): dict(value) for key, value in row["objects"].items()},
         }
 
@@ -497,6 +541,144 @@ class AtomicToolboxArtifactStore:
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
+    def import_https_wheel(
+        self,
+        wheel_path: Path,
+        *,
+        configuration: ToolboxHostProjectConfiguration,
+        source_id: str,
+        metadata_raw: bytes,
+        signing_key_id: str,
+        signature: str,
+        trust_public_keys: Mapping[str, str],
+        filename: str,
+        sha256: str,
+        size_bytes: int,
+    ) -> dict[str, Any]:
+        """Verify one wheel against signed PEP 691 metadata and index it atomically."""
+        try:
+            source = next(item for item in configuration.sources if item.source_id == source_id)
+        except StopIteration as exc:
+            raise ToolboxHttpsArtifactError("https_metadata_invalid") from exc
+        if source.kind not in {"https_index", "https_artifact"}:
+            raise ToolboxHttpsArtifactError("https_metadata_invalid")
+        keys = validate_trust_public_keys(configuration, trust_public_keys)
+        if signing_key_id not in source.trust_key_ids or signing_key_id not in keys:
+            raise ToolboxHttpsArtifactError("https_metadata_signature_invalid")
+        try:
+            Ed25519PublicKey.from_public_bytes(
+                _base64url(keys[signing_key_id], length=32)
+            ).verify(_base64url(signature, length=64), bytes(metadata_raw))
+        except (InvalidSignature, ValueError) as exc:
+            raise ToolboxHttpsArtifactError("https_metadata_signature_invalid") from exc
+        if not metadata_raw or len(metadata_raw) > _MAX_MANIFEST_BYTES:
+            raise ToolboxHttpsArtifactError("https_metadata_invalid")
+        try:
+            metadata = json.loads(metadata_raw.decode("utf-8"))
+            files = list(metadata["files"])
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            raise ToolboxHttpsArtifactError("https_metadata_invalid") from exc
+        matches = [item for item in files if isinstance(item, dict) and item.get("filename") == filename]
+        if len(matches) != 1:
+            raise ToolboxHttpsArtifactError("https_metadata_invalid")
+        descriptor = matches[0]
+        expected_hex = str(sha256 or "").removeprefix("sha256:")
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", expected_hex)
+            or descriptor.get("hashes", {}).get("sha256") != expected_hex
+            or descriptor.get("size") != size_bytes
+            or isinstance(size_bytes, bool)
+            or not isinstance(size_bytes, int)
+            or size_bytes <= 0
+            or size_bytes > min(
+                source.maximum_download_bytes, configuration.resolution.maximum_bytes
+            )
+        ):
+            raise ToolboxHttpsArtifactError("https_artifact_bounds_exceeded")
+        try:
+            wheel_name, wheel_version, _build, _tags = parse_wheel_filename(filename)
+        except InvalidWheelFilename as exc:
+            raise ToolboxHttpsArtifactError("https_artifact_target_invalid") from exc
+        distribution = normalize_distribution_name(wheel_name)
+        version = str(wheel_version)
+        if not wheel_is_compatible(filename, configuration.target):
+            raise ToolboxHttpsArtifactError("https_artifact_target_invalid")
+        if not any(
+            namespace == "*"
+            or distribution == namespace.removesuffix(".*")
+            or (namespace.endswith(".*") and distribution.startswith(namespace[:-1]))
+            for namespace in source.allowed_package_namespaces
+        ):
+            raise ToolboxHttpsArtifactError("https_artifact_invalid")
+        path = Path(wheel_path).expanduser().resolve()
+        try:
+            if not path.is_file() or path.name != filename or path.stat().st_size != size_bytes:
+                raise ToolboxHttpsArtifactError("https_artifact_invalid")
+            hasher = hashlib.sha256()
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    hasher.update(chunk)
+            digest = f"sha256:{hasher.hexdigest()}"
+            if digest != f"sha256:{expected_hex}":
+                raise ToolboxHttpsArtifactError("https_artifact_invalid")
+            self._verify_wheel_archive(
+                path,
+                distribution=distribution,
+                version=version,
+                maximum_bytes=min(
+                    source.maximum_download_bytes, configuration.resolution.maximum_bytes
+                ),
+            )
+        except ToolboxArtifactBundleError as exc:
+            raise ToolboxHttpsArtifactError("https_artifact_invalid") from exc
+        except OSError as exc:
+            raise ToolboxHttpsArtifactError("https_artifact_invalid") from exc
+
+        manifest_digest = f"sha256:{hashlib.sha256(metadata_raw).hexdigest()}"
+        manifest_id = f"https-{manifest_digest.removeprefix('sha256:')}"
+        manifest_record = {
+            "manifest_digest": manifest_digest,
+            "source_id": source.source_id,
+            "source_set_revision": configuration.source_set_revision,
+            "target": configuration.target.name,
+            "signing_key_id": signing_key_id,
+            "signature": signature,
+            "artifact_digests": [digest],
+        }
+        digest_hex = digest.removeprefix("sha256:")
+        relative = PurePosixPath("objects", digest_hex[:2], digest_hex, filename)
+        target_path = self.root.joinpath(*relative.parts)
+        object_record = {
+            "filename": filename,
+            "distribution": distribution,
+            "version": version,
+            "size_bytes": size_bytes,
+            "relative_path": relative.as_posix(),
+        }
+        with _exclusive_process_file_lock(self.lock_path):
+            index = self._read_unlocked()
+            previous_object = index["objects"].get(digest)
+            if previous_object is not None and previous_object != object_record:
+                raise ToolboxHttpsArtifactError("https_artifact_identity_conflict")
+            previous_manifest = index["https_manifests"].get(manifest_id)
+            if previous_manifest is not None:
+                immutable = {key: value for key, value in manifest_record.items() if key != "artifact_digests"}
+                previous_immutable = {
+                    key: value for key, value in previous_manifest.items() if key != "artifact_digests"
+                }
+                if immutable != previous_immutable:
+                    raise ToolboxHttpsArtifactError("https_artifact_identity_conflict")
+                manifest_record["artifact_digests"] = sorted(
+                    set(previous_manifest["artifact_digests"]) | {digest}
+                )
+            if not target_path.exists():
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target_path)
+            index["objects"][digest] = object_record
+            index["https_manifests"][manifest_id] = manifest_record
+            self._write_unlocked(index)
+        return {"status": "imported", "manifest_id": manifest_id, **manifest_record}
+
     def object_path(self, digest: str) -> Path:
         key = require_digest(digest, label="artifact_store_object_digest")
         with _exclusive_process_file_lock(self.lock_path):
@@ -520,9 +702,12 @@ class AtomicToolboxArtifactStore:
             digests = sorted(
                 {
                     digest
-                    for bundle in index["bundles"].values()
-                    if bundle["source_id"] == logical_source
-                    for digest in bundle["artifact_digests"]
+                    for evidence in (
+                        *index["bundles"].values(),
+                        *index["https_manifests"].values(),
+                    )
+                    if evidence["source_id"] == logical_source
+                    for digest in evidence["artifact_digests"]
                 }
             )
             rows = [(digest, dict(index["objects"][digest])) for digest in digests]
@@ -567,5 +752,6 @@ __all__ = [
     "BUNDLE_CONTRACT",
     "SIGNATURE_CONTRACT",
     "ToolboxArtifactBundleError",
+    "ToolboxHttpsArtifactError",
     "validate_trust_public_keys",
 ]

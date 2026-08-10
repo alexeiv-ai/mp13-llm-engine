@@ -605,6 +605,12 @@ boundary—not a double—passes.
   publication.
   - [ ] **R2-05a** Implement revisioned HTTPS index/artifact acquisition into the
     verified content-addressed artifact store with bounds and redaction.
+    - [x] **R2-05a1** Fetch configured HTTPS PEP metadata and selected wheels
+      with exact credential, redirect, signature, digest, target, and byte/time
+      bounds, then atomically index verified objects in the shared CAS.
+    - [ ] **R2-05a2** Discover a bounded transitive candidate set and feed its
+      verified CAS paths through the exact current-target closure resolver and
+      normal setup publication boundary.
   - [x] **R2-05b** Implement configured read-only signed air-gap ZIP ingestion
     with strict manifest, signature, path, tag, digest, and closure checks.
     - [x] **R2-05b1** Implement the Ed25519-verified strict ZIP importer and
