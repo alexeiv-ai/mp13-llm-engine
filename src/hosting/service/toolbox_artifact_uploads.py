@@ -110,19 +110,48 @@ class AtomicToolboxArtifactUploadRepository:
                 "owner_actor_id", "request_id", "fingerprint", "source_id",
                 "config_revision", "source_set_revision", "target", "archive_sha256",
                 "total_size", "received_size", "chunks", "state", "created_at_ms",
-                "updated_at_ms", "expires_at_ms",
+                "updated_at_ms", "expires_at_ms", "commit_request_id", "operation_id",
+                "result",
             }:
                 raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
             require_digest(item["fingerprint"], label="artifact_upload_fingerprint")
             require_digest(item["archive_sha256"], label="artifact_upload_archive_digest")
             if (
-                item["state"] not in {"open", "canceled", "expired", "committing", "committed"}
+                item["state"] not in {
+                    "open", "canceled", "expired", "committing", "committed", "failed"
+                }
                 or isinstance(item["total_size"], bool)
                 or not isinstance(item["total_size"], int)
                 or isinstance(item["received_size"], bool)
                 or not isinstance(item["received_size"], int)
                 or not 0 <= item["received_size"] <= item["total_size"]
                 or not isinstance(item["chunks"], list)
+            ):
+                raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
+            commit_request_id = item["commit_request_id"]
+            operation_id = item["operation_id"]
+            result = item["result"]
+            if (
+                (commit_request_id is not None and not isinstance(commit_request_id, str))
+                or (operation_id is not None and not isinstance(operation_id, str))
+                or (result is not None and not isinstance(result, dict))
+            ):
+                raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
+            if commit_request_id is not None:
+                _identity(commit_request_id, label="commit_request_id")
+            if operation_id is not None:
+                _identity(operation_id, label="operation_id")
+            if result is not None and len(_canonical(result)) > 64 * 1024:
+                raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
+            if (
+                (commit_request_id is None and (operation_id is not None or result is not None))
+                or (item["state"] in {"open", "expired"} and commit_request_id is not None)
+                or (item["state"] == "committing" and (
+                    commit_request_id is None or result is not None
+                ))
+                or (item["state"] in {"committed", "failed"} and (
+                    commit_request_id is None or operation_id is None or result is None
+                ))
             ):
                 raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
             expected_offset = 0
@@ -266,6 +295,9 @@ class AtomicToolboxArtifactUploadRepository:
                 "created_at_ms": now_ms,
                 "updated_at_ms": now_ms,
                 "expires_at_ms": now_ms + UPLOAD_TTL_SECONDS * 1000,
+                "commit_request_id": None,
+                "operation_id": None,
+                "result": None,
             }
             self.staging_root.mkdir(parents=True, exist_ok=True)
             self._stage_path(upload_id).touch(exist_ok=False)
@@ -348,11 +380,130 @@ class AtomicToolboxArtifactUploadRepository:
             item = state["uploads"].get(upload)
             if item is None or item["owner_actor_id"] != owner:
                 raise ToolboxArtifactUploadError("artifact_upload_not_found")
-            if item["state"] == "open":
+            if item["state"] in {"open", "failed"}:
                 item["state"] = "canceled"
                 item["updated_at_ms"] = now_ms
                 self._stage_path(upload).unlink(missing_ok=True)
                 self._write(state)
+            return self._public(upload, item)
+
+    def reserve_commit(
+        self, *, owner_actor_id: str, upload_id: str, request_id: str
+    ) -> dict[str, Any]:
+        owner = _identity(owner_actor_id, label="owner_actor_id")
+        upload = _identity(upload_id, label="upload_id", maximum=128)
+        request = _identity(request_id, label="request_id")
+        now_ms = int(self.clock() * 1000)
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read()
+            item = state["uploads"].get(upload)
+            if item is None or item["owner_actor_id"] != owner:
+                raise ToolboxArtifactUploadError("artifact_upload_not_found")
+            if self._expire(upload, item, now_ms=now_ms):
+                self._write(state)
+                raise ToolboxArtifactUploadError("artifact_upload_expired")
+            if item["commit_request_id"] is not None:
+                if item["commit_request_id"] != request:
+                    raise ToolboxArtifactUploadError("artifact_upload_conflict")
+                return self._public(upload, item)
+            if item["state"] != "open" or item["received_size"] != item["total_size"]:
+                raise ToolboxArtifactUploadError("artifact_upload_not_open")
+            path = self._stage_path(upload)
+            try:
+                if not path.is_file() or path.stat().st_size != item["total_size"]:
+                    raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
+            except OSError as exc:
+                raise ToolboxArtifactUploadError("artifact_upload_state_invalid") from exc
+            item["state"] = "committing"
+            item["commit_request_id"] = request
+            item["updated_at_ms"] = now_ms
+            self._write(state)
+            return self._public(upload, item)
+
+    def bind_commit_operation(
+        self,
+        *,
+        owner_actor_id: str,
+        upload_id: str,
+        request_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        owner = _identity(owner_actor_id, label="owner_actor_id")
+        upload = _identity(upload_id, label="upload_id", maximum=128)
+        request = _identity(request_id, label="request_id")
+        operation = _identity(operation_id, label="operation_id")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read()
+            item = state["uploads"].get(upload)
+            if (
+                item is None
+                or item["owner_actor_id"] != owner
+                or item["commit_request_id"] != request
+                or item["state"] not in {"committing", "committed", "failed"}
+            ):
+                raise ToolboxArtifactUploadError("artifact_upload_conflict")
+            if item["operation_id"] not in {None, operation}:
+                raise ToolboxArtifactUploadError("artifact_upload_conflict")
+            if item["operation_id"] is None:
+                item["operation_id"] = operation
+                item["updated_at_ms"] = int(self.clock() * 1000)
+                self._write(state)
+            return self._public(upload, item)
+
+    def staged_path_for_commit(
+        self, *, owner_actor_id: str, upload_id: str, operation_id: str
+    ) -> tuple[Path, dict[str, Any]]:
+        owner = _identity(owner_actor_id, label="owner_actor_id")
+        upload = _identity(upload_id, label="upload_id", maximum=128)
+        operation = _identity(operation_id, label="operation_id")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read()
+            item = state["uploads"].get(upload)
+            if (
+                item is None
+                or item["owner_actor_id"] != owner
+                or item["operation_id"] != operation
+                or item["state"] != "committing"
+            ):
+                raise ToolboxArtifactUploadError("artifact_upload_conflict")
+            path = self._stage_path(upload)
+            if not path.is_file() or path.stat().st_size != item["total_size"]:
+                raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
+            return path, dict(item)
+
+    def finish_commit(
+        self,
+        *,
+        owner_actor_id: str,
+        upload_id: str,
+        operation_id: str,
+        success: bool,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        owner = _identity(owner_actor_id, label="owner_actor_id")
+        upload = _identity(upload_id, label="upload_id", maximum=128)
+        operation = _identity(operation_id, label="operation_id")
+        safe_result = dict(result or {})
+        if len(_canonical(safe_result)) > 64 * 1024:
+            raise ToolboxArtifactUploadError("artifact_upload_state_invalid")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read()
+            item = state["uploads"].get(upload)
+            if (
+                item is None
+                or item["owner_actor_id"] != owner
+                or item["operation_id"] != operation
+            ):
+                raise ToolboxArtifactUploadError("artifact_upload_conflict")
+            if item["state"] in {"committed", "failed"}:
+                return self._public(upload, item)
+            if item["state"] != "committing":
+                raise ToolboxArtifactUploadError("artifact_upload_conflict")
+            item["state"] = "committed" if success else "failed"
+            item["result"] = safe_result
+            item["updated_at_ms"] = int(self.clock() * 1000)
+            self._stage_path(upload).unlink(missing_ok=True)
+            self._write(state)
             return self._public(upload, item)
 
     def status(self, *, owner_actor_id: str, upload_id: str) -> dict[str, Any]:

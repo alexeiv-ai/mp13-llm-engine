@@ -249,6 +249,21 @@ conflict. Open uploads expire after 15 minutes; cancel is synchronous and
 idempotent. Staging is untrusted and invisible to the CAS until the separate
 durable commit succeeds. Clients must never submit or display a daemon path.
 
+The exact admin-only commands are `toolbox-artifact-upload-begin`,
+`toolbox-artifact-upload-chunk`, `toolbox-artifact-upload-status`,
+`toolbox-artifact-upload-cancel`, and `toolbox-artifact-upload-commit`.
+Commit takes only the opaque `upload_id` plus a stable commit `request_id` and
+returns a generic durable operation status immediately. Its execution kind is
+`toolbox_artifact_import`, selector kind is `upload_id`, and fixed
+non-cancellable phases are `validation`, `artifact_verification`,
+`publication`, and `cleanup`. Poll/watch the canonical operation until
+`artifact_upload_committed`; an identical lost-response retry attaches to the
+same operation, while a changed commit request conflicts. After restart,
+recover that operation rather than beginning or committing a replacement
+upload. An interrupted-after-dispatch import succeeds only when its durable
+upload result already proves commit; otherwise the same record fails with
+`artifact_upload_interrupted_after_dispatch`.
+
 ## Removed toolbox mutation commands and fields
 
 The following current surface is removed:

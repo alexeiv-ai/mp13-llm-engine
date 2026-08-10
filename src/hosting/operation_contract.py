@@ -99,6 +99,9 @@ TOOLBOX_SETUP_PHASES = frozenset(
         "publication",
     }
 )
+TOOLBOX_ARTIFACT_IMPORT_PHASES = frozenset(
+    {"validation", "artifact_verification", "publication", "cleanup"}
+)
 
 
 class HostedExecutionKind(StrEnum):
@@ -106,6 +109,7 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
     TOOLBOX_TEMPLATE_PREWARM = "toolbox_template_prewarm"
     TOOLBOX_SETUP = "toolbox_setup"
+    TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -183,7 +187,9 @@ class HostedOperationSelector:
     id: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"toolbox_id", "engine_id", "template_id", "host_scope"}:
+        if self.kind not in {
+            "toolbox_id", "engine_id", "template_id", "host_scope", "upload_id"
+        }:
             raise ValueError("operation_selector_kind_invalid")
         _bounded_text(self.id, label="operation_selector_id", max_bytes=MAX_SELECTOR_ID_BYTES)
         if self.kind == "host_scope" and self.id != "toolbox-host":
@@ -497,6 +503,11 @@ class HostedOperationStatus:
                     raise ValueError("toolbox_setup_progress_phase_invalid")
                 if self.progress.cancellable:
                     raise ValueError("toolbox_setup_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT:
+                if self.progress.phase not in TOOLBOX_ARTIFACT_IMPORT_PHASES:
+                    raise ValueError("toolbox_artifact_import_progress_phase_invalid")
+                if self.progress.cancellable:
+                    raise ValueError("toolbox_artifact_import_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -578,6 +589,7 @@ __all__ = [
     "TOOLBOX_DEFINITION_APPLY_PHASES",
     "TOOLBOX_TEMPLATE_PREWARM_PHASES",
     "TOOLBOX_SETUP_PHASES",
+    "TOOLBOX_ARTIFACT_IMPORT_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
     "HostedOperationProgress",

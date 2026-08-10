@@ -733,6 +733,35 @@ only the untrusted stage file and retains bounded terminal metadata. Status and
 errors expose no stage path or chunk content. Begin/chunk/cancel alone cannot
 create a CAS object, evidence record, catalog entry, or materialization receipt.
 
+Only an authenticated administrator may call
+`toolbox-artifact-upload-begin`, `toolbox-artifact-upload-chunk`,
+`toolbox-artifact-upload-status`, `toolbox-artifact-upload-cancel`, or
+`toolbox-artifact-upload-commit`. Commit requires a complete stage and binds
+one commit request ID to one durable administrator-owned operation. Its
+execution kind is `toolbox_artifact_import`, its selector is
+`upload_id: <opaque upload_id>`, and its receipt namespace is
+`toolbox_artifact_import:<opaque upload_id>`. Commit returns the generic hosted
+operation status immediately. Repeating the identical commit attaches to that
+operation; a different commit request for the upload is
+`artifact_upload_conflict`.
+
+Artifact-import progress is non-cancellable and uses only `validation`,
+`artifact_verification`, `publication`, and `cleanup`. The worker rehashes the
+complete staged archive against its declared byte size and SHA-256, verifies
+the canonical signed ZIP and its complete current-target wheel closure against
+the source/configuration/trust-key binding, and only then atomically indexes
+its objects and bundle evidence in the shared verified CAS. Terminal success
+is `artifact_upload_committed`; terminal cleanup removes the untrusted stage
+file. A verification failure publishes no new CAS entry and returns a stable
+bounded terminal code rather than exception or path text.
+
+After restart, an import interrupted before dispatch is redispatched on its
+existing operation ID. An import interrupted after dispatch is reconciled as
+success only from the durable committed upload result; otherwise that same
+operation becomes terminal failure with
+`artifact_upload_interrupted_after_dispatch`. Recovery never creates a
+parallel operation record.
+
 For a release-owned built-in, candidate construction requires one and only one
 verified signed bundle whose artifact set covers the entire resolved closure.
 The immutable template provenance retains that bundle ID, source ID, manifest

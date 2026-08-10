@@ -56,6 +56,10 @@ class HostedOperationsMixin:
             if target.kind != "host_scope" or target.id != "toolbox-host":
                 raise ValueError("toolbox_setup_selector_must_be_host_scope")
             namespace = "toolbox_setup:toolbox-host"
+        elif kind == HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT:
+            if target.kind != "upload_id":
+                raise ValueError("toolbox_artifact_import_selector_must_be_upload_id")
+            namespace = f"toolbox_artifact_import:{target.id}"
         else:
             if target.kind != "engine_id":
                 raise ValueError("workflow_operation_selector_must_be_engine_id")
@@ -134,7 +138,10 @@ class HostedOperationsMixin:
                 reason=str(reason or "client_requested"),
                 envelope_factory=cancellation_envelope,
             )
-        if operation.execution_kind == HostedExecutionKind.TOOLBOX_SETUP:
+        if operation.execution_kind in {
+            HostedExecutionKind.TOOLBOX_SETUP,
+            HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT,
+        }:
             return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
         return self._cancel_workflow_operation(record=record, reason=str(reason or "client_requested"))
 

@@ -600,7 +600,7 @@ boundary—not a double—passes.
       batch and release candidate references on any pre-publication failure.
   - [x] **R2-04b** Make required/optional prewarm and readiness use only real
     materialization receipts through normal daemon startup.
-- [ ] **R2-05** Implement revisioned source changes and both air-gap ingestion
+- [x] **R2-05** Implement revisioned source changes and both air-gap ingestion
   paths. Prove missing built-in wheels prevent readiness without partial catalog
   publication.
   - [x] **R2-05a** Implement revisioned HTTPS index/artifact acquisition into the
@@ -617,12 +617,12 @@ boundary—not a double—passes.
       atomically indexed content-addressed artifact store.
     - [x] **R2-05b2** Discover configured read-only bundles and feed verified
       store artifacts into built-in resolution without exposing source paths.
-  - [ ] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
+  - [x] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
     staged storage with bounded, expiring, idempotent commit.
     - [x] **R2-05c1** Add process-safe staged begin/chunk/cancel state with exact
       source/config binding, declared size/digest, chunk bounds, expiry, and no
       trusted-store visibility.
-    - [ ] **R2-05c2** Commit a complete staged archive through a durable
+    - [x] **R2-05c2** Commit a complete staged archive through a durable
       administrator-owned artifact-import operation, verify/import it through
       the signed-bundle CAS boundary, and make identical commit idempotent.
 - [x] **R2-06** Run/recover built-in realization as a system-owned hosted

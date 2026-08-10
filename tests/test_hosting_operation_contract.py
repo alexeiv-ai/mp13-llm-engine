@@ -208,6 +208,42 @@ def test_toolbox_setup_contract_has_one_host_scope_and_fixed_non_cancellable_pha
         HostedOperationStatus.from_dict(payload)
 
 
+def test_toolbox_artifact_import_has_upload_selector_and_noncancellable_phases() -> None:
+    ref = HostedOperationRef(
+        operation_id="op_import",
+        request_id="commit-one",
+        execution_kind=HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT,
+        selector=HostedOperationSelector(kind="upload_id", id="upload_1234567890abcdef"),
+        fingerprint=hosted_execution_fingerprint({"upload": 1}),
+        receipt_namespace="toolbox_artifact_import:upload_1234567890abcdef",
+    )
+    status = HostedOperationStatus(
+        operation=ref,
+        lifecycle=HostedOperationLifecycle.RUNNING,
+        request_id=ref.request_id,
+        created_at_ms=1000,
+        updated_at_ms=1100,
+        progress=HostedOperationProgress(
+            phase="artifact_verification",
+            code="artifact_bundle_verifying",
+            completed_units=0,
+            total_units=1,
+            updated_at_ms=1100,
+            summary="Bundle verifying.",
+            cancellable=False,
+        ),
+    )
+    assert HostedOperationStatus.from_dict(status.to_dict()) == status
+    payload = status.to_dict()
+    payload["progress"]["phase"] = "download"
+    with pytest.raises(ValueError, match="toolbox_artifact_import_progress_phase_invalid"):
+        HostedOperationStatus.from_dict(payload)
+    payload = status.to_dict()
+    payload["progress"]["cancellable"] = True
+    with pytest.raises(ValueError, match="toolbox_artifact_import_progress_cancellable"):
+        HostedOperationStatus.from_dict(payload)
+
+
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [

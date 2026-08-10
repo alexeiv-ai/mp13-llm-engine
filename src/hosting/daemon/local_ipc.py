@@ -3252,6 +3252,38 @@ class EngineHostDaemon:
             )
         if cmd == "toolbox-template-list":
             return svc.toolbox_template_list()
+        if cmd == "toolbox-artifact-upload-begin":
+            return svc.toolbox_artifact_upload_begin(
+                source_id=str(payload.get("source_id") or ""),
+                total_size=payload.get("total_size"),
+                archive_sha256=str(payload.get("archive_sha256") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-artifact-upload-chunk":
+            return svc.toolbox_artifact_upload_chunk(
+                upload_id=str(payload.get("upload_id") or ""),
+                chunk_index=payload.get("chunk_index"),
+                offset=payload.get("offset"),
+                chunk_base64url=str(payload.get("chunk_base64url") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-artifact-upload-status":
+            return svc.toolbox_artifact_upload_status(
+                upload_id=str(payload.get("upload_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-artifact-upload-cancel":
+            return svc.toolbox_artifact_upload_cancel(
+                upload_id=str(payload.get("upload_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-artifact-upload-commit":
+            return svc.toolbox_artifact_upload_commit(
+                upload_id=str(payload.get("upload_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "toolbox-template-describe":
             return svc.toolbox_template_describe(
                 template_id=str(payload.get("template_id") or ""),

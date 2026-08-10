@@ -343,6 +343,7 @@ class AtomicToolboxArtifactStore:
         *,
         configuration: ToolboxHostProjectConfiguration,
         trust_public_keys: Mapping[str, str],
+        expected_source_id: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(configuration, ToolboxHostProjectConfiguration):
             raise ValueError("toolbox_host_project_configuration_required")
@@ -383,6 +384,8 @@ class AtomicToolboxArtifactStore:
                 bundle_id = str(manifest.get("bundle_id") or "")
                 key_id = str(manifest.get("signing_key_id") or "")
                 source_id = str(manifest.get("source_id") or "")
+                if expected_source_id is not None and source_id != str(expected_source_id):
+                    raise ToolboxArtifactBundleError("artifact_bundle_manifest_invalid")
                 if not _BUNDLE_ID_RE.fullmatch(bundle_id) or not _KEY_ID_RE.fullmatch(key_id):
                     raise ToolboxArtifactBundleError("artifact_bundle_manifest_invalid")
                 source_config = next(
