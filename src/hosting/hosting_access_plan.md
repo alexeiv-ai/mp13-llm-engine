@@ -642,9 +642,11 @@ boundary—not a double—passes.
   - [x] **R3-01a** Add strict immutable environment-offer, exact-artifact,
     package-mutation, alternative, dependency-edge, and complete pin models;
     persist and roundtrip them without arbitrary mappings.
-  - [ ] **R3-01b** Populate those models from the configured-source exact
-    resolver and active definition, with deterministic ordering and at most
-    three sanitized alternatives per environment.
+  - [x] **R3-01b** Deterministically derive tool classifications, exact package
+    mutations, complete dependency edges, policy preference, removal-only
+    offers, and three-choice truncation from already verified exact candidates.
+  - [ ] **R3-01c** Populate the builder from the configured-source exact
+    resolver and active definition without manufactured or unverified inputs.
 - [ ] **R3-02** Convert planning to a new hosted execution kind, route generic
   `op-start`/`op-status`/`op-cancel` to its canonical hosted record, and make
   duplicate request IDs return current status instead of waiting. Terminal

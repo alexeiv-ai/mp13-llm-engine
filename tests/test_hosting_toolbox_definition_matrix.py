@@ -7,7 +7,10 @@ import sys
 import pytest
 
 from hosting.toolbox.definition_planner import (
+    ActiveToolboxEnvironmentResolution,
     ToolboxEnvironmentConfirmationChoice,
+    VerifiedToolboxResolutionCandidate,
+    build_toolbox_environment_mutations,
     classify_toolbox_profiles,
     plan_toolbox_definition,
     profile_snapshots_from_draft,
@@ -452,3 +455,114 @@ def test_plan_offer_models_reject_source_secrets_and_more_than_three_alternative
                 ToolboxDependencyEdgeSpec("pkg.add:Add", (), ("demo-pkg",)),
             ),
         )
+
+
+def test_environment_offer_builder_orders_truncates_and_computes_exact_additions() -> None:
+    active = ToolboxDefinitionSpec.from_dict(_definition(autos=[], manuals=[], intrinsics=()))
+    draft = _plan(_definition(autos=[_auto("Alpha")], manuals=[], intrinsics=()))
+    profile = draft.profiles[0]
+    artifacts = tuple(
+        ToolboxExactArtifactSpec(
+            import_roots=(root,),
+            distribution=distribution,
+            dependency_reason="direct" if index == 0 else "transitive",
+            version="1.0.0",
+            wheel_filename=f"{distribution.replace('-', '_')}-1.0.0-py3-none-any.whl",
+            artifact_digest="sha256:" + str(index + 1) * 64,
+            compatibility_tags=("py3-none-any",),
+            provenance="signed-test",
+            source_id="preferred",
+        )
+        for index, (root, distribution) in enumerate(
+            (("demo_pkg", "demo-pkg"), ("dependency", "dependency"))
+        )
+    )
+    candidates = tuple(
+        VerifiedToolboxResolutionCandidate(
+            environment_id=profile.profile_id,
+            base_template_id=profile.template_id,
+            base_template_revision="sha256:" + "a" * 64,
+            source_id=f"source-{index}",
+            source_origin=f"https://packages{index}.example.invalid/simple",
+            source_priority=priority,
+            lock_digest=profile.template_lock_digest,
+            artifacts=tuple(
+                ToolboxExactArtifactSpec.from_dict(
+                    {**item.to_dict(), "source_id": f"source-{index}"}
+                )
+                for item in artifacts
+            ),
+        )
+        for index, priority in enumerate((40, 10, 30, 20))
+    )
+
+    offers = build_toolbox_environment_mutations(
+        active_definition=active,
+        draft=draft,
+        candidates=candidates,
+        dependency_approval_required=True,
+    )
+
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer.alternatives_truncated is True
+    assert len(offer.alternatives) == 3
+    assert [item.source_id for item in offer.alternatives] == [
+        "source-1",
+        "source-3",
+        "source-2",
+    ]
+    assert [item.distribution for item in offer.alternatives[0].package_mutations] == [
+        "demo-pkg",
+        "dependency",
+    ]
+    assert {item.dependency_reason for item in offer.alternatives[0].package_mutations} == {
+        "direct",
+        "transitive",
+    }
+    assert offer.confirmation_required is True
+    assert offer.dependency_approval_required is True
+
+
+def test_environment_offer_builder_emits_explicit_removal_without_candidates() -> None:
+    active_payload = _definition(autos=[_auto("Remove")], manuals=[], intrinsics=())
+    active = ToolboxDefinitionSpec.from_dict(active_payload)
+    proposed_payload = _definition(autos=[], manuals=[], intrinsics=())
+    proposed_payload["expected_revision"] = active.revision
+    draft = _plan(proposed_payload)
+    artifact = ToolboxExactArtifactSpec(
+        import_roots=("demo_pkg",),
+        distribution="demo-pkg",
+        dependency_reason="direct",
+        version="1.0.0",
+        wheel_filename="demo_pkg-1.0.0-py3-none-any.whl",
+        artifact_digest="sha256:" + "7" * 64,
+        compatibility_tags=("py3-none-any",),
+        provenance="signed-test",
+        source_id="release",
+    )
+    active_environment = ActiveToolboxEnvironmentResolution(
+        environment_id="sha256:" + "8" * 64,
+        tool_keys=("pkg.remove:Remove",),
+        base_template_id="core",
+        base_template_revision="sha256:" + "9" * 64,
+        source_id="release",
+        source_origin="airgap://release",
+        lock_digest="sha256:" + "a" * 64,
+        artifacts=(artifact,),
+    )
+
+    offers = build_toolbox_environment_mutations(
+        active_definition=active,
+        draft=draft,
+        candidates=(),
+        active_environments=(active_environment,),
+        dependency_approval_required=True,
+    )
+
+    assert len(offers) == 1
+    assert offers[0].tool_mutations[0].change == "removed"
+    assert offers[0].confirmation_required is False
+    mutation = offers[0].alternatives[0].package_mutations[0]
+    assert mutation.mutation == "removal"
+    assert mutation.from_version == "1.0.0"

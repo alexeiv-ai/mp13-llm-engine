@@ -1052,6 +1052,16 @@ no userinfo, query, or fragment. Duplicate tools, incomplete edges, changed
 wheel identity/tags, unbounded alternatives, missing pins, and persisted state
 corruption fail closed.
 
+Offer construction accepts only preverified exact candidates. It compares each
+candidate closure with the exact active environment closure, emits explicit
+addition/removal/version-transition mutations with direct or transitive reason,
+groups the complete affected tool set, and creates removal-only offers even
+when there is no proposed environment. Candidate order is source priority,
+logical source ID, then lock digest; the first is policy preferred and only the
+first three are exposed, with `alternatives_truncated: true` when more were
+verified. Every candidate, including one omitted by truncation, must have a
+sanitized configured-source identity and internally consistent artifact source.
+
 ## Consumer confirmation reduction
 
 Confirmation is a pure reduction over the immutable active definition,

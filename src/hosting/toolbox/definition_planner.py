@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
 from mp13_engine.mp13_intrinsics_metadata import intrinsic_dependency_metadata, intrinsic_metadata
 
@@ -10,6 +11,11 @@ from .bundle_models import (
     ResolvedToolboxProfileSpec,
     SandboxProfileSpec,
     ToolboxEnvironmentMutationSpec,
+    ToolboxExactArtifactSpec,
+    ToolboxPackageMutationSpec,
+    ToolboxResolutionAlternativeSpec,
+    ToolboxToolMutationSpec,
+    ToolboxDependencyEdgeSpec,
     ToolboxAutoAssignmentRequestV2,
     ToolboxBundleAutoTool,
     ToolboxBundleFile,
@@ -475,6 +481,353 @@ def reduce_toolbox_confirmation(
         ),
         dependency_approval_required=approval_required,
     )
+
+
+@dataclass(frozen=True)
+class VerifiedToolboxResolutionCandidate:
+    environment_id: str
+    base_template_id: str
+    base_template_revision: str
+    source_id: str
+    source_origin: str
+    source_priority: int
+    lock_digest: str
+    artifacts: tuple[ToolboxExactArtifactSpec, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "environment_id",
+            require_digest(self.environment_id, label="verified_candidate_environment_id"),
+        )
+        template = str(self.base_template_id or "").strip()
+        if not template:
+            raise ValueError("verified_candidate_template_id_required")
+        object.__setattr__(self, "base_template_id", template)
+        object.__setattr__(
+            self,
+            "base_template_revision",
+            require_digest(
+                self.base_template_revision, label="verified_candidate_template_revision"
+            ),
+        )
+        source = str(self.source_id or "").strip()
+        if not source:
+            raise ValueError("verified_candidate_source_id_required")
+        object.__setattr__(self, "source_id", source)
+        origin = str(self.source_origin or "").strip()
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"https", "airgap"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("verified_candidate_source_origin_invalid")
+        object.__setattr__(self, "source_origin", origin)
+        if isinstance(self.source_priority, bool) or not isinstance(self.source_priority, int):
+            raise ValueError("verified_candidate_source_priority_invalid")
+        object.__setattr__(
+            self,
+            "lock_digest",
+            require_digest(self.lock_digest, label="verified_candidate_lock_digest"),
+        )
+        artifacts = tuple(
+            sorted(self.artifacts, key=lambda item: (item.distribution, item.version, item.artifact_digest))
+        )
+        if len({item.distribution for item in artifacts}) != len(artifacts):
+            raise ValueError("verified_candidate_artifact_duplicate")
+        if any(item.source_id != source for item in artifacts):
+            raise ValueError("verified_candidate_artifact_source_mismatch")
+        object.__setattr__(self, "artifacts", artifacts)
+
+
+@dataclass(frozen=True)
+class ActiveToolboxEnvironmentResolution:
+    environment_id: str
+    tool_keys: tuple[str, ...]
+    base_template_id: str
+    base_template_revision: str
+    source_id: str
+    source_origin: str
+    lock_digest: str
+    artifacts: tuple[ToolboxExactArtifactSpec, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "environment_id",
+            require_digest(self.environment_id, label="active_environment_id"),
+        )
+        tools = tuple(sorted(str(item or "").strip() for item in self.tool_keys))
+        if not tools or any(not item for item in tools) or len(set(tools)) != len(tools):
+            raise ValueError("active_environment_tool_keys_invalid")
+        object.__setattr__(self, "tool_keys", tools)
+        template = str(self.base_template_id or "").strip()
+        if not template:
+            raise ValueError("active_environment_template_id_required")
+        object.__setattr__(self, "base_template_id", template)
+        object.__setattr__(
+            self,
+            "base_template_revision",
+            require_digest(self.base_template_revision, label="active_environment_template_revision"),
+        )
+        source = str(self.source_id or "").strip()
+        if not source:
+            raise ValueError("active_environment_source_id_required")
+        object.__setattr__(self, "source_id", source)
+        origin = str(self.source_origin or "").strip()
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"https", "airgap"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("active_environment_source_origin_invalid")
+        object.__setattr__(self, "source_origin", origin)
+        object.__setattr__(
+            self, "lock_digest", require_digest(self.lock_digest, label="active_environment_lock_digest")
+        )
+        artifacts = tuple(
+            sorted(self.artifacts, key=lambda item: (item.distribution, item.version, item.artifact_digest))
+        )
+        if len({item.distribution for item in artifacts}) != len(artifacts):
+            raise ValueError("active_environment_artifact_duplicate")
+        if any(item.source_id != source for item in artifacts):
+            raise ValueError("active_environment_artifact_source_mismatch")
+        object.__setattr__(self, "artifacts", artifacts)
+
+
+def _package_mutations(
+    active: Sequence[ToolboxExactArtifactSpec],
+    proposed: Sequence[ToolboxExactArtifactSpec],
+) -> tuple[ToolboxPackageMutationSpec, ...]:
+    before = {item.distribution: item for item in active}
+    after = {item.distribution: item for item in proposed}
+    mutations: list[ToolboxPackageMutationSpec] = []
+    for distribution in sorted(set(before) | set(after)):
+        old = before.get(distribution)
+        new = after.get(distribution)
+        if old is None and new is not None:
+            mutations.append(
+                ToolboxPackageMutationSpec(
+                    distribution=distribution,
+                    mutation="addition",
+                    dependency_reason=new.dependency_reason,
+                    from_version=None,
+                    to_version=new.version,
+                )
+            )
+        elif old is not None and new is None:
+            mutations.append(
+                ToolboxPackageMutationSpec(
+                    distribution=distribution,
+                    mutation="removal",
+                    dependency_reason=old.dependency_reason,
+                    from_version=old.version,
+                    to_version=None,
+                )
+            )
+        elif old is not None and new is not None and (
+            old.version != new.version or old.artifact_digest != new.artifact_digest
+        ):
+            mutations.append(
+                ToolboxPackageMutationSpec(
+                    distribution=distribution,
+                    mutation="transition",
+                    dependency_reason=new.dependency_reason,
+                    from_version=old.version,
+                    to_version=new.version,
+                )
+            )
+    return tuple(mutations)
+
+
+def build_toolbox_environment_mutations(
+    *,
+    active_definition: ToolboxDefinitionSpec | Mapping[str, Any],
+    draft: ToolboxDefinitionPlanDraft,
+    candidates: Sequence[VerifiedToolboxResolutionCandidate],
+    active_environments: Sequence[ActiveToolboxEnvironmentResolution] = (),
+    dependency_approval_required: bool,
+) -> tuple[ToolboxEnvironmentMutationSpec, ...]:
+    """Build bounded deterministic offers from already verified exact candidates."""
+
+    active = (
+        active_definition
+        if isinstance(active_definition, ToolboxDefinitionSpec)
+        else ToolboxDefinitionSpec.from_dict(active_definition)
+    )
+    if active.toolbox_id != draft.definition.toolbox_id:
+        raise ValueError("toolbox_plan_active_definition_mismatch")
+    active_items, _ = _definition_items(active)
+    proposed_items, _ = _definition_items(draft.definition)
+    actual_changes = {
+        key: (
+            "added" if key not in active_items else
+            "removed" if key not in proposed_items else
+            "unchanged" if active_items[key][0] == proposed_items[key][0] and (
+                active_items[key][1] == proposed_items[key][1]
+                if active_items[key][0] == "intrinsic"
+                else active_items[key][1].to_dict() == proposed_items[key][1].to_dict()
+            ) else "updated"
+        )
+        for key in sorted(set(active_items) | set(proposed_items))
+    }
+    active_by_tool: dict[str, ActiveToolboxEnvironmentResolution] = {}
+    for environment in active_environments:
+        for key in environment.tool_keys:
+            if key in active_by_tool:
+                raise ValueError("toolbox_plan_active_tool_environment_duplicate")
+            active_by_tool[key] = environment
+    if set(active_by_tool) != set(active_items):
+        raise ValueError("toolbox_plan_active_tool_environment_incomplete")
+    candidates_by_environment: dict[str, list[VerifiedToolboxResolutionCandidate]] = {}
+    for candidate in candidates:
+        candidates_by_environment.setdefault(candidate.environment_id, []).append(candidate)
+    proposed_environment_ids = {item.profile_id for item in draft.profiles}
+    if set(candidates_by_environment) != proposed_environment_ids:
+        raise ValueError("toolbox_plan_verified_candidates_incomplete")
+
+    offers: list[ToolboxEnvironmentMutationSpec] = []
+    for profile in draft.profiles:
+        group = candidates_by_environment[profile.profile_id]
+        if any(
+            item.base_template_id != profile.template_id
+            or item.base_template_revision != group[0].base_template_revision
+            for item in group
+        ):
+            raise ValueError("toolbox_plan_verified_candidate_identity_mismatch")
+        ordered = sorted(
+            group,
+            key=lambda item: (item.source_priority, item.source_id, item.lock_digest),
+        )
+        expected_lock = profile.custom_resolved_lock_digest or profile.template_lock_digest
+        if ordered[0].lock_digest != expected_lock:
+            raise ValueError("toolbox_plan_preferred_candidate_lock_mismatch")
+        truncated = len(ordered) > 3
+        selected_candidates = ordered[:3]
+        overlapping_active = {
+            active_by_tool[key].environment_id: active_by_tool[key]
+            for key in profile.assigned_tool_keys
+            if key in active_by_tool
+        }
+        active_artifacts = {
+            artifact.distribution: artifact
+            for environment in overlapping_active.values()
+            for artifact in environment.artifacts
+        }
+        alternatives = []
+        for candidate in selected_candidates:
+            mutations = _package_mutations(tuple(active_artifacts.values()), candidate.artifacts)
+            alternative_payload = {
+                "environment_id": candidate.environment_id,
+                "source_id": candidate.source_id,
+                "source_origin": candidate.source_origin,
+                "lock_digest": candidate.lock_digest,
+                "artifacts": [item.to_dict() for item in candidate.artifacts],
+                "package_mutations": [item.to_dict() for item in mutations],
+            }
+            alternatives.append(
+                ToolboxResolutionAlternativeSpec(
+                    alternative_id=identity_digest(
+                        "hosting.toolbox.resolution_alternative.v1", alternative_payload
+                    ),
+                    source_id=candidate.source_id,
+                    source_origin=candidate.source_origin,
+                    lock_digest=candidate.lock_digest,
+                    artifacts=candidate.artifacts,
+                    package_mutations=mutations,
+                )
+            )
+        tool_mutations = tuple(
+            ToolboxToolMutationSpec(key, actual_changes[key])
+            for key in profile.assigned_tool_keys
+        )
+        required_distributions = tuple(
+            sorted({item.distribution for item in selected_candidates[0].artifacts})
+        )
+        edges = tuple(
+            ToolboxDependencyEdgeSpec(
+                tool_key=key,
+                required_tool_keys=(),
+                required_distributions=required_distributions,
+            )
+            for key in profile.assigned_tool_keys
+        )
+        confirmation_required = any(
+            mutation.mutation in {"addition", "transition"}
+            for mutation in alternatives[0].package_mutations
+        )
+        offers.append(
+            ToolboxEnvironmentMutationSpec(
+                environment_id=profile.profile_id,
+                tool_mutations=tool_mutations,
+                base_template_id=selected_candidates[0].base_template_id,
+                base_template_revision=selected_candidates[0].base_template_revision,
+                alternatives=tuple(alternatives),
+                preferred_alternative_id=alternatives[0].alternative_id,
+                alternatives_truncated=truncated,
+                confirmation_required=confirmation_required,
+                dependency_approval_required=(
+                    dependency_approval_required and confirmation_required
+                ),
+                dependency_edges=edges,
+            )
+        )
+
+    proposed_tools = {key for profile in draft.profiles for key in profile.assigned_tool_keys}
+    removed_environments = {
+        active_by_tool[key].environment_id: active_by_tool[key]
+        for key in set(active_items) - proposed_tools
+    }
+    for environment in sorted(removed_environments.values(), key=lambda item: item.environment_id):
+        removed_keys = tuple(key for key in environment.tool_keys if key not in proposed_items)
+        if not removed_keys:
+            continue
+        mutations = _package_mutations(environment.artifacts, ())
+        payload = {
+            "environment_id": environment.environment_id,
+            "removed_tools": list(removed_keys),
+            "package_mutations": [item.to_dict() for item in mutations],
+        }
+        alternative = ToolboxResolutionAlternativeSpec(
+            alternative_id=identity_digest(
+                "hosting.toolbox.removal_alternative.v1", payload
+            ),
+            source_id=environment.source_id,
+            source_origin=environment.source_origin,
+            lock_digest=identity_digest("hosting.toolbox.empty_lock.v1", []),
+            artifacts=(),
+            package_mutations=mutations,
+        )
+        offers.append(
+            ToolboxEnvironmentMutationSpec(
+                environment_id=environment.environment_id,
+                tool_mutations=tuple(
+                    ToolboxToolMutationSpec(key, "removed") for key in removed_keys
+                ),
+                base_template_id=environment.base_template_id,
+                base_template_revision=environment.base_template_revision,
+                alternatives=(alternative,),
+                preferred_alternative_id=alternative.alternative_id,
+                alternatives_truncated=False,
+                confirmation_required=False,
+                dependency_approval_required=False,
+                dependency_edges=tuple(
+                    ToolboxDependencyEdgeSpec(key, (), ()) for key in removed_keys
+                ),
+            )
+        )
+    offered_keys = [tool.tool_key for offer in offers for tool in offer.tool_mutations]
+    if len(set(offered_keys)) != len(offered_keys) or set(offered_keys) != set(actual_changes):
+        raise ValueError("toolbox_plan_environment_tool_coverage_invalid")
+    return tuple(sorted(offers, key=lambda item: item.environment_id))
 
 
 @dataclass(frozen=True)
