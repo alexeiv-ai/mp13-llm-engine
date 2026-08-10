@@ -169,6 +169,45 @@ def test_status_round_trips_bounded_progress() -> None:
     assert HostedOperationStatus.from_dict(status.to_dict()) == status
 
 
+def test_toolbox_setup_contract_has_one_host_scope_and_fixed_non_cancellable_phases() -> None:
+    selector = HostedOperationSelector(kind="host_scope", id="toolbox-host")
+    with pytest.raises(ValueError, match="operation_host_scope_invalid"):
+        HostedOperationSelector(kind="host_scope", id="another-host")
+    ref = HostedOperationRef(
+        operation_id="op_setup",
+        request_id="setup-request",
+        execution_kind=HostedExecutionKind.TOOLBOX_SETUP,
+        selector=selector,
+        fingerprint=hosted_execution_fingerprint({"setup": 1}),
+        receipt_namespace="toolbox_setup:toolbox-host",
+    )
+    status = HostedOperationStatus(
+        operation=ref,
+        lifecycle=HostedOperationLifecycle.RUNNING,
+        request_id=ref.request_id,
+        created_at_ms=1000,
+        updated_at_ms=1100,
+        progress=HostedOperationProgress(
+            phase="resolution",
+            code="builtin_resolution_checked",
+            completed_units=1,
+            total_units=1,
+            updated_at_ms=1100,
+            summary="Resolution checked.",
+            cancellable=False,
+        ),
+    )
+    assert HostedOperationStatus.from_dict(status.to_dict()) == status
+    payload = status.to_dict()
+    payload["progress"]["phase"] = "arbitrary"
+    with pytest.raises(ValueError, match="toolbox_setup_progress_phase_invalid"):
+        HostedOperationStatus.from_dict(payload)
+    payload = status.to_dict()
+    payload["progress"]["cancellable"] = True
+    with pytest.raises(ValueError, match="toolbox_setup_progress_cancellable"):
+        HostedOperationStatus.from_dict(payload)
+
+
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [

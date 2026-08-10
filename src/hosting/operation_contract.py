@@ -88,12 +88,24 @@ TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES = frozenset({"publication", "draining"
 TOOLBOX_TEMPLATE_PREWARM_PHASES = frozenset(
     {"validation", "artifact_verification", "environment_build", "import_probe", "receipt_commit"}
 )
+TOOLBOX_SETUP_PHASES = frozenset(
+    {
+        "resolution",
+        "acquisition",
+        "artifact_verification",
+        "environment_build",
+        "import_probe",
+        "prewarm",
+        "publication",
+    }
+)
 
 
 class HostedExecutionKind(StrEnum):
     TOOLBOX = "toolbox"
     TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
     TOOLBOX_TEMPLATE_PREWARM = "toolbox_template_prewarm"
+    TOOLBOX_SETUP = "toolbox_setup"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -171,9 +183,11 @@ class HostedOperationSelector:
     id: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"toolbox_id", "engine_id", "template_id"}:
+        if self.kind not in {"toolbox_id", "engine_id", "template_id", "host_scope"}:
             raise ValueError("operation_selector_kind_invalid")
         _bounded_text(self.id, label="operation_selector_id", max_bytes=MAX_SELECTOR_ID_BYTES)
+        if self.kind == "host_scope" and self.id != "toolbox-host":
+            raise ValueError("operation_host_scope_invalid")
 
     def to_dict(self) -> Dict[str, str]:
         return {"kind": self.kind, "id": self.id}
@@ -478,6 +492,11 @@ class HostedOperationStatus:
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
                 if self.progress.phase not in TOOLBOX_TEMPLATE_PREWARM_PHASES:
                     raise ValueError("toolbox_template_prewarm_progress_phase_invalid")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_SETUP:
+                if self.progress.phase not in TOOLBOX_SETUP_PHASES:
+                    raise ValueError("toolbox_setup_progress_phase_invalid")
+                if self.progress.cancellable:
+                    raise ValueError("toolbox_setup_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -558,6 +577,7 @@ __all__ = [
     "TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES",
     "TOOLBOX_DEFINITION_APPLY_PHASES",
     "TOOLBOX_TEMPLATE_PREWARM_PHASES",
+    "TOOLBOX_SETUP_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
     "HostedOperationProgress",

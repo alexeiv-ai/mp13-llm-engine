@@ -706,6 +706,26 @@ only those physical fields, not logical template ID/digest. Every reuse still
 reruns the requesting template's complete import-root probes before a
 template-specific public receipt can be committed.
 
+Built-in realization is represented by one system-owned durable hosted
+operation. Its execution kind is `toolbox_setup`, its only selector is
+`host_scope: toolbox-host`, its receipt namespace is
+`toolbox_setup:toolbox-host`, and its owner is `system:toolbox-setup`. The
+request fingerprint binds the complete `config_revision`,
+`source_set_revision`, and detected target. Start returns the queued or running
+generic `hosting.operation_status` immediately; a duplicate request ID with the
+same fingerprint attaches to the same canonical operation.
+
+Setup progress uses only `resolution`, `acquisition`,
+`artifact_verification`, `environment_build`, `import_probe`, `prewarm`, and
+`publication`. Acquisition units are verified artifact bytes; candidate and
+publication phases use bounded item counts. The operation is never
+cancellable. Its terminal success code is `toolbox_setup_ready`; resolution or
+execution failure is terminal with a stable bounded diagnostic. Toolbox
+readiness remains false until the complete receipt and catalog publication has
+succeeded. Clients recover it through the generic hosted-operation
+status/result/request-recovery APIs and never create an actor-owned parallel
+record.
+
 The daemon control plane remains available when toolbox setup is absent,
 partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no
 template entries, and uses exactly one of `toolbox_configuration_missing`,

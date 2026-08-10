@@ -876,7 +876,12 @@ class ToolboxTemplateCatalogMixin:
         ).resolve().to_dict()
         return {**resolution, "published": [], "operations": []}
 
-    def prepare_configured_toolbox_templates(self) -> dict[str, Any]:
+    def prepare_configured_toolbox_templates(
+        self,
+        *,
+        progress: Callable[[str, str, int | None, int | None, str, bool], None]
+        | None = None,
+    ) -> dict[str, Any]:
         """Build and probe all resolved built-ins without publishing state."""
         from ..toolbox.builtin_resolver import ResolvedBuiltinWheelClosure
         from ..toolbox.builtin_templates import resolved_builtin_template_candidate
@@ -890,9 +895,19 @@ class ToolboxTemplateCatalogMixin:
         intents = {item.template_id: item for item in configuration.builtins}
         prepared: list[dict[str, Any]] = []
         references: list[tuple[str, str]] = []
+        report = progress or (lambda *_args: None)
         try:
-            for raw_closure in startup["closures"]:
+            total = len(startup["closures"])
+            for index, raw_closure in enumerate(startup["closures"]):
                 closure = ResolvedBuiltinWheelClosure.from_dict(raw_closure)
+                report(
+                    "artifact_verification",
+                    "builtin_artifacts_verifying",
+                    index,
+                    total,
+                    "The exact signed built-in artifact closure is being verified.",
+                    False,
+                )
                 evidence = self._toolbox_artifact_store.bundle_evidence_for_artifacts(
                     {item.sha256 for item in closure.locked_artifacts}
                 )
@@ -927,7 +942,7 @@ class ToolboxTemplateCatalogMixin:
                     catalog_entry=entry,
                     python_abi=configuration.target.python_abi,
                     platform=configuration.target.platform,
-                    progress=lambda *_args: None,
+                    progress=report,
                 )
                 expected_artifacts = tuple(sorted(item.sha256 for item in artifacts))
                 expected_roots = tuple(sorted(candidate.template.exposed_import_roots))
@@ -962,6 +977,14 @@ class ToolboxTemplateCatalogMixin:
                         "reference_id": reference_id,
                         "receipt": receipt.to_dict(),
                     }
+                )
+                report(
+                    "import_probe",
+                    "builtin_imports_verified",
+                    index + 1,
+                    total,
+                    "The built-in candidate passed its complete import probes.",
+                    False,
                 )
         except Exception:
             builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
@@ -1049,6 +1072,153 @@ class ToolboxTemplateCatalogMixin:
         }
         self._toolbox_startup = {**result, "closures": [], "diagnostics": []}
         return result
+
+    def toolbox_setup_start(self, *, request_id: str | None = None) -> dict[str, Any]:
+        """Start the one system-owned built-in realization operation."""
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        if not isinstance(configuration, ToolboxHostProjectConfiguration):
+            raise ValueError("toolbox_host_project_configuration_required")
+        rid = str(
+            request_id
+            or f"toolbox-setup-{configuration.config_revision.removeprefix('sha256:')}"
+        ).strip()
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.TOOLBOX_SETUP.value,
+                "host_scope": "toolbox-host",
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+                "target": configuration.target.name,
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id="system:toolbox-setup",
+            execution_kind=HostedExecutionKind.TOOLBOX_SETUP,
+            selector=HostedOperationSelector(kind="host_scope", id="toolbox-host"),
+            namespace="toolbox_setup:toolbox-host",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+                "target": configuration.target.name,
+            },
+        )
+        if prepared["action"] != "dispatch":
+            status = prepared.get("status")
+            if status is None:
+                raise RuntimeError("hosted_operation_capacity")
+            return dict(status)
+        operation_id = str(prepared["status"]["operation"]["operation_id"])
+        thread = threading.Thread(
+            target=self._run_toolbox_setup,
+            kwargs={"operation_id": operation_id},
+            name=f"toolbox-setup-{operation_id[-8:]}",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": "toolbox_setup_dispatch_failed",
+                    "summary": "The toolbox setup worker could not be started.",
+                },
+                reason="toolbox_setup_dispatch_failed",
+            )
+            raise
+        return dict(prepared["status"])
+
+    def _run_toolbox_setup(self, *, operation_id: str) -> None:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+
+        def checkpoint(
+            phase: str,
+            code: str,
+            completed_units: int | None,
+            total_units: int | None,
+            summary: str,
+            _cancellable: bool = False,
+        ) -> None:
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase=phase,
+                    code=code,
+                    completed_units=completed_units,
+                    total_units=total_units,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary=summary,
+                    cancellable=False,
+                ),
+            )
+
+        try:
+            startup = getattr(self, "_toolbox_startup", None)
+            checkpoint(
+                "resolution", "builtin_resolution_checked", 1, 1,
+                "The configured built-in closure resolution was checked."
+            )
+            if not isinstance(startup, dict) or startup.get("status") != "resolved":
+                diagnostic = dict((startup or {}).get("diagnostics", [{}])[0] or {})
+                code = str(diagnostic.get("code") or "required_builtin_resolution_not_ready")
+                summary = str(
+                    diagnostic.get("summary")
+                    or "The required built-in wheel closure is not ready."
+                )
+                self._hosted_operations.finish(
+                    operation_id=operation_id,
+                    lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                    envelope={"status": "not_ready", "code": code, "summary": summary},
+                    reason=code,
+                )
+                return
+            artifacts = [
+                artifact
+                for closure in startup["closures"]
+                for artifact in closure["locked_artifacts"]
+            ]
+            checkpoint(
+                "acquisition", "builtin_artifacts_available",
+                sum(item["size_bytes"] for item in artifacts),
+                sum(item["size_bytes"] for item in artifacts),
+                "All exact built-in wheel bytes are available in verified storage."
+            )
+            prepared = self.prepare_configured_toolbox_templates(progress=checkpoint)
+            checkpoint(
+                "prewarm", "builtin_candidates_prewarmed",
+                len(prepared["candidates"]), len(prepared["candidates"]),
+                "All required built-in candidates are materialized and probed."
+            )
+            checkpoint(
+                "publication", "builtin_publication_committing", 0, 1,
+                "The complete built-in receipt and catalog batch is being committed."
+            )
+            result = self.publish_prepared_configured_toolbox_templates(prepared)
+            checkpoint(
+                "publication", "builtin_publication_committed", 1, 1,
+                "The complete built-in receipt and catalog batch is active."
+            )
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={**result, "status": "ok", "code": "toolbox_setup_ready"},
+            )
+        except Exception as exc:
+            code = str(getattr(exc, "code", "toolbox_setup_failed"))
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": code,
+                    "summary": "Toolbox built-in setup failed before complete publication.",
+                },
+                reason=code,
+            )
 
     def toolbox_template_describe(
         self, *, template_id: str, template_digest: str | None = None

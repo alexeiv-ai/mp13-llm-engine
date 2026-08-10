@@ -104,23 +104,30 @@ failure and idempotent restart/retry. It also fixes physical environment reuse
 across logical templates by comparing only physical receipt identity and
 rerunning each template's import probes. The expanded catalog/prewarm/hermetic/
 docs suite passed 61 tests in 171.78s; `git diff --check` passed.
+R2-06a adds the strict system-owned `toolbox_setup` hosted execution kind with
+the sole `host_scope: toolbox-host` selector, canonical
+config/source-set/target fingerprint, immediate duplicate attachment, fixed
+non-cancellable progress phases, verified-byte acquisition units, and bounded
+terminal success/failure. Toolbox readiness becomes ready only after complete
+atomic publication. The operation/repository/artifact-store/docs suite passed
+80 tests in 84.23s; `git diff --check` passed.
 
 ## Active implementation slice
 
-Active slice: R2-04a2 (`high`). Validate that the prepared candidate set exactly
-covers configured built-ins. Commit the complete receipt set with one atomic
-receipt-store replacement, then publish/activate the complete catalog set with
-one atomic catalog replacement. Any ordinary failure removes only receipts
-inserted by this attempt and releases every candidate reference; idempotent
-retry returns the same active revisions without duplicate entries.
+Active slice: none. R2-06a (`high`) is complete. Automatic daemon start and
+restart reconciliation remain R2-04b/R2-06b; HTTPS acquisition and
+administrator upload remain R2-03b2/R2-05a/R2-05c.
 
-Required validation:
+Next-slice validation must be declared before implementation. R2-04b/R2-06b
+must prove:
 
-- complete two-template batch and restart/idempotency test
-- injected receipt/catalog conflicts prove zero partial active publication
-- publication failure rolls back new receipts and candidate references
-- `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q`
-- `git diff --check`
+- normal daemon construction starts or attaches to the canonical setup record
+  without blocking the control plane;
+- interrupted-before-dispatch and interrupted-after-dispatch records are
+  recovered or terminally reconciled after restart;
+- required/optional readiness derives only from real materialization receipts;
+  and
+- no parallel operation mirror or partial catalog publication is created.
 
 ## Status update rules
 

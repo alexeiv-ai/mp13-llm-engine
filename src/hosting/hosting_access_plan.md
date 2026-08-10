@@ -617,7 +617,7 @@ boundary—not a double—passes.
   operation with resolution, acquisition-byte, verification, build, probe, and
   prewarm progress while the control plane remains available and toolbox
   readiness remains false.
-  - [ ] **R2-06a** Add the system-owned hosted execution kind and phase/progress
+  - [x] **R2-06a** Add the system-owned hosted execution kind and phase/progress
     contract for built-in realization while readiness remains false.
   - [ ] **R2-06b** Recover or terminally reconcile interrupted realization after
     restart and expose its canonical status without a parallel operation record.

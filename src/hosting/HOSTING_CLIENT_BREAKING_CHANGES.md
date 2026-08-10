@@ -166,6 +166,23 @@ Administrator setup logic must change as follows:
 - never upload a venv, source distribution, install script, arbitrary index URL,
   or consumer filesystem path.
 
+Built-in realization is no longer a synchronous administrator action. The
+canonical hosted operation has execution kind `toolbox_setup`, selector
+`host_scope: toolbox-host`, receipt namespace `toolbox_setup:toolbox-host`, and
+system owner `system:toolbox-setup`. Its fingerprint binds the configuration
+revision, source-set revision, and detected target. Start returns immediately;
+same-request retries attach to the existing operation, and recovery uses the
+generic hosted-operation status/result/request-recovery surface.
+
+Clients must render only the fixed setup phases `resolution`, `acquisition`,
+`artifact_verification`, `environment_build`, `import_probe`, `prewarm`, and
+`publication`. Acquisition progress counts verified artifact bytes. The setup
+operation is not cancellable, and clients must not synthesize a cancellation or
+a second actor-owned operation. Continue reporting toolbox readiness as false
+until terminal success reports `toolbox_setup_ready` after complete atomic
+receipt/catalog publication. Terminal failures carry stable bounded codes and
+must not be interpreted by parsing their summaries.
+
 Configuration revision transitions invalidate unconsumed definition plans and
 materialization receipts for non-active template revisions. Consumers must
 re-plan after a change. Active catalog revisions and already published toolbox

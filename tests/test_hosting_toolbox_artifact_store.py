@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -459,6 +460,14 @@ def test_normal_daemon_never_treats_unsigned_raw_wheels_as_verified_source_conte
     assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
         "required_template_source_unavailable"
     )
+    started = daemon.svc.toolbox_setup_start(request_id="unsigned-source-setup")
+    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert terminal["lifecycle"] == "terminal_failure"
+    assert terminal["result"]["code"] == "required_template_source_unavailable"
+    assert str(source) not in str(terminal["result"])
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
 
 
 def test_prepublication_candidate_build_uses_exact_cas_path_and_real_import_probes(
@@ -646,3 +655,47 @@ def test_catalog_batch_failure_rolls_back_new_receipt_and_candidate_reference(
     ) is None
     references = daemon.svc._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
     assert json.loads(references.read_text())["environments"] == {}
+
+
+def test_system_setup_operation_returns_immediately_is_idempotent_and_publishes_readiness(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+
+    started_at = time.monotonic()
+    started = daemon.svc.toolbox_setup_start(request_id="system-setup-one")
+    duplicate = daemon.svc.toolbox_setup_start(request_id="system-setup-one")
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 2
+    assert duplicate["operation"]["operation_id"] == started["operation"]["operation_id"]
+    assert started["operation"]["execution_kind"] == "toolbox_setup"
+    assert started["operation"]["selector"] == {"kind": "host_scope", "id": "toolbox-host"}
+    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=60
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["code"] == "toolbox_setup_ready"
+    assert terminal["progress"]["phase"] == "publication"
+    assert terminal["progress"]["cancellable"] is False
+    assert daemon.svc.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
+    recovered = daemon.svc.hosted_operation_resolve_request(
+        execution_kind="toolbox_setup",
+        selector={"kind": "host_scope", "id": "toolbox-host"},
+        request_id="system-setup-one",
+        owner_actor_id="system:toolbox-setup",
+    )
+    assert recovered["operation"]["operation_id"] == started["operation"]["operation_id"]
