@@ -1,114 +1,98 @@
-# Hosting Server Implementation Progress
+# Hosting toolbox corrective status
 
 Last updated: 2026-08-09
 
-## Purpose
-
-This file is the progress ledger for server-side implementation of
-`hosting_access_plan.md`. It reports executed work; it does not redefine the
-contracts or duplicate the plan. Durable behavior belongs in the project
-contracts and worker documentation. Dependent-project migration requirements
-belong in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
-
-## Update rules
-
-1. Define the active slice from unchecked plan item IDs before implementation.
-2. Record the exact focused and regression test commands required to close the
-   slice before changing code.
-3. Do not move a slice to Completed or check its plan boxes until its code,
-   tests, durable documentation, and migration handoff changes are complete.
-4. Commit one coherent completed slice at a time. Include its plan item IDs in
-   the commit subject or body.
-5. Add the Completed entry, test results, commit subject, and checked plan item
-   IDs in the same slice commit. A commit SHA is intentionally not recorded
-   because a commit cannot contain its own final hash.
-6. Keep failed or deferred work under Active or Blocked. Do not represent
-   partial implementation as completed progress.
-7. Do not rewrite completed entries except to correct a factual error; append a
-   dated correction instead.
-
 ## Overall status
 
-Status: Complete with retained reset handoff
+Status: Active corrective work
 
-Phases 0 through 7 and the acceptance audit are complete. The public
-contract/migration handoff, strict dependency pipeline, hermetic environment
-builder, definition planner, and durable plan/state repositories plus atomic
-rollout/routing are implemented and audited. Phase 6 API/transport replacement
-is complete, including strict host-owned standard template/policy startup
-configuration. P7-18 is closed with a retained reset marker rather than file
-deletion, per the user's delivery instruction.
+The complete-definition migration remains adopted, but the environment/template
+implementation is not accepted as complete. A post-acceptance audit found that
+tests proved isolated planner and builder components without proving the real
+daemon/control-channel bridge. The corrective scope is defined in
+[hosting_access_plan.md](hosting_access_plan.md).
 
-## Active slice
+## Retained completed baseline
 
-None.
+The following foundations remain implemented and are not reopened wholesale:
 
-Predeclared verification:
+- complete toolbox definition read/plan/approval/durable-apply APIs;
+- canonical definition, profile, environment, manifest, and lock identities;
+- source import analysis and reviewed import/distribution mapping;
+- strict immutable plans, approval bindings, and digest-validated toolbox state;
+- non-inheriting hermetic environment builder primitives with exact wheel,
+  receipt, import-probe, quarantine, reference, and GC behavior;
+- candidate rollout and atomic complete route publication;
+- removal of version-1 toolbox mutation/environment APIs;
+- dependent adoption of the complete-definition protocol.
 
-No verification is predeclared because no slice is active.
+Release/adoption pins retained for traceability:
 
-## Completed slices
+- parent release adopted by the dependent:
+  `83b35e20604c8f0c2fbe27467980b6a49385d918`;
+- `mp13-docs` adoption commit:
+  `125d20f232bf5b755d18c1b23bc1e4b8929edf21`;
+- breaking-change handoff reset commit: `99b79e0`;
+- stale Python-node fallback removal commit: `3752118`.
 
-| Date | Plan items checked | Delivered outcome | Tests passed | Commit subject |
-| --- | --- | --- | --- | --- |
-| 2026-08-08 | P0-01, P0-02 | Froze all current parent/dependent mutation, environment, payload, persisted-state, and actual hosted import removal/catalog inputs in the transient migration handoff. | Both predeclared parent/dependent `rg` inventories passed. AST assertions covered all 19 old dispatch commands, every deprecated hosted-ref method, parent intrinsic NumPy/SymPy/NumExpr imports, dependent Matplotlib import, and stale Requests declaration. Clean environment, daemon integration, persistence/concurrency, and runtime regression categories: not applicable (documentation-only inventory; no runtime change). | `docs: freeze hosting inventories (P0-01 P0-02)` |
-| 2026-08-08 | P0-03, P0-06, P0-07, P0-09, P0-10, P0-11 | Froze the normative typed public definition/plan/approval/read/apply contract, strict limits and codes, actor rules, per-toolbox scope, retention, projections, and client algorithm; linked the dependent handoff. | `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q` -> 5 passed; forbidden-vocabulary `rg` -> no matches. Clean environment, daemon integration, persistence/concurrency, and runtime regression categories: not applicable (documentation-only contract slice). | `docs: freeze toolbox public contract` (item IDs in commit body) |
-| 2026-08-08 | P0-04 | Added canonical/domain-separated identity helpers and fixed vectors for definitions, resolved profiles, environments, manifests, template locks, and custom locks; documented dependent digest responsibilities. | `python -m pytest tests/test_hosted_toolbox_identity.py tests/test_hosted_toolbox_contract_docs.py -q` -> 10 passed, including two fresh hash-seeded processes; focused bundle staging regressions -> 3 passed, 135 deselected. Clean environment, daemon integration, and persistence/concurrency: not applicable until helpers are wired into runtime/state. | `feat: add canonical toolbox identities (P0-04)` |
-| 2026-08-08 | P0-08 | Added definition-apply execution identity and strict persisted monotonic operation progress, including recovery, terminal diagnostic placement, and an irreversible publication cancellation boundary. | Contract/repository/toolbox-doc command -> 52 passed, including repository recreation/interruption and multi-process idempotency; operation service/workflow regressions -> 15 passed. Clean-environment build/import: not applicable. | `feat: extend hosted operation progress (P0-08)` |
-| 2026-08-08 | P0-05 | Froze template/package/artifact trust, roles/control methods, signed immutable publication, offline preseeding, supported targets/timeouts, lifecycle/audit, and cache retention; removed dependent installation authority in the handoff. | Contract-doc command -> 6 passed; exact forbidden-history search -> no matches. Clean environment, daemon, persistence/concurrency, and runtime regressions: not applicable (policy-only). | `docs: freeze template deployment policy (P0-05)` |
-| 2026-08-08 | P0-13, P0-14, P0-15 | Froze the complete initial catalog/config/sandbox/readiness contract, isolated cross-worker `core` resolution, and exclusive model-runtime lock/status/authorization boundary; added exact dependent selection/readiness/removal rules. | Contract-doc command -> 10 passed; exact forbidden-history search -> no matches; Phase 0 contract/identity/operation audit -> 62 passed. Clean environment, daemon integration, persistence/concurrency, and model execution regressions: not applicable (documentation-only freeze). | `docs: freeze initial environment boundaries (P0-13 P0-14 P0-15)` |
-| 2026-08-08 | P0-12 | Completed the dependent adoption handoff with old/new code, durable recovery and teardown flows, exact version-1 archive/rollback procedure, and an inventory-to-removal matrix. | Document suite -> 12 passed; identity/operation audit -> 52 passed; exit audit -> 21 public operation names, 19 commands, and six dependent file groups covered; durable-contract forbidden-history search -> no matches. Runtime/state-command/client-repository categories: not applicable (documentation-only handoff). | `docs: complete toolbox migration handoff (P0-12)` |
-| 2026-08-08 | P1-01, P1-02 | Added frozen strict immutable template/lock/provenance models and a deterministic reviewed import/distribution catalog, seeded only from inventoried roots. | Catalog -> 16 passed; identity/runtime-key regressions -> 20 passed; compile/diff checks passed. Clean environment and daemon integration: not applicable (pure models/catalog). | `feat: add toolbox template catalog (P1-01 P1-02)` |
-| 2026-08-08 | P1-03 | Moved intrinsic discovery/dependency knowledge into import-safe metadata, derived environment roots/profile identity from it, removed profile branching, and pinned direct SymPy with a current lock. | Metadata -> 7 passed; complete toolbox sandbox -> 138 passed; Poetry lock, compile, and diff checks passed. Clean isolated-template execution remains P1-11/P1-12. | `refactor: isolate intrinsic dependency metadata (P1-03)` |
-| 2026-08-08 | P1-04, P1-05, P1-06 | Added deterministic staged-source AST evidence, reviewed/explicit PEP 440 requirement resolution, and smallest exact template or minimal custom-delta selection. | Dependency pipeline -> 15 passed; catalog/identity regressions -> 21 passed; Poetry lock, compile, and diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure planning). | `feat: add toolbox dependency planner (P1-04 P1-05 P1-06)` |
-| 2026-08-08 | P1-07 | Added strict fail-closed target/template, package allow/deny, custom approval, HTTPS index, intrinsic-completeness, and payload-authority validation. | Policy -> 11 passed; dependency/catalog regressions -> 31 passed; compile/diff checks passed. Clean environment, daemon, persistence/concurrency, and runtime execution: not applicable (pure policy). | `feat: add toolbox dependency policy (P1-07)` |
-| 2026-08-08 | P1-08 | Added an atomic immutable catalog with signed manifest/artifact references, lifecycle/active revisions, bounded consumer projections/audit, and end-to-end authorized service/daemon/channel/CLI controls. | Catalog control -> 11 passed including multi-process/restart/auth/transport; existing channel/CLI/auth regressions -> 95 passed; compile/diff checks passed. Environment materialization: not applicable until P1-09. | `feat: add toolbox catalog control (P1-08)` |
-| 2026-08-08 | P1-09 | Added admin-only durable target-host prewarm orchestration, strict materializer/receipt boundaries, persisted bounded verification progress, and exact-receipt-gated consumer readiness. | Prewarm -> 6 passed; operation/catalog -> 58 passed; channel/CLI/auth -> 95 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared command named two nonexistent test files and failed before collection; it was corrected in the active ledger to the repository's actual CLI/auth suites before closeout. | `feat: add durable template prewarm (P1-09)` |
-| 2026-08-08 | P1-10 | Closed the strict Phase 1 behavior matrix with explicit prewarm role exclusion and exact SSH CLI payload routing on top of direct dependency/catalog/offline tests. | Dependency analysis/policy -> 26 passed; catalog/prewarm -> 18 passed; channel/CLI/auth -> 95 passed; diff checks passed. | `test: close toolbox dependency matrix (P1-10)` |
-| 2026-08-08 | P1-11 | Shipped exact independent `core`/`py-compute` locks, strict resource identities, compute-only policy, normal setup/prewarm and receipt-gated readiness, and smallest-template planning. | Shipped templates -> 6 passed; planner/policy/catalog -> 42 passed; catalog/prewarm/setup-state -> 21 passed; contract docs -> 12 passed; compile/diff checks passed. Physical installation remains Phase 2. | `feat: ship initial toolbox templates (P1-11)` |
-| 2026-08-08 | P1-12 | Unified verified-template resolution/receipts across toolbox, node, snippet, and helper while deriving distinct consumer bindings and preserving runtime/API boundaries. | Shared resolver/isolated probes -> 9 passed; dependency/shipped-template -> 32 passed; workflow/helper/operation -> 37 passed; contract docs -> 12 passed; compile/diff checks passed. An initially predeclared workflow filename did not exist and failed before collection; the active ledger was corrected to the actual contract/node/helper suites before closeout. | `feat: share verified template resolution (P1-12)` |
-| 2026-08-08 | P1-13, Phase 1 exit | Added exact bounded model-runtime status plus generic selection denials, including healthy-installed denial; proved deterministic restart-safe resolution without worker/ledger mutation. | Model boundary -> 12 passed; resolver/policy/catalog -> 32 passed; channel/CLI/auth/security -> 133 passed; docs/shipped templates -> 18 passed; Phase 1 resolver audit -> 10 passed; compile/diff checks passed. | `feat: enforce exclusive model runtime (P1-13)` |
-| 2026-08-08 | Phase 2 groundwork (no items checked) | Added the strict host-derived resolved environment input and frozen `hosting.toolbox.environment.v2` cache identity, removed environment-description service lookup from worker orchestration, and isolated no-bootstrap toolbox interpreter selection while preserving workflow fallback. P2 remains open until the physical builder replaces the legacy inheriting path. | Hermetic contract -> 6 passed; workflow/runtime regressions -> 29 passed; focused toolbox environment regressions -> 3 passed, 135 deselected; compile/diff checks passed. | `refactor: establish hermetic toolbox environment contract` |
-| 2026-08-08 | P2-01 through P2-10, Phase 2 exit | Added the target-host offline hermetic builder, exact wheel/lock/probe receipts, atomic publication/quarantine, thread/process deduplication, reference/grace GC, complete independent derived locks, receipt-gated readiness, catalog prewarm adaptation, and configured-orchestrator verified interpreter routing. | Hermetic builder -> 11 passed including real venvs, two fresh processes, service configuration, quarantine, ambient exclusion, complete base-plus-delta, and GC; environment/prewarm/shipped templates -> 19 passed; workflow/runtime -> 29 passed; focused toolbox environment -> 3 passed, 135 deselected; compile/diff checks passed. | `feat: build hermetic toolbox environments (P2-01..P2-10)` |
-| 2026-08-08 | P3-01 through P3-05 | Added strict canonical version-2 definition/request/dependency models, host-derived resolved profiles, per-toolbox advertised-name and file conflict validation, post-resolution grouping, and resolved-profile bundle manifests. | Definition planner -> 11 passed; dependency/identity -> 20 passed; focused bundle/profile/duplicate regressions -> 18 passed, 120 deselected; docs/compile/diff checks passed. The initially predeclared dependency-pipeline filename did not exist and was corrected to the repository's dependency-analysis suite before execution. | `feat: add toolbox definition planner (P3-01..P3-05)` |
-| 2026-08-08 | P3-06, P3-07, Phase 3 exit | Added exact active/proposed profile classification and a strict atomic expiring plan repository pinned to definition/expected/catalog/policy and resolved bundle identities. | Plan repository -> 10 passed including restart, expiry/no-refresh, pin identity, corruption, two-process writes, and no side effects; planner/identity -> 16 passed; operation repository -> 23 passed; docs/compile/diff checks passed. | `feat: persist toolbox definition plans (P3-06 P3-07)` |
-| 2026-08-08 | P4-01 | Completed durable definition-apply recovery and cancellation dispatch with an atomic persisted publication boundary and bounded candidate-cleanup terminal diagnostics. | Definition apply/contract/repository -> 51 passed including the cancel/publication race; operation/workflow regressions -> 28 passed; compile/diff checks passed. The initially named `tests/test_hosting_workflow_contract.py` did not exist and failed before collection; closeout used the repository's actual workflow operation and Python contract suites. | `feat: add durable definition apply operations (P4-01)` |
-| 2026-08-08 | P4-02, P4-03, P4-04 | Added resolved assignment orchestration with zero work for reuse, explicit non-routable candidate registrations, and exact inventory/profile/environment/receipt readiness. Also restored effective environment-description input in the temporary legacy rebuild adapter. | Resolved rollout/planner/hermetic -> 25 passed; complete toolbox sandbox -> 138 passed; compile/diff checks passed. The first full regression run found two legacy environment-description rebuild failures; both passed after the adapter correction, followed by the clean 138-test run. | `feat: stage verified toolbox candidates (P4-02 P4-03 P4-04)` |
-| 2026-08-08 | P4-05 through P4-11, Phase 4 exit | Added strict active snapshots and atomic complete route publication, route-map-only toolbox selection, post-publish draining with busy-worker preservation, candidate rollback, empty revisions/history, and bounded normal versus authorized operator terminal details. | Atomic routing/apply plus definition/candidate operation suites -> 11 passed; operation repository/full toolbox regressions -> 161 passed; compile/diff checks passed. | `feat: publish atomic toolbox routes (P4-05..P4-11)` |
-| 2026-08-08 | P5-01 through P5-07, Phase 5 exit | Hardened strict digest-bound version-2 state, atomic process-safe CAS, crash recovery, and a local exact-digest version-1 state/bundle archival cutover with code-matched rollback instructions and no translation. | State/atomic routing -> 10 passed including two fresh writers and interrupted replace; full toolbox/CLI -> 187 passed. The first full run exposed 11 temporary legacy routing calls hitting strict definition state; the adapter was explicitly isolated and all 11 focused failures plus the complete regression command passed. The initially named `tests/test_engine_host_cli.py` did not exist; closeout used the actual remote-argument and interactive suites. Compile/diff checks passed. | `feat: harden toolbox state cutover (P5-01..P5-07)` |
-| 2026-08-08 | P6-01 | Added actor/authority-owned authoritative read and immutable planning, exact parent-minted custom approval, and immediate idempotent durable apply with background atomic rollout. | Definition service/plan/atomic routing -> 17 passed; operation service/repository -> 31 passed; compile/diff checks passed. | `feat: add toolbox definition service (P6-01)` |
-| 2026-08-08 | P6-02, P6-03 | Exposed the four definition calls through authenticated daemon/channel/CLI routing and added the frozen definition plus read-only template helpers to the hosted reference while retaining admin controls separately. | Transport/channel/CLI/catalog authorization -> 108 passed; definition/routing/operation -> 38 passed; compile/diff checks passed. The predeclared operation filename was corrected before the regression run to the repository's actual service/repository suites. | `feat: expose toolbox definition transport (P6-02 P6-03)` |
-| 2026-08-08 | P6-04 through P6-10 | Removed every legacy builder/mutation, mutable-environment, version-1 state, selector fallback, and ambient-interpreter path; migrated hosted chat to complete/empty definitions; rewrote maintenance against version-2 routes and registration lifecycle. | Removal/definition -> 16 passed; channel/CLI/sandbox/auth -> 222 passed; maintenance/demo/API/hermetic -> 43 passed; complete suite -> 1,090 passed, 3 skipped; compile/diff checks passed. The first complete run found six stale expectations or timing assumptions; all were corrected before the final passing run. | `refactor: remove legacy toolbox mutation surface (P6-04..P6-10)` |
-| 2026-08-08 | P6-11, Phase 6 exit | Added strict host-owned standard catalog/compute-only policy configuration, eager publish/prewarm and bounded readiness, configured hermetic cache/build limits, and restart-safe administrator immutable revision replacement. | Host configuration/template -> 16 passed; channel/CLI/auth -> 134 passed; workflow concurrency -> 5 consecutive fresh runs; complete suite -> 1,093 passed, 3 skipped; compile/diff checks passed. The first complete run exposed and corrected a registry first-access race; a later run had two transient worker startup timeouts that passed in isolation before the clean exact full run. The initially named prewarm test file was corrected to the repository's actual `test_hosted_toolbox_template_prewarm.py` before closeout. | `feat: configure standard toolbox host startup (P6-11)` |
-| 2026-08-08 | P7-01 through P7-04 | Added mixed-category complete-definition preservation/profile-diff coverage and continuous atomic-route observation; closed the template/alias/custom/offline/lock/probe/missing-import dependency matrix. | Definition/planner/rollout/routing -> 21 passed; dependency/policy/real hermetic build -> 43 passed; complete suite -> 1,096 passed, 3 skipped; compile/diff checks passed. | `test: close definition rollout matrix (P7-01..P7-04)` |
-| 2026-08-08 | P7-05 through P7-08 | Closed real ambient-package hermeticity, every rollout recovery phase, strict v2 state/archive behavior, candidate/active/retired/orphan/grace GC ownership, and removed API/command/payload/state/bootstrap absence. | Hermetic/absence -> 20 passed; state/routing/maintenance/removal -> 25 passed; complete suite -> 1,105 passed, 3 skipped; compile/diff checks passed. One broad absence assertion initially included a generic non-toolbox channel method and was narrowed before the clean focused/full runs. | `test: close toolbox cutover matrix (P7-05..P7-08)` |
-| 2026-08-08 | P7-09 through P7-12 | Closed exact approval authority/pin/evidence binding, durable read/apply/recovery behavior, concurrent same-named multi-toolbox isolation, and stable redacted consumer projections. | Approval/plan -> 17 passed; operation/routing -> 37 passed; toolbox/channel -> 130 passed; complete suite -> 1,109 passed, 3 skipped; compile/diff checks passed. The first full run had one unrelated workflow resource-sampling miss after 1,108 passes; it passed three fresh runs before the clean exact rerun. | `feat: enforce toolbox consumer projections (P7-09..P7-12)` |
-| 2026-08-08 | P7-13 | Reconciled the durable public contract and replaced the worker document with complete supported planning, hermetic environment, candidate rollout, atomic routing, durable recovery, execution/callback, projection, and GC architecture linked to the normative contract. | Final docs -> 16 passed; forbidden transition vocabulary -> no matches; complete suite -> 1,113 passed, 3 skipped; compile/diff checks passed. | `docs: finalize toolbox runtime contract (P7-13)` |
-| 2026-08-08 | P7-14 through P7-16 | Finalized the exact client handoff and release/adoption pins; migrated `mp13-docs` to complete definitions, durable operation/revision recovery, parent approval, bounded projections, isolated validation, and empty-definition retirement; removed its procedural toolbox environment workflow. | Parent final docs -> 16 passed. Dependent definition/generated/parser/cursor -> 99 passed; workflow spec/compose/lifecycle -> 393 passed, 15 skipped; recovery/approval/sandbox and complete hosting -> 522 passed; affected Node -> 126 passed, 15 skipped; compile/diff/removal scans passed. The predeclared dependent commands incorrectly omitted the repository-required Poetry runner and named a nonexistent test file; verification used `poetry run` and the actual focused suites. The widened workspace/workflow run's two Windows socket-buffer exhaustion errors passed immediately in isolation. | `docs: close toolbox dependent cutover (P7-14..P7-16)` |
-| 2026-08-08 | P7-17 and acceptance audit | Closed clean configured bootstrap, strict config, eager/deferred materialization, offline preseed, stable lock failure, compute-only/policy widening, complete derivation, and real hermetic non-inheritance; checked every acceptance criterion. | Standard-base matrix -> 42 passed; exact complete suite -> 1,118 passed, 3 skipped, 4 pre-existing async-marker warnings; compile/diff checks passed. Two unrelated warm workflow process timing failures in the first full run passed together in isolation before the clean rerun. The predeclared P7-17 command named two nonexistent files and was corrected to `test_hosting_toolbox_host_config.py` and `test_hosted_toolbox_shared_template_resolver.py`. | `test: close standard toolbox base matrix (P7-17)` |
-| 2026-08-09 | P7-18 | Reset the consumed breaking-change handoff to a completion marker, retained its canonical path for future handoffs, and confirmed durable documentation is self-contained. | `python -m pytest tests/test_hosted_toolbox_contract_docs.py tests/test_hosting_operation_contract.py -q` -> 34 passed; reset-file forbidden-content scan -> no matches; `git diff --check` passed. `mp13-docs` adoption was already recorded at `125d20f232bf5b755d18c1b23bc1e4b8929edf21`. | `docs: reset consumed breaking-change handoff (P7-18)` |
+## Confirmed open gaps
 
-P0-01/P0-02 exact verification commands:
+1. Custom dependency planning does not produce the complete resolved lock and
+   artifacts consumed by the real builder.
+2. Shipped template artifact references are not a real per-distribution wheel
+   closure, and normal daemon startup does not configure the real materializer.
+3. Built-ins are not constructed for the daemon's current target during real
+   hosting setup.
+4. ARM64 and macOS target detection/validation/support are absent.
+5. Persisted manifest normalization, identical reapply, candidate identity, and
+   concurrent healing are unsafe or incomplete.
+6. Repair reports missing registrations but cannot safely heal them.
+7. Abrupt POSIX daemon death can leave toolbox workers outside daemon ownership.
+8. Dependency approval authority does not match the distinct role described by
+   the contract.
+9. No real-daemon end-to-end test covers built-in setup, custom package add and
+   removal, or restart healing.
 
-```powershell
-rg -n 'register_auto_callable|register_python_callable|register_manual_tool|register_intrinsics|unregister_|resolve_sandbox|environment_(description|resolve|apply|realize|sync|lock|verify|execute)|toolbox-(register|unregister|environment)' src tests
-rg -n 'register_auto_callable|register_python_callable|register_manual_tool|register_intrinsics|unregister_|resolve_sandbox|environment_(description|resolve|apply|realize|sync|lock|verify|execute)|toolbox-(register|unregister|environment)' O:/repos/mp13-docs
-```
+## Progress ledger
 
-The AST verification was executed as an inline Python assertion over
-`src/hosting/toolbox/hosted_ref.py`, both dispatch implementations,
-`src/mp13_engine/mp13_tools_builtin.py`,
-`O:/repos/mp13-docs/src/tools/examples.py`, and the migration handoff. It
-reported:
+Only corrective work is tracked here. The former phase-by-phase historical test
+transcript was intentionally removed because it obscured current truth.
 
-```text
-commands=19; deprecated_methods_checked; parent_imports=['.mp13_config', '__future__', 'codecs', 'dataclasses', 'importlib', 'json', 'numexpr', 'numpy', 're', 'sympy', 'typing']; starter_imports=['__future__', 'base64', 'io', 'math', 'matplotlib', 'pathlib', 'tools']
-```
+| Work group | Status | Outcome/evidence |
+| --- | --- | --- |
+| R0 Documentation reset | Active | R0-01 is complete: the obsolete plan and status ledger were replaced with current decisions, confirmed defects, itemized corrective work, and acceptance criteria. R0-02 remains a cross-slice documentation obligation. No runtime behavior changed. |
+| R1 Current-target platform model | Pending | No implementation started. |
+| R2 Target-local built-in construction | Pending | No implementation started. |
+| R3 End-to-end custom environments | Pending | No implementation started. |
+| R4 Package and tool removal | Pending | No implementation started. |
+| R5 Safe consumer-triggered healing | Pending | No implementation started. |
+| R6 Administrator template construction | Pending | No implementation started. |
+| R7 Authority and consumer compatibility | Pending | No implementation started. |
+| R8 Acceptance and closeout | Pending | No implementation started. |
 
-## Blocked or deferred work
+## Next implementation slice
 
-None.
+No code slice is active. The next slice should be R1-01 through R1-03: establish
+one canonical current-host target model and replace the existing x86-only
+defaults and validators. Before implementation, record the exact focused,
+native-platform, regression, and documentation test commands in this section.
 
-## Next slice
+## Status update rules
 
-None.
+1. Record an active slice and its test commands before changing code.
+2. Commit one coherent slice at a time.
+3. Check plan items only after the real production boundary passes; test doubles
+   may supplement but never replace the boundary test.
+4. Record concise test results and the commit subject after completion.
+5. Keep failures and partial work visible as Active or Blocked.
+6. Put durable behavior in the contracts, not in this ledger.
+7. Populate `HOSTING_CLIENT_BREAKING_CHANGES.md` before releasing any required
+   consumer or administrator migration.
+
+## Documentation correction
+
+This reset supersedes the previous claim that phases 0-7 and the acceptance
+audit were wholly complete. It does not invalidate the retained foundation or
+the dependent's completed definition-protocol migration. It corrects the false
+conclusion that shipped-template setup, custom package materialization, and
+restart-safe healing had been proven end to end.
