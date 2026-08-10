@@ -602,6 +602,15 @@ to the builder. Active custom profiles persist that exact resolved input so a
 later plan compares against the real active closure rather than an installed
 environment or a newly resolved approximation.
 
+Removal planning resolves each remaining profile again from only its complete
+remaining tool and package requirements. Packages needed solely by removed
+tools are not retained implicitly: a custom closure may contract to the exact
+built-in closure. Apply reuses an active immutable environment only when the
+complete profile identity is unchanged, preserving its actual builder
+reference. Replaced and removed builder references remain present through the
+atomic definition publication and are released only afterward. Physical
+deletion remains a separate grace-period, reference-checked operation.
+
 Each cache miss creates a new candidate with `venv` configured as
 `with_pip=True` and `system_site_packages=False`. The candidate's own Python
 runs pip with `--no-index --no-deps` against the approved exact wheel set. The

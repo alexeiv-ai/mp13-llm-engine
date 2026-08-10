@@ -14,7 +14,11 @@ from hosting.toolbox.bundle_models import (
     ToolboxBundleSpec,
     ToolboxDefinitionSpec,
 )
-from hosting.toolbox.definition_planner import ToolboxDefinitionPlanDraft
+from hosting.toolbox.definition_planner import (
+    ToolboxDefinitionPlanDraft,
+    classify_toolbox_profiles,
+    profile_snapshots_from_draft,
+)
 from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 
 
@@ -133,6 +137,15 @@ class _FakeOrchestrator:
             if assignment.classification == "reused":
                 continue
             self.spawned += 1
+            assignment.materialization_reference_id = (
+                f"toolbox:{toolbox_id}:materialized:{definition_revision}:{self.spawned}"
+            )
+            builder = getattr(self.service, "_hermetic_toolbox_environment_builder", None)
+            if isinstance(builder, _TrackingBuilder):
+                builder.add(
+                    assignment.resolved_profile.environment_key,
+                    assignment.materialization_reference_id,
+                )
             engine_id = f"candidate-{self.spawned}"
             manifest = assignment.bundle_spec.manifest_payload()
             assignment.registration = self.service.register_spawned(
@@ -156,6 +169,22 @@ class _FakeOrchestrator:
                 },
             )
         return list(assignments)
+
+
+class _TrackingBuilder:
+    def __init__(self) -> None:
+        self.references: dict[str, set[str]] = {}
+        self.released: list[tuple[str, str]] = []
+
+    def add(self, environment_key: str, reference_id: str) -> None:
+        self.references.setdefault(environment_key, set()).add(reference_id)
+
+    def release_reference(self, *, environment_key: str, reference_id: str) -> None:
+        self.released.append((environment_key, reference_id))
+        references = self.references.get(environment_key, set())
+        references.discard(reference_id)
+        if not references:
+            self.references.pop(environment_key, None)
 
 
 def _install_fake_rollout(service: EngineHostService) -> _FakeOrchestrator:
@@ -237,6 +266,87 @@ def test_apply_publishes_routes_then_drains_old_and_keeps_terminal_result_user_s
         operation_id=second_id, operator_authorized=True
     )
     assert details["candidate_engine_ids"]
+
+
+def test_identical_reapply_reuses_engine_environment_and_materialization_reference(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    builder = _TrackingBuilder()
+    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    orchestrator = _install_fake_rollout(service)
+    first = _draft("Alpha", "a", None)
+    first_result = service._apply_resolved_toolbox_definition(
+        draft=first,
+        profile_changes=_changes(first, "added"),
+        operation_id=_prepare(service, first, "reuse-first"),
+    )
+    assert first_result["lifecycle"] == "terminal_success"
+    first_snapshot = service._toolbox_state_v2.get("demo")
+    first_profile = next(iter(first_snapshot["profiles"].values()))
+    first_reference = first_profile["environment_reference"]
+    first_engine = first_profile["engine_id"]
+    assert builder.references == {first.profiles[0].environment_key: {first_reference}}
+
+    second = _draft("Alpha", "a", first.definition.revision)
+    changes = classify_toolbox_profiles(second, profile_snapshots_from_draft(first))
+    second_result = service._apply_resolved_toolbox_definition(
+        draft=second,
+        profile_changes=changes,
+        operation_id=_prepare(service, second, "reuse-second"),
+    )
+    second_profile = next(iter(service._toolbox_state_v2.get("demo")["profiles"].values()))
+
+    assert second_result["lifecycle"] == "terminal_success"
+    assert orchestrator.spawned == 1
+    assert second_profile["engine_id"] == first_engine
+    assert second_profile["environment_reference"] == first_reference
+    assert builder.references == {first.profiles[0].environment_key: {first_reference}}
+    assert builder.released == []
+
+
+def test_removed_profile_reference_exists_through_publication_then_is_released(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    builder = _TrackingBuilder()
+    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    _install_fake_rollout(service)
+    first = _draft("Alpha", "a", None)
+    service._apply_resolved_toolbox_definition(
+        draft=first,
+        profile_changes=_changes(first, "added"),
+        operation_id=_prepare(service, first, "remove-first"),
+    )
+    first_profile = next(iter(service._toolbox_state_v2.get("demo")["profiles"].values()))
+    old_reference = first_profile["environment_reference"]
+    old_environment = first_profile["profile"]["environment_key"]
+    original_publish = service._toolbox_state_v2.publish
+    observed_during_publication: list[bool] = []
+
+    def publish_after_reference_check(**kwargs):
+        observed_during_publication.append(
+            old_reference in builder.references.get(old_environment, set())
+        )
+        return original_publish(**kwargs)
+
+    service._toolbox_state_v2.publish = publish_after_reference_check  # type: ignore[method-assign]
+    empty = _draft(None, "c", first.definition.revision)
+    result = service._apply_resolved_toolbox_definition(
+        draft=empty,
+        profile_changes=[{
+            "classification": "removed",
+            "active_profile_id": first.profiles[0].profile_id,
+            "proposed_profile_id": None,
+            "changed_fields": [],
+        }],
+        operation_id=_prepare(service, empty, "remove-empty"),
+    )
+
+    assert result["lifecycle"] == "terminal_success"
+    assert observed_during_publication == [True]
+    assert builder.references == {}
+    assert builder.released == [(old_environment, old_reference)]
 
 
 def test_candidate_warmup_and_failed_readiness_leave_old_routes_untouched(tmp_path: Path) -> None:
@@ -344,6 +454,8 @@ def test_continuous_routing_observes_only_complete_old_or_new_definition(tmp_pat
 
 def test_published_replacement_marks_busy_old_worker_retired_without_killing_inflight_work(tmp_path: Path) -> None:
     service = _service(tmp_path)
+    builder = _TrackingBuilder()
+    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
     _install_fake_rollout(service)
     first = _draft("Alpha", "a", None)
     service._apply_resolved_toolbox_definition(
@@ -351,7 +463,9 @@ def test_published_replacement_marks_busy_old_worker_retired_without_killing_inf
         profile_changes=_changes(first, "added"),
         operation_id=_prepare(service, first, "first"),
     )
-    old_engine = service._toolbox_state_v2.get("demo")["tool_routes"]["Alpha"]["engine_id"]
+    old_snapshot = service._toolbox_state_v2.get("demo")
+    old_engine = old_snapshot["tool_routes"]["Alpha"]["engine_id"]
+    old_profile = next(iter(old_snapshot["profiles"].values()))
     service._toolbox_runtime_base = lambda: type(  # type: ignore[method-assign]
         "BusyRuntime",
         (),
@@ -369,6 +483,10 @@ def test_published_replacement_marks_busy_old_worker_retired_without_killing_inf
     assert result["result"]["rollout_summary"]["drain_pending_profiles"] == 1
     assert service.get_registration(old_engine)["routing_state"] == "retired"
     assert service._toolbox_state_v2.get("demo")["tool_routes"]["Beta"]["non_restartable"] is True
+    assert (
+        old_profile["profile"]["environment_key"],
+        old_profile["environment_reference"],
+    ) in builder.released
 
 
 def test_prepublication_cancel_cleans_candidate_and_empty_definition_is_valid_revision(tmp_path: Path) -> None:

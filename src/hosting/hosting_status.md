@@ -160,7 +160,24 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R3 and R4 are complete; pause before R5. R4-03/R4-04/R4-05
+Active slice: none. R5-01 (`high`) is complete; pause before R5-02 (`average`).
+Remaining profiles are resolved from only their post-removal requirements, so a
+custom requests/urllib3 closure contracts to the exact built-in closure when
+those requirements disappear. Exact profiles reuse their engine, environment,
+and actual builder reference. Replaced/removed references survive the atomic
+publication boundary and are released afterward, including while an old worker
+finishes draining; physical deletion remains separate and grace-period guarded.
+Active state now requires its complete profile-reference set, and resolved
+assignments declare the materialization reference explicitly. The
+planner/resolution, real hermetic reference-index, maintenance, atomic-routing,
+state, and contract matrix passed 51 tests in 126.94s. The expanded surrounding
+definition, rollout, catalog, transport, maintenance, and public-guarantee suite
+passed 92 tests in 40.08s; final model/atomic/state/docs validation passed 32
+tests in 7.34s. Compile and `git diff --check` passed. No public API was removed
+or replaced, so the existing breaking-change handoff already covers this
+explicit-removal behavior and required no new migration entry.
+
+Completed slice evidence: R3 and R4 are complete. R4-03/R4-04/R4-05
 (`high`) carry the selected exact verified CAS closure from confirmation through
 orchestration into the real offline hermetic builder. Active custom state keeps
 the exact resolved input for later comparisons. Apply builds/stages/warms

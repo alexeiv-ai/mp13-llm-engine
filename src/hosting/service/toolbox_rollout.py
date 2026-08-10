@@ -115,7 +115,13 @@ class ToolboxDefinitionRolloutCoordinator:
             if len(manifest_hash) == 64 and all(character in "0123456789abcdef" for character in manifest_hash):
                 manifest_hash = f"sha256:{manifest_hash}"
             tool_names = sorted(self._non_restartable_by_name(assignment))
-            reference = f"toolbox:{draft.definition.toolbox_id}:{profile.profile_id}:{draft.definition.revision}"
+            reference = (
+                str(active.get("environment_reference") or "").strip()
+                if assignment.classification == "reused"
+                else str(assignment.materialization_reference_id or "").strip()
+            )
+            if not reference:
+                raise RuntimeError("active_environment_reference_missing")
             profiles[profile.profile_id] = {
                 "profile": profile.to_dict(),
                 "manifest_hash": manifest_hash,
@@ -137,6 +143,34 @@ class ToolboxDefinitionRolloutCoordinator:
                     "non_restartable": non_restartable,
                 }
         return profiles, routes, sorted(environment_references)
+
+    def _release_displaced_environment_references(
+        self,
+        *,
+        old_snapshot: Mapping[str, Any] | None,
+        active_references: Sequence[str],
+    ) -> list[str]:
+        """Release superseded builder references only after publication."""
+
+        builder = getattr(self.service, "_hermetic_toolbox_environment_builder", None)
+        if builder is None:
+            return []
+        retained = {str(item or "").strip() for item in active_references}
+        released: list[str] = []
+        for raw in dict(dict(old_snapshot or {}).get("profiles") or {}).values():
+            row = dict(raw or {})
+            reference = str(row.get("environment_reference") or "").strip()
+            if not reference or reference in retained:
+                continue
+            environment_key = str(dict(row.get("profile") or {}).get("environment_key") or "").strip()
+            if not environment_key:
+                raise RuntimeError("retired_environment_key_missing")
+            builder.release_reference(
+                environment_key=environment_key,
+                reference_id=reference,
+            )
+            released.append(reference)
+        return sorted(released)
 
     def _drain_old(self, old_snapshot: Mapping[str, Any] | None, active_engine_ids: set[str]) -> dict[str, Any]:
         old_engine_ids = {
@@ -281,6 +315,11 @@ class ToolboxDefinitionRolloutCoordinator:
             )
             drain = self._drain_old(old_snapshot, active_engine_ids)
             operator_details["drain"] = drain
+            released_references = self._release_displaced_environment_references(
+                old_snapshot=old_snapshot,
+                active_references=references,
+            )
+            operator_details["released_environment_references"] = released_references
             self._progress(
                 operation_id,
                 phase="cleanup",

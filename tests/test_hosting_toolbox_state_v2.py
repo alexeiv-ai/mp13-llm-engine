@@ -139,6 +139,27 @@ def test_state_reader_fails_closed_on_legacy_corruption_version_and_digest(tmp_p
         repository.read()
 
 
+def test_publish_requires_complete_profile_environment_reference_set(
+    tmp_path: Path,
+) -> None:
+    repository = AtomicJsonToolboxStateV2Repository(tmp_path / "toolbox_sandboxes_v2.json")
+    definition = _definition("Alpha")
+    _profile, profiles, routes = _runtime("a", "Alpha", "engine-a")
+
+    with pytest.raises(
+        ValueError, match="toolbox_state_v2_environment_references_incomplete"
+    ):
+        repository.publish(
+            toolbox_id="demo",
+            expected_revision=None,
+            definition=definition.to_dict(),
+            profiles=profiles,
+            tool_routes=routes,
+            environment_references=["toolbox:demo:wrong-reference"],
+            published_at_ms=1,
+        )
+
+
 def test_publish_is_process_safe_cas_and_interrupted_replace_preserves_old_state(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "toolbox_sandboxes_v2.json"
     context = multiprocessing.get_context("spawn")

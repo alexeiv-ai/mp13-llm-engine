@@ -943,6 +943,7 @@ class ResolvedToolboxSandboxAssignment:
     active_profile_id: str | None = None
     staged_bundle: Optional["StagedToolboxBundle"] = None
     registration: Optional[Dict[str, Any]] = None
+    materialization_reference_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.toolbox_id = str(self.toolbox_id or "").strip()

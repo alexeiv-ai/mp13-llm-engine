@@ -692,7 +692,7 @@ boundary—not a double—passes.
 
 ### R5 - Removal, retention, and administrator environments
 
-- [ ] **R5-01** Recompute complete closure after tool/package removal, reuse
+- [x] **R5-01** Recompute complete closure after tool/package removal, reuse
   unaffected immutable environments, release references after publication, and
   prove custom-to-built-in contraction.
 - [ ] **R5-02** Implement revisioned retention/GC config and the exact-digest

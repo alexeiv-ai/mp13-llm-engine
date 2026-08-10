@@ -21,6 +21,7 @@ from hosting.toolbox.catalog import (
     ToolboxTemplateProvenance,
 )
 from hosting.toolbox.definition_planner import (
+    ActiveToolboxEnvironmentResolution,
     ToolboxDefinitionPlanDraft,
     build_toolbox_environment_mutations,
     plan_toolbox_definition,
@@ -297,6 +298,83 @@ def test_configured_resolver_builds_exact_direct_transitive_verified_cas_offer(
     assert all(".mp13" not in str(item.to_dict()) for item in alternative.artifacts)
     assert offers[0].confirmation_required is True
     assert offers[0].dependency_approval_required is True
+
+
+def test_removed_custom_packages_recompute_to_exact_builtin_closure(
+    tmp_path: Path,
+) -> None:
+    service, template = _service_with_verified_closure(tmp_path)
+    configuration = service._toolbox_host_project_config  # noqa: SLF001
+    custom_draft = plan_toolbox_definition(
+        _definition(),
+        templates=(template,),
+        python_abi=configuration.target.python_abi,
+        platform=configuration.target.platform,
+        runtime_identity={
+            "version": "3.12.7",
+            "artifact_digest": template.parent_worker_artifact_digest,
+        },
+    )
+    resolver = ConfiguredToolboxPlanResolver(
+        configuration=configuration,
+        artifact_store=service._toolbox_artifact_store,  # noqa: SLF001
+        catalog_state=service._toolbox_template_catalog.read(),  # noqa: SLF001
+    )
+    active_candidate = resolver.candidates_for_draft(custom_draft)[0]
+    active_environment = ActiveToolboxEnvironmentResolution(
+        environment_id=custom_draft.profiles[0].profile_id,
+        tool_keys=custom_draft.profiles[0].assigned_tool_keys,
+        base_template_id=active_candidate.base_template_id,
+        base_template_revision=active_candidate.base_template_revision,
+        source_ids=active_candidate.source_ids,
+        source_origins=active_candidate.source_origins,
+        lock_digest=active_candidate.lock_digest,
+        artifacts=active_candidate.artifacts,
+    )
+    contracted_definition = json.loads(json.dumps(_definition()))
+    contracted_definition["expected_revision"] = custom_draft.definition.revision
+    request = contracted_definition["auto_requests"][0]
+    request["files"] = [{
+        "relative_path": "pkg/fetch.py",
+        "content": "def Fetch():\n    return 'base-only'\n",
+    }]
+    request["dependency"] = {
+        "mode": "template",
+        "template_id": "core",
+        "declared_imports": [],
+        "package_requirements": [],
+    }
+    contracted_draft = plan_toolbox_definition(
+        contracted_definition,
+        templates=(template,),
+        python_abi=configuration.target.python_abi,
+        platform=configuration.target.platform,
+        runtime_identity={
+            "version": "3.12.7",
+            "artifact_digest": template.parent_worker_artifact_digest,
+        },
+    )
+    contracted_candidates = resolver.candidates_for_draft(contracted_draft)
+    offers = build_toolbox_environment_mutations(
+        active_definition=custom_draft.definition,
+        draft=contracted_draft,
+        candidates=contracted_candidates,
+        active_environments=(active_environment,),
+        dependency_approval_required=True,
+    )
+
+    assert contracted_draft.custom_environment_count == 0
+    assert contracted_draft.profiles[0].custom_resolved_lock_digest is None
+    assert {item.distribution for item in contracted_candidates[0].artifacts} == {
+        "packaging"
+    }
+    mutations = offers[0].alternatives[0].package_mutations
+    assert {(item.distribution, item.mutation) for item in mutations} == {
+        ("requests", "removal"),
+        ("urllib3", "removal"),
+    }
+    assert offers[0].confirmation_required is False
+    assert offers[0].dependency_approval_required is False
 
 
 def test_confirmed_custom_closure_flows_through_orchestration_to_real_builder(

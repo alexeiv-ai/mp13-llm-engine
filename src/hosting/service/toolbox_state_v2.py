@@ -116,6 +116,10 @@ class AtomicJsonToolboxStateV2Repository:
         references = sorted(str(item or "").strip() for item in row["environment_references"])
         if any(not item for item in references) or len(set(references)) != len(references):
             raise ValueError("toolbox_state_v2_environment_references_invalid")
+        if set(references) != {
+            profile["environment_reference"] for profile in profiles.values()
+        }:
+            raise ValueError("toolbox_state_v2_environment_references_incomplete")
         history = [dict(item or {}) for item in row["rollout_history"]]
         if len(history) > MAX_ROLLOUT_HISTORY:
             raise ValueError("toolbox_state_v2_history_unbounded")
