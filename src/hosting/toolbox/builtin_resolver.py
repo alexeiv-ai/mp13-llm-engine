@@ -68,12 +68,20 @@ class AirgapBuiltinWheelResolver:
         configuration: ToolboxHostProjectConfiguration,
         *,
         artifact_sources: Mapping[str, Path],
+        verified_artifacts: Mapping[str, Mapping[str, Path]] | None = None,
     ) -> None:
         self.configuration = configuration
         self.sources = {
             source.source_id: Path(artifact_sources[source.source_id]).expanduser().resolve()
             for source in configuration.sources
             if source.kind == "airgap_store" and source.source_id in artifact_sources
+        }
+        self.verified_artifacts = {
+            str(source_id): {
+                str(filename): Path(path).expanduser().resolve()
+                for filename, path in dict(artifacts).items()
+            }
+            for source_id, artifacts in dict(verified_artifacts or {}).items()
         }
 
     @staticmethod
@@ -120,6 +128,11 @@ class AirgapBuiltinWheelResolver:
 
     def _source_for(self, path: Path, distribution_name: str) -> tuple[str, int]:
         for source in self.configuration.sources:
+            verified = self.verified_artifacts.get(source.source_id, {})
+            if verified.get(path.name) == path:
+                if not self._allowed(distribution_name, source.allowed_package_namespaces):
+                    raise ValueError("resolved_artifact_source_invalid")
+                return source.source_id, source.maximum_download_bytes
             root = self.sources.get(source.source_id)
             if root is None:
                 continue
@@ -140,6 +153,12 @@ class AirgapBuiltinWheelResolver:
             for item in self.configuration.sources
             if item.source_id in self.sources
         ]
+        wheelhouses.extend(
+            path.parent
+            for source in self.configuration.sources
+            for path in self.verified_artifacts.get(source.source_id, {}).values()
+        )
+        wheelhouses = list(dict.fromkeys(wheelhouses))
         if not wheelhouses or self.configuration.resolution.mode not in {"air_gapped", "prefer_airgap"}:
             raise RuntimeError("required_template_source_unavailable")
         with tempfile.TemporaryDirectory(prefix="mp13-toolbox-resolve-") as temporary:

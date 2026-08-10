@@ -46,6 +46,11 @@ from .toolbox_runtime import ToolboxRuntimeMixin
 from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from .toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
 from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationRepository
+from .toolbox_artifact_store import (
+    AtomicToolboxArtifactStore,
+    ToolboxArtifactBundleError,
+    validate_trust_public_keys,
+)
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from ..toolbox.host_project_config import (
@@ -79,6 +84,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
         toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
+        toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
         toolbox_dependency_policy: Optional[Dict[str, Any] | ToolboxDependencyPolicy] = None,
     ):
@@ -99,6 +105,16 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_host_project_config = (
             ToolboxHostProjectConfiguration.from_dict(toolbox_host_project_configuration)
             if toolbox_host_project_configuration is not None
+            else None
+        )
+        if self._toolbox_host_project_config is None and toolbox_trust_public_keys is not None:
+            raise ValueError("toolbox_trust_public_keys_without_configuration")
+        self._toolbox_trust_public_keys = (
+            validate_trust_public_keys(
+                self._toolbox_host_project_config, toolbox_trust_public_keys
+            )
+            if self._toolbox_host_project_config is not None
+            and toolbox_trust_public_keys is not None
             else None
         )
         current_target = detect_current_toolbox_target()
@@ -226,6 +242,11 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._ensure_metrics_initialized()
         self._toolbox_startup = None
         self._toolbox_config_transition = None
+        self._toolbox_artifact_store = AtomicToolboxArtifactStore(
+            self.hosting_root / "toolbox_artifact_store"
+        )
+        self._toolbox_verified_artifacts: dict[str, dict[str, Path]] = {}
+        self._toolbox_artifact_ingestion_diagnostic = None
         if self._toolbox_host_project_config is not None:
             self._toolbox_config_transition = self._toolbox_host_config_revisions.apply(
                 self._toolbox_host_project_config
@@ -238,6 +259,31 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
                 self._toolbox_config_transition["invalidated_materialization_receipts"] = (
                     self._toolbox_materialization_receipts.retain_template_digests(active_digests)
                 )
+            if self._toolbox_trust_public_keys is not None:
+                try:
+                    for source in self._toolbox_host_project_config.sources:
+                        if source.kind != "airgap_store":
+                            continue
+                        source_root = self._toolbox_artifact_sources[source.source_id]
+                        for bundle_path in sorted(source_root.glob("*.zip")):
+                            self._toolbox_artifact_store.import_signed_bundle(
+                                bundle_path,
+                                configuration=self._toolbox_host_project_config,
+                                trust_public_keys=self._toolbox_trust_public_keys,
+                            )
+                        self._toolbox_verified_artifacts[source.source_id] = (
+                            self._toolbox_artifact_store.source_artifacts(source.source_id)
+                        )
+                except ToolboxArtifactBundleError as exc:
+                    self._toolbox_artifact_ingestion_diagnostic = {
+                        "code": exc.code,
+                        "summary": exc.summary,
+                    }
+                except (KeyError, OSError, ValueError):
+                    self._toolbox_artifact_ingestion_diagnostic = {
+                        "code": "artifact_store_invalid",
+                        "summary": "The verified toolbox artifact store is invalid.",
+                    }
             self._toolbox_startup = self.initialize_configured_toolbox_templates(
                 configuration=self._toolbox_host_project_config,
                 request_id_prefix=f"host-startup-{self._toolbox_host_project_config.config_revision}",

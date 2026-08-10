@@ -30,6 +30,7 @@ from ..sandbox.host_capabilities import (
 from ..service.host_service import EngineHostService
 from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
+from ..service.toolbox_artifact_store import validate_trust_public_keys
 from .constants import DEFAULT_DAEMON_PORT
 from .diagnostics import write_daemon_report
 from .paths import _daemon_local_ipc_endpoint
@@ -58,6 +59,7 @@ class EngineHostDaemon:
         runtime_profile: str = "foreground_terminal_bound",
         toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
         toolbox_artifact_sources: Optional[Mapping[str, Path]] = None,
+        toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
         toolbox_dependency_policy: Optional[Mapping[str, Any]] = None,
     ):
         self.port = int(port or DEFAULT_DAEMON_PORT)
@@ -71,13 +73,14 @@ class EngineHostDaemon:
             toolbox_host_project_configuration is not None,
             toolbox_artifact_sources is not None,
             toolbox_dependency_policy is not None,
+            toolbox_trust_public_keys is not None,
         )
         if not any(provided):
             toolbox_setup_diagnostic = {
                 "code": "toolbox_configuration_missing",
                 "summary": "Toolbox hosting configuration is not available.",
             }
-        elif not provided[0] or not provided[2]:
+        elif not all(provided):
             toolbox_setup_diagnostic = {
                 "code": "toolbox_configuration_incomplete",
                 "summary": "Toolbox hosting configuration is incomplete.",
@@ -88,6 +91,9 @@ class EngineHostDaemon:
                     toolbox_host_project_configuration or {}
                 )
                 parsed_policy = ToolboxDependencyPolicy.from_dict(toolbox_dependency_policy or {})
+                parsed_trust_keys = validate_trust_public_keys(
+                    parsed_configuration, toolbox_trust_public_keys or {}
+                )
                 bindings = {
                     str(key): Path(value).expanduser().resolve()
                     for key, value in dict(toolbox_artifact_sources or {}).items()
@@ -105,6 +111,7 @@ class EngineHostDaemon:
                     "toolbox_host_project_configuration": parsed_configuration.to_dict(),
                     "toolbox_artifact_sources": bindings or None,
                     "toolbox_dependency_policy": parsed_policy.to_dict(),
+                    "toolbox_trust_public_keys": parsed_trust_keys,
                 }
             except Exception as exc:
                 reason = str(exc or "")

@@ -240,6 +240,7 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
         "`credential_ref`",
         "`source_set_revision`",
         "`toolbox_artifact_sources`",
+        "`toolbox_trust_public_keys`",
         "`toolbox_dependency_policy`",
         "`toolbox_configuration_missing`",
         "`toolbox_configuration_incomplete`",

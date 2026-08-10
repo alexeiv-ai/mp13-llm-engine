@@ -16,7 +16,9 @@ from hosting.service.toolbox_artifact_store import (
     AtomicToolboxArtifactStore,
     ToolboxArtifactBundleError,
 )
+from hosting.daemon import EngineHostDaemon
 from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
+from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.target import detect_current_toolbox_target
 
 
@@ -56,7 +58,7 @@ def _configuration() -> ToolboxHostProjectConfiguration:
             ],
             "resolution": {
                 "mode": "air_gapped",
-                "timeout_seconds": 30,
+                "timeout_seconds": 60,
                 "maximum_bytes": 10_000_000,
                 "maximum_artifacts": 10,
                 "allowed_redirect_origins": [],
@@ -178,6 +180,21 @@ def _keys() -> tuple[Ed25519PrivateKey, dict[str, str]]:
     return private, {"release-key": _b64(private.public_key().public_bytes_raw())}
 
 
+def _policy() -> dict:
+    target = detect_current_toolbox_target()
+    body = {
+        "allowed_template_ids": ["core"],
+        "allowed_targets": [target.name],
+        "package_allowlist": [],
+        "package_denylist": [],
+        "allow_custom": False,
+        "custom_requires_approval": True,
+        "online_resolution_allowed": False,
+        "allowed_index_origins": [],
+    }
+    return {"revision": identity_digest("test.bundle.policy.v1", body), **body}
+
+
 def test_signed_bundle_import_is_atomic_idempotent_and_restart_readable(tmp_path: Path) -> None:
     configuration = _configuration()
     private, public = _keys()
@@ -256,3 +273,120 @@ def test_bundle_target_and_symlink_entries_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(ToolboxArtifactBundleError) as captured:
         store.import_signed_bundle(rewritten, configuration=configuration, trust_public_keys=public)
     assert captured.value.code == "artifact_bundle_archive_invalid"
+
+
+def test_normal_daemon_discovers_signed_bundles_and_resolves_only_verified_cas_objects(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _bundle(source / "release.zip", configuration, private)
+
+    def construct() -> EngineHostDaemon:
+        return EngineHostDaemon(
+            pid_file=tmp_path / "daemon.pid",
+            engines_state_file=tmp_path / "engines.json",
+            control_state_file=tmp_path / "control.json",
+            toolbox_host_project_configuration=configuration.to_dict(),
+            toolbox_artifact_sources={"offline-release": source},
+            toolbox_dependency_policy=_policy(),
+            toolbox_trust_public_keys=public,
+        )
+
+    daemon = construct()
+    assert daemon.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
+    assert [item["template_id"] for item in daemon.svc._toolbox_startup["closures"]] == ["core"]  # noqa: SLF001
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert str(source) not in str(daemon.svc._toolbox_startup)  # noqa: SLF001
+    assert next(iter(public.values())) not in str(daemon.svc.hosting_setup_summary())
+    daemon.svc.close()
+
+    restarted = construct()
+    assert restarted.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
+    assert len(restarted.svc._toolbox_artifact_store.read()["bundles"]) == 1  # noqa: SLF001
+
+
+def test_normal_daemon_invalid_bundle_is_degraded_without_catalog_publication(tmp_path: Path) -> None:
+    configuration = _configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _bundle(source / "bad.zip", configuration, private, bad_signature=True)
+
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+
+    readiness = daemon.svc.hosting_setup_summary()["toolbox_readiness"]
+    assert readiness["status"] == "degraded"
+    assert readiness["code"] == "artifact_bundle_signature_invalid"
+    assert daemon.svc._toolbox_startup["closures"] == []  # noqa: SLF001
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert str(source) not in str(readiness)
+
+
+@pytest.mark.parametrize(
+    "trust_keys",
+    [
+        {},
+        {"release-key": "not-base64"},
+        {"release-key": _b64(bytes(32)), "extra-key": _b64(bytes([1]) * 32)},
+    ],
+)
+def test_normal_daemon_rejects_missing_malformed_or_extra_trust_key_bindings(
+    tmp_path: Path, trust_keys: dict[str, str]
+) -> None:
+    configuration = _configuration()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=trust_keys,
+    )
+
+    readiness = daemon.svc.hosting_setup_summary()["toolbox_readiness"]
+    assert readiness["status"] == "unavailable"
+    assert readiness["code"] == "toolbox_configuration_invalid"
+    assert not any(value in str(readiness) for value in trust_keys.values())
+
+
+def test_normal_daemon_never_treats_unsigned_raw_wheels_as_verified_source_content(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration()
+    _private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    (source / "alpha-1.0-py3-none-any.whl").write_bytes(
+        _wheel("alpha", "1.0", requires=("beta==2.0",))
+    )
+    (source / "beta-2.0-py3-none-any.whl").write_bytes(_wheel("beta", "2.0"))
+
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+
+    assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["closures"] == []  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
+        "required_template_source_unavailable"
+    )

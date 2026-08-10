@@ -742,9 +742,26 @@ class ToolboxTemplateCatalogMixin:
         materialization_target(python_abi=python_abi, platform=platform)
         from ..toolbox.builtin_resolver import AirgapBuiltinWheelResolver
 
+        ingestion_diagnostic = getattr(self, "_toolbox_artifact_ingestion_diagnostic", None)
+        if ingestion_diagnostic is not None:
+            return {
+                "status": "not_ready",
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+                "target": configuration.target.name,
+                "closures": [],
+                "diagnostics": [dict(ingestion_diagnostic)],
+                "published": [],
+                "operations": [],
+            }
         resolution = AirgapBuiltinWheelResolver(
             configuration,
-            artifact_sources=getattr(self, "_toolbox_artifact_sources", {}),
+            artifact_sources=(
+                {}
+                if getattr(self, "_toolbox_trust_public_keys", None) is not None
+                else getattr(self, "_toolbox_artifact_sources", {})
+            ),
+            verified_artifacts=getattr(self, "_toolbox_verified_artifacts", {}),
         ).resolve().to_dict()
         return {**resolution, "published": [], "operations": []}
 

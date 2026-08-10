@@ -80,6 +80,25 @@ def _base64url(value: str, *, length: int) -> bytes:
     return decoded
 
 
+def validate_trust_public_keys(
+    configuration: ToolboxHostProjectConfiguration,
+    trust_public_keys: Mapping[str, str],
+) -> dict[str, str]:
+    """Require exactly the public keys referenced by configured sources."""
+    required = {
+        key_id for source in configuration.sources for key_id in source.trust_key_ids
+    }
+    provided = {str(key): str(value) for key, value in dict(trust_public_keys or {}).items()}
+    if set(provided) != required:
+        raise ValueError("toolbox_trust_public_keys_invalid")
+    try:
+        for value in provided.values():
+            Ed25519PublicKey.from_public_bytes(_base64url(value, length=32))
+    except ValueError as exc:
+        raise ValueError("toolbox_trust_public_keys_invalid") from exc
+    return provided
+
+
 class AtomicToolboxArtifactStore:
     def __init__(self, root: Path):
         self.root = Path(root).expanduser().resolve()
@@ -493,6 +512,37 @@ class AtomicToolboxArtifactStore:
             raise ValueError("artifact_store_object_missing")
         return path
 
+    def source_artifacts(self, source_id: str) -> dict[str, Path]:
+        """Return verified internal object paths for one logical source."""
+        logical_source = str(source_id or "").strip()
+        with _exclusive_process_file_lock(self.lock_path):
+            index = self._read_unlocked()
+            digests = sorted(
+                {
+                    digest
+                    for bundle in index["bundles"].values()
+                    if bundle["source_id"] == logical_source
+                    for digest in bundle["artifact_digests"]
+                }
+            )
+            rows = [(digest, dict(index["objects"][digest])) for digest in digests]
+        result: dict[str, Path] = {}
+        for digest, item in rows:
+            path = self.object_path(digest)
+            if path.stat().st_size != item["size_bytes"]:
+                raise ValueError("artifact_store_object_corrupt")
+            hasher = hashlib.sha256()
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    hasher.update(chunk)
+            if f"sha256:{hasher.hexdigest()}" != digest:
+                raise ValueError("artifact_store_object_corrupt")
+            previous = result.get(item["filename"])
+            if previous is not None and previous != path:
+                raise ValueError("artifact_store_filename_conflict")
+            result[item["filename"]] = path
+        return result
+
 
 __all__ = [
     "ARTIFACT_STORE_CONTRACT",
@@ -500,4 +550,5 @@ __all__ = [
     "BUNDLE_CONTRACT",
     "SIGNATURE_CONTRACT",
     "ToolboxArtifactBundleError",
+    "validate_trust_public_keys",
 ]

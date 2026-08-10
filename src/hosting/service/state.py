@@ -297,6 +297,9 @@ class StateMixin:
         required_abi = str(getattr(self, "_toolbox_required_python_abi", "") or "").strip()
         required_platform = str(getattr(self, "_toolbox_required_platform", "") or "").strip()
         toolbox_setup_diagnostic = getattr(self, "_toolbox_setup_diagnostic", None)
+        artifact_ingestion_diagnostic = getattr(
+            self, "_toolbox_artifact_ingestion_diagnostic", None
+        )
         if isinstance(toolbox_setup_diagnostic, dict):
             summary["toolbox_readiness"] = {
                 "status": "unavailable",
@@ -305,6 +308,15 @@ class StateMixin:
                 "target": getattr(self, "_toolbox_target").to_dict(),
                 "templates": [],
                 "diagnostics": [dict(toolbox_setup_diagnostic)],
+            }
+        elif isinstance(artifact_ingestion_diagnostic, dict):
+            summary["toolbox_readiness"] = {
+                "status": "degraded",
+                "code": str(artifact_ingestion_diagnostic["code"]),
+                "summary": str(artifact_ingestion_diagnostic["summary"]),
+                "target": getattr(self, "_toolbox_target").to_dict(),
+                "templates": [],
+                "diagnostics": [dict(artifact_ingestion_diagnostic)],
             }
         elif required_abi and required_platform:
             summary["toolbox_readiness"] = self.toolbox_required_template_status(

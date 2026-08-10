@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,11 @@ from hosting.toolbox.sandbox_policies import (
     compute_only_worker_policy,
 )
 from hosting.toolbox.target import detect_current_toolbox_target
+
+
+TRUST_PUBLIC_KEYS = {
+    "parent-release-toolbox-v1": base64.urlsafe_b64encode(bytes(32)).decode().rstrip("=")
+}
 
 
 def _configuration() -> dict[str, object]:
@@ -124,6 +130,7 @@ def test_normal_daemon_does_not_publish_intent_before_exact_resolution(tmp_path:
         toolbox_host_project_configuration=_configuration(),
         toolbox_artifact_sources={"release-airgap": source},
         toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=TRUST_PUBLIC_KEYS,
     )
 
     assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001

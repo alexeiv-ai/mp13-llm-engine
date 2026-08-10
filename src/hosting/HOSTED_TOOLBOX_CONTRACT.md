@@ -659,10 +659,21 @@ explicit daemon configuration remains required.
 
 Normal daemon construction supplies `toolbox_host_project_configuration`,
 daemon-local `toolbox_artifact_sources` bindings keyed by logical source ID,
-and `toolbox_dependency_policy` to `EngineHostService`. The daemon and service
-both use the same canonical detected target. Supplying only part of the strict
-setup or omitting a required air-gap binding is invalid; the normal daemon does
-not construct an unconfigured parallel materializer.
+`toolbox_trust_public_keys` keyed by every configured trust-key ID, and
+`toolbox_dependency_policy` to `EngineHostService`. Public-key values are raw
+32-byte Ed25519 keys encoded as unpadded base64url. The binding set must exactly
+equal the configured key-ID set; missing, extra, or malformed bindings make
+toolbox configuration unavailable. The daemon and service both use the same
+canonical detected target. Supplying only part of the strict setup or omitting
+a required air-gap binding is invalid; the normal daemon does not construct an
+unconfigured parallel materializer.
+
+At startup the normal daemon scans only direct `*.zip` children of each bound
+read-only air-gap root. It imports them through the verified artifact store and
+passes only rehashed CAS object paths to resolution. Raw wheel files beside a
+bundle are never eligible. Invalid bundle ingestion produces a bounded degraded
+toolbox-readiness diagnostic while the general control plane remains available;
+no physical source path or public-key value is projected.
 
 The daemon control plane remains available when toolbox setup is absent,
 partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no

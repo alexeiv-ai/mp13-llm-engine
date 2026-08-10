@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import asyncio
 import os
 from pathlib import Path
@@ -8,6 +9,11 @@ from typing import Any
 from hosting.daemon import EngineHostDaemon
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.target import detect_current_toolbox_target
+
+
+TRUST_PUBLIC_KEYS = {
+    "parent-release-toolbox-v1": base64.urlsafe_b64encode(bytes(32)).decode().rstrip("=")
+}
 
 
 class _FakePidFile:
@@ -213,12 +219,13 @@ def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
         toolbox_host_project_configuration=configuration,
         toolbox_artifact_sources={"parent-release-resources": source_root},
         toolbox_dependency_policy=dependency_policy,
+        toolbox_trust_public_keys=TRUST_PUBLIC_KEYS,
     )
 
     assert daemon.svc._toolbox_target == target  # noqa: SLF001
     assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
     assert daemon.svc._configured_toolbox_dependency_policy.to_dict() == dependency_policy  # noqa: SLF001
-    assert daemon.svc._toolbox_startup["status"] == "configured"  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
     summary = daemon.svc.hosting_setup_summary()
     assert summary["toolbox_readiness"]["status"] == "degraded"
     assert summary["toolbox_host_project"]["target"]["platform"] == target.platform
@@ -244,6 +251,7 @@ def test_missing_partial_and_invalid_toolbox_setup_are_bounded_and_publish_nothi
                     "parent-release-resources": tmp_path / "secret-packages"
                 },
                 "toolbox_dependency_policy": _toolbox_dependency_policy(),
+                "toolbox_trust_public_keys": TRUST_PUBLIC_KEYS,
             },
             "toolbox_configuration_invalid",
         ),

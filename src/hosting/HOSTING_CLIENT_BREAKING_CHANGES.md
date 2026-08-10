@@ -138,13 +138,18 @@ The accepted bundle is a canonical Ed25519-signed ZIP containing only
 Directories, links, traversal, undeclared entries, source distributions,
 incompatible tags, digest/metadata mismatches, and incomplete dependency
 closures are rejected before the content-addressed store index changes.
+The daemon trust-key binding is an exact map from every configured key ID to
+its unpadded base64url raw 32-byte Ed25519 public key. Raw wheel files in a
+read-only source root are ignored; only verified direct-child signed ZIPs feed
+normal resolution.
 
 Administrator setup logic must change as follows:
 
 - replace `EngineHostService(toolbox_environment_catalog=...,
   toolbox_sandbox_policies=...)` construction with normal
   `EngineHostDaemon(toolbox_host_project_configuration=...,
-  toolbox_artifact_sources=..., toolbox_dependency_policy=...)` construction;
+  toolbox_artifact_sources=..., toolbox_trust_public_keys=...,
+  toolbox_dependency_policy=...)` construction;
 - stop generating `required_target`; verify the daemon-reported detected target;
 - define built-in intent and ordered sources instead of realized locks;
 - treat configuration application as revision creation, not in-place mutation;

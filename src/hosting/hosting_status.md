@@ -88,21 +88,25 @@ transcript was intentionally removed because it obscured current truth.
 | R6 Restart-safe consumer healing | Pending | No implementation started. |
 | R7 Breaking-change handoff and acceptance | Pending | No implementation started. |
 
+R2 evidence continuation: R2-05b2 binds the exact daemon public-key set,
+discovers direct signed bundles, and resolves only rehashed CAS objects with
+bounded degraded diagnostics. The expanded signed-ingress/daemon/config/docs
+matrix passed 45 tests in 17.92s; `git diff --check` passed.
+
 ## Active implementation slice
 
-Active slice: R2-05b1 (`high`). Add the strict signed air-gap ZIP importer and
-one atomically indexed content-addressed artifact store. Verify canonical
-manifest shape/digest, raw Ed25519 signature and configured key binding, ZIP
-paths/types/compression bounds, current-target wheel tags, exact hashes/sizes,
-wheel metadata, and complete dependency closure before making a bundle
-discoverable. Failed imports leave no discoverable partial bundle.
+Active slice: R2-05b2 (`high`). Bind the exact configured Ed25519 public-key set
+at normal daemon construction, discover only direct signed ZIPs in read-only
+air-gap roots, and import them through R2-05b1. Feed verified CAS object paths
+to the built-in resolver internally while normal projections expose only
+logical sources and digests. Invalid bundles degrade toolbox setup without
+taking down the control plane or publishing any catalog entry.
 
 Required validation:
 
-- focused valid/idempotent signed bundle and restart tests
-- invalid signature, traversal/symlink/extra-entry, zip-bomb, tag, digest,
-  metadata, and incomplete-closure rejection matrix
-- failed imports leave the artifact index byte-identical
+- normal daemon signed-bundle discovery/resolution and restart test
+- missing/extra/malformed key binding and invalid-bundle degraded diagnostics
+- no unsigned raw-wheel fallback, path/key redaction, and zero catalog publish
 - `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q`
 - `git diff --check`
 
