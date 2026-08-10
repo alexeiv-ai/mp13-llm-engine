@@ -34,22 +34,23 @@ change merges.
 
 ## Documentation policy
 
-- [ ] `src/hosting/HOSTED_TOOLBOX_CONTRACT.md` is durable normative
+- [x] `src/hosting/HOSTED_TOOLBOX_CONTRACT.md` is durable normative
   documentation. It describes only the supported contract as implemented. It
   must not mention removed methods, legacy fields, old state schemas, migration
   aliases, historical behavior, cutover instructions, parent pin transitions,
   or compatibility comparisons.
-- [ ] `src/hosting/sandbox/TOOLBOX_WORKER.md` is durable implementation
+- [x] `src/hosting/sandbox/TOOLBOX_WORKER.md` is durable implementation
   documentation. It describes only the current worker architecture and links to
   the normative contract. It must not retain a legacy-behavior or migration
   section.
-- [ ] `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` is the sole transient
-  migration handoff. All removed APIs/fields, old-to-new examples, unsupported
-  state formats, archival/cutover steps, release commits, dependent-project
-  requirements, and historical references belong there.
-- [ ] Remove `HOSTING_CLIENT_BREAKING_CHANGES.md` after every listed dependent
-  project confirms adoption and the handoff is no longer needed. Durable
-  documentation must remain complete without it.
+- [x] `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` is the sole transient
+  migration handoff. Before adoption it contained removed APIs/fields,
+  old-to-new examples, unsupported state formats, archival/cutover steps,
+  release commits, dependent-project requirements, and historical references;
+  after adoption it is reset to a completion marker for future handoffs.
+- [x] Reset `HOSTING_CLIENT_BREAKING_CHANGES.md` after every listed dependent
+  project confirms adoption rather than deleting its canonical path. Durable
+  documentation remains complete without the reset marker.
 
 ## Execution, sliced-commit, and completion policy
 
@@ -91,7 +92,7 @@ change merges.
 - [ ] Parent and dependent-project changes use separate sliced commits. Record
   the finalized parent commit in the transient breaking-change handoff before
   the dependent project repins; then record the dependent adoption commit and
-  verification evidence before deleting the handoff file.
+  verification evidence before resetting the handoff file.
 
 ### Completed-slice test, checkbox, status, and commit protocol
 
@@ -1251,7 +1252,7 @@ version-1 toolbox state path.
   template/custom package environment, candidate rollout, active routing,
   durable apply, recovery, and GC architecture. Both documents must describe
   only the supported implementation, contain no migration/history sections,
-  and remain complete after the transient breaking-changes file is deleted.
+  and remain complete after the transient breaking-changes file is reset.
   Link the worker document to the normative contract instead of duplicating it.
 
   Evidence (2026-08-08): the durable contract was reconciled with the final
@@ -1308,20 +1309,22 @@ version-1 toolbox state path.
   and diff checks passed. The first full run's two unrelated warm workflow
   process timing failures passed together in isolation before the clean full
   rerun.
-- [ ] **P7-18** After every listed dependent project confirms adoption, clear
-  `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` and remove any transient
-  references to it. Confirm the durable contract and worker documentation are
-  independently complete before deletion.
+- [x] **P7-18** After every listed dependent project confirms adoption, reset
+  `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md` to a completion marker while
+  retaining its canonical path for future handoffs. Remove transient migration
+  instructions from the reset file and confirm the durable contract and worker
+  documentation are independently complete.
 
-  Delivery override (2026-08-08): intentionally not executed because the user
-  explicitly requires this file to contain dependent-project code-change and
-  deprecated-behavior removal instructions. The file remains the complete
-  checked adoption handoff; the durable contract and worker documentation are
-  independently complete.
+  Evidence (2026-08-09): `mp13-docs` fully consumed the recorded parent release
+  and dependent adoption commit. The handoff was reset to a short completion
+  marker linking the durable contract, Hosting Access §11.6, and the worker
+  document. The focused documentation/operation suite passed 34 tests; the
+  reset-file forbidden-content scan and diff check passed.
 
 Exit gate: the direct replacement passes both repositories, all old behavior is
-absent, and a dependent project can migrate using only the breaking-change
-entry and public examples.
+absent, durable documentation is self-contained, and the retained handoff path
+contains only a completion marker until a future client-visible break is
+introduced.
 
 ## Acceptance checklist
 

@@ -1,6 +1,6 @@
 # Hosting Server Implementation Progress
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 ## Purpose
 
@@ -29,15 +29,15 @@ belong in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 ## Overall status
 
-Status: Complete with one explicit delivery override
+Status: Complete with retained reset handoff
 
-Phases 0 through 7 and the acceptance audit are complete. The public contract/migration handoff, strict
-dependency pipeline, hermetic environment builder, definition planner, and
-durable plan/state repositories plus atomic rollout/routing are implemented and
-audited. Phase 6 API/transport replacement is complete, including strict
-host-owned standard template/policy startup configuration. P7-18's conditional
-handoff-file deletion is intentionally superseded by the user's explicit
-requirement to retain those dependent code-change and removal instructions.
+Phases 0 through 7 and the acceptance audit are complete. The public
+contract/migration handoff, strict dependency pipeline, hermetic environment
+builder, definition planner, and durable plan/state repositories plus atomic
+rollout/routing are implemented and audited. Phase 6 API/transport replacement
+is complete, including strict host-owned standard template/policy startup
+configuration. P7-18 is closed with a retained reset marker rather than file
+deletion, per the user's delivery instruction.
 
 ## Active slice
 
@@ -85,7 +85,8 @@ No verification is predeclared because no slice is active.
 | 2026-08-08 | P7-09 through P7-12 | Closed exact approval authority/pin/evidence binding, durable read/apply/recovery behavior, concurrent same-named multi-toolbox isolation, and stable redacted consumer projections. | Approval/plan -> 17 passed; operation/routing -> 37 passed; toolbox/channel -> 130 passed; complete suite -> 1,109 passed, 3 skipped; compile/diff checks passed. The first full run had one unrelated workflow resource-sampling miss after 1,108 passes; it passed three fresh runs before the clean exact rerun. | `feat: enforce toolbox consumer projections (P7-09..P7-12)` |
 | 2026-08-08 | P7-13 | Reconciled the durable public contract and replaced the worker document with complete supported planning, hermetic environment, candidate rollout, atomic routing, durable recovery, execution/callback, projection, and GC architecture linked to the normative contract. | Final docs -> 16 passed; forbidden transition vocabulary -> no matches; complete suite -> 1,113 passed, 3 skipped; compile/diff checks passed. | `docs: finalize toolbox runtime contract (P7-13)` |
 | 2026-08-08 | P7-14 through P7-16 | Finalized the exact client handoff and release/adoption pins; migrated `mp13-docs` to complete definitions, durable operation/revision recovery, parent approval, bounded projections, isolated validation, and empty-definition retirement; removed its procedural toolbox environment workflow. | Parent final docs -> 16 passed. Dependent definition/generated/parser/cursor -> 99 passed; workflow spec/compose/lifecycle -> 393 passed, 15 skipped; recovery/approval/sandbox and complete hosting -> 522 passed; affected Node -> 126 passed, 15 skipped; compile/diff/removal scans passed. The predeclared dependent commands incorrectly omitted the repository-required Poetry runner and named a nonexistent test file; verification used `poetry run` and the actual focused suites. The widened workspace/workflow run's two Windows socket-buffer exhaustion errors passed immediately in isolation. | `docs: close toolbox dependent cutover (P7-14..P7-16)` |
-| 2026-08-08 | P7-17 and acceptance audit | Closed clean configured bootstrap, strict config, eager/deferred materialization, offline preseed, stable lock failure, compute-only/policy widening, complete derivation, and real hermetic non-inheritance; checked every acceptance criterion. P7-18 remains intentionally unexecuted because the user requires the transient handoff to be retained. | Standard-base matrix -> 42 passed; exact complete suite -> 1,118 passed, 3 skipped, 4 pre-existing async-marker warnings; compile/diff checks passed. Two unrelated warm workflow process timing failures in the first full run passed together in isolation before the clean rerun. The predeclared P7-17 command named two nonexistent files and was corrected to `test_hosting_toolbox_host_config.py` and `test_hosted_toolbox_shared_template_resolver.py`. | `test: close standard toolbox base matrix (P7-17)` |
+| 2026-08-08 | P7-17 and acceptance audit | Closed clean configured bootstrap, strict config, eager/deferred materialization, offline preseed, stable lock failure, compute-only/policy widening, complete derivation, and real hermetic non-inheritance; checked every acceptance criterion. | Standard-base matrix -> 42 passed; exact complete suite -> 1,118 passed, 3 skipped, 4 pre-existing async-marker warnings; compile/diff checks passed. Two unrelated warm workflow process timing failures in the first full run passed together in isolation before the clean rerun. The predeclared P7-17 command named two nonexistent files and was corrected to `test_hosting_toolbox_host_config.py` and `test_hosted_toolbox_shared_template_resolver.py`. | `test: close standard toolbox base matrix (P7-17)` |
+| 2026-08-09 | P7-18 | Reset the consumed breaking-change handoff to a completion marker, retained its canonical path for future handoffs, and confirmed durable documentation is self-contained. | `python -m pytest tests/test_hosted_toolbox_contract_docs.py tests/test_hosting_operation_contract.py -q` -> 34 passed; reset-file forbidden-content scan -> no matches; `git diff --check` passed. `mp13-docs` adoption was already recorded at `125d20f232bf5b755d18c1b23bc1e4b8929edf21`. | `docs: reset consumed breaking-change handoff (P7-18)` |
 
 P0-01/P0-02 exact verification commands:
 
@@ -106,12 +107,7 @@ commands=19; deprecated_methods_checked; parent_imports=['.mp13_config', '__futu
 
 ## Blocked or deferred work
 
-P7-18 is intentionally deferred by explicit user delivery scope: retain
-`HOSTING_CLIENT_BREAKING_CHANGES.md` with dependent migration and removal
-instructions. No implementation or verification work is blocked.
-
-Record blocked work with the affected unchecked plan item IDs, evidence, impact,
-and the condition required to resume it.
+None.
 
 ## Next slice
 
