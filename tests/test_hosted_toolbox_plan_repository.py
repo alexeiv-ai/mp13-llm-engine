@@ -140,6 +140,23 @@ def test_plan_record_is_pinned_strict_and_restart_recoverable(tmp_path: Path) ->
     assert recovered.profile_changes[0]["classification"] == "added"
 
 
+def test_plan_repository_can_atomically_invalidate_unused_plans(tmp_path: Path) -> None:
+    repository = AtomicJsonToolboxDefinitionPlanRepository(tmp_path / "plans.json")
+    record = repository.create(
+        _draft(_definition("demo", [_auto("Alpha")])),
+        active_profiles=(),
+        catalog_revision=CATALOG_REVISION,
+        package_policy_revision=POLICY_REVISION,
+        now_ms=1_000,
+        ttl_ms=60_000,
+    )
+
+    assert repository.invalidate_all() == 1
+    assert repository.invalidate_all() == 0
+    with pytest.raises(ValueError, match="toolbox_definition_plan_not_found"):
+        repository.get(record.plan_id, now_ms=2_000)
+
+
 def test_plan_identity_changes_with_every_authoritative_pin(tmp_path: Path) -> None:
     repository = AtomicJsonToolboxDefinitionPlanRepository(tmp_path / "plans.json")
     first_draft = _draft(_definition("demo", [_auto("Alpha")]))

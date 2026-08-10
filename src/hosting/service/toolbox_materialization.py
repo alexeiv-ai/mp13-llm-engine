@@ -367,6 +367,25 @@ class AtomicJsonToolboxMaterializationReceipts:
             self._write_unlocked(state)
         return receipt
 
+    def retain_template_digests(self, template_digests: set[str]) -> int:
+        """Drop receipts not belonging to revisions active in the catalog."""
+        retained = {
+            require_digest(item, label="materialization_retained_template_digest")
+            for item in template_digests
+        }
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            removed = [
+                key
+                for key, row in state["receipts"].items()
+                if row["template_digest"] not in retained
+            ]
+            for key in removed:
+                state["receipts"].pop(key)
+            if removed:
+                self._write_unlocked(state)
+        return len(removed)
+
 
 def derived_environment_digest(
     *, template_digest: str, python_abi: str, platform: str, artifact_digests: Sequence[str]

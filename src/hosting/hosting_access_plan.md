@@ -561,13 +561,13 @@ boundary—not a double—passes.
 
 ### R2 - Revisioned hosting configuration and built-ins
 
-- [ ] **R2-01** Replace the current shipped-catalog-only schema in
+- [x] **R2-01** Replace the current shipped-catalog-only schema in
   `toolbox/host_project_config.py` with the strict built-in/source/mode/retention
   schema above; remove old schema parsing and standard-config fixtures.
   - [x] **R2-01a** Land strict built-in intent, source, resolution, and retention
     models with deterministic config/source-set revisions; switch
     `EngineHostService` to the new schema and delete every old field parser.
-  - [ ] **R2-01b** Persist atomic configuration revisions, invalidate unused
+  - [x] **R2-01b** Persist atomic configuration revisions, invalidate unused
     plans/receipts on revision changes, and leave active environments pinned.
 - [x] **R2-02** Wire configuration, sources, policy, and target detection through
   `daemon/local_ipc.py::EngineHostDaemon` into `EngineHostService`; refuse

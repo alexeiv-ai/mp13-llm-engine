@@ -45,6 +45,7 @@ from .toolbox_materialization import (
 from .toolbox_runtime import ToolboxRuntimeMixin
 from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from .toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
+from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationRepository
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from ..toolbox.host_project_config import (
@@ -162,6 +163,9 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_definition_plans = AtomicJsonToolboxDefinitionPlanRepository(
             self.hosting_root / "state" / "toolbox_definition_plans.json"
         )
+        self._toolbox_host_config_revisions = AtomicJsonToolboxHostConfigurationRepository(
+            self.hosting_root / "state" / "toolbox_host_configurations.json"
+        )
         self._toolbox_dependency_approvals = AtomicJsonToolboxDependencyApprovalRepository(
             self.hosting_root / "state" / "toolbox_dependency_approvals.json"
         )
@@ -221,7 +225,19 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         }
         self._ensure_metrics_initialized()
         self._toolbox_startup = None
+        self._toolbox_config_transition = None
         if self._toolbox_host_project_config is not None:
+            self._toolbox_config_transition = self._toolbox_host_config_revisions.apply(
+                self._toolbox_host_project_config
+            )
+            if self._toolbox_config_transition["changed"]:
+                active_digests = set(self._toolbox_template_catalog.read()["active"].values())
+                self._toolbox_config_transition["invalidated_plans"] = (
+                    self._toolbox_definition_plans.invalidate_all()
+                )
+                self._toolbox_config_transition["invalidated_materialization_receipts"] = (
+                    self._toolbox_materialization_receipts.retain_template_digests(active_digests)
+                )
             self._toolbox_startup = self.initialize_configured_toolbox_templates(
                 configuration=self._toolbox_host_project_config,
                 request_id_prefix=f"host-startup-{self._toolbox_host_project_config.config_revision}",

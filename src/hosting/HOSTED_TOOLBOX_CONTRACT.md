@@ -630,6 +630,15 @@ Canonical JSON of the complete configuration produces an immutable
 the detected target, built-in intent, sanitized origins, and bounds, but omit
 every `credential_ref` and daemon path.
 
+The host records every applied configuration revision in one process-locked,
+atomically replaced state file and marks exactly one revision current. Applying
+the same revision is idempotent. A transition to a different revision
+invalidates unconsumed definition plans and materialization receipts not tied
+to an active catalog revision. It does not mutate the active catalog map,
+published toolbox definition state, or hermetic environment references. An
+otherwise unconfigured restart does not resurrect the last persisted revision;
+explicit daemon configuration remains required.
+
 Normal daemon construction supplies `toolbox_host_project_configuration`,
 daemon-local `toolbox_artifact_sources` bindings keyed by logical source ID,
 and `toolbox_dependency_policy` to `EngineHostService`. The daemon and service

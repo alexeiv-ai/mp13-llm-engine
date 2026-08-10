@@ -147,6 +147,12 @@ Administrator setup logic must change as follows:
 - never upload a venv, source distribution, install script, arbitrary index URL,
   or consumer filesystem path.
 
+Configuration revision transitions invalidate unconsumed definition plans and
+materialization receipts for non-active template revisions. Consumers must
+re-plan after a change. Active catalog revisions and already published toolbox
+environments remain pinned; absence of configuration after restart does not
+fall back to the persisted prior revision.
+
 An absent, partial, invalid, or incorrectly bound configuration no longer
 silently uses shipped defaults and does not take down the general control
 plane. Branch on `toolbox_readiness.status == "unavailable"` and the stable

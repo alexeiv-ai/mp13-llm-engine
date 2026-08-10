@@ -291,6 +291,16 @@ class AtomicJsonToolboxDefinitionPlanRepository:
             plans = [PersistedToolboxDefinitionPlan.from_dict(item) for item in state["plans"].values()]
         return tuple(sorted(plans, key=lambda item: (item.created_at_ms, item.plan_id)))
 
+    def invalidate_all(self) -> int:
+        """Remove unused immutable plans after a host configuration transition."""
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            count = len(state["plans"])
+            if count:
+                state["plans"] = {}
+                self._write_unlocked(state)
+        return count
+
 
 __all__ = [
     "AtomicJsonToolboxDefinitionPlanRepository",

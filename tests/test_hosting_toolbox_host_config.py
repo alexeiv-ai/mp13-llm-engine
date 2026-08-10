@@ -119,6 +119,41 @@ def _service(root: Path) -> EngineHostService:
     )
 
 
+def _definition() -> dict[str, Any]:
+    return {
+        "contract": "hosting.toolbox.definition",
+        "toolbox_id": "config-transition",
+        "expected_revision": None,
+        "auto_requests": [
+            {
+                "files": [{"relative_path": "pkg/tool.py", "content": "def Tool():\n    return 1\n"}],
+                "module_name": "pkg.tool",
+                "callable_name": "Tool",
+                "dependency": {
+                    "mode": "auto",
+                    "template_id": None,
+                    "declared_imports": [],
+                    "package_requirements": [],
+                },
+                "sandbox_policy": {"sandbox": {"enabled": True}},
+                "activate": True,
+                "hidden": False,
+                "non_restartable": False,
+                "guide_content": None,
+                "guide_description": None,
+                "callback_signature": None,
+                "concurrency": None,
+            }
+        ],
+        "manual_requests": [],
+        "intrinsics": {
+            "names": [],
+            "include_guides": False,
+            "sandbox_policy": {"sandbox": {"enabled": True}},
+        },
+    }
+
+
 def test_host_project_configuration_is_strict_revisioned_and_current_target() -> None:
     config = ToolboxHostProjectConfiguration.from_dict(_configuration())
     assert tuple(item.template_id for item in config.builtins) == BUILTIN_IDS
@@ -236,3 +271,93 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     status = restarted.hosting_setup_summary()["toolbox_readiness"]
     assert status["status"] == "degraded"
     assert status["templates"][0]["template_digest"] == published["template_digest"]
+
+
+def test_configuration_revision_change_invalidates_unused_state_but_preserves_active_pins(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    release = realized_test_catalog().release("core")
+    published = service.toolbox_template_publish(
+        template=release.template.to_dict(),
+        artifact_references=[release.artifact_reference()],
+        manifest_signature=release.manifest_signature,
+        activate=True,
+        actor_id="test:config-transition",
+    )
+    plan = service.toolbox_plan_definition(
+        definition=_definition(),
+        owner_actor_id="actor:test",
+        authority_id="workspace:test",
+    )
+    assert service._toolbox_definition_plans.list(now_ms=int(time.time() * 1000))  # noqa: SLF001
+    artifact_digest = release.artifact_reference()["sha256"]
+    active_receipt = ToolboxTemplateMaterializationReceipt(
+        template_id="core",
+        template_digest=published["template_digest"],
+        python_abi=TARGET.python_abi,
+        platform=TARGET.platform,
+        environment_digest=identity_digest("test.active.environment.v1", {}),
+        artifact_digests=(artifact_digest,),
+        verified_import_roots=release.template.exposed_import_roots,
+        verified_at_ms=1,
+        verifier="config-transition-test-v1",
+    )
+    stale_receipt = ToolboxTemplateMaterializationReceipt(
+        template_id="stale",
+        template_digest="sha256:" + "9" * 64,
+        python_abi=TARGET.python_abi,
+        platform=TARGET.platform,
+        environment_digest=identity_digest("test.stale.environment.v1", {}),
+        artifact_digests=("sha256:" + "8" * 64,),
+        verified_import_roots=("stale_root",),
+        verified_at_ms=1,
+        verifier="config-transition-test-v1",
+    )
+    service._toolbox_materialization_receipts.put(active_receipt)  # noqa: SLF001
+    service._toolbox_materialization_receipts.put(stale_receipt)  # noqa: SLF001
+    catalog_before = service._toolbox_template_catalog.read()  # noqa: SLF001
+    references = tmp_path / "toolbox_environment_cache" / "references.json"
+    references.parent.mkdir(parents=True, exist_ok=True)
+    references.write_text('{"active-environment":"pinned"}\n', encoding="utf-8")
+    references_before = references.read_bytes()
+    service.close()
+
+    changed = _configuration()
+    changed["retention"]["artifact_cache_grace_seconds"] += 1
+    restarted = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "access_control.json",
+        toolbox_template_materializer=VerifiedMaterializer(),
+        toolbox_host_project_configuration=changed,
+    )
+
+    assert restarted._toolbox_config_transition["changed"] is True  # noqa: SLF001
+    assert restarted._toolbox_config_transition["invalidated_plans"] == 1  # noqa: SLF001
+    assert restarted._toolbox_config_transition["invalidated_materialization_receipts"] == 1  # noqa: SLF001
+    assert restarted._toolbox_definition_plans.list(now_ms=int(time.time() * 1000)) == ()  # noqa: SLF001
+    assert restarted._toolbox_template_catalog.read() == catalog_before  # noqa: SLF001
+    assert restarted._toolbox_materialization_receipts.get(  # noqa: SLF001
+        template_digest=published["template_digest"],
+        python_abi=TARGET.python_abi,
+        platform=TARGET.platform,
+    ) == active_receipt
+    assert restarted._toolbox_materialization_receipts.get(  # noqa: SLF001
+        template_digest=stale_receipt.template_digest,
+        python_abi=TARGET.python_abi,
+        platform=TARGET.platform,
+    ) is None
+    assert references.read_bytes() == references_before
+    state = restarted._toolbox_host_config_revisions.read()  # noqa: SLF001
+    assert len(state["revisions"]) == 2
+    assert state["current_revision"] == ToolboxHostProjectConfiguration.from_dict(changed).config_revision
+    with pytest.raises(ValueError, match="toolbox_definition_plan_not_found"):
+        restarted._toolbox_definition_plans.get(plan["plan_id"], now_ms=int(time.time() * 1000))  # noqa: SLF001
+    restarted.close()
+
+    unconfigured = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    assert unconfigured._toolbox_host_project_config is None  # noqa: SLF001
+    assert unconfigured._toolbox_config_transition is None  # noqa: SLF001
