@@ -141,11 +141,18 @@ in 224.43s; the final PEP 503/691 acquisition matrix passed 10 tests in
 The final shared HTTPS/signed-bundle store regression passed 35 tests in
 112.37s after bounding each signed project alternative set and source-scoping
 HTTPS manifest identities.
+R2-05c1 adds process-safe untrusted upload staging with exact
+owner/request/source/config/source-set/target/size/digest identity, idempotent
+begin and chunk retry, contiguous 1 MiB chunk bounds, restart continuation,
+15-minute expiry, synchronous idempotent cancel, and zero trusted-store
+visibility. The focused upload/compile/docs boundary passed 5 tests in 1.52s;
+the expanded upload/docs suite passed 15 tests in 1.44s; `git diff --check`
+passed.
 
 ## Active implementation slice
 
-Active slice: none. R2-05a2/R2-03b2 (`high`) are complete. Administrator upload
-remains R2-05c.
+Active slice: none. R2-05c1 (`high`) is complete. Durable authenticated verified
+commit remains R2-05c2.
 
 Next-slice validation must be declared before implementation. R2-05a2/R2-03b2
 must prove:

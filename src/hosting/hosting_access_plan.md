@@ -619,6 +619,12 @@ boundary—not a double—passes.
       store artifacts into built-in resolution without exposing source paths.
   - [ ] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
     staged storage with bounded, expiring, idempotent commit.
+    - [x] **R2-05c1** Add process-safe staged begin/chunk/cancel state with exact
+      source/config binding, declared size/digest, chunk bounds, expiry, and no
+      trusted-store visibility.
+    - [ ] **R2-05c2** Commit a complete staged archive through a durable
+      administrator-owned artifact-import operation, verify/import it through
+      the signed-bundle CAS boundary, and make identical commit idempotent.
 - [x] **R2-06** Run/recover built-in realization as a system-owned hosted
   operation with resolution, acquisition-byte, verification, build, probe, and
   prewarm progress while the control plane remains available and toolbox

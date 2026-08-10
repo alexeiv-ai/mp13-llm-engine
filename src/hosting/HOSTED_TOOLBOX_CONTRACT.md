@@ -715,6 +715,24 @@ eligible. Invalid bundle ingestion produces a bounded degraded
 toolbox-readiness diagnostic while the general control plane remains available;
 no physical source path or public-key value is projected.
 
+Administrator bundle upload begins in a process-locked untrusted staging
+repository, never in the verified artifact store. Begin binds the authenticated
+owner and idempotency request ID to exactly one air-gap source ID, current
+config/source-set revisions, detected target, declared archive byte size, and
+SHA-256. Identical begin retries return the same `upload_id`; a changed binding
+is `artifact_upload_conflict`. At most 64 uploads are retained, an archive is
+bounded by both its source and resolution byte limits, and an open upload
+expires after 15 minutes.
+
+Chunks are unpadded base64url, at most 1 MiB decoded, and carry exact zero-based
+index and byte offset. Only the next contiguous chunk is accepted. Retrying an
+identical committed chunk is idempotent; changed content/order is rejected.
+Stage-file append is fsynced before one atomic metadata replacement, and restart
+continues from the last committed offset. Expiry or synchronous cancel removes
+only the untrusted stage file and retains bounded terminal metadata. Status and
+errors expose no stage path or chunk content. Begin/chunk/cancel alone cannot
+create a CAS object, evidence record, catalog entry, or materialization receipt.
+
 For a release-owned built-in, candidate construction requires one and only one
 verified signed bundle whose artifact set covers the entire resolved closure.
 The immutable template provenance retains that bundle ID, source ID, manifest

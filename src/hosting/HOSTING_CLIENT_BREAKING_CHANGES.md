@@ -239,6 +239,16 @@ publishes nothing if any required intent reports
 `required_template_wheel_missing`, `required_template_resolution_invalid`, or
 `required_template_resolution_bounds_exceeded`.
 
+Administrator upload transport is begin/chunk/commit/cancel, not a path or
+whole archive field. Begin declares the logical air-gap source, total bytes,
+archive SHA-256, and idempotency request ID; the host returns an opaque
+`upload_id` bound to the current config/source-set/target and authenticated
+administrator. Chunks are contiguous zero-based unpadded-base64url pieces of at
+most 1 MiB decoded. Identical begin/chunk retries attach, while changed values
+conflict. Open uploads expire after 15 minutes; cancel is synchronous and
+idempotent. Staging is untrusted and invisible to the CAS until the separate
+durable commit succeeds. Clients must never submit or display a daemon path.
+
 ## Removed toolbox mutation commands and fields
 
 The following current surface is removed:
