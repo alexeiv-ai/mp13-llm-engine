@@ -33,6 +33,7 @@ class ToolboxConfirmationReceipt:
     authority_id: str
     choices_digest: str
     reduction: Mapping[str, Any]
+    confirmed_draft: Mapping[str, Any]
     created_at_ms: int
     expires_at_ms: int
     contract: str = CONFIRMATION_RECEIPT_CONTRACT
@@ -68,6 +69,13 @@ class ToolboxConfirmationReceipt:
         if not self.created_at_ms < self.expires_at_ms:
             raise ValueError("toolbox_confirmation_lifetime_invalid")
         object.__setattr__(self, "reduction", copy.deepcopy(row))
+        draft = copy.deepcopy(dict(self.confirmed_draft or {}))
+        if set(draft) != {
+            "definition", "definition_revision", "profiles", "bundles",
+            "custom_environment_count",
+        } or draft["definition"] != definition.to_dict() or draft["definition_revision"] != definition.revision:
+            raise ValueError("toolbox_confirmation_draft_invalid")
+        object.__setattr__(self, "confirmed_draft", draft)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +87,7 @@ class ToolboxConfirmationReceipt:
             "authority_id": self.authority_id,
             "choices_digest": self.choices_digest,
             "reduction": copy.deepcopy(dict(self.reduction)),
+            "confirmed_draft": copy.deepcopy(dict(self.confirmed_draft)),
             "created_at_ms": self.created_at_ms,
             "expires_at_ms": self.expires_at_ms,
         }
@@ -89,6 +98,7 @@ class ToolboxConfirmationReceipt:
         if set(row) != {
             "contract", "confirmation_ref_digest", "plan_id", "toolbox_id",
             "owner_actor_id", "authority_id", "choices_digest", "reduction",
+            "confirmed_draft",
             "created_at_ms", "expires_at_ms",
         }:
             raise ValueError("toolbox_confirmation_receipt_fields_invalid")
@@ -149,6 +159,7 @@ class AtomicJsonToolboxConfirmationRepository:
         authority_id: str,
         choices: Sequence[Mapping[str, Any]],
         reduction: ToolboxConfirmationReduction,
+        confirmed_draft: Mapping[str, Any],
         now_ms: int,
         expires_at_ms: int,
     ) -> tuple[str, ToolboxConfirmationReceipt]:
@@ -173,6 +184,7 @@ class AtomicJsonToolboxConfirmationRepository:
             authority_id=str(authority_id or "").strip(),
             choices_digest=choices_digest,
             reduction=reduction.to_dict(),
+            confirmed_draft=dict(confirmed_draft),
             created_at_ms=int(now_ms),
             expires_at_ms=int(expires_at_ms),
         )

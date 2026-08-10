@@ -1069,6 +1069,64 @@ class ToolboxBundleSpec:
             "hidden_tool_names": hidden_tool_names,
         }
 
+    def persisted_payload(self) -> Dict[str, Any]:
+        """Return the complete immutable bundle input needed after restart."""
+        return {
+            "manifest": self.manifest_payload(),
+            "files": [item.to_runtime_dict() for item in self.files],
+        }
+
+    @classmethod
+    def from_persisted_payload(cls, payload: Mapping[str, Any]) -> "ToolboxBundleSpec":
+        row = dict(payload or {})
+        _strict_model_fields(row, {"manifest", "files"}, label="persisted_toolbox_bundle")
+        manifest = dict(row["manifest"] or {})
+        tools = []
+        for raw in list(manifest.get("tools") or []):
+            item = dict(raw or {})
+            tools.append(ToolboxBundleTool(
+                definition=dict(item.get("definition") or {}),
+                entrypoint=str(item.get("entrypoint") or ""),
+                hidden=bool(item.get("hidden", False)),
+                non_restartable=bool(item.get("non_restartable", False)),
+                callback_signature=dict(item.get("callback_signature") or {}) or None,
+                concurrency=dict(item.get("concurrency") or {}) or None,
+            ))
+        auto_tools = []
+        for raw in list(manifest.get("auto_tools") or []):
+            item = dict(raw or {})
+            auto_tools.append(ToolboxBundleAutoTool(
+                module_name=str(item.get("module_name") or ""),
+                callable_name=str(item.get("callable_name") or ""),
+                activate=bool(item.get("activate", True)),
+                hidden=bool(item.get("hidden", False)),
+                non_restartable=bool(item.get("non_restartable", False)),
+                guide_content=dict(item.get("guide_content") or {}) or None,
+                guide_description=str(item.get("guide_description") or "").strip() or None,
+                callback_signature=dict(item.get("callback_signature") or {}) or None,
+                concurrency=dict(item.get("concurrency") or {}) or None,
+            ))
+        model = cls(
+            bundle_id=str(manifest.get("bundle_id") or ""),
+            toolbox_id=str(manifest.get("toolbox_id") or ""),
+            sandbox_profile=SandboxProfileSpec.from_dict(dict(manifest.get("sandbox_profile") or {})),
+            files=[ToolboxBundleFile.from_runtime_dict(item) for item in list(row["files"] or [])],
+            tools=tools,
+            auto_tools=auto_tools,
+            with_intrinsics=bool(manifest.get("with_intrinsics", False)),
+            with_intrinsic_guides=bool(manifest.get("with_intrinsic_guides", False)),
+            intrinsic_tool_names=list(manifest.get("intrinsic_tool_names") or []),
+            active_intrinsic_tool_names=list(manifest.get("active_intrinsic_tool_names") or []),
+            hidden_intrinsic_tool_names=list(manifest.get("hidden_intrinsic_tool_names") or []),
+            hidden_tool_names=list(manifest.get("hidden_tool_names") or []),
+            dependency_lock_hash=str(manifest.get("dependency_lock_hash") or "").strip() or None,
+            resolved_profile=(ResolvedToolboxProfileSpec.from_dict(manifest["resolved_profile"])
+                              if manifest.get("resolved_profile") is not None else None),
+        )
+        if model.manifest_payload() != manifest:
+            raise ValueError("persisted_toolbox_bundle_manifest_mismatch")
+        return model
+
 
 @dataclass
 class ToolboxWorkerStartupSpec:

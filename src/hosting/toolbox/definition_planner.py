@@ -210,6 +210,35 @@ class ToolboxDefinitionPlanDraft:
             "custom_environment_count": self.custom_environment_count,
         }
 
+    def to_persisted_dict(self) -> dict[str, Any]:
+        return {
+            **self.to_dict(),
+            "bundles": [item.persisted_payload() for item in self.bundles],
+        }
+
+    @classmethod
+    def from_persisted_dict(cls, payload: Mapping[str, Any]) -> "ToolboxDefinitionPlanDraft":
+        row = dict(payload or {})
+        if set(row) != {"definition", "definition_revision", "profiles", "bundles", "custom_environment_count"}:
+            raise ValueError("toolbox_persisted_draft_fields_invalid")
+        definition = ToolboxDefinitionSpec.from_dict(row["definition"])
+        if definition.revision != row["definition_revision"]:
+            raise ValueError("toolbox_persisted_draft_revision_mismatch")
+        profiles = tuple(ResolvedToolboxProfileSpec.from_dict(item) for item in row["profiles"])
+        bundles = tuple(ToolboxBundleSpec.from_persisted_payload(item) for item in row["bundles"])
+        model = cls(
+            definition=definition,
+            profiles=profiles,
+            bundles=bundles,
+            custom_environment_count=int(row["custom_environment_count"]),
+        )
+        if len(profiles) != len(bundles) or any(
+            profile != bundle.resolved_profile
+            for profile, bundle in zip(profiles, bundles, strict=True)
+        ):
+            raise ValueError("toolbox_persisted_draft_profile_mismatch")
+        return model
+
 
 @dataclass(frozen=True)
 class ToolboxEnvironmentConfirmationChoice:

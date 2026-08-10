@@ -378,8 +378,9 @@ class PersistedCompleteToolboxDefinitionPlan:
             or draft["definition_revision"] != self.proposed_definition.revision
         ):
             raise ValueError("toolbox_complete_plan_draft_definition_mismatch")
-        profiles = tuple(ResolvedToolboxProfileSpec.from_dict(item) for item in draft["profiles"])
-        if len(profiles) != len(draft["bundles"]) or draft["custom_environment_count"] != sum(
+        parsed_draft = ToolboxDefinitionPlanDraft.from_persisted_dict(draft)
+        profiles = parsed_draft.profiles
+        if draft["custom_environment_count"] != sum(
             item.custom_resolved_lock_digest is not None for item in profiles
         ):
             raise ValueError("toolbox_complete_plan_draft_profiles_invalid")
@@ -540,7 +541,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             "proposed_definition": draft.definition.to_dict(),
             "pins": pins.to_dict(),
             "environment_mutations": [item.to_dict() for item in environment_mutations],
-            "draft_plan": draft.to_dict(),
+            "draft_plan": draft.to_persisted_dict(),
             "profile_changes": list(classify_toolbox_profiles(draft, active_profiles)),
             "owner_actor_id": str(owner_actor_id or "").strip(),
             "authority_id": str(authority_id or "").strip(),
@@ -551,7 +552,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             proposed_definition=draft.definition,
             pins=pins,
             environment_mutations=tuple(environment_mutations),
-            draft_plan=draft.to_dict(),
+            draft_plan=draft.to_persisted_dict(),
             profile_changes=tuple(identity_payload["profile_changes"]),
             created_at_ms=now_ms,
             expires_at_ms=now_ms + ttl_ms,

@@ -1973,8 +1973,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "toolbox-apply-definition":
             _print_ok(
                 svc.toolbox_apply_definition(
-                    definition=dict(payload.get("definition") or {}),
                     plan_id=str(payload.get("plan_id") or ""),
+                    confirmation_ref=str(payload.get("confirmation_ref") or ""),
                     request_id=str(payload.get("request_id") or ""),
                     dependency_approval_ref=payload.get("dependency_approval_ref"),
                 )

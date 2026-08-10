@@ -98,6 +98,26 @@ def _plan(service: EngineHostService, definition: dict, *, request_id: str, poli
     return dict(terminal["result"])
 
 
+def _confirm(service: EngineHostService, plan: dict, *, request_id: str) -> dict:
+    choices = [
+        {
+            "environment_id": offer["environment_id"],
+            "alternative_id": offer["preferred_alternative_id"],
+            "accept_package_changes": True,
+        }
+        for offer in plan["environment_mutations"]
+    ]
+    started = service.toolbox_confirm_definition_plan(
+        plan_id=plan["plan_id"], environment_choices=choices, request_id=request_id,
+        owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    return dict(terminal["result"])
+
+
 def test_authoritative_read_is_side_effect_free_and_plan_is_actor_owned(tmp_path: Path) -> None:
     service = _service(tmp_path)
     before = set(tmp_path.rglob("*"))
@@ -118,10 +138,11 @@ def test_authoritative_read_is_side_effect_free_and_plan_is_actor_owned(tmp_path
     assert plan["approval_required"] is False
     assert "profile_id" not in str(plan)
     assert "environment_key" not in str(plan)
+    confirmation = _confirm(service, plan, request_id="confirm-owner")
     with pytest.raises(PermissionError, match="toolbox_definition_plan_not_found"):
         service.toolbox_apply_definition(
-            definition=_definition(),
             plan_id=plan["plan_id"],
+            confirmation_ref=confirmation["confirmation_ref"],
             request_id="apply-a",
             owner_actor_id="actor:b",
             authority_id="workspace:a",
@@ -163,11 +184,12 @@ def test_apply_returns_immediately_reuses_request_and_rolls_out_once(tmp_path: P
     service = _service(tmp_path)
     definition = _definition()
     plan = _plan(service, definition, request_id="plan-apply")
+    confirmation = _confirm(service, plan, request_id="confirm-apply")
     entered = threading.Event()
     release = threading.Event()
     dispatches: list[str] = []
 
-    def fake_apply(*, draft, profile_changes, operation_id):
+    def fake_apply(*, draft, profile_changes, confirmation_result, operation_id):
         dispatches.append(operation_id)
         service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         entered.set()
@@ -185,16 +207,16 @@ def test_apply_returns_immediately_reuses_request_and_rolls_out_once(tmp_path: P
 
     service._apply_resolved_toolbox_definition = fake_apply  # type: ignore[method-assign]
     started = service.toolbox_apply_definition(
-        definition=definition,
         plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
         request_id="apply-stable",
         owner_actor_id="actor:a",
         authority_id="workspace:a",
     )
     assert entered.wait(2)
     duplicate = service.toolbox_apply_definition(
-        definition=definition,
         plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
         request_id="apply-stable",
         owner_actor_id="actor:a",
         authority_id="workspace:a",
@@ -284,11 +306,12 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
     approval = service.toolbox_approve_definition_plan(
         plan_id=plan["plan_id"], owner_actor_id="actor:a", authority_id="workspace:a"
     )
+    confirmation = _confirm(service, plan, request_id="confirm-custom")
     assert approval["approval_ref"].startswith("approval_")
     with pytest.raises(ValueError, match="dependency_approval_ref_must_be_opaque_string"):
         service.toolbox_apply_definition(
-            definition=definition,
             plan_id=plan["plan_id"],
+            confirmation_ref=confirmation["confirmation_ref"],
             request_id="custom-1",
             dependency_approval_ref={"approved": True},  # type: ignore[arg-type]
             owner_actor_id="actor:a",
@@ -297,7 +320,7 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
     entered = threading.Event()
     release = threading.Event()
 
-    def fake_apply(*, draft, profile_changes, operation_id):
+    def fake_apply(*, draft, profile_changes, confirmation_result, operation_id):
         service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         entered.set()
         assert release.wait(2)
@@ -309,8 +332,8 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
 
     service._apply_resolved_toolbox_definition = fake_apply  # type: ignore[method-assign]
     started = service.toolbox_apply_definition(
-        definition=definition,
         plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
         request_id="custom-1",
         dependency_approval_ref=approval["approval_ref"],
         owner_actor_id="actor:a",
@@ -318,8 +341,8 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
     )
     assert entered.wait(2)
     duplicate = service.toolbox_apply_definition(
-        definition=definition,
         plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
         request_id="custom-1",
         dependency_approval_ref=approval["approval_ref"],
         owner_actor_id="actor:a",
@@ -328,8 +351,8 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
     assert duplicate["operation"] == started["operation"]
     with pytest.raises(PermissionError, match="dependency_approval_invalid"):
         service.toolbox_apply_definition(
-            definition=definition,
             plan_id=plan["plan_id"],
+            confirmation_ref=confirmation["confirmation_ref"],
             request_id="custom-2",
             dependency_approval_ref=approval["approval_ref"],
             owner_actor_id="actor:a",

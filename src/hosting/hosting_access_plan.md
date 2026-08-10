@@ -655,15 +655,15 @@ boundary—not a double—passes.
 - [x] **R3-03** Add the durable confirmation/acquisition operation and receipt
   repository in `toolbox_runtime.py`, `daemon/local_ipc.py`,
   `engine_host_channel.py`, and `engine_host_cli.py`.
-- [ ] **R3-04** Implement accepted, declined, skipped, preserved-active-update,
+- [x] **R3-04** Implement accepted, declined, skipped, preserved-active-update,
   explicit-removal, shared-environment, and namespace-conflict semantics exactly
   as specified above. Remove the old apply-original-definition behavior.
   - [x] **R3-04a** Implement a pure, deterministic confirmation reducer that
     accepts only offered choices and produces the pinned effective definition,
     accepted/skipped/preserved/removed tools, and logical package mutations.
-  - [ ] **R3-04b** Wire the reducer through durable confirmation/apply and remove
+  - [x] **R3-04b** Wire the reducer through durable confirmation/apply and remove
     the original-definition apply payload and re-resolution path.
-- [ ] **R3-05** Return sanitized source alternatives and exact direct/transitive
+- [x] **R3-05** Return sanitized source alternatives and exact direct/transitive
   additions, removals, and transitions. Reject arbitrary URLs, paths, locks, and
   install commands supplied by consumers.
 - [ ] **R3-06** Prove multi-tool add/update/remove and idempotent plan/confirmation

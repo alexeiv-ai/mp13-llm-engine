@@ -158,6 +158,7 @@ class ToolboxDefinitionRolloutCoordinator:
         *,
         draft: ToolboxDefinitionPlanDraft,
         profile_changes: Sequence[Mapping[str, Any]],
+        confirmation_result: Mapping[str, Any] | None = None,
         operation_id: str,
     ) -> dict[str, Any]:
         tid = draft.definition.toolbox_id
@@ -286,6 +287,11 @@ class ToolboxDefinitionRolloutCoordinator:
                 "toolbox_id": tid,
                 "active_revision": snapshot["active_revision"],
                 "active_tool_names": sorted(snapshot["tool_routes"]),
+                "accepted_tool_keys": list(dict(confirmation_result or {}).get("accepted_tool_keys") or []),
+                "skipped_tools": list(dict(confirmation_result or {}).get("skipped_tools") or []),
+                "preserved_active_tool_keys": list(dict(confirmation_result or {}).get("preserved_active_tool_keys") or []),
+                "removed_tool_keys": list(dict(confirmation_result or {}).get("removed_tool_keys") or []),
+                "package_mutations": list(dict(confirmation_result or {}).get("package_mutations") or []),
                 "rollout_summary": {
                     "reused_profiles": sum(item.classification == "reused" for item in assignments),
                     "changed_profiles": len(candidates),

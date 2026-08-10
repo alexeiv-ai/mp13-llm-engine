@@ -43,8 +43,8 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
     )
     channel.toolbox_approve_definition_plan(plan_id="plan-1")
     channel.toolbox_apply_definition(
-        definition=definition,
         plan_id="plan-1",
+        confirmation_ref="confirmation-1",
         request_id="request-1",
         dependency_approval_ref="opaque-approval",
     )
@@ -54,11 +54,11 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
         "op-start",
         "op-start",
         "toolbox-approve-definition-plan",
-        "toolbox-apply-definition",
+        "op-start",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
     assert connection.calls[1][1]["payload"]["ttl_ms"] == 42
-    assert connection.calls[4][1]["dependency_approval_ref"] == "opaque-approval"
+    assert connection.calls[4][1]["payload"]["dependency_approval_ref"] == "opaque-approval"
 
 
 def test_operation_watch_emits_changed_snapshots_and_stops_at_terminal() -> None:
@@ -105,8 +105,8 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
     )
     ref.approve_definition_plan(plan_id="plan-1")
     ref.apply_definition(
-        definition=definition,
         plan_id="plan-1",
+        confirmation_ref="confirmation-1",
         request_id="request-1",
         dependency_approval_ref="approval-1",
     )
@@ -166,8 +166,8 @@ def test_daemon_dispatch_preserves_actor_and_opaque_approval(
                         "payload": {
                             "command": "toolbox-apply-definition",
                             "payload": {
-                                "definition": {"toolbox_id": "tb"},
                                 "plan_id": "plan-1",
+                                "confirmation_ref": "confirmation-1",
                                 "request_id": "request-1",
                                 "dependency_approval_ref": {"forged": True},
                             },

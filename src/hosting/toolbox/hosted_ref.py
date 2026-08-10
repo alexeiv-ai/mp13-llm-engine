@@ -121,14 +121,14 @@ class HostedToolBoxRef:
     def apply_definition(
         self,
         *,
-        definition: Dict[str, Any],
         plan_id: str,
+        confirmation_ref: str,
         request_id: str,
         dependency_approval_ref: Optional[str] = None,
     ) -> Dict[str, Any]:
         return dict(self.host.toolbox_apply_definition(
-            definition=dict(definition or {}),
             plan_id=str(plan_id or "").strip(),
+            confirmation_ref=str(confirmation_ref or "").strip(),
             request_id=str(request_id or "").strip(),
             dependency_approval_ref=dependency_approval_ref,
         ) or {})

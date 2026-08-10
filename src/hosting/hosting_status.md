@@ -160,7 +160,17 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R3-02/R3-03/R3-07 (`high`) are complete. Planning and
+Active slice: none. R3-04b/R3-05 (`average`) are complete. Apply now accepts
+only `plan_id`, the actor-bound immutable `confirmation_ref`, and a request ID;
+the caller-supplied definition and apply-time re-resolution path are removed.
+Complete runnable bundle inputs survive restart inside the immutable plan and
+confirmation records, while consumer choices remain limited to offered IDs and
+one boolean. Durable results carry accepted/skipped/preserved/removed tools and
+logical package mutations. The focused plan repository, definition matrix,
+service, and transport suite passed 32 tests in 9.00s; compile and
+`git diff --check` passed.
+
+Completed slice evidence: R3-02/R3-03/R3-07 (`high`) are complete. Planning and
 confirmation/acquisition now use canonical hosted execution kinds and the
 shared operation repository; identical request IDs return current status and
 one deterministic immutable confirmation receipt. Daemon `op-*` routes these

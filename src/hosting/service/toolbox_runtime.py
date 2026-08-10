@@ -450,7 +450,10 @@ class ToolboxRuntimeMixin:
         owner_actor_id: str,
         authority_id: str,
     ) -> Dict[str, Any]:
-        from ..toolbox.definition_planner import reduce_toolbox_confirmation
+        from ..toolbox.definition_planner import (
+            plan_toolbox_definition,
+            reduce_toolbox_confirmation,
+        )
 
         self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         try:
@@ -464,6 +467,24 @@ class ToolboxRuntimeMixin:
                 environment_mutations=plan.environment_mutations,
                 choices=choices,
             )
+            context = self._toolbox_definition_planning_context()
+            configuration = context["configuration"]
+            if configuration is None or (
+                context["catalog_revision"] != plan.pins.catalog_revision
+                or configuration.config_revision != plan.pins.host_config_revision
+                or configuration.source_set_revision != plan.pins.source_set_revision
+                or context["policy"].revision != plan.pins.dependency_policy_revision
+                or context["target"] != plan.pins.target
+            ):
+                raise ValueError("toolbox_definition_plan_pins_changed")
+            confirmed_draft = plan_toolbox_definition(
+                reduction.effective_definition,
+                templates=context["templates"],
+                python_abi=context["python_abi"],
+                platform=context["platform"],
+                runtime_identity=context["runtime_identity"],
+            )
+            self._validate_definition_policy(confirmed_draft, context)
             confirmation_ref, receipt = self._toolbox_confirmations.create(
                 plan_id=plan.plan_id,
                 toolbox_id=plan.toolbox_id,
@@ -471,6 +492,7 @@ class ToolboxRuntimeMixin:
                 authority_id=authority_id,
                 choices=choices,
                 reduction=reduction,
+                confirmed_draft=confirmed_draft.to_persisted_dict(),
                 now_ms=now_ms,
                 expires_at_ms=plan.expires_at_ms,
             )
@@ -546,15 +568,18 @@ class ToolboxRuntimeMixin:
     def toolbox_apply_definition(
         self,
         *,
-        definition: Dict[str, Any],
         plan_id: str,
+        confirmation_ref: str,
         request_id: str,
         dependency_approval_ref: Optional[str] = None,
         owner_actor_id: str = "service:local",
         authority_id: str = "authority:local",
     ) -> Dict[str, Any]:
-        from ..toolbox.bundle_models import ToolboxDefinitionSpec
-        from ..toolbox.definition_planner import plan_toolbox_definition
+        from ..toolbox.definition_planner import (
+            ActiveToolboxProfileSnapshot,
+            ToolboxDefinitionPlanDraft,
+            classify_toolbox_profiles,
+        )
         from ..toolbox.identity import identity_digest
 
         if dependency_approval_ref is not None and not isinstance(dependency_approval_ref, str):
@@ -568,36 +593,34 @@ class ToolboxRuntimeMixin:
         authority = str(authority_id or "").strip()
         if record.owner_actor_id != actor or record.authority_id != authority:
             raise PermissionError("toolbox_definition_plan_not_found")
-        model = ToolboxDefinitionSpec.from_dict(definition)
-        if (
-            model.to_dict() != record.proposed_definition.to_dict()
-            or model.revision != record.proposed_definition.revision
-        ):
-            raise ValueError("toolbox_definition_plan_mismatch")
+        receipt = self._toolbox_confirmations.get(
+            confirmation_ref,
+            owner_actor_id=actor,
+            authority_id=authority,
+            now_ms=now_ms,
+        )
+        if receipt.plan_id != record.plan_id:
+            raise ValueError("toolbox_confirmation_plan_mismatch")
+        draft = ToolboxDefinitionPlanDraft.from_persisted_dict(receipt.confirmed_draft)
+        model = draft.definition
         active = self._toolbox_state_v2.get(model.toolbox_id)
         if dict(active or {}).get("active_revision") != model.expected_revision:
             from .toolbox_state_v2 import ToolboxRevisionConflictError
 
             raise ToolboxRevisionConflictError("toolbox_revision_conflict")
         context = self._toolbox_definition_planning_context()
-        if (
+        configuration = context["configuration"]
+        if configuration is None or (
             context["catalog_revision"] != record.pins.catalog_revision
             or context["policy"].revision != record.pins.dependency_policy_revision
+            or configuration.config_revision != record.pins.host_config_revision
+            or configuration.source_set_revision != record.pins.source_set_revision
+            or context["target"] != record.pins.target
         ):
             raise ValueError("toolbox_definition_plan_pins_changed")
-        draft = plan_toolbox_definition(
-            model,
-            templates=context["templates"],
-            python_abi=context["python_abi"],
-            platform=context["platform"],
-            runtime_identity=context["runtime_identity"],
-        )
-        self._validate_definition_policy(draft, context)
-        if draft.to_dict() != record.draft_plan:
-            raise ValueError("toolbox_definition_plan_resolution_changed")
         custom_delta_digest = self._toolbox_custom_delta_digest(draft)
         approval_identity = None
-        if draft.custom_environment_count and context["policy"].custom_requires_approval:
+        if bool(receipt.reduction["dependency_approval_required"]):
             if not dependency_approval_ref:
                 raise PermissionError("dependency_approval_required")
             self._toolbox_dependency_approvals.validate_and_consume(
@@ -606,7 +629,7 @@ class ToolboxRuntimeMixin:
                 authority_id=authority,
                 toolbox_id=model.toolbox_id,
                 plan_id=record.plan_id,
-                definition_revision=model.revision,
+                definition_revision=record.proposed_definition.revision,
                 custom_delta_digest=custom_delta_digest,
                 catalog_revision=record.pins.catalog_revision,
                 package_policy_revision=record.pins.dependency_policy_revision,
@@ -624,6 +647,7 @@ class ToolboxRuntimeMixin:
                 "definition_revision": model.revision,
                 "expected_revision": model.expected_revision,
                 "plan_id": record.plan_id,
+                "confirmation_ref_digest": receipt.confirmation_ref_digest,
                 "custom_delta_digest": custom_delta_digest,
                 "approval_identity": approval_identity,
                 "catalog_revision": record.pins.catalog_revision,
@@ -648,6 +672,21 @@ class ToolboxRuntimeMixin:
         if action != "dispatch":
             return status
         operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        active_profiles = []
+        for profile_id, row in dict(dict(active or {}).get("profiles") or {}).items():
+            profile = dict(row["profile"])
+            active_profiles.append(
+                ActiveToolboxProfileSnapshot(
+                    profile_id=profile_id,
+                    manifest_hash=row["manifest_hash"],
+                    environment_key=profile["environment_key"],
+                    sandbox_policy_digest=identity_digest(
+                        "hosting.toolbox.sandbox_policy.v1", profile["sandbox_policy"]
+                    ),
+                    assigned_tool_keys=tuple(profile["assigned_tool_keys"]),
+                )
+            )
+        profile_changes = classify_toolbox_profiles(draft, active_profiles)
         self._hosted_operations.update_progress(
             operation_id=operation_id,
             progress={
@@ -664,7 +703,8 @@ class ToolboxRuntimeMixin:
             target=self._apply_resolved_toolbox_definition,
             kwargs={
                 "draft": draft,
-                "profile_changes": [dict(item) for item in record.profile_changes],
+                "profile_changes": [dict(item) for item in profile_changes],
+                "confirmation_result": dict(receipt.reduction),
                 "operation_id": operation_id,
             },
             name=f"toolbox-definition-apply-{operation_id[:12]}",
@@ -678,6 +718,7 @@ class ToolboxRuntimeMixin:
         *,
         draft: Any,
         profile_changes: List[Dict[str, Any]],
+        confirmation_result: Optional[Dict[str, Any]] = None,
         operation_id: str,
     ) -> Dict[str, Any]:
         from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
@@ -687,6 +728,7 @@ class ToolboxRuntimeMixin:
             ToolboxDefinitionRolloutCoordinator(self).apply,
             draft=draft,
             profile_changes=profile_changes,
+            confirmation_result=dict(confirmation_result or {}),
             operation_id=str(operation_id or "").strip(),
         )
 

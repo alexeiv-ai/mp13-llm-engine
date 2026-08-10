@@ -3320,8 +3320,8 @@ class EngineHostDaemon:
         if cmd == "toolbox-apply-definition":
             actor = str(payload.get("_claim_actor_id") or "service:local")
             return svc.toolbox_apply_definition(
-                definition=dict(payload.get("definition") or {}),
                 plan_id=str(payload.get("plan_id") or ""),
+                confirmation_ref=str(payload.get("confirmation_ref") or ""),
                 request_id=str(payload.get("request_id") or ""),
                 dependency_approval_ref=payload.get("dependency_approval_ref"),
                 owner_actor_id=actor,

@@ -143,7 +143,7 @@ def _service_with_verified_closure(tmp_path: Path, *, policy=None):
     private = Ed25519PrivateKey.generate()
     public = _b64(private.public_key().public_bytes_raw())
     source = tmp_path / "source"
-    source.mkdir()
+    source.mkdir(exist_ok=True)
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
         control_state_file=tmp_path / "control.json",
