@@ -346,8 +346,6 @@ class HermeticToolboxEnvironmentBuilder:
             for source_id, path in dict(artifact_sources or {}).items()
         }
         self.verified_artifact_paths: dict[tuple[str, str], Path] = {}
-        if not self.artifact_sources:
-            raise ValueError("artifact_sources_required")
         if isinstance(gc_grace_ms, bool) or not isinstance(gc_grace_ms, int) or gc_grace_ms < 1:
             raise ValueError("environment_gc_grace_ms_invalid")
         self.gc_grace_ms = gc_grace_ms

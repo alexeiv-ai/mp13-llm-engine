@@ -31,11 +31,20 @@ def resolved_builtin_template_candidate(
     if intent.sandbox_policy != "compute-only":
         raise ValueError("builtin_template_sandbox_policy_invalid")
     row = dict(evidence or {})
-    fields = {
+    bundle_fields = {
         "bundle_id", "manifest_digest", "source_id", "source_set_revision",
         "target", "signing_key_id", "signature", "artifact_digests",
     }
-    if set(row) != fields or row["target"] != target.name:
+    https_fields = {
+        "evidence_kind", "evidence_id", "manifest_digest", "source_ids",
+        "source_set_revision", "target", "signing_key_ids", "authenticator",
+        "artifact_digests",
+    }
+    evidence_fields = frozenset(row)
+    if (
+        evidence_fields not in {frozenset(bundle_fields), frozenset(https_fields)}
+        or row["target"] != target.name
+    ):
         raise ValueError("builtin_template_evidence_invalid")
     closure_digests = {item.sha256 for item in closure.locked_artifacts}
     if not closure_digests.issubset(set(row["artifact_digests"])):
@@ -52,6 +61,24 @@ def resolved_builtin_template_candidate(
     manifest_digest = require_digest(
         row["manifest_digest"], label="builtin_template_manifest_digest"
     )
+    if evidence_fields == frozenset(bundle_fields):
+        provenance_source = f"signed-airgap:{row['source_id']}"
+        revision = str(row["bundle_id"])
+        signing_key_id = str(row["signing_key_id"])
+        authenticator = str(row["signature"] or "")
+    else:
+        if (
+            row["evidence_kind"] != "https_metadata_set"
+            or not isinstance(row["source_ids"], list)
+            or not row["source_ids"]
+            or not isinstance(row["signing_key_ids"], list)
+            or not row["signing_key_ids"]
+        ):
+            raise ValueError("builtin_template_evidence_invalid")
+        provenance_source = f"signed-https:{'+'.join(row['source_ids'])}"
+        revision = str(row["evidence_id"])
+        signing_key_id = f"ed25519-set:{'+'.join(row['signing_key_ids'])}"
+        authenticator = str(row["authenticator"] or "")
     template = ToolboxEnvironmentTemplateSpec(
         template_id=intent.template_id,
         python_requires=">=3.12,<3.13",
@@ -65,10 +92,10 @@ def resolved_builtin_template_candidate(
         parent_worker_artifact_digest=runtime_artifact.sha256,
         isolation_policy_version="compute-only-v1",
         provenance=ToolboxTemplateProvenance(
-            source=f"signed-airgap:{row['source_id']}",
-            revision=str(row["bundle_id"]),
+            source=provenance_source,
+            revision=revision,
             manifest_digest=manifest_digest,
-            signing_key_id=str(row["signing_key_id"]),
+            signing_key_id=signing_key_id,
         ),
     )
     references = tuple(
@@ -80,14 +107,13 @@ def resolved_builtin_template_candidate(
         }
         for item in closure.locked_artifacts
     )
-    signature = str(row["signature"] or "")
-    if not signature:
+    if not authenticator:
         raise ValueError("builtin_template_signature_missing")
     return ResolvedBuiltinTemplateCandidate(
         template=template,
         artifact_references=references,
-        manifest_signature=signature,
-        source_bundle_id=str(row["bundle_id"]),
+        manifest_signature=authenticator,
+        source_bundle_id=revision,
     )
 
 

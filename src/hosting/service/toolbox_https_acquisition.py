@@ -6,13 +6,17 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from html.parser import HTMLParser
 from typing import Any, Mapping
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import requests
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from packaging.markers import default_environment
+from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
+from packaging.version import InvalidVersion, Version
 
 from ..toolbox.catalog import normalize_distribution_name
 from ..toolbox.host_project_config import ToolboxHostProjectConfiguration, ToolboxPackageSource
@@ -31,6 +35,42 @@ _MAX_REDIRECTS = 5
 _MAX_METADATA_BYTES = 4 * 1024 * 1024
 
 
+class _Pep503Parser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.files: list[dict[str, Any]] = []
+        self._anchor: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() != "a":
+            return
+        values = {str(key).lower(): str(value or "") for key, value in attrs}
+        self._anchor = {"href": values.get("href", ""), "size": values.get("data-size", ""), "text": []}
+
+    def handle_data(self, data: str) -> None:
+        if self._anchor is not None:
+            self._anchor["text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or self._anchor is None:
+            return
+        anchor = self._anchor
+        self._anchor = None
+        try:
+            digest = parse_qs(urlsplit(anchor["href"]).fragment).get("sha256", [""])[0]
+            size = int(anchor["size"])
+        except (TypeError, ValueError):
+            return
+        self.files.append(
+            {
+                "filename": "".join(anchor["text"]).strip(),
+                "url": anchor["href"],
+                "hashes": {"sha256": digest},
+                "size": size,
+            }
+        )
+
+
 class ToolboxHttpsAcquisitionError(RuntimeError):
     _SUMMARIES = {
         "https_source_credentials_invalid": "The HTTPS source credential bindings are invalid.",
@@ -40,6 +80,7 @@ class ToolboxHttpsAcquisitionError(RuntimeError):
         "https_source_signature_invalid": "The HTTPS package source signature is invalid.",
         "https_source_artifact_invalid": "The HTTPS wheel does not match signed source metadata.",
         "https_source_bounds_exceeded": "The HTTPS source exceeded configured byte bounds.",
+        "https_source_candidate_missing": "No signed compatible HTTPS wheel candidate is available.",
     }
 
     def __init__(self, code: str):
@@ -210,12 +251,20 @@ class ToolboxHttpsArtifactAcquirer:
         )
         key_id, signature = self._verify_metadata_signature(source, raw, headers)
         try:
-            payload = json.loads(raw.decode("utf-8"))
-            files = list(payload["files"])
+            if raw.lstrip().startswith(b"{"):
+                payload = json.loads(raw.decode("utf-8"))
+                files = list(payload["files"])
+                if payload.get("name") is not None and normalize_distribution_name(payload["name"]) != normalized:
+                    raise ToolboxHttpsAcquisitionError("https_source_metadata_invalid")
+            else:
+                parser = _Pep503Parser()
+                parser.feed(raw.decode("utf-8"))
+                parser.close()
+                files = parser.files
         except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            if isinstance(exc, ToolboxHttpsAcquisitionError):
+                raise
             raise ToolboxHttpsAcquisitionError("https_source_metadata_invalid") from exc
-        if payload.get("name") is not None and normalize_distribution_name(payload["name"]) != normalized:
-            raise ToolboxHttpsAcquisitionError("https_source_metadata_invalid")
         eligible: list[dict[str, Any]] = []
         for item in files:
             if not isinstance(item, dict):
@@ -252,7 +301,7 @@ class ToolboxHttpsArtifactAcquirer:
                     "size_bytes": size,
                 }
             )
-        if not eligible or len(eligible) > self.configuration.resolution.maximum_artifacts:
+        if not eligible:
             raise ToolboxHttpsAcquisitionError("https_source_metadata_invalid")
         eligible.sort(key=lambda item: (item["version"], item["filename"]))
         return {
@@ -310,6 +359,124 @@ class ToolboxHttpsArtifactAcquirer:
             "filename": filename,
             "sha256": item["sha256"],
             "size_bytes": item["size_bytes"],
+        }
+
+    @staticmethod
+    def _source_allows(source: ToolboxPackageSource, distribution: str) -> bool:
+        return any(
+            namespace == "*"
+            or distribution == namespace.removesuffix(".*")
+            or (namespace.endswith(".*") and distribution.startswith(namespace[:-1]))
+            for namespace in source.allowed_package_namespaces
+        )
+
+    def discover_and_acquire(
+        self,
+        requirements: list[str] | tuple[str, ...],
+        *,
+        progress=None,
+    ) -> dict[str, Any]:
+        """Acquire a bounded transitive candidate wheelhouse for offline pip resolution."""
+        if self.configuration.resolution.mode not in {"online", "prefer_airgap"}:
+            raise ToolboxHttpsAcquisitionError("https_source_candidate_missing")
+        try:
+            queue = [Requirement(item) for item in requirements]
+        except InvalidRequirement as exc:
+            raise ToolboxHttpsAcquisitionError("https_source_metadata_invalid") from exc
+        report = progress or (lambda *_args: None)
+        processed: set[str] = set()
+        acquired: dict[str, dict[str, Any]] = {}
+        metadata_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        total_bytes = 0
+        marker_environment = default_environment()
+        https_sources = [
+            source
+            for source in self.configuration.sources
+            if source.kind in {"https_index", "https_artifact"}
+        ]
+        while queue:
+            requirement = queue.pop(0)
+            if requirement.marker is not None and not requirement.marker.evaluate(marker_environment):
+                continue
+            distribution = normalize_distribution_name(requirement.name)
+            request_key = str(requirement)
+            if request_key in processed:
+                continue
+            processed.add(request_key)
+            found = False
+            for source in https_sources:
+                if not self._source_allows(source, distribution):
+                    continue
+                cache_key = (source.source_id, distribution)
+                try:
+                    metadata = metadata_cache.get(cache_key)
+                    if metadata is None:
+                        metadata = self.fetch_project_metadata(
+                            source_id=source.source_id, project_name=distribution
+                        )
+                        metadata_cache[cache_key] = metadata
+                except ToolboxHttpsAcquisitionError as exc:
+                    if exc.code == "https_source_request_failed":
+                        continue
+                    raise
+                candidates = []
+                for item in metadata["files"]:
+                    try:
+                        version = Version(item["version"])
+                    except InvalidVersion as exc:
+                        raise ToolboxHttpsAcquisitionError(
+                            "https_source_metadata_invalid"
+                        ) from exc
+                    if not requirement.specifier or version in requirement.specifier:
+                        candidates.append((version, item))
+                candidates.sort(key=lambda row: (row[0], row[1]["filename"]), reverse=True)
+                for _version, item in candidates[:3]:
+                    digest = item["sha256"]
+                    if digest in acquired:
+                        found = True
+                        continue
+                    if len(acquired) >= self.configuration.resolution.maximum_artifacts:
+                        raise ToolboxHttpsAcquisitionError("https_source_bounds_exceeded")
+                    if total_bytes + item["size_bytes"] > self.configuration.resolution.maximum_bytes:
+                        raise ToolboxHttpsAcquisitionError("https_source_bounds_exceeded")
+                    imported = self.acquire_wheel(metadata=metadata, artifact=item)
+                    total_bytes += item["size_bytes"]
+                    acquired[digest] = {**item, **imported, "source_id": source.source_id}
+                    report(
+                        "acquisition",
+                        "https_artifact_acquired",
+                        total_bytes,
+                        self.configuration.resolution.maximum_bytes,
+                        "A signed-hash HTTPS wheel candidate was verified in CAS.",
+                        False,
+                    )
+                    path = self.artifact_store.object_path(digest)
+                    try:
+                        dependencies = self.artifact_store._verify_wheel_archive(
+                            path,
+                            distribution=item["distribution"],
+                            version=item["version"],
+                            maximum_bytes=self.configuration.resolution.maximum_bytes,
+                        )
+                    except Exception as exc:
+                        raise ToolboxHttpsAcquisitionError(
+                            "https_source_artifact_invalid"
+                        ) from exc
+                    queue.extend(dependencies)
+                    found = True
+                if found:
+                    break
+            if not found:
+                raise ToolboxHttpsAcquisitionError("https_source_candidate_missing")
+        return {
+            "status": "acquired",
+            "artifact_count": len(acquired),
+            "verified_bytes": total_bytes,
+            "artifacts": [acquired[key] for key in sorted(acquired)],
+            "verified_artifacts": {
+                source.source_id: self.artifact_store.source_artifacts(source.source_id)
+                for source in https_sources
+            },
         }
 
 

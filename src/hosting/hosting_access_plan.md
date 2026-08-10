@@ -577,16 +577,16 @@ boundary—not a double—passes.
     normal daemon supplies them to `EngineHostService`.
   - [x] **R2-02b** Publish bounded not-ready diagnostics for missing, invalid, or
     incomplete setup without partially publishing built-ins.
-- [ ] **R2-03** Replace realized shipped lock resources in
+- [x] **R2-03** Replace realized shipped lock resources in
   `toolbox/shipped_templates.py` and `resources/toolbox_templates/` with built-in
   intent. Resolve exact transitive wheel closures for the current host.
   - [x] **R2-03a** Replace the shipped catalog and lock JSON resources with
     strict release-owned built-in intents and remove lock-JSON artifact bridges.
-  - [ ] **R2-03b** Resolve each intent to one exact current-host transitive wheel
+  - [x] **R2-03b** Resolve each intent to one exact current-host transitive wheel
     closure from the configured source mode with stable missing-wheel results.
     - [x] **R2-03b1** Resolve bounded read-only air-gap wheelhouses into exact
       deterministic current-host closures with stable missing-wheel results.
-    - [ ] **R2-03b2** Resolve HTTPS-backed modes through the verified artifact
+    - [x] **R2-03b2** Resolve HTTPS-backed modes through the verified artifact
       acquisition boundary delivered by R2-05a, using the same closure model.
 - [x] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
   the real `toolbox_catalog.py` and `hermetic_environment.py` boundary. Remove
@@ -603,12 +603,12 @@ boundary—not a double—passes.
 - [ ] **R2-05** Implement revisioned source changes and both air-gap ingestion
   paths. Prove missing built-in wheels prevent readiness without partial catalog
   publication.
-  - [ ] **R2-05a** Implement revisioned HTTPS index/artifact acquisition into the
+  - [x] **R2-05a** Implement revisioned HTTPS index/artifact acquisition into the
     verified content-addressed artifact store with bounds and redaction.
     - [x] **R2-05a1** Fetch configured HTTPS PEP metadata and selected wheels
       with exact credential, redirect, signature, digest, target, and byte/time
       bounds, then atomically index verified objects in the shared CAS.
-    - [ ] **R2-05a2** Discover a bounded transitive candidate set and feed its
+    - [x] **R2-05a2** Discover a bounded transitive candidate set and feed its
       verified CAS paths through the exact current-target closure resolver and
       normal setup publication boundary.
   - [x] **R2-05b** Implement configured read-only signed air-gap ZIP ingestion

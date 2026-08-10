@@ -181,7 +181,9 @@ class AirgapBuiltinWheelResolver:
             for path in self.verified_artifacts.get(source.source_id, {}).values()
         )
         wheelhouses = list(dict.fromkeys(wheelhouses))
-        if not wheelhouses or self.configuration.resolution.mode not in {"air_gapped", "prefer_airgap"}:
+        if not wheelhouses or self.configuration.resolution.mode not in {
+            "air_gapped", "prefer_airgap", "online"
+        }:
             raise RuntimeError("required_template_source_unavailable")
         with tempfile.TemporaryDirectory(prefix="mp13-toolbox-resolve-") as temporary:
             report = Path(temporary) / "report.json"

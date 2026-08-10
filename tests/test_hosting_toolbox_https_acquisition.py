@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from hosting.service.toolbox_https_acquisition import (
     ToolboxHttpsArtifactAcquirer,
 )
 from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
+from hosting.toolbox.builtin_resolver import AirgapBuiltinWheelResolver
+from hosting.toolbox.identity import identity_digest
+from hosting.toolbox.target import detect_current_toolbox_target
 
 
 def _b64(value: bytes) -> str:
@@ -49,7 +53,7 @@ def _configuration(*, maximum_bytes: int = 1_000_000) -> ToolboxHostProjectConfi
             ],
             "resolution": {
                 "mode": "online",
-                "timeout_seconds": 30,
+                "timeout_seconds": 60,
                 "maximum_bytes": maximum_bytes,
                 "maximum_artifacts": 16,
                 "allowed_redirect_origins": ["https://artifacts.example"],
@@ -81,6 +85,103 @@ def _wheel() -> bytes:
             "Wheel-Version: 1.0\nTag: py3-none-any\n",
         )
     return output.getvalue()
+
+
+def _package_wheel(
+    distribution: str,
+    version: str,
+    *,
+    packages: tuple[str, ...],
+    requires: tuple[str, ...] = (),
+) -> bytes:
+    import io
+
+    normalized = distribution.replace("-", "_")
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for package in packages:
+            archive.writestr(f"{package}/__init__.py", f"NAME = {package!r}\n")
+        metadata = [
+            "Metadata-Version: 2.1",
+            f"Name: {distribution}",
+            f"Version: {version}",
+            "Requires-Python: >=3.12",
+        ]
+        metadata.extend(f"Requires-Dist: {item}" for item in requires)
+        archive.writestr(
+            f"{normalized}-{version}.dist-info/METADATA",
+            "\n".join(metadata) + "\n\n",
+        )
+        archive.writestr(
+            f"{normalized}-{version}.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(f"{normalized}-{version}.dist-info/RECORD", "")
+    return output.getvalue()
+
+
+def _online_runtime_configuration() -> ToolboxHostProjectConfiguration:
+    value = _configuration().to_dict()
+    value["builtins"] = [
+        {
+            "template_id": "core",
+            "imports": ["hosting", "mp13_engine"],
+            "package_requirements": ["mp13-engine==13.0.0"],
+            "sandbox_policy": "compute-only",
+            "required": True,
+            "prewarm": True,
+            "provenance": "online-runtime-test",
+        }
+    ]
+    return ToolboxHostProjectConfiguration.from_dict(value)
+
+
+def _online_policy() -> dict:
+    body = {
+        "allowed_template_ids": ["core"],
+        "allowed_targets": [detect_current_toolbox_target().name],
+        "package_allowlist": ["alpha", "mp13-engine"],
+        "package_denylist": [],
+        "allow_custom": False,
+        "custom_requires_approval": True,
+        "online_resolution_allowed": True,
+        "allowed_index_origins": ["https://packages.example"],
+    }
+    return {"revision": identity_digest("test.online.policy.v1", body), **body}
+
+
+def _signed_project_response(
+    private: Ed25519PrivateKey,
+    *,
+    project: str,
+    filename: str,
+    wheel: bytes,
+) -> _Response:
+    raw = json.dumps(
+        {
+            "meta": {"api-version": "1.0"},
+            "name": project,
+            "files": [
+                {
+                    "filename": filename,
+                    "url": f"https://artifacts.example/files/{filename}",
+                    "hashes": {"sha256": hashlib.sha256(wheel).hexdigest()},
+                    "size": len(wheel),
+                }
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return _Response(
+        200,
+        raw,
+        headers={
+            "Content-Length": str(len(raw)),
+            "X-MP13-Signing-Key-Id": "packages-key",
+            "X-MP13-Signature": _b64(private.sign(raw)),
+        },
+    )
 
 
 class _Response:
@@ -197,6 +298,57 @@ def test_https_metadata_requires_configured_ed25519_signature(tmp_path: Path) ->
     assert store.read()["objects"] == {}
 
 
+def test_signed_pep503_html_hash_and_size_use_same_verified_cas_boundary(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration()
+    private = Ed25519PrivateKey.generate()
+    public = {"packages-key": _b64(private.public_key().public_bytes_raw())}
+    wheel = _wheel()
+    digest = hashlib.sha256(wheel).hexdigest()
+    filename = "alpha-1.0-py3-none-any.whl"
+    raw = (
+        "<!doctype html><html><body>"
+        f'<a href="https://artifacts.example/files/{filename}#sha256={digest}" '
+        f'data-size="{len(wheel)}">{filename}</a>'
+        "</body></html>"
+    ).encode()
+    session = _Session(
+        {
+            "https://packages.example/simple/alpha/": [
+                _Response(
+                    200,
+                    raw,
+                    headers={
+                        "Content-Length": str(len(raw)),
+                        "X-MP13-Signing-Key-Id": "packages-key",
+                        "X-MP13-Signature": _b64(private.sign(raw)),
+                    },
+                )
+            ],
+            f"https://artifacts.example/files/{filename}": [
+                _Response(200, wheel, headers={"Content-Length": str(len(wheel))})
+            ],
+        }
+    )
+    store = AtomicToolboxArtifactStore(tmp_path / "store")
+    acquirer = ToolboxHttpsArtifactAcquirer(
+        configuration,
+        artifact_store=store,
+        trust_public_keys=public,
+        source_credentials={"secret:index": "Bearer top-secret"},
+        session=session,
+    )
+
+    metadata = acquirer.fetch_project_metadata(
+        source_id="approved-index", project_name="alpha"
+    )
+    imported = acquirer.acquire_wheel(metadata=metadata, artifact=metadata["files"][0])
+
+    assert imported["sha256"] == f"sha256:{digest}"
+    assert store.object_path(imported["sha256"]).is_file()
+
+
 def test_https_artifact_origin_outside_redirect_allowlist_is_denied(tmp_path: Path) -> None:
     acquirer, store, _session, _digest = _fixture(
         tmp_path, redirect_origin="evil.example"
@@ -270,3 +422,217 @@ def test_https_metadata_redirect_to_unapproved_origin_is_denied_before_credentia
 
     assert captured.value.code == "https_source_redirect_denied"
     assert [call["url"] for call in session.calls] == [original]
+
+
+def test_normal_daemon_discovers_transitive_https_closure_and_publishes_from_cas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _online_runtime_configuration()
+    private = Ed25519PrivateKey.generate()
+    public = {"packages-key": _b64(private.public_key().public_bytes_raw())}
+    runtime = _package_wheel(
+        "mp13-engine",
+        "13.0.0",
+        packages=("hosting", "mp13_engine"),
+        requires=("alpha==1.0",),
+    )
+    alpha = _package_wheel("alpha", "1.0", packages=("alpha",))
+    runtime_name = "mp13_engine-13.0.0-py3-none-any.whl"
+    alpha_name = "alpha-1.0-py3-none-any.whl"
+    session = _Session(
+        {
+            "https://packages.example/simple/mp13-engine/": [
+                _signed_project_response(
+                    private,
+                    project="mp13-engine",
+                    filename=runtime_name,
+                    wheel=runtime,
+                )
+            ],
+            "https://packages.example/simple/alpha/": [
+                _signed_project_response(
+                    private, project="alpha", filename=alpha_name, wheel=alpha
+                )
+            ],
+            f"https://artifacts.example/files/{runtime_name}": [
+                _Response(200, runtime, headers={"Content-Length": str(len(runtime))})
+            ],
+            f"https://artifacts.example/files/{alpha_name}": [
+                _Response(200, alpha, headers={"Content-Length": str(len(alpha))})
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        "hosting.service.toolbox_https_acquisition.requests.Session", lambda: session
+    )
+
+    started_at = time.monotonic()
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={},
+        toolbox_dependency_policy=_online_policy(),
+        toolbox_trust_public_keys=public,
+        toolbox_source_credentials={"secret:index": "Bearer top-secret"},
+    )
+    elapsed = time.monotonic() - started_at
+    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
+    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=operation["operation"]["operation_id"], timeout_seconds=60
+    )
+
+    assert elapsed < 2
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["code"] == "toolbox_setup_ready"
+    assert daemon.svc.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
+    catalog = daemon.svc._toolbox_template_catalog.read()  # noqa: SLF001
+    assert catalog["entries"][0]["template"]["provenance"]["source"] == (
+        "signed-https:approved-index"
+    )
+    assert {
+        item["sha256"] for item in catalog["entries"][0]["artifacts"]
+    } == {
+        f"sha256:{hashlib.sha256(runtime).hexdigest()}",
+        f"sha256:{hashlib.sha256(alpha).hexdigest()}",
+    }
+    assert "top-secret" not in str(terminal)
+    assert "top-secret" not in str(daemon.svc.hosting_setup_summary())
+
+
+def test_normal_daemon_missing_transitive_https_wheel_stays_not_ready_without_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _online_runtime_configuration()
+    private = Ed25519PrivateKey.generate()
+    public = {"packages-key": _b64(private.public_key().public_bytes_raw())}
+    runtime = _package_wheel(
+        "mp13-engine",
+        "13.0.0",
+        packages=("hosting", "mp13_engine"),
+        requires=("alpha==1.0",),
+    )
+    runtime_name = "mp13_engine-13.0.0-py3-none-any.whl"
+    session = _Session(
+        {
+            "https://packages.example/simple/mp13-engine/": [
+                _signed_project_response(
+                    private,
+                    project="mp13-engine",
+                    filename=runtime_name,
+                    wheel=runtime,
+                )
+            ],
+            f"https://artifacts.example/files/{runtime_name}": [
+                _Response(200, runtime, headers={"Content-Length": str(len(runtime))})
+            ],
+            "https://packages.example/simple/alpha/": [_Response(404)],
+        }
+    )
+    monkeypatch.setattr(
+        "hosting.service.toolbox_https_acquisition.requests.Session", lambda: session
+    )
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={},
+        toolbox_dependency_policy=_online_policy(),
+        toolbox_trust_public_keys=public,
+        toolbox_source_credentials={"secret:index": "Bearer top-secret"},
+    )
+    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
+    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=operation["operation"]["operation_id"], timeout_seconds=20
+    )
+
+    assert terminal["lifecycle"] == "terminal_failure"
+    assert terminal["result"]["code"] == "https_source_candidate_missing"
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert daemon.svc.hosting_setup_summary()["toolbox_readiness"]["status"] == "degraded"
+
+
+def test_online_and_airgap_sources_produce_identical_exact_lock_and_artifact_digests(
+    tmp_path: Path,
+) -> None:
+    online = _online_runtime_configuration()
+    private = Ed25519PrivateKey.generate()
+    public = {"packages-key": _b64(private.public_key().public_bytes_raw())}
+    runtime = _package_wheel(
+        "mp13-engine",
+        "13.0.0",
+        packages=("hosting", "mp13_engine"),
+        requires=("alpha==1.0",),
+    )
+    alpha = _package_wheel("alpha", "1.0", packages=("alpha",))
+    runtime_name = "mp13_engine-13.0.0-py3-none-any.whl"
+    alpha_name = "alpha-1.0-py3-none-any.whl"
+    session = _Session(
+        {
+            "https://packages.example/simple/mp13-engine/": [
+                _signed_project_response(
+                    private,
+                    project="mp13-engine",
+                    filename=runtime_name,
+                    wheel=runtime,
+                )
+            ],
+            "https://packages.example/simple/alpha/": [
+                _signed_project_response(
+                    private, project="alpha", filename=alpha_name, wheel=alpha
+                )
+            ],
+            f"https://artifacts.example/files/{runtime_name}": [
+                _Response(200, runtime, headers={"Content-Length": str(len(runtime))})
+            ],
+            f"https://artifacts.example/files/{alpha_name}": [
+                _Response(200, alpha, headers={"Content-Length": str(len(alpha))})
+            ],
+        }
+    )
+    store = AtomicToolboxArtifactStore(tmp_path / "online-store")
+    acquisition = ToolboxHttpsArtifactAcquirer(
+        online,
+        artifact_store=store,
+        trust_public_keys=public,
+        source_credentials={"secret:index": "Bearer top-secret"},
+        session=session,
+    ).discover_and_acquire(("mp13-engine==13.0.0",))
+    online_result = AirgapBuiltinWheelResolver(
+        online,
+        artifact_sources={},
+        verified_artifacts=acquisition["verified_artifacts"],
+    ).resolve()
+
+    airgap_value = online.to_dict()
+    airgap_value["sources"] = [
+        {
+            **airgap_value["sources"][0],
+            "kind": "airgap_store",
+            "origin": "airgap://approved-index",
+            "credential_ref": None,
+        }
+    ]
+    airgap_value["resolution"] = {
+        **airgap_value["resolution"],
+        "mode": "air_gapped",
+        "allowed_redirect_origins": [],
+    }
+    airgap = ToolboxHostProjectConfiguration.from_dict(airgap_value)
+    wheelhouse = tmp_path / "airgap"
+    wheelhouse.mkdir()
+    (wheelhouse / runtime_name).write_bytes(runtime)
+    (wheelhouse / alpha_name).write_bytes(alpha)
+    airgap_result = AirgapBuiltinWheelResolver(
+        airgap,
+        artifact_sources={"approved-index": wheelhouse},
+    ).resolve()
+
+    assert online_result.status == airgap_result.status == "resolved"
+    assert online_result.closures[0].lock_digest == airgap_result.closures[0].lock_digest
+    assert [
+        item.sha256 for item in online_result.closures[0].locked_artifacts
+    ] == [item.sha256 for item in airgap_result.closures[0].locked_artifacts]
+from hosting.daemon import EngineHostDaemon

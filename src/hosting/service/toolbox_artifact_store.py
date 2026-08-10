@@ -10,8 +10,10 @@ import shutil
 import tempfile
 import zipfile
 from email.parser import BytesParser
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
+from urllib.parse import parse_qs, urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -37,6 +39,44 @@ _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _MAX_METADATA_BYTES = 1024 * 1024
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_COMPRESSION_RATIO = 100
+
+
+class _Pep503Parser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.files: list[dict[str, Any]] = []
+        self._anchor: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() == "a":
+            values = {str(key).lower(): str(value or "") for key, value in attrs}
+            self._anchor = {
+                "href": values.get("href", ""),
+                "size": values.get("data-size", ""),
+                "text": [],
+            }
+
+    def handle_data(self, data: str) -> None:
+        if self._anchor is not None:
+            self._anchor["text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or self._anchor is None:
+            return
+        anchor = self._anchor
+        self._anchor = None
+        try:
+            digest = parse_qs(urlsplit(anchor["href"]).fragment).get("sha256", [""])[0]
+            size = int(anchor["size"])
+        except (TypeError, ValueError):
+            return
+        self.files.append(
+            {
+                "filename": "".join(anchor["text"]).strip(),
+                "hashes": {"sha256": digest},
+                "size": size,
+            }
+        )
 
 
 class ToolboxArtifactBundleError(RuntimeError):
@@ -574,8 +614,14 @@ class AtomicToolboxArtifactStore:
         if not metadata_raw or len(metadata_raw) > _MAX_MANIFEST_BYTES:
             raise ToolboxHttpsArtifactError("https_metadata_invalid")
         try:
-            metadata = json.loads(metadata_raw.decode("utf-8"))
-            files = list(metadata["files"])
+            if metadata_raw.lstrip().startswith(b"{"):
+                metadata = json.loads(metadata_raw.decode("utf-8"))
+                files = list(metadata["files"])
+            else:
+                parser = _Pep503Parser()
+                parser.feed(metadata_raw.decode("utf-8"))
+                parser.close()
+                files = parser.files
         except (KeyError, TypeError, ValueError, UnicodeError) as exc:
             raise ToolboxHttpsArtifactError("https_metadata_invalid") from exc
         matches = [item for item in files if isinstance(item, dict) and item.get("filename") == filename]
@@ -635,7 +681,17 @@ class AtomicToolboxArtifactStore:
             raise ToolboxHttpsArtifactError("https_artifact_invalid") from exc
 
         manifest_digest = f"sha256:{hashlib.sha256(metadata_raw).hexdigest()}"
-        manifest_id = f"https-{manifest_digest.removeprefix('sha256:')}"
+        manifest_identity = hashlib.sha256(
+            _canonical_bytes(
+                {
+                    "source_id": source.source_id,
+                    "source_set_revision": configuration.source_set_revision,
+                    "target": configuration.target.name,
+                    "manifest_digest": manifest_digest,
+                }
+            )
+        ).hexdigest()
+        manifest_id = f"https-{manifest_identity}"
         manifest_record = {
             "manifest_digest": manifest_digest,
             "source_id": source.source_id,
@@ -744,6 +800,79 @@ class AtomicToolboxArtifactStore:
         if len(matches) != 1:
             raise ValueError("artifact_evidence_ambiguous")
         return matches[0]
+
+    def verified_evidence_for_artifacts(
+        self, digests: set[str], *, source_ids: set[str]
+    ) -> dict[str, Any]:
+        """Bind a closure to one signed bundle or a deterministic signed HTTPS set."""
+        required = {
+            require_digest(item, label="artifact_evidence_digest") for item in digests
+        }
+        expected_sources = {str(item or "").strip() for item in source_ids}
+        if not required or not expected_sources or "" in expected_sources:
+            raise ValueError("artifact_evidence_required")
+        with _exclusive_process_file_lock(self.lock_path):
+            index = self._read_unlocked()
+            bundles = [
+                {"bundle_id": bundle_id, **dict(bundle)}
+                for bundle_id, bundle in index["bundles"].items()
+                if bundle["source_id"] in expected_sources
+                and required.issubset(set(bundle["artifact_digests"]))
+            ]
+            manifests = {
+                manifest_id: dict(manifest)
+                for manifest_id, manifest in index["https_manifests"].items()
+                if manifest["source_id"] in expected_sources
+                and required.intersection(manifest["artifact_digests"])
+            }
+        if bundles:
+            if len(bundles) != 1:
+                raise ValueError("artifact_evidence_ambiguous")
+            return bundles[0]
+        selected: dict[str, dict[str, Any]] = {}
+        for digest in sorted(required):
+            matches = [
+                (manifest_id, manifest)
+                for manifest_id, manifest in manifests.items()
+                if digest in manifest["artifact_digests"]
+            ]
+            if len(matches) != 1:
+                raise ValueError("artifact_evidence_ambiguous")
+            selected[matches[0][0]] = matches[0][1]
+        rows = [
+            {"manifest_id": manifest_id, **selected[manifest_id]}
+            for manifest_id in sorted(selected)
+        ]
+        if (
+            {item["source_set_revision"] for item in rows} != {
+                rows[0]["source_set_revision"]
+            }
+            or {item["target"] for item in rows} != {rows[0]["target"]}
+        ):
+            raise ValueError("artifact_evidence_ambiguous")
+        canonical = _canonical_bytes(
+            {
+                "source_set_revision": rows[0]["source_set_revision"],
+                "target": rows[0]["target"],
+                "artifact_digests": sorted(required),
+                "manifests": rows,
+            }
+        )
+        evidence_hex = hashlib.sha256(canonical).hexdigest()
+        authenticator = base64.urlsafe_b64encode(
+            hashlib.sha256(b"".join(item["signature"].encode("ascii") for item in rows)).digest()
+        ).decode("ascii").rstrip("=")
+        return {
+            "evidence_kind": "https_metadata_set",
+            "evidence_id": f"https-set-{evidence_hex}",
+            "manifest_digest": f"sha256:{evidence_hex}",
+            "source_ids": sorted({item["source_id"] for item in rows}),
+            "source_set_revision": rows[0]["source_set_revision"],
+            "target": rows[0]["target"],
+            "signing_key_ids": sorted({item["signing_key_id"] for item in rows}),
+            "authenticator": authenticator,
+            "artifact_digests": sorted(required),
+        }
 
 
 __all__ = [

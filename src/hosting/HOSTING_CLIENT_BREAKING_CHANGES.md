@@ -157,10 +157,11 @@ collection that references the same immutable CAS objects as signed air-gap
 bundles. Hosts must not reuse or edit a v1 index in place; reacquire/reimport
 artifacts under the configured source revision.
 
-HTTPS package sources now require signed PEP 691 JSON. The exact response bytes
+HTTPS package sources now require signed PEP 503 HTML or PEP 691 JSON. The exact response bytes
 are authenticated by `X-MP13-Signing-Key-Id` and the unpadded-base64url
 Ed25519 `X-MP13-Signature`; every selected file also requires a SHA-256 and
-exact byte size. Administrator wiring supplies an exact daemon-owned map from
+exact byte size; HTML anchors use the `sha256` fragment and `data-size`.
+Administrator wiring supplies an exact daemon-owned map from
 each configured `credential_ref` to its Authorization value. Clients and
 status projections must never return that map, forward it across an unapproved
 redirect, or parse network/parser text. Stable bounded failures cover invalid
@@ -173,7 +174,8 @@ Administrator setup logic must change as follows:
   toolbox_sandbox_policies=...)` construction with normal
   `EngineHostDaemon(toolbox_host_project_configuration=...,
   toolbox_artifact_sources=..., toolbox_trust_public_keys=...,
-  toolbox_dependency_policy=...)` construction;
+  toolbox_source_credentials=..., toolbox_dependency_policy=...)`
+  construction;
 - stop generating `required_target`; verify the daemon-reported detected target;
 - define built-in intent and ordered sources instead of realized locks;
 - treat configuration application as revision creation, not in-place mutation;
@@ -208,6 +210,14 @@ only from a durable complete-publication checkpoint plus current real receipts;
 otherwise that same record fails with
 `toolbox_setup_interrupted_after_dispatch`. Clients must not create a retry
 record or infer success from an active catalog entry alone.
+
+Online setup does not pass an index URL or credential to pip. It discovers a
+bounded transitive candidate set from signed project metadata, verifies each
+wheel into CAS, and invokes the same offline exact resolver used for air-gap
+content. Multiple signed project documents become one deterministic
+`https_metadata_set` provenance identity. Administrator status may show its
+logical source IDs and signing-key IDs, but never Authorization values, signed
+query data, response bodies, or network/parser exception text.
 
 Configuration revision transitions invalidate unconsumed definition plans and
 materialization receipts for non-active template revisions. Consumers must

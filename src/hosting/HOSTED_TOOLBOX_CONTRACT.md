@@ -646,7 +646,7 @@ Canonical JSON of the complete configuration produces an immutable
 the detected target, built-in intent, sanitized origins, and bounds, but omit
 every `credential_ref` and daemon path.
 
-HTTPS acquisition accepts PEP 691 JSON only from the configured source origin
+HTTPS acquisition accepts PEP 503 HTML or PEP 691 JSON only from the configured source origin
 or an exact origin in `allowed_redirect_origins`, follows at most five explicit
 redirects, and never forwards credentials to an unapproved origin. A source
 with `credential_ref` requires one exact daemon-owned Authorization binding;
@@ -656,7 +656,8 @@ unpadded base64url Ed25519 over the exact response bytes and the key ID is in
 that source's configured trust set.
 
 Only current-target wheel entries with a source-provided SHA-256 and exact byte
-size are eligible. Metadata and artifact responses are streamed with configured
+size are eligible; signed PEP 503 anchors carry these as the `sha256` URL
+fragment and exact `data-size`. Metadata and artifact responses are streamed with configured
 timeouts, redirect limits, per-source and aggregate byte bounds. The downloaded
 filename, size, digest, wheel tags, distribution/version metadata, and allowed
 namespace are verified before one atomic shared-CAS index replacement. The CAS
@@ -664,6 +665,25 @@ contract is `hosting.toolbox.artifact_store.v2`; its `https_manifests` evidence
 is separate from signed air-gap `bundles`, while both reference the same
 immutable `objects` collection. Failure changes neither evidence nor the object
 index.
+
+For each configured built-in root, online/prefer-air-gap setup discovers a
+bounded transitive candidate wheelhouse by reading verified wheel metadata and
+following applicable `Requires-Dist` entries. Candidate count and total bytes
+never exceed resolution bounds. The exact resolver then runs offline against
+verified CAS object paths only; it does not give pip an index URL, credential,
+or network path. `prefer_airgap` first accepts a complete exact air-gap closure
+and contacts HTTPS only when that closure is unavailable.
+
+One online closure may be covered by multiple individually signed project
+metadata documents. The host deterministically binds the exact selected
+artifact digests and their unique signed manifests into one
+`https_metadata_set` evidence identity. Template provenance records
+`signed-https:<source IDs>`, the aggregate manifest digest, and the exact
+Ed25519 key set; the catalog authenticator is a deterministic digest of the
+constituent signatures. Readiness accepts that key set only while every key
+remains configured. Online and air-gap sources containing identical wheels
+produce the same exact distribution/artifact lock when their logical source ID
+is the same.
 
 The host records every applied configuration revision in one process-locked,
 atomically replaced state file and marks exactly one revision current. Applying
@@ -677,7 +697,8 @@ explicit daemon configuration remains required.
 Normal daemon construction supplies `toolbox_host_project_configuration`,
 daemon-local `toolbox_artifact_sources` bindings keyed by logical source ID,
 `toolbox_trust_public_keys` keyed by every configured trust-key ID, and
-`toolbox_dependency_policy` to `EngineHostService`. Public-key values are raw
+`toolbox_source_credentials` keyed by every configured credential reference,
+and `toolbox_dependency_policy` to `EngineHostService`. Public-key values are raw
 32-byte Ed25519 keys encoded as unpadded base64url. The binding set must exactly
 equal the configured key-ID set; missing, extra, or malformed bindings make
 toolbox configuration unavailable. The daemon and service both use the same

@@ -60,6 +60,7 @@ class EngineHostDaemon:
         toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
         toolbox_artifact_sources: Optional[Mapping[str, Path]] = None,
         toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
+        toolbox_source_credentials: Optional[Mapping[str, str]] = None,
         toolbox_dependency_policy: Optional[Mapping[str, Any]] = None,
     ):
         self.port = int(port or DEFAULT_DAEMON_PORT)
@@ -107,11 +108,23 @@ class EngineHostDaemon:
                     not path.is_dir() for path in bindings.values()
                 ):
                     raise ValueError("toolbox_source_binding_invalid")
+                credential_refs = {
+                    item.credential_ref
+                    for item in parsed_configuration.sources
+                    if item.credential_ref is not None
+                }
+                credential_bindings = {
+                    str(key): str(value)
+                    for key, value in dict(toolbox_source_credentials or {}).items()
+                }
+                if set(credential_bindings) != credential_refs:
+                    raise ValueError("toolbox_source_binding_invalid")
                 toolbox_service_kwargs = {
                     "toolbox_host_project_configuration": parsed_configuration.to_dict(),
                     "toolbox_artifact_sources": bindings or None,
                     "toolbox_dependency_policy": parsed_policy.to_dict(),
                     "toolbox_trust_public_keys": parsed_trust_keys,
+                    "toolbox_source_credentials": credential_bindings,
                 }
             except Exception as exc:
                 reason = str(exc or "")

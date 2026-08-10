@@ -27,6 +27,10 @@ from ..operation_contract import (
 )
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 from .toolbox_artifact_store import ToolboxArtifactBundleError
+from .toolbox_https_acquisition import (
+    ToolboxHttpsAcquisitionError,
+    ToolboxHttpsArtifactAcquirer,
+)
 from .toolbox_materialization import (
     AtomicJsonToolboxMaterializationReceipts,
     HermeticToolboxTemplateMaterializer,
@@ -686,10 +690,19 @@ class ToolboxTemplateCatalogMixin:
                 template_digest = entry["template_digest"]
                 manifest_digest = entry["template"]["provenance"]["manifest_digest"]
                 lock_digest = entry["template"]["lock_digest"]
-            elif (
-                isinstance(configured, ToolboxHostProjectConfiguration)
-                and entry["template"]["provenance"]["signing_key_id"]
-                not in configured_trust_keys
+            elif isinstance(configured, ToolboxHostProjectConfiguration) and not (
+                entry["template"]["provenance"]["signing_key_id"]
+                in configured_trust_keys
+                or (
+                    entry["template"]["provenance"]["signing_key_id"].startswith(
+                        "ed25519-set:"
+                    )
+                    and set(
+                        entry["template"]["provenance"]["signing_key_id"]
+                        .removeprefix("ed25519-set:")
+                        .split("+")
+                    ).issubset(configured_trust_keys)
+                )
             ):
                 code = "required_template_signature_invalid"
                 ready = False
@@ -907,14 +920,6 @@ class ToolboxTemplateCatalogMixin:
                     self._toolbox_verified_artifacts[source.source_id] = (
                         self._toolbox_artifact_store.source_artifacts(source.source_id)
                     )
-                exact_artifact_paths = {
-                    (source_id, filename): path
-                    for source_id, artifacts in self._toolbox_verified_artifacts.items()
-                    for filename, path in artifacts.items()
-                }
-                builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
-                if exact_artifact_paths and builder is not None:
-                    builder.configure_verified_artifact_paths(exact_artifact_paths)
             except ToolboxArtifactBundleError as exc:
                 self._toolbox_artifact_ingestion_diagnostic = {
                     "code": exc.code,
@@ -925,6 +930,48 @@ class ToolboxTemplateCatalogMixin:
                     "code": "artifact_store_invalid",
                     "summary": "The verified toolbox artifact store is invalid.",
                 }
+        if (
+            self._toolbox_artifact_ingestion_diagnostic is None
+            and configuration.resolution.mode == "prefer_airgap"
+            and self._toolbox_verified_artifacts
+        ):
+            airgap_result = self.initialize_configured_toolbox_templates(
+                configuration=configuration,
+                request_id_prefix=f"host-startup-{configuration.config_revision}",
+            )
+            if airgap_result.get("status") == "resolved":
+                self._toolbox_startup = airgap_result
+                self._configure_verified_toolbox_artifact_paths()
+                progress(
+                    "resolution", "builtin_resolution_checked", 1, 1,
+                    "The configured built-in closure resolution was checked.", False,
+                )
+                return airgap_result
+        if (
+            self._toolbox_artifact_ingestion_diagnostic is None
+            and configuration.resolution.mode in {"online", "prefer_airgap"}
+        ):
+            try:
+                acquisition = ToolboxHttpsArtifactAcquirer(
+                    configuration,
+                    artifact_store=self._toolbox_artifact_store,
+                    trust_public_keys=self._toolbox_trust_public_keys,
+                    source_credentials=getattr(self, "_toolbox_source_credentials", {}),
+                ).discover_and_acquire(
+                    tuple(
+                        requirement
+                        for intent in configuration.builtins
+                        for requirement in intent.package_requirements
+                    ),
+                    progress=progress,
+                )
+                self._toolbox_verified_artifacts.update(acquisition["verified_artifacts"])
+            except ToolboxHttpsAcquisitionError as exc:
+                self._toolbox_artifact_ingestion_diagnostic = {
+                    "code": exc.code,
+                    "summary": exc.summary,
+                }
+        self._configure_verified_toolbox_artifact_paths()
         startup = self.initialize_configured_toolbox_templates(
             configuration=configuration,
             request_id_prefix=f"host-startup-{configuration.config_revision}",
@@ -935,6 +982,16 @@ class ToolboxTemplateCatalogMixin:
             "The configured built-in closure resolution was checked.", False,
         )
         return startup
+
+    def _configure_verified_toolbox_artifact_paths(self) -> None:
+        exact_artifact_paths = {
+            (source_id, filename): path
+            for source_id, artifacts in self._toolbox_verified_artifacts.items()
+            for filename, path in artifacts.items()
+        }
+        builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+        if exact_artifact_paths and builder is not None:
+            builder.configure_verified_artifact_paths(exact_artifact_paths)
 
     def prepare_configured_toolbox_templates(
         self,
@@ -968,8 +1025,9 @@ class ToolboxTemplateCatalogMixin:
                     "The exact signed built-in artifact closure is being verified.",
                     False,
                 )
-                evidence = self._toolbox_artifact_store.bundle_evidence_for_artifacts(
-                    {item.sha256 for item in closure.locked_artifacts}
+                evidence = self._toolbox_artifact_store.verified_evidence_for_artifacts(
+                    {item.sha256 for item in closure.locked_artifacts},
+                    source_ids={item.source_id for item in closure.locked_artifacts},
                 )
                 candidate = resolved_builtin_template_candidate(
                     intent=intents[closure.template_id],

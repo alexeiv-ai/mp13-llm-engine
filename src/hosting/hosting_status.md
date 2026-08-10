@@ -129,11 +129,23 @@ signature, redirect, size, digest, tag, namespace, or metadata failure leaves
 the index unchanged. The HTTPS/store suite passed 31 tests; compile and
 `git diff --check` passed. The expanded HTTPS/store/config/docs suite passed 47
 tests in 97.91s.
+R2-05a2/R2-03b2 adds bounded transitive candidate discovery from signed wheel
+metadata, exact daemon credential wiring, offline-only pip resolution over
+verified CAS paths, deterministic aggregate HTTPS evidence, and normal
+nonblocking daemon build/probe/publication. Missing transitive content remains
+not-ready with zero catalog publication. Online and air-gap fixtures with the
+same logical source and wheel bytes produce identical lock/artifact digests.
+The expanded online/air-gap/resolver/hermetic/config/docs suite passed 72 tests
+in 224.43s; the final PEP 503/691 acquisition matrix passed 10 tests in
+17.85s. Compile and `git diff --check` passed.
+The final shared HTTPS/signed-bundle store regression passed 35 tests in
+112.37s after bounding each signed project alternative set and source-scoping
+HTTPS manifest identities.
 
 ## Active implementation slice
 
-Active slice: none. R2-05a1 (`high`) is complete. Resolver/setup integration
-remains R2-05a2/R2-03b2; administrator upload remains R2-05c.
+Active slice: none. R2-05a2/R2-03b2 (`high`) are complete. Administrator upload
+remains R2-05c.
 
 Next-slice validation must be declared before implementation. R2-05a2/R2-03b2
 must prove:

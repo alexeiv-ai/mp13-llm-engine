@@ -84,6 +84,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         toolbox_required_platform: Optional[str] = None,
         toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
         toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
+        toolbox_source_credentials: Optional[Mapping[str, str]] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
         toolbox_dependency_policy: Optional[Dict[str, Any] | ToolboxDependencyPolicy] = None,
     ):
@@ -116,6 +117,21 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             and toolbox_trust_public_keys is not None
             else None
         )
+        self._toolbox_source_credentials = {
+            str(key): str(value)
+            for key, value in dict(toolbox_source_credentials or {}).items()
+        }
+        expected_credential_refs = (
+            {
+                source.credential_ref
+                for source in self._toolbox_host_project_config.sources
+                if source.credential_ref is not None
+            }
+            if self._toolbox_host_project_config is not None
+            else set()
+        )
+        if set(self._toolbox_source_credentials) != expected_credential_refs:
+            raise ValueError("toolbox_source_credentials_invalid")
         current_target = detect_current_toolbox_target()
         configured_abi = ""
         configured_platform = ""
@@ -151,7 +167,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
                     else 300
                 ),
             )
-            if toolbox_artifact_sources is not None
+            if self._toolbox_host_project_config is not None
+            or toolbox_artifact_sources is not None
             else None
         )
         if toolbox_template_materializer is not None:
