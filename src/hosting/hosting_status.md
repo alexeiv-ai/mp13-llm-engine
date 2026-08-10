@@ -160,14 +160,22 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R3-04a (`average`) is complete. Strict offered artifact,
-package mutation, alternative, environment, dependency-edge, and pin models
-support a pure deterministic reducer. It accepts only complete offered choices,
-implements decline/skip, preserved active updates, explicit removal and shared
-environment propagation, reconstructs the exact effective definition, and
-revalidates namespace conflicts before any worker. Focused validation is
-37 planner/model/repository/contract tests in 3.10s; `git diff --check` passed.
-R3-01a persistence is next.
+Active slice: none. R3-01a (`average`) is complete. The strict v2 complete-plan
+record binds active/proposed definitions, target/config/catalog/source/policy
+pins, exact artifact alternatives, package mutations and dependency edges.
+Process-safe create/get/list/invalidate preserves first-create expiry and every
+pin/artifact participates in identity. Focused planner/repository/model/service/
+contract validation passed 43 tests in 5.69s; `git diff --check` passed.
+Configured-source population and v1 call-site removal remain R3-01b/R3-05.
+
+Completed slice evidence: R3-04a added strict offered artifact, package
+mutation, alternative, environment, dependency-edge, and pin models plus the
+pure deterministic confirmation reducer. It accepts only complete offered
+choices, implements decline/skip, preserved active updates, explicit removal
+and shared-environment propagation, reconstructs the exact effective
+definition, and revalidates namespace conflicts before any worker. Focused
+validation passed 37 planner/model/repository/contract tests in 3.10s;
+`git diff --check` passed.
 
 ## Status update rules
 

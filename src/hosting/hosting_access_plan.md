@@ -639,7 +639,7 @@ boundary—not a double—passes.
 - [ ] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
   `toolbox_plans.py` with exact complete resolutions, package diffs, bounded
   alternatives, source/config pins, and affected-tool dependency edges.
-  - [ ] **R3-01a** Add strict immutable environment-offer, exact-artifact,
+  - [x] **R3-01a** Add strict immutable environment-offer, exact-artifact,
     package-mutation, alternative, dependency-edge, and complete pin models;
     persist and roundtrip them without arbitrary mappings.
   - [ ] **R3-01b** Populate those models from the configured-source exact

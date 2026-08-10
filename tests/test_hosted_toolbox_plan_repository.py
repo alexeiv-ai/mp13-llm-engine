@@ -8,7 +8,21 @@ from pathlib import Path
 
 import pytest
 
-from hosting.service.toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
+from hosting.service.toolbox_plans import (
+    AtomicJsonCompleteToolboxDefinitionPlanRepository,
+    AtomicJsonToolboxDefinitionPlanRepository,
+)
+from hosting.toolbox.bundle_models import (
+    ToolboxDefinitionSpec,
+    ToolboxDependencyEdgeSpec,
+    ToolboxEnvironmentMutationSpec,
+    ToolboxExactArtifactSpec,
+    ToolboxPackageMutationSpec,
+    ToolboxPlanPins,
+    ToolboxResolutionAlternativeSpec,
+    ToolboxToolMutationSpec,
+)
+from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.definition_planner import (
     classify_toolbox_profiles,
     plan_toolbox_definition,
@@ -19,6 +33,8 @@ from hosting_toolbox_test_catalog import realized_test_catalog
 
 CATALOG_REVISION = "sha256:" + "c" * 64
 POLICY_REVISION = "sha256:" + "d" * 64
+HOST_CONFIG_REVISION = "sha256:" + "1" * 64
+SOURCE_SET_REVISION = "sha256:" + "2" * 64
 
 
 def _auto(name: str, *, body: str | None = None, sandbox: dict | None = None) -> dict:
@@ -74,6 +90,60 @@ def _draft(definition: dict):
     )
 
 
+def _complete_inputs(definition: dict):
+    draft = _draft(definition)
+    active = ToolboxDefinitionSpec.from_dict(_definition(definition["toolbox_id"], []))
+    artifact = ToolboxExactArtifactSpec(
+        import_roots=("demo_pkg",),
+        distribution="demo-pkg",
+        dependency_reason="direct",
+        version="1.0.0",
+        wheel_filename="demo_pkg-1.0.0-py3-none-any.whl",
+        artifact_digest="sha256:" + "3" * 64,
+        compatibility_tags=("py3-none-any",),
+        provenance="signed-test",
+        source_id="release",
+    )
+    mutation = ToolboxPackageMutationSpec(
+        distribution="demo-pkg",
+        mutation="addition",
+        dependency_reason="direct",
+        from_version=None,
+        to_version="1.0.0",
+    )
+    alternative_payload = {"artifact": artifact.to_dict(), "mutation": mutation.to_dict()}
+    alternative = ToolboxResolutionAlternativeSpec(
+        alternative_id=identity_digest("test.toolbox.complete.alternative.v1", alternative_payload),
+        source_id="release",
+        source_origin="https://packages.example.invalid/simple",
+        lock_digest=identity_digest("test.toolbox.complete.lock.v1", alternative_payload),
+        artifacts=(artifact,),
+        package_mutations=(mutation,),
+    )
+    tool_key = draft.definition.auto_requests[0].stable_key
+    environment = ToolboxEnvironmentMutationSpec(
+        environment_id=identity_digest("test.toolbox.complete.environment.v1", tool_key),
+        tool_mutations=(ToolboxToolMutationSpec(tool_key, "added"),),
+        base_template_id=draft.profiles[0].template_id,
+        base_template_revision="sha256:" + "4" * 64,
+        alternatives=(alternative,),
+        preferred_alternative_id=alternative.alternative_id,
+        alternatives_truncated=False,
+        confirmation_required=True,
+        dependency_approval_required=True,
+        dependency_edges=(ToolboxDependencyEdgeSpec(tool_key, (), ("demo-pkg",)),),
+    )
+    pins = ToolboxPlanPins(
+        active_definition_revision=None,
+        target="cp312-win_amd64" if os.name == "nt" else "cp312-manylinux_2_28_x86_64",
+        catalog_revision=CATALOG_REVISION,
+        host_config_revision=HOST_CONFIG_REVISION,
+        dependency_policy_revision=POLICY_REVISION,
+        source_set_revision=SOURCE_SET_REVISION,
+    )
+    return draft, active, pins, (environment,)
+
+
 def _create_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
     try:
         record = AtomicJsonToolboxDefinitionPlanRepository(Path(path)).create(
@@ -83,6 +153,25 @@ def _create_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
             package_policy_revision=POLICY_REVISION,
             now_ms=now_ms,
             ttl_ms=60_000,
+        )
+        queue.put({"ok": True, "plan_id": record.plan_id})
+    except Exception as exc:  # pragma: no cover - asserted through child output
+        queue.put({"ok": False, "error": type(exc).__name__, "detail": str(exc)})
+
+
+def _create_complete_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
+    try:
+        draft, active, pins, environments = _complete_inputs(definition)
+        record = AtomicJsonCompleteToolboxDefinitionPlanRepository(Path(path)).create(
+            draft,
+            active_definition=active,
+            pins=pins,
+            environment_mutations=environments,
+            active_profiles=(),
+            now_ms=now_ms,
+            ttl_ms=60_000,
+            owner_actor_id="actor:one",
+            authority_id="workspace:one",
         )
         queue.put({"ok": True, "plan_id": record.plan_id})
     except Exception as exc:  # pragma: no cover - asserted through child output
@@ -281,3 +370,129 @@ def test_planning_and_persistence_do_not_stage_or_start_workers(tmp_path: Path) 
     )
     assert not (tmp_path / "toolbox_bundles").exists()
     assert not (tmp_path / "managed_engines.json").exists()
+
+
+def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Path) -> None:
+    draft, active, pins, environments = _complete_inputs(
+        _definition("complete", [_auto("Alpha")])
+    )
+    path = tmp_path / "complete-plans.json"
+    repository = AtomicJsonCompleteToolboxDefinitionPlanRepository(path)
+    created = repository.create(
+        draft,
+        active_definition=active,
+        pins=pins,
+        environment_mutations=environments,
+        active_profiles=(),
+        now_ms=1_000,
+        ttl_ms=60_000,
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+    )
+    duplicate = repository.create(
+        draft,
+        active_definition=active,
+        pins=pins,
+        environment_mutations=environments,
+        active_profiles=(),
+        now_ms=1_100,
+        ttl_ms=60_000,
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+    )
+    recovered = AtomicJsonCompleteToolboxDefinitionPlanRepository(path).get(
+        created.plan_id, now_ms=2_000
+    )
+
+    assert duplicate == recovered == created
+    assert recovered.pins == pins
+    assert recovered.environment_mutations == environments
+    artifact = recovered.environment_mutations[0].alternatives[0].artifacts[0]
+    assert artifact.artifact_digest == "sha256:" + "3" * 64
+    assert recovered.profile_changes[0]["classification"] == "added"
+    assert recovered.expires_at_ms == 61_000
+    assert repository.list(now_ms=2_000) == (created,)
+    assert repository.invalidate_all() == 1
+    assert repository.invalidate_all() == 0
+
+
+def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: Path) -> None:
+    draft, active, pins, environments = _complete_inputs(
+        _definition("complete", [_auto("Alpha")])
+    )
+    repository = AtomicJsonCompleteToolboxDefinitionPlanRepository(tmp_path / "plans.json")
+
+    def create(current_pins, current_environments, now_ms):
+        return repository.create(
+            draft,
+            active_definition=active,
+            pins=current_pins,
+            environment_mutations=current_environments,
+            active_profiles=(),
+            now_ms=now_ms,
+            ttl_ms=60_000,
+            owner_actor_id="actor:one",
+            authority_id="workspace:one",
+        )
+
+    baseline = create(pins, environments, 1_000)
+    changed_pins = ToolboxPlanPins(
+        **{**pins.to_dict(), "source_set_revision": "sha256:" + "5" * 64}
+    )
+    pin_changed = create(changed_pins, environments, 1_001)
+    environment = environments[0]
+    alternative = environment.alternatives[0]
+    artifact = alternative.artifacts[0]
+    changed_artifact = ToolboxExactArtifactSpec.from_dict(
+        {**artifact.to_dict(), "artifact_digest": "sha256:" + "6" * 64}
+    )
+    changed_alternative = ToolboxResolutionAlternativeSpec(
+        **{
+            **alternative.__dict__,
+            "alternative_id": identity_digest(
+                "test.toolbox.changed.alternative.v1", changed_artifact.to_dict()
+            ),
+            "lock_digest": identity_digest(
+                "test.toolbox.changed.lock.v1", changed_artifact.to_dict()
+            ),
+            "artifacts": (changed_artifact,),
+        }
+    )
+    changed_environment = ToolboxEnvironmentMutationSpec(
+        **{
+            **environment.__dict__,
+            "alternatives": (changed_alternative,),
+            "preferred_alternative_id": changed_alternative.alternative_id,
+        }
+    )
+    artifact_changed = create(pins, (changed_environment,), 1_002)
+
+    assert len({baseline.plan_id, pin_changed.plan_id, artifact_changed.plan_id}) == 3
+
+
+def test_complete_plan_processes_do_not_lose_distinct_records(tmp_path: Path) -> None:
+    path = tmp_path / "complete-plans.json"
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_create_complete_in_process,
+            args=(
+                str(path),
+                _definition(f"complete-{index}", [_auto(f"Tool{index}")]),
+                1_000 + index,
+                queue,
+            ),
+        )
+        for index in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(60)
+        assert process.exitcode == 0
+    results = [queue.get(timeout=5) for _ in processes]
+
+    assert all(item["ok"] for item in results), results
+    assert len({item["plan_id"] for item in results}) == 2
+    assert len(AtomicJsonCompleteToolboxDefinitionPlanRepository(path).list(now_ms=2_000)) == 2

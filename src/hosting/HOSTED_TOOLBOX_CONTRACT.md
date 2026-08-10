@@ -1028,6 +1028,30 @@ from 5 to 60 minutes. At most 64 unexpired plans are retained per actor and
 toolbox; older plans are evicted first. Apply rejects an expired or evicted plan
 rather than recomputing it implicitly.
 
+## Complete immutable definition-plan record
+
+The durable mutation protocol persists
+`hosting.toolbox.definition_plan.v2`, never the former partial v1 plan. Its
+identity binds the exact active and proposed definitions, active-definition
+revision, detected target, catalog revision, host-configuration revision,
+dependency-policy revision, source-set revision, every environment offer,
+every offered exact artifact and logical package mutation, dependency edges,
+owner, authority, and resolved rollout draft. Expiry is fixed by the first
+successful create and an identical retry returns the same record without
+refreshing it.
+
+Each environment offer has unique affected tool keys and their exact
+added/updated/unchanged/removed classification, immutable base template and
+revision, one to three deterministic alternatives, the preferred alternative,
+an alternatives-truncated flag, confirmation/approval requirements, and a
+complete dependency edge for every affected tool. Exact artifacts carry import
+roots, mapped distribution, direct/transitive/template-runtime reason, version,
+wheel filename, digest, compatible wheel tags, bounded provenance, and logical
+source ID. Source origins are sanitized `https` or logical `airgap` URLs with
+no userinfo, query, or fragment. Duplicate tools, incomplete edges, changed
+wheel identity/tags, unbounded alternatives, missing pins, and persisted state
+corruption fail closed.
+
 ## Consumer confirmation reduction
 
 Confirmation is a pure reduction over the immutable active definition,
