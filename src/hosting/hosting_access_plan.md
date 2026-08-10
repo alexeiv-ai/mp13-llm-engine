@@ -106,6 +106,19 @@ parallel subsystem.
     is absent. Orphan scanning and cleanup must cover
     `hosting.toolbox_executor_ipc` and its IPC/spec/candidate resources before a
     POSIX target can be advertised for untrusted toolbox execution.
+12. **Blocking interactive/network boundary.** Existing management commands are
+    dispatched through synchronous `engine_host_channel.py::_invoke` calls.
+    `toolbox_plan_definition` and the pre-dispatch part of
+    `toolbox_apply_definition` analyze synchronously; `toolbox_describe` may wait
+    ten seconds on worker IPC; GC/repair/reconcile and hosted cancellation may
+    wait on process/filesystem work. The planned resolver would add HTTPS work
+    to the synchronous planning path. A request must never hold its connection
+    while waiting for a human package confirmation or dependency approval.
+    `daemon/local_ipc.py` already has `op-start`/`op-status`, but that store is
+    separate from `service/operation_repository.py`, has only 200 snapshots, and
+    does not reconcile an in-flight record after restart. Workflow/proxy stream
+    sessions are execution-specific and in-memory, so they are not a durable
+    substitute.
 
 ## Final mutation protocol
 
@@ -163,16 +176,16 @@ the plan and, for every offered environment, selects one offered alternative
 and accepts or declines its package additions. It cannot submit a new version,
 URL, source, lock, artifact, path, or install command.
 
-The final consumer sequence is `toolbox_get_definition`,
+The final semantic sequence is `toolbox_get_definition`,
 `toolbox_plan_definition`, `toolbox_confirm_definition_plan`, and
-`toolbox_apply_definition`. Planning returns a durable hosted-operation status;
-its terminal result contains the plan and alternatives. Confirmation also
-returns a durable hosted-operation status because it acquires and verifies the
-selected package artifacts; its terminal result supplies an opaque
-`confirmation_ref`. Apply accepts `plan_id`, `confirmation_ref`, `request_id`,
-and, only when required, `dependency_approval_ref`; it returns a durable
-hosted-operation status and no longer accepts or re-resolves a second copy of
-the definition. The privileged, bounded operation is
+`toolbox_apply_definition`. Consumers submit the three potentially long mutation
+commands through the generic `op-start` façade described below. Planning's
+terminal hosted result contains the plan and alternatives. Confirmation's
+terminal hosted result supplies an opaque `confirmation_ref` after acquiring
+and verifying selected package artifacts. Apply accepts `plan_id`,
+`confirmation_ref`, `request_id`, and, only when required,
+`dependency_approval_ref`; it no longer accepts or re-resolves a second copy of
+the definition. The privileged, bounded synchronous operation is
 `toolbox_approve_confirmed_definition_plan`. Remove
 `toolbox_approve_definition_plan` and its dispatch/channel/CLI surface when the
 replacement is available.
@@ -331,12 +344,46 @@ The final rule is:
 - cancellation records `cancel_requested` immediately and performs teardown in
   the operation worker. The cancel request does not wait for worker shutdown.
 
-Use the existing `service/operation_repository.py` and
-`service/hosted_operations.py` ledger. Do not wrap toolbox calls in the separate
-daemon `op-start`/`op-status` store. Consumers poll `hosted-operation-status`
-with the opaque ref and recover a lost initial response with
-`hosted-operation-resolve-request`. No new push stream, SSE protocol, or job UI
-is required.
+### Least-invasive consumer API
+
+Use the existing generic `op-start`, `op-status`, and `op-cancel` commands as the
+consumer façade instead of adding a separate `*-start`/`*-status` family for
+every long hosting command. A consumer submits the existing command name and
+payload once through `EngineHostChannel.start_host_operation`, then observes the
+returned operation ID with `get_host_operation_status`.
+
+Existing high-level channel methods such as `toolbox_plan_definition` and
+`toolbox_apply_definition` become thin wrappers around `start_host_operation`,
+so most consumers do not construct the generic envelope themselves. Their final
+return type is operation status and the required result-handling change is
+documented in the breaking handoff. Raw top-level dispatch of a command
+classified as long must fail with `operation_start_required`; there is no second
+synchronous execution path.
+
+The server implementation must stop treating that façade as a second source of
+truth. For the long commands identified below, `daemon/local_ipc.py::op-start`
+must prepare/dispatch through `service/operation_repository.py` and
+`service/hosted_operations.py`, and `op-status`/`op-cancel` must delegate to the
+canonical hosted record. The target payload must contain a request ID and the
+canonical fingerprint must make retrying `op-start` return the same operation.
+The current `operations.json` snapshot path may remain only for non-toolbox
+daemon operations that are independently part of the final product contract; it
+is removed if no such user remains and must never mirror a hosted operation.
+
+Human decisions are continuations, not running jobs. Planning terminates with a
+result that says confirmation/approval is required. The consumer collects the
+decision without an open daemon request, then starts the confirmation or apply
+operation. No background worker waits for a person and no approval callback
+lease is held across disconnect.
+
+The existing workflow Python/JS and proxy streaming APIs are not reused: their
+stream IDs and event buffers are tied to live execution pools and are not the
+durable operation ledger. For convenient progress, add
+`EngineHostChannel.watch_host_operation(operation_id, ...)`, a client-side
+iterator that polls `op-status` and yields changed snapshots. Optionally add
+`after_updated_at` plus a bounded `wait_timeout_ms` to `op-status` for long
+polling. This is a transport optimization only; correctness and recovery remain
+status-based. No SSE or new generic stream-session protocol is required.
 
 Each long operation updates the existing strict `HostedOperationProgress`
 snapshot with `phase`, stable `code`, `completed_units`, `total_units`,
@@ -351,16 +398,17 @@ polling is immediate, then 500 ms, backing off to 2 seconds while unchanged.
 | API group | Current client behavior | Required disposition |
 | --- | --- | --- |
 | `toolbox_get_definition`, template list/describe, references, consistency, review snapshot, hosted-operation status/result/resolve | Synchronous and client-blocking, but local/bounded | Keep synchronous and bounded. |
-| `toolbox_plan_definition` | Synchronous; currently local, but the planned resolver/download work would block | Convert to durable hosted operation before adding resolution. |
+| `toolbox_describe` live worker inventory | Synchronous worker IPC with a ten-second default timeout | Return persisted/cached inventory synchronously; submit an explicitly requested live refresh through `op-start`. |
+| `toolbox_plan_definition` | Synchronous; currently local, but the planned resolver/network metadata work would block | Submit through `op-start`; terminal canonical hosted result contains the immutable plan. |
 | `toolbox_approve_definition_plan` | Synchronous bounded check/mint on the wrong authority path | Replace with synchronous bounded `toolbox_approve_confirmed_definition_plan`. |
-| `toolbox_confirm_definition_plan` | Not implemented | Durable operation; acquire/verify selected wheels and return confirmation receipt. |
+| `toolbox_confirm_definition_plan` | Not implemented | Submit through `op-start`; acquire/verify selected wheels and return confirmation receipt. |
 | `toolbox_apply_definition` | Already returns durable hosted-operation status and runs rollout on a worker thread | Retain, remove synchronous re-resolution, and add package/build progress. |
 | `toolbox_template_prewarm` | Already returns durable hosted-operation status and materializes on a worker thread | Retain and add artifact-byte progress. |
 | Template publish/deprecate/revoke | Synchronous catalog mutations; raw publish is superseded | Keep final bounded lifecycle mutations synchronous; remove raw publish. |
-| `toolbox_gc`, `toolbox_repair`, `toolbox_reconcile` | Synchronous and client-blocking; may recover state, stop workers, traverse/delete files, or rebuild indexes | Convert mutating forms to durable operations; keep separate read-only diagnostics bounded. |
+| `toolbox_gc`, `toolbox_repair`, `toolbox_reconcile` | Synchronous and client-blocking; may recover state, stop workers, traverse/delete files, or rebuild indexes | Submit mutating forms through `op-start`; keep separate read-only diagnostics bounded. |
 | `toolbox_execute` | New submissions are scheduled durably, but an idempotent `attach` waits up to the request timeout | Return current status on attach; never wait in the submission API. |
 | `hosted_operation_cancel` | May synchronously wait for executor teardown/respawn | Persist cancel request and return immediately; teardown reports progress asynchronously. |
-| Host config apply/built-in setup, template construction, artifact-bundle commit, environment removal | Not implemented | All are durable operations. Config validation/get and upload begin/chunk/cancel remain bounded synchronous calls. |
+| Host config apply/built-in setup, template construction, artifact-bundle commit, environment removal | Not implemented | Submit long work through `op-start`. Config validation/get and upload begin/chunk/cancel remain bounded synchronous calls. |
 | Daemon startup built-in realization | Not implemented; making startup resolve inline would block control readiness | Start/recover a system-owned hosted setup operation, keep control API available, and report `toolbox_ready=false` until success. |
 
 Therefore, the hosting/toolbox API is not uniformly asynchronous today. The
@@ -399,25 +447,46 @@ compatible verified wheel for the daemon target, the resolution fails. Adding
 reproducible sdist compilation would require a separately reviewed compiler,
 toolchain, build-sandbox, provenance, and cache contract.
 
-## Priority and LLM-agent expertise allocation
+## Priority and required implementation expertise
 
 The expertise label is the minimum primary-agent level for the item, not a
 license to work ahead of prerequisites. A higher tier may take any lower-tier
-item. `GPT 5.6 sol Medium` work starts only after its governing contract is
-frozen and must not make new protocol or security decisions.
+item. `medium` work starts only after its governing contract is frozen and must
+not make new protocol, concurrency, destructive-operation, or security choices.
 
 | Priority | Required expertise | Plan items | Why |
 | --- | --- | --- | --- |
-| P0: contract/concurrency decisions | Luna Extra High | R0-02, R3-01, R3-04, R4-01, R4-02, R4-04, R6-01, R6-02, R6-03, R6-06 | Effective-definition semantics, authority separation, immutable receipt binding, atomic publication/healing, and non-blocking idempotency have the highest wrong-implementation blast radius. |
-| P0: platform/package implementation | GPT 5.6 sol High | R1-01..R1-03, R2-01..R2-06, R3-02, R3-03, R3-05, R3-06, R4-03, R4-05 | Requires repository-wide Python changes, resolver/artifact expertise, durable operations, daemon wiring, and native-platform diagnosis under an already decided contract. |
-| P1: destructive/admin safety | Luna Extra High | R5-02, R6-04 | Exact environment deletion and native process/sandbox containment require adversarial reference and OS-lifecycle reasoning. |
-| P1: lifecycle implementation | GPT 5.6 sol High | R5-01, R5-03, R5-04, R5-05, R6-05 | Dependency contraction, immutable template lifecycle, maintenance operations, and native failure testing are substantial but governed by the P0 design. |
-| P2: production acceptance | GPT 5.6 sol High | R7-02 | The no-double suite must diagnose cross-boundary failures rather than merely assemble fixtures. |
-| P0/P2: precise handoff and audit | GPT 5.6 sol Medium | R0-03, R7-01, R7-03, R7-04 | Once replacement contracts are frozen, drafting exact migration payloads, running prescribed suites, recording evidence, and removing enumerated obsolete docs/tests are bounded tasks. A High-or-higher reviewer verifies the handoff before release. |
+| P0: contract/concurrency decisions | average | R0-02, R3-01, R3-04, R4-01, R4-02, R4-04, R6-01, R6-02, R6-03, R6-06 | Effective-definition semantics, authority separation, immutable receipt binding, atomic publication/healing, and non-blocking idempotency have the highest wrong-implementation blast radius. |
+| P0: platform/package implementation | high | R1-01..R1-03, R2-01..R2-06, R3-02, R3-03, R3-05..R3-07, R4-03, R4-05 | Requires repository-wide Python changes, resolver/artifact expertise, durable operations, daemon wiring, and native-platform diagnosis under an already decided contract. |
+| P1: destructive/admin safety | average | R5-02, R6-04 | Exact environment deletion and native process/sandbox containment require adversarial reference and OS-lifecycle reasoning. |
+| P1: lifecycle implementation | high | R5-01, R5-03, R5-04, R5-05, R6-05 | Dependency contraction, immutable template lifecycle, maintenance operations, and native failure testing are substantial but governed by the P0 design. |
+| P2: production acceptance | high | R7-02 | The no-double suite must diagnose cross-boundary failures rather than merely assemble fixtures. |
+| P0/P2: precise handoff and audit | medium | R0-03, R7-01, R7-03, R7-04 | Once replacement contracts are frozen, drafting exact migration payloads, running prescribed suites, recording evidence, and removing enumerated obsolete docs/tests are bounded tasks. A high-or-higher reviewer verifies the handoff before release. |
 
 Execution order is P0 contract decisions, P0 platform/package implementation,
 P1 lifecycle/safety, then P2 acceptance. R0-03 is prepared immediately before
 each client-visible P0/P1 slice, not deferred to final closeout.
+
+### Code guidance for high work
+
+| Items | Start at these production seams | Required proof |
+| --- | --- | --- |
+| R1-01..R1-03 | Replace `_SUPPORTED_TARGETS` and every `os.name` x64 fallback in `toolbox/host_project_config.py`, `toolbox/dependency_policy.py`, `toolbox/catalog.py`, `toolbox/hermetic_environment.py`, `toolbox/orchestration.py`, and `service/toolbox_runtime.py` with one detector returning ABI plus ordered `packaging.tags.sys_tags()`. | Extend host-config, catalog, hermetic-builder, rollout, and hash-vector tests; native jobs must assert the detected machine and import a native wheel. |
+| R2-01..R2-06 | Change `ToolboxHostProjectConfiguration.from_dict`; pass the result from `daemon/local_ipc.py::EngineHostDaemon.__init__` to `service/host_service.py::EngineHostService`; replace `initialize_configured_toolbox_templates`, `shipped_templates.py`, and shipped resource locks with intent resolution; converge acquisition in `service/toolbox_materialization.py` and `toolbox/hermetic_environment.py`. | `tests/test_hosting_toolbox_host_config.py` and `tests/test_hosted_toolbox_shipped_templates.py` must use the normal daemon and real materializer; add online/air-gap source fixtures that verify the same artifact digest and a missing-wheel not-ready result. |
+| R3-02, R3-03, R3-07 | Add strict kinds/phases in `operation_contract.py`; make `daemon/local_ipc.py` `op-start`/`op-status`/`op-cancel` delegate to `AtomicJsonHostedOperationRepository`; update namespace resolution in `service/hosted_operations.py`; dispatch planning/confirmation in `service/toolbox_runtime.py`; expose start/status/watch helpers in `engine_host_channel.py` and CLI. Never write a parallel record to `operations.json`. | Extend definition transport/service/public-guarantee tests with lost-response retry, daemon restart, long-poll timeout, changed-snapshot iteration, no open request during human decision, and one canonical receipt per request ID. |
+| R3-05, R3-06 | Build alternatives from `toolbox/dependency_analysis.py` import evidence and `toolbox/catalog.py` mapping rules; persist the exact source/config/artifact pins in `service/toolbox_plans.py`; sanitize projections in `service/toolbox_runtime.py`. | Extend the definition matrix with multiple tools sharing direct/transitive dependencies, three-choice truncation, declined packages, source redaction, and stable ordering through the authenticated daemon channel. |
+| R4-03, R4-05 | Carry the confirmed resolved input through `toolbox/orchestration.py::spawn_resolved_assignments` into `service/toolbox_catalog.py::materialize_toolbox_environment_for_bundle` and `service/toolbox_materialization.py`; feed the exact wheel closure to `HermeticToolboxEnvironmentBuilder`. | Replace hand-built resolved inputs in hermetic-builder tests with plan/confirm output; prove every pre-publication failure leaves active state, routes, registrations, and references unchanged. |
+| R5-01, R5-03..R5-05 | Use `definition_planner.py::classify_toolbox_profiles`, `service/toolbox_rollout.py`, `service/toolbox_env.py`, and catalog lifecycle methods. Route GC/repair/reconcile through the generic operation façade and preserve reference checks in the builder index. | Extend maintenance, catalog-control, and atomic-routing tests with shared-lock contraction, inactive construction, lifecycle replacement, cancellation, restart recovery, and no synchronous recursive deletion. |
+| R6-05 | Exercise `service/toolbox_rollout.py::recover`, `_retire_toolbox_registration`, `service/engines.py`, and the OS launcher/worker ownership boundary. | Extend resolved-rollout, atomic-routing, and sandbox tests with native abrupt death, two healers, and checkpoints immediately before/after publication. |
+| R7-02 | Create a real-daemon suite beside the current definition transport tests; do not inject catalog/materializer doubles or manufacture `ResolvedToolboxEnvironmentInput`. | One suite must traverse config load, source acquisition, plan/confirm/approve/apply, execution, removal, restart healing, maintenance, and terminal result recovery. |
+
+### Code guidance for medium work
+
+| Items | Bounded instructions |
+| --- | --- |
+| R0-03, R7-01 | Diff command names and payloads in `daemon/local_ipc.py::_call_service`, `engine_host_channel.py`, `engine_host_cli.py`, `service/auth.py`, and `service/policy.py`. Put exact removed/replacement JSON, retry/status/watch logic, and obsolete client branches/tests in `HOSTING_CLIENT_BREAKING_CHANGES.md`; never edit the dependent repository. |
+| R7-03 | Run the focused files named in the high-work table, `tests/test_hosted_toolbox_contract_docs.py`, all native CI commands supplied by the high implementation slices, then the full parent suite. Record command, count, duration, and commit in `hosting_status.md`; do not reinterpret a failing contract. |
+| R7-04 | Use `rg` for every removed command, contract version, old target literal, shipped realized lock, raw publish payload, `wait_for_terminal` attach, and toolbox use of `operations.json`. Reconcile `HOSTED_TOOLBOX_CONTRACT.md`, `HOSTING_ACCESS.md`, `sandbox/TOOLBOX_WORKER.md`, CLI docs, plan/status, and the breaking handoff with the surviving symbols. |
 
 ## Itemized corrective work
 
@@ -477,9 +546,11 @@ boundary—not a double—passes.
 - [ ] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
   `toolbox_plans.py` with exact complete resolutions, package diffs, bounded
   alternatives, source/config pins, and affected-tool dependency edges.
-- [ ] **R3-02** Convert planning to a new hosted execution kind and make
+- [ ] **R3-02** Convert planning to a new hosted execution kind, route generic
+  `op-start`/`op-status`/`op-cancel` to its canonical hosted record, and make
   duplicate request IDs return current status instead of waiting. Terminal
-  result contains the immutable plan and bounded alternatives.
+  result contains the immutable plan and bounded alternatives; no
+  `operations.json` mirror is written.
 - [ ] **R3-03** Add the durable confirmation/acquisition operation and receipt
   repository in `toolbox_runtime.py`, `daemon/local_ipc.py`,
   `engine_host_channel.py`, and `engine_host_cli.py`.
@@ -491,6 +562,10 @@ boundary—not a double—passes.
   install commands supplied by consumers.
 - [ ] **R3-06** Prove multi-tool add/update/remove and idempotent plan/confirmation
   recovery through the real authenticated daemon channel.
+- [ ] **R3-07** Add `EngineHostChannel.watch_host_operation` over changed
+  `op-status` snapshots and optional bounded long polling. Prove human
+  confirmation/approval occurs between terminal operations without an open
+  request, callback lease, or in-memory workflow/proxy stream dependency.
 
 ### R4 - Privileged approval and immutable apply
 
@@ -544,8 +619,10 @@ boundary—not a double—passes.
   concurrent healers, and failures immediately before and after route
   publication on every advertised host.
 - [ ] **R6-06** Remove `wait_for_terminal` from duplicate toolbox execution
-  attach and make hosted cancellation acknowledge immediately while teardown is
-  reflected through durable progress.
+  attach, make hosted cancellation acknowledge immediately while teardown is
+  reflected through durable progress, and split `toolbox_describe` into a
+  bounded persisted/cached read plus an explicit live-refresh operation through
+  `op-start`.
 
 ### R7 - Breaking-change handoff and acceptance
 
@@ -586,8 +663,9 @@ boundary—not a double—passes.
 - [ ] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
   upload artifacts, supply filesystem/interpreter paths, or install packages.
 - [ ] Every potentially long plan/setup/confirm/apply/admin/maintenance call
-  returns durable status promptly, exposes bounded polling progress, recovers by
-  request ID, and never waits on duplicate attach or cancellation teardown.
+  submitted through `op-start` returns canonical durable status promptly,
+  exposes `op-status`/watch progress, recovers by request ID, and never waits on
+  human input, duplicate attach, or cancellation teardown.
 - [ ] Superseded compatibility code and documentation are removed, and every
   dependent action is recorded in the breaking-change handoff with independent
   adoption evidence.
