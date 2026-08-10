@@ -1028,6 +1028,31 @@ from 5 to 60 minutes. At most 64 unexpired plans are retained per actor and
 toolbox; older plans are evicted first. Apply rejects an expired or evicted plan
 rather than recomputing it implicitly.
 
+## Consumer confirmation reduction
+
+Confirmation is a pure reduction over the immutable active definition,
+proposed definition, complete environment offers, and exactly one choice per
+offered environment. A choice contains only the offered `environment_id`, an
+offered `alternative_id`, and `accept_package_changes`; versions, sources,
+URLs, locks, artifacts, paths, and install commands are not accepted.
+
+Declining an addition or transition skips every new affected tool with
+`package_changes_declined`. A skipped update preserves its exact active
+request. Explicit removals proceed. Dependency edges are then reduced to a
+fixed point: an otherwise accepted tool depending on a skipped affected tool
+is skipped with `shared_environment_incomplete`, preserving its active request
+when it was an update. The effective definition is reconstructed from accepted
+proposed requests plus preserved active requests and is revalidated for file
+and advertised-name conflicts before any confirmation receipt or apply worker
+can exist. A namespace conflict is terminal
+`toolbox_confirmation_namespace_conflict`; tool ordering never resolves it.
+
+The reduction result contains the exact effective definition and revision,
+selected alternative IDs, accepted tools, skipped tools and stable reasons,
+preserved active updates, explicit removals, effective logical package
+mutations, and whether dependency approval remains required. Apply consumes
+that pinned result and never reinterprets the original proposed definition.
+
 ## Dependency approval references
 
 `approve_definition_plan(plan_id)` is an authenticated parent decision, never a

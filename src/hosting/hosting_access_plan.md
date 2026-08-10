@@ -639,6 +639,12 @@ boundary—not a double—passes.
 - [ ] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
   `toolbox_plans.py` with exact complete resolutions, package diffs, bounded
   alternatives, source/config pins, and affected-tool dependency edges.
+  - [ ] **R3-01a** Add strict immutable environment-offer, exact-artifact,
+    package-mutation, alternative, dependency-edge, and complete pin models;
+    persist and roundtrip them without arbitrary mappings.
+  - [ ] **R3-01b** Populate those models from the configured-source exact
+    resolver and active definition, with deterministic ordering and at most
+    three sanitized alternatives per environment.
 - [ ] **R3-02** Convert planning to a new hosted execution kind, route generic
   `op-start`/`op-status`/`op-cancel` to its canonical hosted record, and make
   duplicate request IDs return current status instead of waiting. Terminal
@@ -650,6 +656,11 @@ boundary—not a double—passes.
 - [ ] **R3-04** Implement accepted, declined, skipped, preserved-active-update,
   explicit-removal, shared-environment, and namespace-conflict semantics exactly
   as specified above. Remove the old apply-original-definition behavior.
+  - [x] **R3-04a** Implement a pure, deterministic confirmation reducer that
+    accepts only offered choices and produces the pinned effective definition,
+    accepted/skipped/preserved/removed tools, and logical package mutations.
+  - [ ] **R3-04b** Wire the reducer through durable confirmation/apply and remove
+    the original-definition apply payload and re-resolution path.
 - [ ] **R3-05** Return sanitized source alternatives and exact direct/transitive
   additions, removals, and transitions. Reject arbitrary URLs, paths, locks, and
   install commands supplied by consumers.

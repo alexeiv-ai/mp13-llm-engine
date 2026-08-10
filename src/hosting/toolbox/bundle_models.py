@@ -7,11 +7,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from .common import _sha256_text, _stable_json
-from .catalog import normalize_import_root
+from .catalog import normalize_distribution_name, normalize_import_root
 from .identity import canonical_json_bytes, definition_revision, require_digest, resolved_profile_identity
 
 
@@ -435,6 +437,406 @@ class ToolboxSandboxAssignment:
     bundle_spec: "ToolboxBundleSpec"
     staged_bundle: Optional["StagedToolboxBundle"] = None
     registration: Optional[Dict[str, Any]] = None
+
+
+def _bounded_plan_text(value: Any, *, label: str, maximum: int = 512) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label}_string_required")
+    text = value.strip()
+    if not text or len(text.encode("utf-8")) > maximum or any(ord(item) < 32 for item in text):
+        raise ValueError(f"{label}_invalid")
+    return text
+
+
+def _sanitized_source_origin(value: Any) -> str:
+    text = _bounded_plan_text(value, label="toolbox_plan_source_origin", maximum=2048)
+    parsed = urlsplit(text)
+    if (
+        parsed.scheme not in {"https", "airgap"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("toolbox_plan_source_origin_invalid")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+@dataclass(frozen=True)
+class ToolboxExactArtifactSpec:
+    import_roots: tuple[str, ...]
+    distribution: str
+    dependency_reason: str
+    version: str
+    wheel_filename: str
+    artifact_digest: str
+    compatibility_tags: tuple[str, ...]
+    provenance: str
+    source_id: str
+
+    def __post_init__(self) -> None:
+        roots = tuple(sorted(normalize_import_root(item) for item in self.import_roots))
+        if len(set(roots)) != len(roots) or len(roots) > 512:
+            raise ValueError("toolbox_plan_artifact_import_roots_invalid")
+        distribution = normalize_distribution_name(self.distribution)
+        reason = _bounded_plan_text(
+            self.dependency_reason, label="toolbox_plan_dependency_reason", maximum=32
+        )
+        if reason not in {"direct", "transitive", "template_runtime"}:
+            raise ValueError("toolbox_plan_dependency_reason_invalid")
+        version = _bounded_plan_text(self.version, label="toolbox_plan_artifact_version", maximum=128)
+        filename = _bounded_plan_text(
+            self.wheel_filename, label="toolbox_plan_wheel_filename", maximum=512
+        )
+        try:
+            wheel_name, wheel_version, _build, wheel_tags = parse_wheel_filename(filename)
+        except InvalidWheelFilename as exc:
+            raise ValueError("toolbox_plan_wheel_filename_invalid") from exc
+        if normalize_distribution_name(str(wheel_name)) != distribution or str(wheel_version) != version:
+            raise ValueError("toolbox_plan_wheel_identity_mismatch")
+        digest = require_digest(self.artifact_digest, label="toolbox_plan_artifact_digest")
+        tags = tuple(sorted(_bounded_plan_text(item, label="toolbox_plan_artifact_tag", maximum=256) for item in self.compatibility_tags))
+        if not tags or len(set(tags)) != len(tags) or not set(tags) <= {str(item) for item in wheel_tags}:
+            raise ValueError("toolbox_plan_artifact_tags_invalid")
+        object.__setattr__(self, "import_roots", roots)
+        object.__setattr__(self, "distribution", distribution)
+        object.__setattr__(self, "dependency_reason", reason)
+        object.__setattr__(self, "version", version)
+        object.__setattr__(self, "wheel_filename", filename)
+        object.__setattr__(self, "artifact_digest", digest)
+        object.__setattr__(self, "compatibility_tags", tags)
+        object.__setattr__(
+            self, "provenance", _bounded_plan_text(self.provenance, label="toolbox_plan_artifact_provenance")
+        )
+        object.__setattr__(
+            self, "source_id", _bounded_plan_text(self.source_id, label="toolbox_plan_source_id", maximum=128)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "import_roots": list(self.import_roots),
+            "distribution": self.distribution,
+            "dependency_reason": self.dependency_reason,
+            "version": self.version,
+            "wheel_filename": self.wheel_filename,
+            "artifact_digest": self.artifact_digest,
+            "compatibility_tags": list(self.compatibility_tags),
+            "provenance": self.provenance,
+            "source_id": self.source_id,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxExactArtifactSpec":
+        row = dict(payload or {})
+        fields = {
+            "import_roots", "distribution", "dependency_reason", "version",
+            "wheel_filename", "artifact_digest", "compatibility_tags", "provenance",
+            "source_id",
+        }
+        _strict_model_fields(row, fields, label="toolbox_plan_exact_artifact")
+        return cls(
+            **{
+                **row,
+                "import_roots": tuple(row["import_roots"]),
+                "compatibility_tags": tuple(row["compatibility_tags"]),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ToolboxPackageMutationSpec:
+    distribution: str
+    mutation: str
+    dependency_reason: str
+    from_version: str | None
+    to_version: str | None
+
+    def __post_init__(self) -> None:
+        distribution = normalize_distribution_name(self.distribution)
+        mutation = _bounded_plan_text(self.mutation, label="toolbox_package_mutation", maximum=32)
+        reason = _bounded_plan_text(
+            self.dependency_reason, label="toolbox_package_mutation_reason", maximum=32
+        )
+        if mutation not in {"addition", "removal", "transition"}:
+            raise ValueError("toolbox_package_mutation_invalid")
+        if reason not in {"direct", "transitive", "template_runtime"}:
+            raise ValueError("toolbox_package_mutation_reason_invalid")
+        before = (
+            _bounded_plan_text(self.from_version, label="toolbox_package_from_version", maximum=128)
+            if self.from_version is not None else None
+        )
+        after = (
+            _bounded_plan_text(self.to_version, label="toolbox_package_to_version", maximum=128)
+            if self.to_version is not None else None
+        )
+        if (
+            (mutation == "addition" and (before is not None or after is None))
+            or (mutation == "removal" and (before is None or after is not None))
+            or (mutation == "transition" and (before is None or after is None or before == after))
+        ):
+            raise ValueError("toolbox_package_mutation_versions_invalid")
+        object.__setattr__(self, "distribution", distribution)
+        object.__setattr__(self, "mutation", mutation)
+        object.__setattr__(self, "dependency_reason", reason)
+        object.__setattr__(self, "from_version", before)
+        object.__setattr__(self, "to_version", after)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "distribution": self.distribution,
+            "mutation": self.mutation,
+            "dependency_reason": self.dependency_reason,
+            "from_version": self.from_version,
+            "to_version": self.to_version,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxPackageMutationSpec":
+        row = dict(payload or {})
+        _strict_model_fields(
+            row,
+            {"distribution", "mutation", "dependency_reason", "from_version", "to_version"},
+            label="toolbox_package_mutation",
+        )
+        return cls(**row)
+
+
+@dataclass(frozen=True)
+class ToolboxToolMutationSpec:
+    tool_key: str
+    change: str
+
+    def __post_init__(self) -> None:
+        key = _bounded_plan_text(self.tool_key, label="toolbox_plan_tool_key", maximum=512)
+        change = _bounded_plan_text(self.change, label="toolbox_plan_tool_change", maximum=32)
+        if change not in {"added", "updated", "unchanged", "removed"}:
+            raise ValueError("toolbox_plan_tool_change_invalid")
+        object.__setattr__(self, "tool_key", key)
+        object.__setattr__(self, "change", change)
+
+    def to_dict(self) -> dict[str, str]:
+        return {"tool_key": self.tool_key, "change": self.change}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxToolMutationSpec":
+        row = dict(payload or {})
+        _strict_model_fields(row, {"tool_key", "change"}, label="toolbox_plan_tool_mutation")
+        return cls(**row)
+
+
+@dataclass(frozen=True)
+class ToolboxDependencyEdgeSpec:
+    tool_key: str
+    required_tool_keys: tuple[str, ...]
+    required_distributions: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        key = _bounded_plan_text(self.tool_key, label="toolbox_dependency_edge_tool", maximum=512)
+        tools = tuple(sorted(_bounded_plan_text(item, label="toolbox_dependency_edge_required_tool", maximum=512) for item in self.required_tool_keys))
+        distributions = tuple(sorted(normalize_distribution_name(item) for item in self.required_distributions))
+        if len(set(tools)) != len(tools) or len(set(distributions)) != len(distributions):
+            raise ValueError("toolbox_dependency_edge_duplicate")
+        object.__setattr__(self, "tool_key", key)
+        object.__setattr__(self, "required_tool_keys", tools)
+        object.__setattr__(self, "required_distributions", distributions)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tool_key": self.tool_key,
+            "required_tool_keys": list(self.required_tool_keys),
+            "required_distributions": list(self.required_distributions),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxDependencyEdgeSpec":
+        row = dict(payload or {})
+        _strict_model_fields(
+            row,
+            {"tool_key", "required_tool_keys", "required_distributions"},
+            label="toolbox_dependency_edge",
+        )
+        return cls(
+            tool_key=row["tool_key"],
+            required_tool_keys=tuple(row["required_tool_keys"]),
+            required_distributions=tuple(row["required_distributions"]),
+        )
+
+
+@dataclass(frozen=True)
+class ToolboxResolutionAlternativeSpec:
+    alternative_id: str
+    source_id: str
+    source_origin: str
+    lock_digest: str
+    artifacts: tuple[ToolboxExactArtifactSpec, ...]
+    package_mutations: tuple[ToolboxPackageMutationSpec, ...]
+
+    def __post_init__(self) -> None:
+        alternative = require_digest(self.alternative_id, label="toolbox_plan_alternative_id")
+        source = _bounded_plan_text(self.source_id, label="toolbox_plan_source_id", maximum=128)
+        origin = _sanitized_source_origin(self.source_origin)
+        lock = require_digest(self.lock_digest, label="toolbox_plan_alternative_lock_digest")
+        artifacts = tuple(sorted(self.artifacts, key=lambda item: (item.distribution, item.version, item.artifact_digest)))
+        mutations = tuple(sorted(self.package_mutations, key=lambda item: (item.distribution, item.mutation)))
+        if len(artifacts) > 512 or len({item.distribution for item in artifacts}) != len(artifacts):
+            raise ValueError("toolbox_plan_alternative_artifacts_invalid")
+        if len(mutations) > 1024 or len({item.distribution for item in mutations}) != len(mutations):
+            raise ValueError("toolbox_plan_alternative_mutations_invalid")
+        object.__setattr__(self, "alternative_id", alternative)
+        object.__setattr__(self, "source_id", source)
+        object.__setattr__(self, "source_origin", origin)
+        object.__setattr__(self, "lock_digest", lock)
+        object.__setattr__(self, "artifacts", artifacts)
+        object.__setattr__(self, "package_mutations", mutations)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "alternative_id": self.alternative_id,
+            "source_id": self.source_id,
+            "source_origin": self.source_origin,
+            "lock_digest": self.lock_digest,
+            "artifacts": [item.to_dict() for item in self.artifacts],
+            "package_mutations": [item.to_dict() for item in self.package_mutations],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxResolutionAlternativeSpec":
+        row = dict(payload or {})
+        _strict_model_fields(
+            row,
+            {"alternative_id", "source_id", "source_origin", "lock_digest", "artifacts", "package_mutations"},
+            label="toolbox_resolution_alternative",
+        )
+        return cls(
+            **{
+                **row,
+                "artifacts": tuple(ToolboxExactArtifactSpec.from_dict(item) for item in row["artifacts"]),
+                "package_mutations": tuple(ToolboxPackageMutationSpec.from_dict(item) for item in row["package_mutations"]),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ToolboxEnvironmentMutationSpec:
+    environment_id: str
+    tool_mutations: tuple[ToolboxToolMutationSpec, ...]
+    base_template_id: str
+    base_template_revision: str
+    alternatives: tuple[ToolboxResolutionAlternativeSpec, ...]
+    preferred_alternative_id: str
+    alternatives_truncated: bool
+    confirmation_required: bool
+    dependency_approval_required: bool
+    dependency_edges: tuple[ToolboxDependencyEdgeSpec, ...]
+
+    def __post_init__(self) -> None:
+        environment = require_digest(self.environment_id, label="toolbox_plan_environment_id")
+        tools = tuple(sorted(self.tool_mutations, key=lambda item: item.tool_key))
+        if not tools or len({item.tool_key for item in tools}) != len(tools):
+            raise ValueError("toolbox_plan_environment_tools_invalid")
+        template = _bounded_plan_text(self.base_template_id, label="toolbox_plan_base_template_id", maximum=128)
+        revision = require_digest(self.base_template_revision, label="toolbox_plan_base_template_revision")
+        alternatives = tuple(self.alternatives)
+        if not 1 <= len(alternatives) <= 3 or len({item.alternative_id for item in alternatives}) != len(alternatives):
+            raise ValueError("toolbox_plan_alternatives_invalid")
+        preferred = require_digest(
+            self.preferred_alternative_id, label="toolbox_plan_preferred_alternative_id"
+        )
+        if preferred not in {item.alternative_id for item in alternatives}:
+            raise ValueError("toolbox_plan_preferred_alternative_invalid")
+        edges = tuple(sorted(self.dependency_edges, key=lambda item: item.tool_key))
+        if {item.tool_key for item in edges} != {item.tool_key for item in tools}:
+            raise ValueError("toolbox_plan_dependency_edges_incomplete")
+        for name in ("alternatives_truncated", "confirmation_required", "dependency_approval_required"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"toolbox_plan_{name}_boolean_required")
+        object.__setattr__(self, "environment_id", environment)
+        object.__setattr__(self, "tool_mutations", tools)
+        object.__setattr__(self, "base_template_id", template)
+        object.__setattr__(self, "base_template_revision", revision)
+        object.__setattr__(self, "alternatives", alternatives)
+        object.__setattr__(self, "preferred_alternative_id", preferred)
+        object.__setattr__(self, "dependency_edges", edges)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "environment_id": self.environment_id,
+            "tool_mutations": [item.to_dict() for item in self.tool_mutations],
+            "base_template_id": self.base_template_id,
+            "base_template_revision": self.base_template_revision,
+            "alternatives": [item.to_dict() for item in self.alternatives],
+            "preferred_alternative_id": self.preferred_alternative_id,
+            "alternatives_truncated": self.alternatives_truncated,
+            "confirmation_required": self.confirmation_required,
+            "dependency_approval_required": self.dependency_approval_required,
+            "dependency_edges": [item.to_dict() for item in self.dependency_edges],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxEnvironmentMutationSpec":
+        row = dict(payload or {})
+        fields = {
+            "environment_id", "tool_mutations", "base_template_id", "base_template_revision",
+            "alternatives", "preferred_alternative_id", "alternatives_truncated",
+            "confirmation_required", "dependency_approval_required", "dependency_edges",
+        }
+        _strict_model_fields(row, fields, label="toolbox_environment_mutation")
+        return cls(
+            **{
+                **row,
+                "tool_mutations": tuple(ToolboxToolMutationSpec.from_dict(item) for item in row["tool_mutations"]),
+                "alternatives": tuple(ToolboxResolutionAlternativeSpec.from_dict(item) for item in row["alternatives"]),
+                "dependency_edges": tuple(ToolboxDependencyEdgeSpec.from_dict(item) for item in row["dependency_edges"]),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ToolboxPlanPins:
+    active_definition_revision: str | None
+    target: str
+    catalog_revision: str
+    host_config_revision: str
+    dependency_policy_revision: str
+    source_set_revision: str
+
+    def __post_init__(self) -> None:
+        if self.active_definition_revision is not None:
+            object.__setattr__(
+                self,
+                "active_definition_revision",
+                require_digest(self.active_definition_revision, label="toolbox_plan_active_revision"),
+            )
+        object.__setattr__(self, "target", _bounded_plan_text(self.target, label="toolbox_plan_target", maximum=128))
+        for name in (
+            "catalog_revision", "host_config_revision", "dependency_policy_revision",
+            "source_set_revision",
+        ):
+            object.__setattr__(self, name, require_digest(getattr(self, name), label=f"toolbox_plan_{name}"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "active_definition_revision": self.active_definition_revision,
+            "target": self.target,
+            "catalog_revision": self.catalog_revision,
+            "host_config_revision": self.host_config_revision,
+            "dependency_policy_revision": self.dependency_policy_revision,
+            "source_set_revision": self.source_set_revision,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxPlanPins":
+        row = dict(payload or {})
+        _strict_model_fields(
+            row,
+            {
+                "active_definition_revision", "target", "catalog_revision",
+                "host_config_revision", "dependency_policy_revision", "source_set_revision",
+            },
+            label="toolbox_plan_pins",
+        )
+        return cls(**row)
 
 
 @dataclass(frozen=True)

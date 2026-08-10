@@ -160,9 +160,14 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R2 is complete. Work is paused before the R3/R4 P0
-multi-tool planning, confirmation, privileged-approval, and immutable-apply
-protocol changes pending explicit user confirmation.
+Active slice: none. R3-04a (`average`) is complete. Strict offered artifact,
+package mutation, alternative, environment, dependency-edge, and pin models
+support a pure deterministic reducer. It accepts only complete offered choices,
+implements decline/skip, preserved active updates, explicit removal and shared
+environment propagation, reconstructs the exact effective definition, and
+revalidates namespace conflicts before any worker. Focused validation is
+37 planner/model/repository/contract tests in 3.10s; `git diff --check` passed.
+R3-01a persistence is next.
 
 ## Status update rules
 

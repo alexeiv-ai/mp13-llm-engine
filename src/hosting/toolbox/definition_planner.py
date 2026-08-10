@@ -9,6 +9,7 @@ from mp13_engine.mp13_intrinsics_metadata import intrinsic_dependency_metadata, 
 from .bundle_models import (
     ResolvedToolboxProfileSpec,
     SandboxProfileSpec,
+    ToolboxEnvironmentMutationSpec,
     ToolboxAutoAssignmentRequestV2,
     ToolboxBundleAutoTool,
     ToolboxBundleFile,
@@ -202,6 +203,278 @@ class ToolboxDefinitionPlanDraft:
             "bundles": [item.manifest_payload() for item in self.bundles],
             "custom_environment_count": self.custom_environment_count,
         }
+
+
+@dataclass(frozen=True)
+class ToolboxEnvironmentConfirmationChoice:
+    environment_id: str
+    alternative_id: str
+    accept_package_changes: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "environment_id",
+            require_digest(self.environment_id, label="toolbox_confirmation_environment_id"),
+        )
+        object.__setattr__(
+            self,
+            "alternative_id",
+            require_digest(self.alternative_id, label="toolbox_confirmation_alternative_id"),
+        )
+        if not isinstance(self.accept_package_changes, bool):
+            raise ValueError("toolbox_confirmation_accept_boolean_required")
+
+    @classmethod
+    def from_dict(
+        cls, payload: Mapping[str, Any]
+    ) -> "ToolboxEnvironmentConfirmationChoice":
+        row = dict(payload or {})
+        if set(row) != {"environment_id", "alternative_id", "accept_package_changes"}:
+            raise ValueError("toolbox_confirmation_choice_fields_invalid")
+        return cls(**row)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "environment_id": self.environment_id,
+            "alternative_id": self.alternative_id,
+            "accept_package_changes": self.accept_package_changes,
+        }
+
+
+@dataclass(frozen=True)
+class ToolboxConfirmationReduction:
+    effective_definition: ToolboxDefinitionSpec
+    selected_alternatives: tuple[Mapping[str, str], ...]
+    accepted_tool_keys: tuple[str, ...]
+    skipped_tools: tuple[Mapping[str, Any], ...]
+    preserved_active_tool_keys: tuple[str, ...]
+    removed_tool_keys: tuple[str, ...]
+    package_mutations: tuple[Mapping[str, Any], ...]
+    dependency_approval_required: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "effective_definition": self.effective_definition.to_dict(),
+            "effective_definition_revision": self.effective_definition.revision,
+            "selected_alternatives": [dict(item) for item in self.selected_alternatives],
+            "accepted_tool_keys": list(self.accepted_tool_keys),
+            "skipped_tools": [dict(item) for item in self.skipped_tools],
+            "preserved_active_tool_keys": list(self.preserved_active_tool_keys),
+            "removed_tool_keys": list(self.removed_tool_keys),
+            "package_mutations": [dict(item) for item in self.package_mutations],
+            "dependency_approval_required": self.dependency_approval_required,
+        }
+
+
+def _definition_items(
+    definition: ToolboxDefinitionSpec,
+) -> tuple[dict[str, tuple[str, Any]], dict[str, str]]:
+    items: dict[str, tuple[str, Any]] = {}
+    for request in definition.auto_requests:
+        items[request.stable_key] = ("auto", request)
+    for request in definition.manual_requests:
+        items[request.stable_key] = ("manual", request)
+    for name in definition.intrinsics.names:
+        items[f"intrinsic:{name}"] = ("intrinsic", name)
+    advertised: dict[str, str] = {}
+    for key, (kind, value) in items.items():
+        if kind == "auto":
+            advertised[key] = value.advertised_name
+        elif kind == "manual":
+            advertised[key] = value.advertised_name
+        else:
+            advertised[key] = intrinsic_metadata(value).name
+    return items, advertised
+
+
+def reduce_toolbox_confirmation(
+    *,
+    active_definition: ToolboxDefinitionSpec | Mapping[str, Any],
+    proposed_definition: ToolboxDefinitionSpec | Mapping[str, Any],
+    environment_mutations: Sequence[ToolboxEnvironmentMutationSpec | Mapping[str, Any]],
+    choices: Sequence[ToolboxEnvironmentConfirmationChoice | Mapping[str, Any]],
+) -> ToolboxConfirmationReduction:
+    """Reduce only offered choices into one pinned effective definition."""
+
+    active = (
+        active_definition
+        if isinstance(active_definition, ToolboxDefinitionSpec)
+        else ToolboxDefinitionSpec.from_dict(active_definition)
+    )
+    proposed = (
+        proposed_definition
+        if isinstance(proposed_definition, ToolboxDefinitionSpec)
+        else ToolboxDefinitionSpec.from_dict(proposed_definition)
+    )
+    active_is_empty = (
+        not active.auto_requests and not active.manual_requests and not active.intrinsics.names
+    )
+    expected_active_revision = None if active_is_empty else active.revision
+    if (
+        active.toolbox_id != proposed.toolbox_id
+        or proposed.expected_revision != expected_active_revision
+    ):
+        raise ValueError("toolbox_confirmation_active_revision_mismatch")
+    offers = tuple(
+        item if isinstance(item, ToolboxEnvironmentMutationSpec)
+        else ToolboxEnvironmentMutationSpec.from_dict(item)
+        for item in environment_mutations
+    )
+    decisions = tuple(
+        item if isinstance(item, ToolboxEnvironmentConfirmationChoice)
+        else ToolboxEnvironmentConfirmationChoice.from_dict(item)
+        for item in choices
+    )
+    if (
+        not offers
+        or len({item.environment_id for item in offers}) != len(offers)
+        or len({item.environment_id for item in decisions}) != len(decisions)
+        or {item.environment_id for item in offers} != {item.environment_id for item in decisions}
+    ):
+        raise ValueError("toolbox_confirmation_choices_incomplete")
+    decision_by_environment = {item.environment_id: item for item in decisions}
+    active_items, _active_advertised = _definition_items(active)
+    proposed_items, _proposed_advertised = _definition_items(proposed)
+    expected_changes: dict[str, str] = {}
+    all_edges: dict[str, Any] = {}
+    tool_environment: dict[str, str] = {}
+    selected: list[dict[str, str]] = []
+    declined_distributions: dict[str, tuple[str, ...]] = {}
+    package_mutations: list[dict[str, Any]] = []
+    approval_required = False
+    for offer in offers:
+        decision = decision_by_environment[offer.environment_id]
+        alternative = next(
+            (item for item in offer.alternatives if item.alternative_id == decision.alternative_id),
+            None,
+        )
+        if alternative is None:
+            raise ValueError("toolbox_confirmation_alternative_not_offered")
+        selected.append(
+            {
+                "environment_id": offer.environment_id,
+                "alternative_id": alternative.alternative_id,
+            }
+        )
+        package_change_distributions = tuple(
+            sorted(
+                item.distribution
+                for item in alternative.package_mutations
+                if item.mutation in {"addition", "transition"}
+            )
+        )
+        declined = not decision.accept_package_changes and bool(package_change_distributions)
+        for mutation in alternative.package_mutations:
+            if not declined or mutation.mutation == "removal":
+                package_mutations.append(mutation.to_dict())
+        if decision.accept_package_changes:
+            approval_required = approval_required or offer.dependency_approval_required
+        for mutation in offer.tool_mutations:
+            if mutation.tool_key in expected_changes:
+                raise ValueError("toolbox_confirmation_tool_offered_twice")
+            expected_changes[mutation.tool_key] = mutation.change
+            tool_environment[mutation.tool_key] = offer.environment_id
+            if declined:
+                declined_distributions[mutation.tool_key] = package_change_distributions
+        for edge in offer.dependency_edges:
+            all_edges[edge.tool_key] = edge
+
+    actual_keys = set(active_items) | set(proposed_items)
+    if set(expected_changes) != actual_keys or set(all_edges) != actual_keys:
+        raise ValueError("toolbox_confirmation_offer_tools_incomplete")
+    for key in sorted(actual_keys):
+        before = active_items.get(key)
+        after = proposed_items.get(key)
+        actual = (
+            "added" if before is None else
+            "removed" if after is None else
+            "unchanged" if before[0] == after[0] and (
+                before[1] == after[1]
+                if before[0] == "intrinsic"
+                else before[1].to_dict() == after[1].to_dict()
+            ) else "updated"
+        )
+        if expected_changes[key] != actual:
+            raise ValueError("toolbox_confirmation_tool_change_mismatch")
+
+    skipped: dict[str, dict[str, Any]] = {}
+    preserved: set[str] = set()
+    removed = {key for key, change in expected_changes.items() if change == "removed"}
+    for key, distributions in declined_distributions.items():
+        change = expected_changes[key]
+        if change in {"added", "updated"}:
+            skipped[key] = {
+                "tool_key": key,
+                "reason": "package_changes_declined",
+                "affected_distributions": list(distributions),
+                "environment_id": tool_environment[key],
+            }
+            if change == "updated":
+                preserved.add(key)
+
+    changed = True
+    while changed:
+        changed = False
+        for key in sorted(actual_keys - removed - set(skipped)):
+            missing = sorted(set(all_edges[key].required_tool_keys) & set(skipped))
+            if not missing:
+                continue
+            skipped[key] = {
+                "tool_key": key,
+                "reason": "shared_environment_incomplete",
+                "affected_distributions": [],
+                "environment_id": tool_environment[key],
+                "missing_tool_keys": missing,
+            }
+            if expected_changes[key] == "updated":
+                preserved.add(key)
+            changed = True
+
+    effective_keys = (set(proposed_items) - set(skipped)) | preserved
+    autos = []
+    manuals = []
+    intrinsic_names = []
+    for key in sorted(effective_keys):
+        source = active_items[key] if key in preserved else proposed_items[key]
+        if source[0] == "auto":
+            autos.append(source[1])
+        elif source[0] == "manual":
+            manuals.append(source[1])
+        else:
+            intrinsic_names.append(source[1])
+    effective = ToolboxDefinitionSpec(
+        toolbox_id=proposed.toolbox_id,
+        expected_revision=proposed.expected_revision,
+        auto_requests=tuple(autos),
+        manual_requests=tuple(manuals),
+        intrinsics=type(proposed.intrinsics)(
+            names=tuple(intrinsic_names),
+            include_guides=proposed.intrinsics.include_guides,
+            sandbox_policy=proposed.intrinsics.sandbox_policy,
+        ),
+    )
+    try:
+        _validate_definition_namespace(effective)
+    except ValueError as exc:
+        raise ValueError("toolbox_confirmation_namespace_conflict") from exc
+    accepted = tuple(sorted(set(proposed_items) - set(skipped)))
+    unique_mutations = {
+        (item["distribution"], item["mutation"], item["from_version"], item["to_version"]): item
+        for item in package_mutations
+    }
+    return ToolboxConfirmationReduction(
+        effective_definition=effective,
+        selected_alternatives=tuple(sorted(selected, key=lambda item: item["environment_id"])),
+        accepted_tool_keys=accepted,
+        skipped_tools=tuple(skipped[key] for key in sorted(skipped)),
+        preserved_active_tool_keys=tuple(sorted(preserved)),
+        removed_tool_keys=tuple(sorted(removed)),
+        package_mutations=tuple(
+            unique_mutations[key] for key in sorted(unique_mutations)
+        ),
+        dependency_approval_required=approval_required,
+    )
 
 
 @dataclass(frozen=True)

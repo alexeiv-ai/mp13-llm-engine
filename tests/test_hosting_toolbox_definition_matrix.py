@@ -7,10 +7,22 @@ import sys
 import pytest
 
 from hosting.toolbox.definition_planner import (
+    ToolboxEnvironmentConfirmationChoice,
     classify_toolbox_profiles,
     plan_toolbox_definition,
     profile_snapshots_from_draft,
+    reduce_toolbox_confirmation,
 )
+from hosting.toolbox.bundle_models import (
+    ToolboxDependencyEdgeSpec,
+    ToolboxDefinitionSpec,
+    ToolboxEnvironmentMutationSpec,
+    ToolboxExactArtifactSpec,
+    ToolboxPackageMutationSpec,
+    ToolboxResolutionAlternativeSpec,
+    ToolboxToolMutationSpec,
+)
+from hosting.toolbox.identity import identity_digest
 from hosting_toolbox_test_catalog import realized_test_catalog
 
 
@@ -131,6 +143,66 @@ def _bundle_by_key(draft) -> dict[str, dict]:
     return out
 
 
+def _alternative(
+    name: str,
+    *,
+    mutations: tuple[ToolboxPackageMutationSpec, ...],
+) -> ToolboxResolutionAlternativeSpec:
+    artifact = ToolboxExactArtifactSpec(
+        import_roots=("demo_pkg",),
+        distribution="demo-pkg",
+        dependency_reason="direct",
+        version="1.0.0",
+        wheel_filename="demo_pkg-1.0.0-py3-none-any.whl",
+        artifact_digest="sha256:" + "a" * 64,
+        compatibility_tags=("py3-none-any",),
+        provenance="signed-test",
+        source_id="release",
+    )
+    payload = {
+        "name": name,
+        "mutations": [item.to_dict() for item in mutations],
+    }
+    return ToolboxResolutionAlternativeSpec(
+        alternative_id=identity_digest("test.toolbox.alternative.v1", payload),
+        source_id="release",
+        source_origin="https://packages.example.invalid/simple",
+        lock_digest=identity_digest("test.toolbox.lock.v1", payload),
+        artifacts=(artifact,),
+        package_mutations=mutations,
+    )
+
+
+def _offer(
+    name: str,
+    *,
+    tools: tuple[ToolboxToolMutationSpec, ...],
+    mutations: tuple[ToolboxPackageMutationSpec, ...],
+    required_tools: dict[str, tuple[str, ...]] | None = None,
+) -> ToolboxEnvironmentMutationSpec:
+    alternative = _alternative(name, mutations=mutations)
+    required = required_tools or {}
+    return ToolboxEnvironmentMutationSpec(
+        environment_id=identity_digest("test.toolbox.environment.v1", {"name": name}),
+        tool_mutations=tools,
+        base_template_id="core",
+        base_template_revision="sha256:" + "b" * 64,
+        alternatives=(alternative,),
+        preferred_alternative_id=alternative.alternative_id,
+        alternatives_truncated=False,
+        confirmation_required=any(item.mutation != "removal" for item in mutations),
+        dependency_approval_required=True,
+        dependency_edges=tuple(
+            ToolboxDependencyEdgeSpec(
+                tool_key=item.tool_key,
+                required_tool_keys=required.get(item.tool_key, ()),
+                required_distributions=("demo-pkg",),
+            )
+            for item in tools
+        ),
+    )
+
+
 def test_mixed_definition_category_updates_preserve_unchanged_profiles() -> None:
     base_definition = _definition(autos=[_auto("Alpha")], manuals=[_manual("ManualEcho")])
     base = _plan(base_definition)
@@ -212,3 +284,171 @@ def test_conflicting_active_profile_identity_and_missing_import_fail_before_roll
     )
     with pytest.raises(Exception, match="dependency_unresolved"):
         _plan(missing)
+
+
+def test_confirmation_decline_skips_new_preserves_update_and_applies_removal() -> None:
+    active_payload = _definition(
+        autos=[
+            _auto("Update", source="def Update():\n    return 'old'\n"),
+            _auto("Remove"),
+        ],
+        manuals=[],
+        intrinsics=(),
+    )
+    active = ToolboxDefinitionSpec.from_dict(active_payload)
+    proposed_payload = _definition(
+        autos=[
+            _auto("Update", source="def Update():\n    return 'new'\n"),
+            _auto("Add"),
+        ],
+        manuals=[],
+        intrinsics=(),
+    )
+    proposed_payload["expected_revision"] = active.revision
+    proposed = ToolboxDefinitionSpec.from_dict(proposed_payload)
+    package_change = ToolboxPackageMutationSpec(
+        distribution="demo-pkg",
+        mutation="transition",
+        dependency_reason="direct",
+        from_version="0.9.0",
+        to_version="1.0.0",
+    )
+    removal = ToolboxPackageMutationSpec(
+        distribution="old-pkg",
+        mutation="removal",
+        dependency_reason="direct",
+        from_version="2.0.0",
+        to_version=None,
+    )
+    changed = _offer(
+        "changed",
+        tools=(
+            ToolboxToolMutationSpec("pkg.add:Add", "added"),
+            ToolboxToolMutationSpec("pkg.update:Update", "updated"),
+        ),
+        mutations=(package_change,),
+    )
+    removed = _offer(
+        "removed",
+        tools=(ToolboxToolMutationSpec("pkg.remove:Remove", "removed"),),
+        mutations=(removal,),
+    )
+
+    result = reduce_toolbox_confirmation(
+        active_definition=active,
+        proposed_definition=proposed,
+        environment_mutations=(changed, removed),
+        choices=(
+            ToolboxEnvironmentConfirmationChoice(
+                changed.environment_id, changed.preferred_alternative_id, False
+            ),
+            ToolboxEnvironmentConfirmationChoice(
+                removed.environment_id, removed.preferred_alternative_id, False
+            ),
+        ),
+    )
+
+    assert result.accepted_tool_keys == ()
+    assert result.preserved_active_tool_keys == ("pkg.update:Update",)
+    assert result.removed_tool_keys == ("pkg.remove:Remove",)
+    assert [item["reason"] for item in result.skipped_tools] == [
+        "package_changes_declined",
+        "package_changes_declined",
+    ]
+    assert [item.callable_name for item in result.effective_definition.auto_requests] == [
+        "Update"
+    ]
+    assert result.effective_definition.auto_requests[0].files[0].content.endswith("'old'\n")
+    assert [item["distribution"] for item in result.package_mutations] == ["old-pkg"]
+    assert result.dependency_approval_required is False
+
+
+def test_confirmation_propagates_shared_environment_skip_and_rejects_unoffered_choice() -> None:
+    active = ToolboxDefinitionSpec.from_dict(_definition(autos=[], manuals=[], intrinsics=()))
+    proposed_payload = _definition(
+        autos=[_auto("Producer"), _auto("Consumer")],
+        manuals=[],
+        intrinsics=(),
+    )
+    proposed = ToolboxDefinitionSpec.from_dict(proposed_payload)
+    addition = ToolboxPackageMutationSpec(
+        distribution="demo-pkg",
+        mutation="addition",
+        dependency_reason="direct",
+        from_version=None,
+        to_version="1.0.0",
+    )
+    producer = _offer(
+        "producer",
+        tools=(ToolboxToolMutationSpec("pkg.producer:Producer", "added"),),
+        mutations=(addition,),
+    )
+    consumer = _offer(
+        "consumer",
+        tools=(ToolboxToolMutationSpec("pkg.consumer:Consumer", "added"),),
+        mutations=(),
+        required_tools={"pkg.consumer:Consumer": ("pkg.producer:Producer",)},
+    )
+    choices = (
+        ToolboxEnvironmentConfirmationChoice(
+            producer.environment_id, producer.preferred_alternative_id, False
+        ),
+        ToolboxEnvironmentConfirmationChoice(
+            consumer.environment_id, consumer.preferred_alternative_id, True
+        ),
+    )
+
+    result = reduce_toolbox_confirmation(
+        active_definition=active,
+        proposed_definition=proposed,
+        environment_mutations=(producer, consumer),
+        choices=choices,
+    )
+
+    assert result.effective_definition.auto_requests == ()
+    assert {item["tool_key"]: item["reason"] for item in result.skipped_tools} == {
+        "pkg.consumer:Consumer": "shared_environment_incomplete",
+        "pkg.producer:Producer": "package_changes_declined",
+    }
+    bad = list(choices)
+    bad[0] = ToolboxEnvironmentConfirmationChoice(
+        producer.environment_id, "sha256:" + "f" * 64, True
+    )
+    with pytest.raises(ValueError, match="toolbox_confirmation_alternative_not_offered"):
+        reduce_toolbox_confirmation(
+            active_definition=active,
+            proposed_definition=proposed,
+            environment_mutations=(producer, consumer),
+            choices=bad,
+        )
+
+
+def test_plan_offer_models_reject_source_secrets_and_more_than_three_alternatives() -> None:
+    mutation = ToolboxPackageMutationSpec(
+        distribution="demo-pkg",
+        mutation="addition",
+        dependency_reason="direct",
+        from_version=None,
+        to_version="1.0.0",
+    )
+    alternative = _alternative("one", mutations=(mutation,))
+    assert ToolboxResolutionAlternativeSpec.from_dict(alternative.to_dict()) == alternative
+    leaked = alternative.to_dict()
+    leaked["source_origin"] = "https://user:secret@packages.example.invalid/simple?token=x"
+    with pytest.raises(ValueError, match="toolbox_plan_source_origin_invalid"):
+        ToolboxResolutionAlternativeSpec.from_dict(leaked)
+    with pytest.raises(ValueError, match="toolbox_plan_alternatives_invalid"):
+        ToolboxEnvironmentMutationSpec(
+            environment_id="sha256:" + "1" * 64,
+            tool_mutations=(ToolboxToolMutationSpec("pkg.add:Add", "added"),),
+            base_template_id="core",
+            base_template_revision="sha256:" + "2" * 64,
+            alternatives=(alternative, alternative, alternative, alternative),
+            preferred_alternative_id=alternative.alternative_id,
+            alternatives_truncated=True,
+            confirmation_required=True,
+            dependency_approval_required=True,
+            dependency_edges=(
+                ToolboxDependencyEdgeSpec("pkg.add:Add", (), ("demo-pkg",)),
+            ),
+        )
