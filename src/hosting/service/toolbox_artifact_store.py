@@ -543,6 +543,23 @@ class AtomicToolboxArtifactStore:
             result[item["filename"]] = path
         return result
 
+    def bundle_evidence_for_artifacts(self, digests: set[str]) -> dict[str, Any]:
+        required = {
+            require_digest(item, label="artifact_evidence_digest") for item in digests
+        }
+        if not required:
+            raise ValueError("artifact_evidence_required")
+        with _exclusive_process_file_lock(self.lock_path):
+            index = self._read_unlocked()
+            matches = [
+                {"bundle_id": bundle_id, **dict(bundle)}
+                for bundle_id, bundle in index["bundles"].items()
+                if required.issubset(set(bundle["artifact_digests"]))
+            ]
+        if len(matches) != 1:
+            raise ValueError("artifact_evidence_ambiguous")
+        return matches[0]
+
 
 __all__ = [
     "ARTIFACT_STORE_CONTRACT",

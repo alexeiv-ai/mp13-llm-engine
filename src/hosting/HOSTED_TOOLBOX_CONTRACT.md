@@ -412,8 +412,8 @@ worker artifact digest, isolation-policy version, artifact records, provenance,
 manifest digest, signing-key ID, signature algorithm, and signature.
 
 The signature algorithm is `ed25519`. The signature is base64url over canonical
-manifest bytes with the signature field absent. `signing_key_id` must resolve to
-an active trusted public key in host project configuration. Every artifact
+source-manifest bytes with the signature field absent. `signing_key_id` must
+resolve to an active trusted public key in host project configuration. Every artifact
 record contains immutable filename/distribution identity, exact byte size,
 SHA-256 digest, and an approved logical origin reference. The daemon verifies
 signature, manifest digest, artifact digest, artifact size, lock consistency,
@@ -619,12 +619,10 @@ interpreter branch on that path. The setup summary continues to report the
 required `core` and `py-compute` target receipts; absence or mismatch is a
 degraded setup state and prevents resolved acquisition.
 
-For the initial lock, `core` contains `mp13-engine` 0.9.0, `packaging` 26.0,
-Pydantic 2.12.5, and the exact Pydantic validation closure (`pydantic-core`
-2.41.5, `annotated-types` 0.7.0, `typing-extensions` 4.15.0, and
-`typing-inspection` 0.4.2). `py-compute` repeats that complete lock and adds
-NumPy 2.4.3, SymPy 1.14.0, NumExpr 2.14.1, and mpmath 1.3.0. These versions are
-release-owned immutable inputs, not consumer-selectable constraints.
+No distribution version is hard-coded in package resources or runtime code.
+Release-owned intent supplies package constraints; configured source metadata
+and the detected target produce the exact immutable closure. Consumers cannot
+select or override those versions.
 
 The host project configuration input is `toolbox_host_project_configuration`
 and has exactly four top-level keys:
@@ -674,6 +672,23 @@ passes only rehashed CAS object paths to resolution. Raw wheel files beside a
 bundle are never eligible. Invalid bundle ingestion produces a bounded degraded
 toolbox-readiness diagnostic while the general control plane remains available;
 no physical source path or public-key value is projected.
+
+For a release-owned built-in, candidate construction requires one and only one
+verified signed bundle whose artifact set covers the entire resolved closure.
+The immutable template provenance retains that bundle ID, source ID, manifest
+digest, signing-key ID, and signature. The host deterministically binds those
+signed source inputs to the configured intent, exact closure and detected
+target; ambiguous multi-bundle evidence is rejected. The `mp13-engine` wheel
+digest in the closure is the parent-worker artifact digest. Absence of that
+runtime artifact fails before build.
+
+The hermetic builder receives an exact `(source_id, filename) -> verified CAS
+path` map. Once this map is configured it cannot fall back to a raw source
+root. Candidate preparation computes the final template digest, constructs the
+same strict resolved input used by catalog prewarm, installs the exact lock, and
+runs every declared import probe. This pre-publication boundary returns strict
+candidate receipts but writes neither the catalog nor the public receipt store.
+Any candidate failure releases all references created by that batch.
 
 The daemon control plane remains available when toolbox setup is absent,
 partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no

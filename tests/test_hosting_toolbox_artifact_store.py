@@ -75,7 +75,14 @@ def _configuration() -> ToolboxHostProjectConfiguration:
     )
 
 
-def _wheel(name: str, version: str, *, metadata_name: str | None = None, requires=()) -> bytes:
+def _wheel(
+    name: str,
+    version: str,
+    *,
+    metadata_name: str | None = None,
+    requires=(),
+    packages: tuple[str, ...] | None = None,
+) -> bytes:
     import io
 
     output = io.BytesIO()
@@ -89,7 +96,8 @@ def _wheel(name: str, version: str, *, metadata_name: str | None = None, require
     ]
     metadata.extend(f"Requires-Dist: {item}" for item in requires)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{distribution}/__init__.py", "")
+        for package in packages or (distribution,):
+            archive.writestr(f"{package}/__init__.py", "")
         archive.writestr(f"{dist_info}/METADATA", "\n".join(metadata) + "\n")
         archive.writestr(
             f"{dist_info}/WHEEL",
@@ -178,6 +186,59 @@ def _bundle(
 def _keys() -> tuple[Ed25519PrivateKey, dict[str, str]]:
     private = Ed25519PrivateKey.generate()
     return private, {"release-key": _b64(private.public_key().public_bytes_raw())}
+
+
+def _runtime_configuration() -> ToolboxHostProjectConfiguration:
+    payload = _configuration().to_dict()
+    payload["builtins"][0]["imports"] = ["hosting", "mp13_engine"]
+    payload["builtins"][0]["package_requirements"] = ["mp13-engine==0.9.0"]
+    return ToolboxHostProjectConfiguration.from_dict(payload)
+
+
+def _runtime_bundle(
+    path: Path,
+    configuration: ToolboxHostProjectConfiguration,
+    private_key: Ed25519PrivateKey,
+    *,
+    packages: tuple[str, ...] = ("hosting", "mp13_engine"),
+) -> None:
+    content = _wheel(
+        "mp13-engine", "0.9.0", packages=packages
+    )
+    filename = "mp13_engine-0.9.0-py3-none-any.whl"
+    manifest = {
+        "contract": BUNDLE_CONTRACT,
+        "bundle_id": "runtime-bundle",
+        "source_id": "offline-release",
+        "source_set_revision": configuration.source_set_revision,
+        "target": {
+            "name": configuration.target.name,
+            "python_abi": configuration.target.python_abi,
+            "platform": configuration.target.platform,
+        },
+        "signing_key_id": "release-key",
+        "wheels": [
+            _wheel_row(
+                filename,
+                content,
+                distribution="mp13-engine",
+                version="0.9.0",
+            )
+        ],
+    }
+    manifest_raw = _canonical(manifest)
+    signature_raw = _canonical(
+        {
+            "contract": SIGNATURE_CONTRACT,
+            "algorithm": "ed25519",
+            "key_id": "release-key",
+            "signature": _b64(private_key.sign(manifest_raw)),
+        }
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", manifest_raw)
+        archive.writestr("signature.json", signature_raw)
+        archive.writestr(f"wheels/{filename}", content)
 
 
 def _policy() -> dict:
@@ -306,6 +367,9 @@ def test_normal_daemon_discovers_signed_bundles_and_resolves_only_verified_cas_o
     restarted = construct()
     assert restarted.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
     assert len(restarted.svc._toolbox_artifact_store.read()["bundles"]) == 1  # noqa: SLF001
+    with pytest.raises(ValueError, match="required_template_runtime_artifact_missing"):
+        restarted.svc.prepare_configured_toolbox_templates()
+    assert restarted.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
 
 
 def test_normal_daemon_invalid_bundle_is_degraded_without_catalog_publication(tmp_path: Path) -> None:
@@ -390,3 +454,113 @@ def test_normal_daemon_never_treats_unsigned_raw_wheels_as_verified_source_conte
     assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
         "required_template_source_unavailable"
     )
+
+
+def test_prepublication_candidate_build_uses_exact_cas_path_and_real_import_probes(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    assert daemon.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
+
+    prepared = daemon.svc.prepare_configured_toolbox_templates()
+
+    assert prepared["status"] == "prepared"
+    assert len(prepared["candidates"]) == 1
+    candidate = prepared["candidates"][0]
+    assert candidate["template"]["provenance"]["source"] == "signed-airgap:offline-release"
+    assert candidate["template"]["parent_worker_artifact_digest"] == (
+        candidate["artifact_references"][0]["sha256"]
+    )
+    assert candidate["receipt"]["verified_import_roots"] == ["hosting", "mp13_engine"]
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert daemon.svc._toolbox_materialization_receipts.get(  # noqa: SLF001
+        template_digest=candidate["template_digest"],
+        python_abi=configuration.target.python_abi,
+        platform=configuration.target.platform,
+    ) is None
+
+
+def test_prepublication_candidate_failure_leaves_catalog_and_receipts_empty(tmp_path: Path) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    artifact = next(
+        iter(daemon.svc._toolbox_verified_artifacts["offline-release"].values())  # noqa: SLF001
+    )
+    artifact.write_bytes(b"corrupt-after-resolution")
+
+    with pytest.raises(Exception, match="environment_artifact_verification_failed"):
+        daemon.svc.prepare_configured_toolbox_templates()
+
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert not daemon.svc._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
+
+
+def test_prepublication_import_probe_failure_releases_reference_and_publishes_nothing(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(
+        source / "runtime.zip", configuration, private, packages=("mp13_engine",)
+    )
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+
+    with pytest.raises(Exception, match="environment_import_probe_failed"):
+        daemon.svc.prepare_configured_toolbox_templates()
+
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert not daemon.svc._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
+    references = daemon.svc._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
+    assert not references.exists() or json.loads(references.read_text())["environments"] == {}
+
+
+def test_candidate_provenance_requires_one_unambiguous_signed_bundle(tmp_path: Path) -> None:
+    configuration = _configuration()
+    private, public = _keys()
+    first = tmp_path / "first.zip"
+    second = tmp_path / "second.zip"
+    _bundle(first, configuration, private, bundle_id="bundle-first")
+    _bundle(second, configuration, private, bundle_id="bundle-second")
+    store = AtomicToolboxArtifactStore(tmp_path / "store")
+    imported = store.import_signed_bundle(
+        first, configuration=configuration, trust_public_keys=public
+    )
+    store.import_signed_bundle(second, configuration=configuration, trust_public_keys=public)
+
+    with pytest.raises(ValueError, match="artifact_evidence_ambiguous"):
+        store.bundle_evidence_for_artifacts(set(imported["artifact_digests"]))

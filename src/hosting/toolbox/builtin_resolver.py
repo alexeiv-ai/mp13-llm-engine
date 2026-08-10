@@ -39,6 +39,28 @@ class ResolvedBuiltinWheelClosure:
             "locked_artifacts": [item.to_dict() for item in self.locked_artifacts],
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ResolvedBuiltinWheelClosure":
+        row = dict(payload or {})
+        if set(row) != {
+            "template_id", "lock_digest", "locked_distributions", "locked_artifacts"
+        }:
+            raise ValueError("resolved_builtin_closure_fields_invalid")
+        from .catalog import ToolboxLockedDistributionSpec
+
+        return cls(
+            template_id=str(row["template_id"]),
+            lock_digest=str(row["lock_digest"]),
+            locked_distributions=tuple(
+                ToolboxLockedDistributionSpec.from_dict(item)
+                for item in row["locked_distributions"]
+            ),
+            locked_artifacts=tuple(
+                ToolboxLockedArtifactSpec.from_dict(item)
+                for item in row["locked_artifacts"]
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class BuiltinWheelResolutionResult:

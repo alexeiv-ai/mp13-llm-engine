@@ -765,6 +765,109 @@ class ToolboxTemplateCatalogMixin:
         ).resolve().to_dict()
         return {**resolution, "published": [], "operations": []}
 
+    def prepare_configured_toolbox_templates(self) -> dict[str, Any]:
+        """Build and probe all resolved built-ins without publishing state."""
+        from ..toolbox.builtin_resolver import ResolvedBuiltinWheelClosure
+        from ..toolbox.builtin_templates import resolved_builtin_template_candidate
+
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        startup = getattr(self, "_toolbox_startup", None)
+        if not isinstance(configuration, ToolboxHostProjectConfiguration):
+            raise ValueError("toolbox_host_project_configuration_required")
+        if not isinstance(startup, dict) or startup.get("status") != "resolved":
+            raise ValueError("required_builtin_resolution_not_ready")
+        intents = {item.template_id: item for item in configuration.builtins}
+        prepared: list[dict[str, Any]] = []
+        references: list[tuple[str, str]] = []
+        try:
+            for raw_closure in startup["closures"]:
+                closure = ResolvedBuiltinWheelClosure.from_dict(raw_closure)
+                evidence = self._toolbox_artifact_store.bundle_evidence_for_artifacts(
+                    {item.sha256 for item in closure.locked_artifacts}
+                )
+                candidate = resolved_builtin_template_candidate(
+                    intent=intents[closure.template_id],
+                    closure=closure,
+                    target=configuration.target,
+                    evidence=evidence,
+                )
+                artifacts = tuple(
+                    ToolboxTemplateArtifactReference.from_dict(item)
+                    for item in candidate.artifact_references
+                )
+                template_digest = _template_digest(
+                    candidate.template, artifacts, candidate.manifest_signature
+                )
+                entry = {
+                    "template_id": candidate.template.template_id,
+                    "template_digest": template_digest,
+                    "template": candidate.template.to_dict(),
+                    "artifacts": [item.to_dict() for item in artifacts],
+                    "manifest_signature": candidate.manifest_signature,
+                }
+                resolved = HermeticToolboxTemplateMaterializer._resolved_input(
+                    entry,
+                    python_abi=configuration.target.python_abi,
+                    platform=configuration.target.platform,
+                )
+                reference_id = f"template:{template_digest.removeprefix('sha256:')}"
+                references.append((resolved.environment_key, reference_id))
+                receipt = self._toolbox_template_materializer.materialize(
+                    catalog_entry=entry,
+                    python_abi=configuration.target.python_abi,
+                    platform=configuration.target.platform,
+                    progress=lambda *_args: None,
+                )
+                expected_artifacts = tuple(sorted(item.sha256 for item in artifacts))
+                expected_roots = tuple(sorted(candidate.template.exposed_import_roots))
+                if (
+                    not isinstance(receipt, ToolboxTemplateMaterializationReceipt)
+                    or receipt.template_id != candidate.template.template_id
+                    or receipt.template_digest != template_digest
+                    or receipt.python_abi != configuration.target.python_abi
+                    or receipt.platform != configuration.target.platform
+                    or tuple(sorted(receipt.artifact_digests)) != expected_artifacts
+                    or tuple(sorted(receipt.verified_import_roots)) != expected_roots
+                    or receipt.environment_digest
+                    != derived_environment_digest(
+                        template_digest=template_digest,
+                        python_abi=configuration.target.python_abi,
+                        platform=configuration.target.platform,
+                        artifact_digests=expected_artifacts,
+                    )
+                ):
+                    raise ToolboxTemplateMaterializationError(
+                        "template_materialization_receipt_mismatch",
+                        "The built-in verification receipt does not cover its exact candidate.",
+                    )
+                prepared.append(
+                    {
+                        "template": candidate.template.to_dict(),
+                        "template_digest": template_digest,
+                        "artifact_references": [item.to_dict() for item in artifacts],
+                        "manifest_signature": candidate.manifest_signature,
+                        "source_bundle_id": candidate.source_bundle_id,
+                        "environment_key": resolved.environment_key,
+                        "reference_id": reference_id,
+                        "receipt": receipt.to_dict(),
+                    }
+                )
+        except Exception:
+            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+            if builder is not None:
+                for environment_key, reference_id in references:
+                    builder.release_reference(
+                        environment_key=environment_key, reference_id=reference_id
+                    )
+            raise
+        return {
+            "status": "prepared",
+            "config_revision": configuration.config_revision,
+            "source_set_revision": configuration.source_set_revision,
+            "target": configuration.target.name,
+            "candidates": prepared,
+        }
+
     def toolbox_template_describe(
         self, *, template_id: str, template_digest: str | None = None
     ) -> dict[str, Any]:

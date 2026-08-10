@@ -345,6 +345,7 @@ class HermeticToolboxEnvironmentBuilder:
             _id(source_id, label="artifact_source_id"): Path(path).expanduser().resolve()
             for source_id, path in dict(artifact_sources or {}).items()
         }
+        self.verified_artifact_paths: dict[tuple[str, str], Path] = {}
         if not self.artifact_sources:
             raise ValueError("artifact_sources_required")
         if isinstance(gc_grace_ms, bool) or not isinstance(gc_grace_ms, int) or gc_grace_ms < 1:
@@ -358,6 +359,27 @@ class HermeticToolboxEnvironmentBuilder:
         ):
             raise ValueError("environment_build_timeout_seconds_invalid")
         self.build_timeout_seconds = build_timeout_seconds
+
+    def configure_verified_artifact_paths(
+        self, artifacts: Mapping[tuple[str, str], Path]
+    ) -> None:
+        exact: dict[tuple[str, str], Path] = {}
+        for raw_key, raw_path in dict(artifacts or {}).items():
+            if not isinstance(raw_key, tuple) or len(raw_key) != 2:
+                raise ValueError("verified_artifact_key_invalid")
+            key = (
+                _id(raw_key[0], label="verified_artifact_source_id"),
+                str(raw_key[1] or "").strip(),
+            )
+            path = Path(raw_path).expanduser().resolve()
+            if not key[1] or path.name != key[1] or not path.is_file():
+                raise ValueError("verified_artifact_path_invalid")
+            exact[key] = path
+        if not exact:
+            raise ValueError("verified_artifact_paths_required")
+        if self.verified_artifact_paths and self.verified_artifact_paths != exact:
+            raise ValueError("verified_artifact_paths_already_configured")
+        self.verified_artifact_paths = exact
 
     @staticmethod
     def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -432,19 +454,29 @@ class HermeticToolboxEnvironmentBuilder:
     def _artifact_paths(self, resolved: ResolvedToolboxEnvironmentInput) -> tuple[Path, ...]:
         paths: list[Path] = []
         for artifact in resolved.locked_artifacts:
-            source = self.artifact_sources.get(artifact.source_id)
-            if source is None:
-                raise HermeticToolboxEnvironmentBuildError(
-                    "environment_artifact_source_denied",
-                    "A locked artifact source is not configured on this runtime host.",
+            if self.verified_artifact_paths:
+                path = self.verified_artifact_paths.get(
+                    (artifact.source_id, artifact.filename)
                 )
-            path = (source / artifact.filename).resolve()
-            try:
-                path.relative_to(source)
-            except ValueError as exc:
-                raise HermeticToolboxEnvironmentBuildError(
-                    "environment_artifact_path_denied", "A locked artifact escaped its configured source."
-                ) from exc
+                if path is None:
+                    raise HermeticToolboxEnvironmentBuildError(
+                        "environment_artifact_source_denied",
+                        "A locked artifact is absent from the verified source set.",
+                    )
+            else:
+                source = self.artifact_sources.get(artifact.source_id)
+                if source is None:
+                    raise HermeticToolboxEnvironmentBuildError(
+                        "environment_artifact_source_denied",
+                        "A locked artifact source is not configured on this runtime host.",
+                    )
+                path = (source / artifact.filename).resolve()
+                try:
+                    path.relative_to(source)
+                except ValueError as exc:
+                    raise HermeticToolboxEnvironmentBuildError(
+                        "environment_artifact_path_denied", "A locked artifact escaped its configured source."
+                    ) from exc
             try:
                 data = path.read_bytes()
             except OSError as exc:

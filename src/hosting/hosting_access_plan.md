@@ -593,6 +593,11 @@ boundary—not a double—passes.
   the lock-JSON-as-wheel bridge and tests that normalize it.
   - [ ] **R2-04a** Carry resolved built-in wheel closures through catalog
     publication into the real hermetic builder and import probes.
+    - [x] **R2-04a1** Construct immutable signed-provenance template candidates
+      from resolved CAS closures and pass exact CAS paths through real build and
+      import probes without catalog publication.
+    - [ ] **R2-04a2** Atomically commit the complete required receipt/catalog
+      batch and release candidate references on any pre-publication failure.
   - [ ] **R2-04b** Make required/optional prewarm and readiness use only real
     materialization receipts through normal daemon startup.
 - [ ] **R2-05** Implement revisioned source changes and both air-gap ingestion

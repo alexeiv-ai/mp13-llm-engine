@@ -92,21 +92,28 @@ R2 evidence continuation: R2-05b2 binds the exact daemon public-key set,
 discovers direct signed bundles, and resolves only rehashed CAS objects with
 bounded degraded diagnostics. The expanded signed-ingress/daemon/config/docs
 matrix passed 45 tests in 17.92s; `git diff --check` passed.
+R2-04a1 constructs single-bundle signed-provenance candidates and passes exact
+verified CAS paths through the real hermetic install/lock/import-probe boundary
+without catalog or public receipt mutation. The focused success/corruption/
+runtime-artifact/ambiguous-evidence/probe-failure matrix passed 19 tests in
+33.92s. The expanded artifact/hermetic/prewarm/docs suite passed 48 tests in
+138.19s; `git diff --check` passed.
 
 ## Active implementation slice
 
-Active slice: R2-05b2 (`high`). Bind the exact configured Ed25519 public-key set
-at normal daemon construction, discover only direct signed ZIPs in read-only
-air-gap roots, and import them through R2-05b1. Feed verified CAS object paths
-to the built-in resolver internally while normal projections expose only
-logical sources and digests. Invalid bundles degrade toolbox setup without
-taking down the control plane or publishing any catalog entry.
+Active slice: R2-04a1 (`high`). Construct strict immutable template candidates
+from configured intent, exact resolved CAS closure, detected target, and the one
+signed source-bundle evidence covering every artifact. Teach the real hermetic
+builder to accept only the exact verified CAS path map, then build and run every
+declared import probe through an explicit pre-publication service boundary.
+Catalog and public receipt state remain unchanged until R2-04a2.
 
 Required validation:
 
-- normal daemon signed-bundle discovery/resolution and restart test
-- missing/extra/malformed key binding and invalid-bundle degraded diagnostics
-- no unsigned raw-wheel fallback, path/key redaction, and zero catalog publish
+- exact candidate identity/provenance and single-bundle evidence tests
+- real CAS-backed hermetic build with complete installed-lock/import probes
+- missing runtime artifact, mixed-bundle evidence, corrupt CAS, and probe
+  failure leave catalog/receipt state empty
 - `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q`
 - `git diff --check`
 

@@ -274,6 +274,15 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
                         self._toolbox_verified_artifacts[source.source_id] = (
                             self._toolbox_artifact_store.source_artifacts(source.source_id)
                         )
+                    exact_artifact_paths = {
+                        (source_id, filename): path
+                        for source_id, artifacts in self._toolbox_verified_artifacts.items()
+                        for filename, path in artifacts.items()
+                    }
+                    if exact_artifact_paths and self._hermetic_toolbox_environment_builder is not None:
+                        self._hermetic_toolbox_environment_builder.configure_verified_artifact_paths(
+                            exact_artifact_paths
+                        )
                 except ToolboxArtifactBundleError as exc:
                     self._toolbox_artifact_ingestion_diagnostic = {
                         "code": exc.code,

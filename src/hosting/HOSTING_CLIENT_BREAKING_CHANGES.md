@@ -142,6 +142,10 @@ The daemon trust-key binding is an exact map from every configured key ID to
 its unpadded base64url raw 32-byte Ed25519 public key. Raw wheel files in a
 read-only source root are ignored; only verified direct-child signed ZIPs feed
 normal resolution.
+Built-in candidate provenance must be covered by exactly one verified source
+bundle. The host binds its signed manifest to configured intent and the exact
+resolved closure, then builds/probes through verified CAS paths before any
+catalog or public receipt mutation.
 
 Administrator setup logic must change as follows:
 
