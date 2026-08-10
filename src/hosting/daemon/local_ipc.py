@@ -3310,12 +3310,12 @@ class EngineHostDaemon:
                 owner_actor_id=actor,
                 authority_id=actor,
             )
-        if cmd == "toolbox-approve-definition-plan":
+        if cmd == "toolbox-approve-confirmed-definition-plan":
             actor = str(payload.get("_claim_actor_id") or "service:local")
-            return svc.toolbox_approve_definition_plan(
-                plan_id=str(payload.get("plan_id") or ""),
-                owner_actor_id=actor,
-                authority_id=actor,
+            return svc.toolbox_approve_confirmed_definition_plan(
+                confirmation_ref=str(payload.get("confirmation_ref") or ""),
+                approver_actor_id=actor,
+                dependency_approver_authorized=True,
             )
         if cmd == "toolbox-apply-definition":
             actor = str(payload.get("_claim_actor_id") or "service:local")

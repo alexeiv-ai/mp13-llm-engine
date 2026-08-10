@@ -41,7 +41,9 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
     channel.toolbox_confirm_definition_plan(
         plan_id="plan-1", environment_choices=[], request_id="confirm-1"
     )
-    channel.toolbox_approve_definition_plan(plan_id="plan-1")
+    channel.toolbox_approve_confirmed_definition_plan(
+        confirmation_ref="confirmation-1"
+    )
     channel.toolbox_apply_definition(
         plan_id="plan-1",
         confirmation_ref="confirmation-1",
@@ -53,7 +55,7 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
         "toolbox-get-definition",
         "op-start",
         "op-start",
-        "toolbox-approve-definition-plan",
+        "toolbox-approve-confirmed-definition-plan",
         "op-start",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
@@ -103,7 +105,6 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
     ref.confirm_definition_plan(
         plan_id="plan-1", environment_choices=[], request_id="confirm-1"
     )
-    ref.approve_definition_plan(plan_id="plan-1")
     ref.apply_definition(
         plan_id="plan-1",
         confirmation_ref="confirmation-1",
@@ -117,12 +118,11 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
         "toolbox_get_definition",
         "toolbox_plan_definition",
         "toolbox_confirm_definition_plan",
-        "toolbox_approve_definition_plan",
         "toolbox_apply_definition",
         "toolbox_template_list",
         "toolbox_template_describe",
     ]
-    assert host.calls[4][1]["request_id"] == "request-1"
+    assert host.calls[3][1]["request_id"] == "request-1"
     assert not hasattr(type(ref), "publish_template")
 
 
@@ -130,7 +130,7 @@ def test_definition_role_separation() -> None:
     definition_commands = {
         "toolbox-get-definition",
         "toolbox-plan-definition",
-        "toolbox-approve-definition-plan",
+        "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
     }
     for role in ("worker_user", "config_editor", "admin"):
@@ -140,6 +140,10 @@ def test_definition_role_separation() -> None:
     assert not (definition_commands - {"toolbox-get-definition"}) & diagnostics
     worker = EngineHostService._commands_allowed_for_role("worker_user")  # noqa: SLF001
     assert "toolbox-template-publish" not in worker
+    approval_command = "toolbox-approve-confirmed-definition-plan"
+    assert approval_command not in worker
+    assert approval_command not in EngineHostService._commands_allowed_for_role("config_editor")  # noqa: SLF001
+    assert approval_command in EngineHostService._commands_allowed_for_role("dependency_approver")  # noqa: SLF001
 
 
 def test_daemon_dispatch_preserves_actor_and_opaque_approval(
@@ -200,11 +204,11 @@ def test_remote_cli_routes_definition_commands(
     monkeypatch.setattr("hosting.engine_host_channel.EngineHostControlChannel", FakeRemoteChannel)
     payloads = {
         "toolbox-get-definition": {"toolbox_id": "tb"},
-        "toolbox-plan-definition": {"definition": {"toolbox_id": "tb"}},
-        "toolbox-approve-definition-plan": {"plan_id": "plan-1"},
+        "toolbox-plan-definition": {"request_id": "plan-1", "definition": {"toolbox_id": "tb"}},
+        "toolbox-approve-confirmed-definition-plan": {"confirmation_ref": "confirmation-1"},
         "toolbox-apply-definition": {
-            "definition": {"toolbox_id": "tb"},
             "plan_id": "plan-1",
+            "confirmation_ref": "confirmation-1",
             "request_id": "request-1",
         },
     }

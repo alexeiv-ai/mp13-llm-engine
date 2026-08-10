@@ -44,8 +44,9 @@ class AtomicJsonToolboxDependencyApprovalRepository:
             raise ValueError("toolbox_approval_state_invalid")
         approvals: dict[str, dict[str, Any]] = {}
         fields = {
-            "approval_ref_digest", "owner_actor_id", "authority_id", "toolbox_id", "plan_id",
-            "definition_revision", "custom_delta_digest", "catalog_revision", "package_policy_revision",
+            "approval_ref_digest", "owner_actor_id", "authority_id", "approver_actor_id",
+            "toolbox_id", "plan_id", "confirmation_ref_digest",
+            "effective_definition_revision", "exact_resolution_digest", "plan_pins_digest",
             "decision", "minted_at_ms", "expires_at_ms", "consumed_request_id", "revoked_at_ms",
         }
         for key, value in row["approvals"].items():
@@ -53,13 +54,13 @@ class AtomicJsonToolboxDependencyApprovalRepository:
             if set(item) != fields or key != item.get("approval_ref_digest"):
                 raise ValueError("toolbox_approval_record_invalid")
             for digest_field in (
-                "approval_ref_digest", "plan_id", "definition_revision", "custom_delta_digest",
-                "catalog_revision", "package_policy_revision",
+                "approval_ref_digest", "plan_id", "confirmation_ref_digest",
+                "effective_definition_revision", "exact_resolution_digest", "plan_pins_digest",
             ):
                 require_digest(item[digest_field], label=f"approval_{digest_field}")
             if item["decision"] != "approved":
                 raise ValueError("toolbox_approval_decision_invalid")
-            if any(not str(item[field] or "").strip() for field in ("owner_actor_id", "authority_id", "toolbox_id")):
+            if any(not str(item[field] or "").strip() for field in ("owner_actor_id", "authority_id", "approver_actor_id", "toolbox_id")):
                 raise ValueError("toolbox_approval_owner_invalid")
             if (
                 isinstance(item["minted_at_ms"], bool)
@@ -103,12 +104,13 @@ class AtomicJsonToolboxDependencyApprovalRepository:
         *,
         owner_actor_id: str,
         authority_id: str,
+        approver_actor_id: str,
         toolbox_id: str,
         plan_id: str,
-        definition_revision: str,
-        custom_delta_digest: str,
-        catalog_revision: str,
-        package_policy_revision: str,
+        confirmation_ref_digest: str,
+        effective_definition_revision: str,
+        exact_resolution_digest: str,
+        plan_pins_digest: str,
         now_ms: int,
         expires_at_ms: int,
     ) -> dict[str, Any]:
@@ -118,12 +120,13 @@ class AtomicJsonToolboxDependencyApprovalRepository:
             "approval_ref_digest": key,
             "owner_actor_id": str(owner_actor_id or "").strip(),
             "authority_id": str(authority_id or "").strip(),
+            "approver_actor_id": str(approver_actor_id or "").strip(),
             "toolbox_id": str(toolbox_id or "").strip(),
             "plan_id": require_digest(plan_id, label="approval_plan_id"),
-            "definition_revision": require_digest(definition_revision, label="approval_definition_revision"),
-            "custom_delta_digest": require_digest(custom_delta_digest, label="approval_custom_delta_digest"),
-            "catalog_revision": require_digest(catalog_revision, label="approval_catalog_revision"),
-            "package_policy_revision": require_digest(package_policy_revision, label="approval_policy_revision"),
+            "confirmation_ref_digest": require_digest(confirmation_ref_digest, label="approval_confirmation_ref_digest"),
+            "effective_definition_revision": require_digest(effective_definition_revision, label="approval_effective_definition_revision"),
+            "exact_resolution_digest": require_digest(exact_resolution_digest, label="approval_exact_resolution_digest"),
+            "plan_pins_digest": require_digest(plan_pins_digest, label="approval_plan_pins_digest"),
             "decision": "approved",
             "minted_at_ms": int(now_ms),
             "expires_at_ms": int(expires_at_ms),
@@ -154,10 +157,10 @@ class AtomicJsonToolboxDependencyApprovalRepository:
         authority_id: str,
         toolbox_id: str,
         plan_id: str,
-        definition_revision: str,
-        custom_delta_digest: str,
-        catalog_revision: str,
-        package_policy_revision: str,
+        confirmation_ref_digest: str,
+        effective_definition_revision: str,
+        exact_resolution_digest: str,
+        plan_pins_digest: str,
         request_id: str,
         now_ms: int,
     ) -> dict[str, Any]:
@@ -167,10 +170,10 @@ class AtomicJsonToolboxDependencyApprovalRepository:
             "authority_id": str(authority_id or "").strip(),
             "toolbox_id": str(toolbox_id or "").strip(),
             "plan_id": plan_id,
-            "definition_revision": definition_revision,
-            "custom_delta_digest": custom_delta_digest,
-            "catalog_revision": catalog_revision,
-            "package_policy_revision": package_policy_revision,
+            "confirmation_ref_digest": confirmation_ref_digest,
+            "effective_definition_revision": effective_definition_revision,
+            "exact_resolution_digest": exact_resolution_digest,
+            "plan_pins_digest": plan_pins_digest,
         }
         with _exclusive_process_file_lock(self.lock_path):
             state = self._read()

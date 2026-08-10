@@ -164,7 +164,7 @@ def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
         for cmd in [
             "toolbox-get-definition",
             "toolbox-plan-definition",
-            "toolbox-approve-definition-plan",
+            "toolbox-confirm-definition-plan",
             "toolbox-apply-definition",
             "toolbox-repair",
             "toolbox-reconcile",
@@ -199,6 +199,42 @@ def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
             "workflow-js-stream-close",
         ]:
             svc.authorize_command(cmd, {"session_token": token})
+
+        with pytest.raises(PermissionError, match="insufficient_role"):
+            svc.authorize_command(
+                "toolbox-approve-confirmed-definition-plan",
+                {"session_token": token},
+            )
+
+
+def test_dependency_approver_has_only_the_distinct_approval_surface() -> None:
+    with _workspace_tmpdir() as td:
+        svc = _svc(td)
+        svc.auth_upsert_key(
+            key_id="dependency-approver",
+            key_secret="approver-secret",
+            role="dependency_approver",
+            auth_method="shared_secret",
+        )
+        svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        token = str(svc.auth_issue_session(
+            key_id="dependency-approver",
+            key_secret="approver-secret",
+            scope="control",
+        )["token"])
+        svc.authorize_command(
+            "toolbox-approve-confirmed-definition-plan", {"session_token": token}
+        )
+        for command in (
+            "toolbox-plan-definition",
+            "toolbox-confirm-definition-plan",
+            "toolbox-apply-definition",
+        ):
+            with pytest.raises(PermissionError, match="insufficient_role"):
+                svc.authorize_command(command, {"session_token": token})
 
 
 def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_facade() -> None:

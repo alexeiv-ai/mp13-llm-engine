@@ -3551,10 +3551,10 @@ class EngineHostControlChannel:
             },
         )
 
-    def toolbox_approve_definition_plan(self, *, plan_id: str) -> Dict[str, Any]:
+    def toolbox_approve_confirmed_definition_plan(self, *, confirmation_ref: str) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-approve-definition-plan",
-            {"plan_id": str(plan_id or "").strip()},
+            "toolbox-approve-confirmed-definition-plan",
+            {"confirmation_ref": str(confirmation_ref or "").strip()},
         )
         return dict(res or {})
 

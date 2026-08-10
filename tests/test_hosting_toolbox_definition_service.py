@@ -299,14 +299,17 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
     )
     plan = _plan(service, definition, request_id="plan-custom")
     assert plan["approval_required"] is True
-    with pytest.raises(PermissionError, match="toolbox_definition_plan_not_found"):
-        service.toolbox_approve_definition_plan(
-            plan_id=plan["plan_id"], owner_actor_id="actor:b", authority_id="workspace:a"
-        )
-    approval = service.toolbox_approve_definition_plan(
-        plan_id=plan["plan_id"], owner_actor_id="actor:a", authority_id="workspace:a"
-    )
     confirmation = _confirm(service, plan, request_id="confirm-custom")
+    with pytest.raises(PermissionError, match="dependency_approver_authorization_required"):
+        service.toolbox_approve_confirmed_definition_plan(
+            confirmation_ref=confirmation["confirmation_ref"],
+            approver_actor_id="actor:a",
+        )
+    approval = service.toolbox_approve_confirmed_definition_plan(
+        confirmation_ref=confirmation["confirmation_ref"],
+        approver_actor_id="approver:dependencies",
+        dependency_approver_authorized=True,
+    )
     assert approval["approval_ref"].startswith("approval_")
     with pytest.raises(ValueError, match="dependency_approval_ref_must_be_opaque_string"):
         service.toolbox_apply_definition(

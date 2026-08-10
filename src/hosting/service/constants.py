@@ -27,6 +27,7 @@ ROLE_MODEL_USER_WITH_MODEL_CONTROL = "model_user_with_model_control"
 ROLE_MODEL_USER = "model_user"
 ROLE_DIAGNOSTIC_USER = "diagnostic_user"
 ROLE_TRANSPORT = "transport"
+ROLE_DEPENDENCY_APPROVER = "dependency_approver"
 
 LIFECYCLE_PROFILE_FOREGROUND = "foreground_terminal_bound"
 LIFECYCLE_PROFILE_DETACHED = "detached_user_process"
@@ -45,6 +46,7 @@ VALID_AUTH_ROLES = {
     ROLE_MODEL_USER,
     ROLE_DIAGNOSTIC_USER,
     ROLE_TRANSPORT,
+    ROLE_DEPENDENCY_APPROVER,
 }
 
 VALID_FORCE_OVERRIDE_REASONS = {

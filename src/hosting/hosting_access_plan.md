@@ -675,10 +675,10 @@ boundary—not a double—passes.
 
 ### R4 - Privileged approval and immutable apply
 
-- [ ] **R4-01** Move approval minting behind distinct dependency-approver
+- [x] **R4-01** Move approval minting behind distinct dependency-approver
   authorization in `service/auth.py`, `service/policy.py`, daemon dispatch, and
   channel/CLI surfaces. Remove ordinary-consumer approval minting.
-- [ ] **R4-02** Bind approval to the confirmation receipt and exact complete
+- [x] **R4-02** Bind approval to the confirmation receipt and exact complete
   locks/artifacts/config/source/policy revisions; reject stale or mismatched
   receipts before worker spawn.
 - [ ] **R4-03** Pass accepted custom resolved inputs from the persisted plan

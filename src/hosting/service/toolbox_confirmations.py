@@ -223,5 +223,17 @@ class AtomicJsonToolboxConfirmationRepository:
             raise ValueError("toolbox_confirmation_expired")
         return receipt
 
+    def get_for_approval(self, confirmation_ref: str, *, now_ms: int) -> ToolboxConfirmationReceipt:
+        """Resolve a receipt for the separately authorized approver surface."""
+        key = _ref_digest(str(confirmation_ref or ""))
+        with _exclusive_process_file_lock(self.lock_path):
+            receipt_raw = self._read()["receipts"].get(key)
+        if receipt_raw is None:
+            raise PermissionError("toolbox_confirmation_not_found")
+        receipt = ToolboxConfirmationReceipt.from_dict(receipt_raw)
+        if receipt.expires_at_ms <= int(now_ms):
+            raise ValueError("toolbox_confirmation_expired")
+        return receipt
+
 
 __all__ = ["AtomicJsonToolboxConfirmationRepository", "ToolboxConfirmationReceipt"]

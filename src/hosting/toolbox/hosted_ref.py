@@ -113,11 +113,6 @@ class HostedToolBoxRef:
             request_id=str(request_id or "").strip(),
         ) or {})
 
-    def approve_definition_plan(self, *, plan_id: str) -> Dict[str, Any]:
-        return dict(self.host.toolbox_approve_definition_plan(
-            plan_id=str(plan_id or "").strip()
-        ) or {})
-
     def apply_definition(
         self,
         *,

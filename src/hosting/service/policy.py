@@ -185,7 +185,7 @@ class PolicyMixin:
             "toolbox-get-definition",
             "toolbox-plan-definition",
             "toolbox-confirm-definition-plan",
-            "toolbox-approve-definition-plan",
+            "toolbox-approve-confirmed-definition-plan",
             "toolbox-apply-definition",
             "toolbox-template-list",
             "toolbox-template-describe",

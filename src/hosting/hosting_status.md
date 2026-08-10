@@ -160,7 +160,18 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R3-04b/R3-05 (`average`) are complete. Apply now accepts
+Active slice: none. R4-01/R4-02 (`average`) are complete. The ordinary
+consumer approval command and hosted-reference helper are removed. A distinct
+dependency-approver role and `toolbox-approve-confirmed-definition-plan`
+surface mint approval only after confirmation. The durable approval binds the
+confirmation owner/authority, approving actor, confirmation-ref digest,
+effective definition, selected exact locks/artifacts digest, complete plan-pin
+digest, expiry, and first apply request. Focused service, authenticated role,
+channel/daemon/CLI transport validation passed 13 tests in 5.57s. The expanded
+auth-role, service, transport, and operation-repository suite passed 78 tests
+in 19.47s; compile and `git diff --check` passed.
+
+Completed slice evidence: R3-04b/R3-05 (`average`) are complete. Apply now accepts
 only `plan_id`, the actor-bound immutable `confirmation_ref`, and a request ID;
 the caller-supplied definition and apply-time re-resolution path are removed.
 Complete runnable bundle inputs survive restart inside the immutable plan and

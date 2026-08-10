@@ -520,47 +520,80 @@ class ToolboxRuntimeMixin:
                 },
             )
 
-    def toolbox_approve_definition_plan(
+    @staticmethod
+    def _toolbox_confirmation_approval_binding(plan: Any, receipt: Any) -> tuple[str, str]:
+        from ..toolbox.identity import identity_digest
+
+        selected = {
+            item["environment_id"]: item["alternative_id"]
+            for item in receipt.reduction["selected_alternatives"]
+        }
+        exact = []
+        for offer in plan.environment_mutations:
+            alternative_id = selected.get(offer.environment_id)
+            alternative = next(
+                (item for item in offer.alternatives if item.alternative_id == alternative_id),
+                None,
+            )
+            if alternative is None:
+                raise ValueError("toolbox_confirmation_alternative_not_offered")
+            exact.append(alternative.to_dict())
+        exact_resolution_digest = identity_digest(
+            "hosting.toolbox.confirmation.exact_resolution.v1",
+            {
+                "plan_id": plan.plan_id,
+                "confirmation_ref_digest": receipt.confirmation_ref_digest,
+                "choices_digest": receipt.choices_digest,
+                "effective_definition_revision": receipt.reduction["effective_definition_revision"],
+                "alternatives": exact,
+            },
+        )
+        pins_digest = identity_digest(
+            "hosting.toolbox.confirmation.plan_pins.v1", plan.pins.to_dict()
+        )
+        return exact_resolution_digest, pins_digest
+
+    def toolbox_approve_confirmed_definition_plan(
         self,
         *,
-        plan_id: str,
-        owner_actor_id: str = "service:local",
-        authority_id: str = "authority:local",
+        confirmation_ref: str,
+        approver_actor_id: str,
+        dependency_approver_authorized: bool = False,
     ) -> Dict[str, Any]:
-        from ..toolbox.bundle_models import ResolvedToolboxProfileSpec
-
+        if not dependency_approver_authorized:
+            raise PermissionError("dependency_approver_authorization_required")
         now_ms = int(time.time() * 1000)
-        record = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
-        if (
-            record.owner_actor_id != str(owner_actor_id or "").strip()
-            or record.authority_id != str(authority_id or "").strip()
-        ):
-            raise PermissionError("toolbox_definition_plan_not_found")
+        receipt = self._toolbox_confirmations.get_for_approval(
+            confirmation_ref, now_ms=now_ms
+        )
+        record = self._toolbox_definition_plans.get(receipt.plan_id, now_ms=now_ms)
         context = self._toolbox_definition_planning_context()
-        if (
+        configuration = context["configuration"]
+        if configuration is None or (
             context["catalog_revision"] != record.pins.catalog_revision
             or context["policy"].revision != record.pins.dependency_policy_revision
+            or configuration.config_revision != record.pins.host_config_revision
+            or configuration.source_set_revision != record.pins.source_set_revision
+            or context["target"] != record.pins.target
             or not context["policy"].allow_custom
             or not context["policy"].custom_requires_approval
         ):
             raise PermissionError("dependency_approval_invalid")
-        pinned = type(
-            "PinnedDraft",
-            (),
-            {"profiles": tuple(ResolvedToolboxProfileSpec.from_dict(item) for item in record.draft_plan["profiles"])},
-        )()
-        custom_delta_digest = self._toolbox_custom_delta_digest(pinned)
-        if int(record.draft_plan["custom_environment_count"]) < 1:
+        if not bool(receipt.reduction["dependency_approval_required"]):
             raise ValueError("dependency_approval_not_required")
+        exact_resolution_digest, pins_digest = self._toolbox_confirmation_approval_binding(
+            record, receipt
+        )
         return self._toolbox_dependency_approvals.mint(
-            owner_actor_id=record.owner_actor_id,
-            authority_id=record.authority_id,
+            owner_actor_id=receipt.owner_actor_id,
+            authority_id=receipt.authority_id,
+            approver_actor_id=str(approver_actor_id or "").strip(),
             toolbox_id=record.toolbox_id,
             plan_id=record.plan_id,
-            definition_revision=record.proposed_definition.revision,
-            custom_delta_digest=custom_delta_digest,
-            catalog_revision=record.pins.catalog_revision,
-            package_policy_revision=record.pins.dependency_policy_revision,
+            confirmation_ref_digest=receipt.confirmation_ref_digest,
+            effective_definition_revision=receipt.reduction["effective_definition_revision"],
+            exact_resolution_digest=exact_resolution_digest,
+            plan_pins_digest=pins_digest,
             now_ms=now_ms,
             expires_at_ms=min(record.expires_at_ms, now_ms + 60 * 60 * 1000),
         )
@@ -618,7 +651,9 @@ class ToolboxRuntimeMixin:
             or context["target"] != record.pins.target
         ):
             raise ValueError("toolbox_definition_plan_pins_changed")
-        custom_delta_digest = self._toolbox_custom_delta_digest(draft)
+        exact_resolution_digest, pins_digest = self._toolbox_confirmation_approval_binding(
+            record, receipt
+        )
         approval_identity = None
         if bool(receipt.reduction["dependency_approval_required"]):
             if not dependency_approval_ref:
@@ -629,10 +664,10 @@ class ToolboxRuntimeMixin:
                 authority_id=authority,
                 toolbox_id=model.toolbox_id,
                 plan_id=record.plan_id,
-                definition_revision=record.proposed_definition.revision,
-                custom_delta_digest=custom_delta_digest,
-                catalog_revision=record.pins.catalog_revision,
-                package_policy_revision=record.pins.dependency_policy_revision,
+                confirmation_ref_digest=receipt.confirmation_ref_digest,
+                effective_definition_revision=model.revision,
+                exact_resolution_digest=exact_resolution_digest,
+                plan_pins_digest=pins_digest,
                 request_id=rid,
                 now_ms=now_ms,
             )
@@ -648,7 +683,8 @@ class ToolboxRuntimeMixin:
                 "expected_revision": model.expected_revision,
                 "plan_id": record.plan_id,
                 "confirmation_ref_digest": receipt.confirmation_ref_digest,
-                "custom_delta_digest": custom_delta_digest,
+                "exact_resolution_digest": exact_resolution_digest,
+                "plan_pins_digest": pins_digest,
                 "approval_identity": approval_identity,
                 "catalog_revision": record.pins.catalog_revision,
                 "package_policy_revision": record.pins.dependency_policy_revision,

@@ -23,6 +23,7 @@ from .constants import (
     ROLE_TRANSPORT,
     ROLE_WORKER_USER,
     VALID_AUTH_ROLES,
+    ROLE_DEPENDENCY_APPROVER,
 )
 
 _WORKFLOW_PYTHON_COMMANDS = {
@@ -79,8 +80,11 @@ _TOOLBOX_DEFINITION_COMMANDS = {
     "toolbox-get-definition",
     "toolbox-plan-definition",
     "toolbox-confirm-definition-plan",
-    "toolbox-approve-definition-plan",
     "toolbox-apply-definition",
+}
+
+_TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS = {
+    "toolbox-approve-confirmed-definition-plan",
 }
 
 _WORKFLOW_JS_COMMANDS = {
@@ -317,6 +321,8 @@ class AuthMixin:
             return {"traffic"}
         if r == ROLE_DIAGNOSTIC_USER:
             return {"control"}
+        if r == ROLE_DEPENDENCY_APPROVER:
+            return {"control"}
         return set()
 
 
@@ -416,7 +422,14 @@ class AuthMixin:
             *_HOST_CAPABILITY_SESSION_COMMANDS,
         }
         if r == ROLE_ADMIN:
-            return all_non_bootstrap
+            return all_non_bootstrap | _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS
+        if r == ROLE_DEPENDENCY_APPROVER:
+            return {
+                *_TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS,
+                "auth-status",
+                "auth-validate-session",
+                "auth-renew-session",
+            }
         if r == ROLE_CONFIG_EDITOR:
             return {
                 "discover-running",

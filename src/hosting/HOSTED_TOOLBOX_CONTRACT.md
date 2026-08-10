@@ -1056,8 +1056,9 @@ that pinned result and never reinterprets the original proposed definition.
 
 ## Dependency approval references
 
-`approve_definition_plan(plan_id)` is an authenticated parent decision, never a
-client assertion. Policy denial returns a stable diagnostic and no reference.
+`approve_confirmed_definition_plan(confirmation_ref)` is available only to the
+distinct authenticated dependency-approver role (and the administrator
+superset), never the ordinary toolbox consumer. Policy denial returns a stable diagnostic and no reference.
 Approval returns:
 
 ```json
@@ -1075,17 +1076,18 @@ Approval returns:
 ```
 
 The reference is opaque and minted only by the parent. Its stored record is
-bound to the authenticated actor and authority, toolbox ID, plan ID, definition
-hash, exact custom-delta digest, catalog revision, package-policy revision,
-decision, mint time, expiry, and audit event.
+bound to the confirmation owner and authority, approving actor, toolbox and
+plan IDs, confirmation-ref digest, effective-definition revision, the exact
+selected locks/artifacts digest, the complete target/config/catalog/source/
+policy pins digest, decision, mint time, expiry, and consumption identity.
 
 Approval lifetime cannot exceed the plan lifetime or 60 minutes. Apply
 atomically binds first use to one stable `request_id`. Idempotent retries by the
 same actor with the same request ID and identical apply fingerprint may reuse
 it. Another request ID is denied as consumed. Revocation is effective until
 route publication begins. Expired, revoked, consumed, cross-actor,
-wrong-authority, wrong-plan, wrong-definition, changed-delta, changed-policy,
-and changed-catalog cases all return `dependency_approval_invalid` to an
+wrong-authority, wrong-plan, wrong-confirmation, changed exact resolution, or
+changed pinned configuration cases all return `dependency_approval_invalid` to an
 unauthorized caller so another actor's approval state is not disclosed.
 
 Approval decisions and validation attempts are audited with actor, authority,

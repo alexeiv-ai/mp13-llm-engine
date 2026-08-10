@@ -120,8 +120,8 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-confirm-definition-plan": [
         "Get-Content toolbox-confirmation.json | python -m hosting.engine_host_cli --payload-stdin toolbox-confirm-definition-plan",
     ],
-    "toolbox-approve-definition-plan": [
-        "'{\"plan_id\":\"plan-id\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-approve-definition-plan",
+    "toolbox-approve-confirmed-definition-plan": [
+        "'{\"confirmation_ref\":\"confirmation-ref\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-approve-confirmed-definition-plan",
     ],
     "toolbox-apply-definition": [
         "Get-Content toolbox-apply.json | python -m hosting.engine_host_cli --payload-stdin toolbox-apply-definition",
@@ -889,7 +889,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-get-definition",
         "toolbox-plan-definition",
         "toolbox-confirm-definition-plan",
-        "toolbox-approve-definition-plan",
+        "toolbox-approve-confirmed-definition-plan",
         "toolbox-apply-definition",
         "toolbox-template-list",
         "toolbox-template-describe",
@@ -1963,10 +1963,12 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "toolbox-approve-definition-plan":
+        if cmd == "toolbox-approve-confirmed-definition-plan":
             _print_ok(
-                svc.toolbox_approve_definition_plan(
-                    plan_id=str(payload.get("plan_id") or ""),
+                svc.toolbox_approve_confirmed_definition_plan(
+                    confirmation_ref=str(payload.get("confirmation_ref") or ""),
+                    approver_actor_id="cli:dependency-approver",
+                    dependency_approver_authorized=True,
                 )
             )
             return 0
