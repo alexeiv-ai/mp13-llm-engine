@@ -552,6 +552,12 @@ boundary—not a double—passes.
 - [ ] **R1-03** Add native CI jobs and production-boundary tests. A target is not
   advertised until its sandbox, worker ownership, restart, and cleanup tests
   pass natively.
+  - [ ] **R1-03a** Add native Windows x64/ARM64, Linux glibc x64/ARM64, and
+    macOS ARM64 jobs that assert the canonical detected machine and import a
+    native CPython 3.12 wheel.
+  - [ ] **R1-03b** Run the sandbox, worker-ownership, restart, and cleanup
+    boundaries on every native job after R6-04 supplies POSIX parent-death
+    containment; advertise a family only after its job passes.
 
 ### R2 - Revisioned hosting configuration and built-ins
 

@@ -1,0 +1,55 @@
+name: Hosting native targets
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/hosting-native-targets.yml"
+      - "src/hosting/**"
+      - "tests/native_hosting_target_probe.py"
+      - "tests/test_hosting_toolbox_target.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hosting-native-targets.yml"
+      - "src/hosting/**"
+      - "tests/native_hosting_target_probe.py"
+      - "tests/test_hosting_toolbox_target.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detected-target-and-native-wheel:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: cp312-win_amd64
+          - runner: windows-11-arm
+            target: cp312-win_arm64
+          - runner: ubuntu-24.04
+            target: cp312-manylinux_2_28_x86_64
+          - runner: ubuntu-24.04-arm
+            target: cp312-manylinux_2_28_aarch64
+          - runner: macos-15
+            target: cp312-macosx_11_0_arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: ${{ (contains(matrix.target, 'arm64') || contains(matrix.target, 'aarch64')) && 'arm64' || 'x64' }}
+          cache: pip
+      - name: Install target probe dependencies and native wheel
+        run: python -m pip install --disable-pip-version-check packaging==26.0 pydantic-core==2.41.5
+      - name: Assert detected target and import native wheel
+        run: python tests/native_hosting_target_probe.py --expected-target ${{ matrix.target }}
+
+  # R1-03b adds the native sandbox/worker/restart/cleanup boundary here after
+  # R6-04 lands POSIX parent-death containment. No target is advertised before
+  # that second gate passes on all five runners.
