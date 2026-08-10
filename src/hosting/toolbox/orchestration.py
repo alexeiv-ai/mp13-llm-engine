@@ -98,6 +98,7 @@ class ToolboxSandboxOrchestrator:
         toolbox_id: str,
         definition_revision: str,
         assignments: Sequence[ResolvedToolboxSandboxAssignment],
+        resolved_environments: Optional[Dict[str, Any]] = None,
         worker_profile_class: str = "generic",
     ) -> List[ResolvedToolboxSandboxAssignment]:
         """Stage and spawn only added/replaced profiles as non-routable candidates."""
@@ -108,6 +109,7 @@ class ToolboxSandboxOrchestrator:
             raise ValueError("resolved_rollout_identity_required")
         out = list(assignments or [])
         current_target = detect_current_toolbox_target()
+        pinned_environments = dict(resolved_environments or {})
         for item in out:
             if item.toolbox_id != tid:
                 raise ValueError("resolved_assignment_toolbox_mismatch")
@@ -118,6 +120,10 @@ class ToolboxSandboxOrchestrator:
             staged = item.staged_bundle
             bundle_revision = str(staged.manifest.get("bundle_revision") or "")
             engine_id = f"{tid}-{profile.profile_id.removeprefix('sha256:')[:20]}-{bundle_revision[:8]}"
+            item.materialization_reference_id = (
+                f"toolbox:{tid}:{profile.profile_id.removeprefix('sha256:')[:24]}:"
+                f"{revision.removeprefix('sha256:')[:24]}"
+            )
             hermetic = self.service.materialize_toolbox_environment_for_bundle(
                 files=list(staged.manifest.get("files") or []),
                 python_abi=str(getattr(self.service, "_toolbox_required_python_abi", "") or "").strip()
@@ -128,11 +134,15 @@ class ToolboxSandboxOrchestrator:
                 intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
                 allowed_template_ids=(profile.template_id,),
                 sandbox_policy=profile.sandbox_policy,
-                reference_id=f"toolbox:{tid}:{profile.profile_id}:{revision}",
+                reference_id=item.materialization_reference_id,
+                resolved_environment=dict(pinned_environments.get(profile.profile_id) or {}),
             )
             if (
                 hermetic.environment_key != profile.environment_key
-                or hermetic.resolved.complete_lock_digest != profile.effective_lock_digest
+                or (
+                    getattr(hermetic.resolved, "custom_resolved_lock_digest", None)
+                    or hermetic.resolved.complete_lock_digest
+                ) != profile.effective_lock_digest
             ):
                 raise RuntimeError("resolved_environment_identity_mismatch")
             environment_spec = ToolboxEnvironmentSpec(

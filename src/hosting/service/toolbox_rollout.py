@@ -89,6 +89,7 @@ class ToolboxDefinitionRolloutCoordinator:
         draft: ToolboxDefinitionPlanDraft,
         assignments: Sequence[ResolvedToolboxSandboxAssignment],
         old_snapshot: Mapping[str, Any] | None,
+        resolved_environments: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         old_profiles = dict(dict(old_snapshot or {}).get("profiles") or {})
         profiles: dict[str, Any] = {}
@@ -97,6 +98,7 @@ class ToolboxDefinitionRolloutCoordinator:
         for assignment in assignments:
             profile = assignment.resolved_profile
             manifest = assignment.bundle_spec.manifest_payload()
+            active: dict[str, Any] = {}
             if assignment.classification == "reused":
                 source_id = str(assignment.active_profile_id or profile.profile_id)
                 active = dict(old_profiles.get(source_id) or {})
@@ -120,6 +122,10 @@ class ToolboxDefinitionRolloutCoordinator:
                 "engine_id": engine_id,
                 "tool_names": tool_names,
                 "environment_reference": reference,
+                "resolved_environment": (
+                    dict(dict(resolved_environments or {}).get(profile.profile_id) or {})
+                    or dict(active.get("resolved_environment") or {})
+                ),
             }
             environment_references.append(reference)
             for name, non_restartable in self._non_restartable_by_name(assignment).items():
@@ -159,6 +165,7 @@ class ToolboxDefinitionRolloutCoordinator:
         draft: ToolboxDefinitionPlanDraft,
         profile_changes: Sequence[Mapping[str, Any]],
         confirmation_result: Mapping[str, Any] | None = None,
+        resolved_environments: Mapping[str, Any] | None = None,
         operation_id: str,
     ) -> dict[str, Any]:
         tid = draft.definition.toolbox_id
@@ -215,6 +222,7 @@ class ToolboxDefinitionRolloutCoordinator:
                 toolbox_id=tid,
                 definition_revision=draft.definition.revision,
                 assignments=assignments,
+                resolved_environments=dict(resolved_environments or {}),
             )
             candidates = [
                 str(dict(item.registration or {}).get("engine_id") or "").strip()
@@ -238,6 +246,7 @@ class ToolboxDefinitionRolloutCoordinator:
                 draft=draft,
                 assignments=assignments,
                 old_snapshot=old_snapshot,
+                resolved_environments=resolved_environments,
             )
             self._progress(
                 operation_id,
@@ -315,6 +324,21 @@ class ToolboxDefinitionRolloutCoordinator:
                 return repository.status(ref=current["operation"], owner_actor_id=current["owner_actor_id"])
             cleanup: list[str] = []
             if not published:
+                builder = getattr(
+                    self.service, "_hermetic_toolbox_environment_builder", None
+                )
+                if builder is not None:
+                    for assignment in assignments:
+                        if assignment.materialization_reference_id:
+                            try:
+                                builder.release_reference(
+                                    environment_key=assignment.resolved_profile.environment_key,
+                                    reference_id=assignment.materialization_reference_id,
+                                )
+                            except Exception:
+                                operator_details.setdefault(
+                                    "reference_cleanup_failed", []
+                                ).append(assignment.resolved_profile.environment_key)
                 for engine_id in candidates:
                     self.service._retire_toolbox_registration(engine_id)
                     cleanup.append(engine_id)

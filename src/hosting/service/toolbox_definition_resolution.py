@@ -287,7 +287,47 @@ class ConfiguredToolboxPlanResolver:
         for profile_id, raw in sorted(dict(snapshot.get("profiles") or {}).items()):
             profile = dict(dict(raw or {}).get("profile") or {})
             if profile.get("custom_resolved_lock_digest") is not None:
-                raise ValueError("toolbox_active_custom_resolution_missing")
+                from ..toolbox.hermetic_environment import ResolvedToolboxEnvironmentInput
+
+                resolved = ResolvedToolboxEnvironmentInput.from_dict(
+                    dict(dict(raw or {}).get("resolved_environment") or {})
+                )
+                template_entry = self._entry(str(profile.get("template_id") or ""))
+                template = ToolboxEnvironmentTemplateSpec.from_dict(template_entry["template"])
+                template_names = {item.name for item in template.locked_distributions}
+                artifacts = []
+                for item in resolved.locked_artifacts:
+                    _name, _version, _build, tags = parse_wheel_filename(item.filename)
+                    distribution = normalize_distribution_name(item.distribution_name)
+                    rule = PHASE0_REVIEWED_IMPORT_CATALOG.for_distribution(distribution)
+                    roots = tuple(
+                        sorted(set(rule.import_roots) & set(resolved.resolved_import_roots))
+                    ) if rule is not None else ()
+                    artifacts.append(ToolboxExactArtifactSpec(
+                        import_roots=roots,
+                        distribution=distribution,
+                        dependency_reason=(
+                            "template_runtime" if distribution in template_names else "transitive"
+                        ),
+                        version=item.version,
+                        wheel_filename=item.filename,
+                        artifact_digest=item.sha256,
+                        compatibility_tags=tuple(sorted(str(value) for value in tags)),
+                        provenance="verified-cas:active-confirmation",
+                        source_id=item.source_id,
+                    ))
+                source_ids = tuple(sorted({item.source_id for item in resolved.locked_artifacts}))
+                environments.append(ActiveToolboxEnvironmentResolution(
+                    environment_id=profile_id,
+                    tool_keys=tuple(profile["assigned_tool_keys"]),
+                    base_template_id=template.template_id,
+                    base_template_revision=resolved.template_digest,
+                    source_ids=source_ids,
+                    source_origins=tuple(sorted(self._source(item).origin for item in source_ids)),
+                    lock_digest=resolved.custom_resolved_lock_digest or resolved.complete_lock_digest,
+                    artifacts=tuple(sorted(artifacts, key=lambda item: item.distribution)),
+                ))
+                continue
             template_id = str(profile.get("template_id") or "")
             entry = self._entry(template_id)
             template = ToolboxEnvironmentTemplateSpec.from_dict(entry["template"])

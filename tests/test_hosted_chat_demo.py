@@ -74,7 +74,7 @@ def test_setup_and_shutdown_apply_complete_definitions(monkeypatch, tmp_path: Pa
         active_revision = None
 
         def __init__(self, **_kwargs):
-            pass
+            self.plans = {}
 
         def toolbox_get_definition(self, **payload):
             calls.append(("get", dict(payload)))
@@ -82,11 +82,31 @@ def test_setup_and_shutdown_apply_complete_definitions(monkeypatch, tmp_path: Pa
 
         def toolbox_plan_definition(self, **payload):
             calls.append(("plan", dict(payload)))
-            return {"plan_id": f"plan-{len(calls)}"}
+            plan_id = f"plan-{len(calls)}"
+            self.plans[plan_id] = dict(payload["definition"])
+            return {
+                "lifecycle": "terminal_success",
+                "operation": {"operation_id": f"op-{plan_id}"},
+                "result": {
+                    "plan_id": plan_id,
+                    "environment_mutations": [{
+                        "environment_id": "sha256:" + "1" * 64,
+                        "preferred_alternative_id": "sha256:" + "2" * 64,
+                    }],
+                },
+            }
+
+        def toolbox_confirm_definition_plan(self, **payload):
+            calls.append(("confirm", dict(payload)))
+            return {
+                "lifecycle": "terminal_success",
+                "operation": {"operation_id": "op-confirm"},
+                "result": {"confirmation_ref": f"confirmation-{payload['plan_id']}"},
+            }
 
         def toolbox_apply_definition(self, **payload):
             calls.append(("apply", dict(payload)))
-            definition = dict(payload["definition"])
+            definition = dict(self.plans[payload["plan_id"]])
             self.active_revision = "sha256:" + "a" * 64
             return {
                 "lifecycle": "terminal_success",
@@ -108,14 +128,14 @@ def test_setup_and_shutdown_apply_complete_definitions(monkeypatch, tmp_path: Pa
         project_root=tmp_path,
         toolbox_id="demo",
     )
-    created = [payload["definition"] for name, payload in calls if name == "apply"][0]
+    created = [payload["definition"] for name, payload in calls if name == "plan"][0]
     assert len(created["auto_requests"]) == 3
     assert all("sandbox_profile" not in request for request in created["auto_requests"])
     assert all("environment_name" not in request for request in created["auto_requests"])
     assert all("required_imports" not in request for request in created["auto_requests"])
 
     shutdown_hosted_chat_demo(runtime)
-    emptied = [payload["definition"] for name, payload in calls if name == "apply"][-1]
+    emptied = [payload["definition"] for name, payload in calls if name == "plan"][-1]
     assert emptied["expected_revision"] == "sha256:" + "a" * 64
     assert emptied["auto_requests"] == []
     assert emptied["manual_requests"] == []

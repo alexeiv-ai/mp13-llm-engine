@@ -817,6 +817,7 @@ class ToolboxTemplateCatalogMixin:
         allowed_template_ids: Sequence[str] | None = None,
         sandbox_policy: Mapping[str, Any] | None = None,
         reference_id: str,
+        resolved_environment: Mapping[str, Any] | None = None,
     ):
         """Resolve and acquire a receipt-verified physical toolbox environment."""
 
@@ -826,6 +827,34 @@ class ToolboxTemplateCatalogMixin:
                 "template_materializer_unconfigured",
                 "This runtime host has no configured hermetic toolbox environment builder.",
             )
+        if resolved_environment:
+            from ..toolbox.hermetic_environment import ResolvedToolboxEnvironmentInput
+
+            resolved = ResolvedToolboxEnvironmentInput.from_dict(resolved_environment)
+            allowed = {
+                str(item or "").strip() for item in list(allowed_template_ids or [])
+                if str(item or "").strip()
+            }
+            if allowed and resolved.template_id not in allowed:
+                raise ToolboxTemplateMaterializationError(
+                    "resolved_template_not_allowed",
+                    "The confirmed environment does not use the assigned template.",
+                )
+            if resolved.python_abi != python_abi or resolved.platform != platform:
+                raise ToolboxTemplateMaterializationError(
+                    "resolved_target_mismatch",
+                    "The confirmed environment target no longer matches this host.",
+                )
+            if not set(declared_imports).issubset(set(resolved.resolved_import_roots)):
+                raise ToolboxTemplateMaterializationError(
+                    "resolved_import_roots_incomplete",
+                    "The confirmed environment does not cover all assigned imports.",
+                )
+            builder.extend_verified_artifact_paths({
+                (item.source_id, item.filename): self._toolbox_artifact_store.object_path(item.sha256)
+                for item in resolved.locked_artifacts
+            })
+            return builder.materialize_environment(resolved, reference_id=reference_id)
         resolution = self.resolve_hosted_template_environment(
             consumer_kind="toolbox",
             files=files,

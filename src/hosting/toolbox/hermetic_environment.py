@@ -379,6 +379,25 @@ class HermeticToolboxEnvironmentBuilder:
             raise ValueError("verified_artifact_paths_already_configured")
         self.verified_artifact_paths = exact
 
+    def extend_verified_artifact_paths(
+        self, artifacts: Mapping[tuple[str, str], Path]
+    ) -> None:
+        merged = dict(self.verified_artifact_paths)
+        for raw_key, raw_path in dict(artifacts or {}).items():
+            key = (
+                _id(raw_key[0], label="verified_artifact_source_id"),
+                str(raw_key[1] or "").strip(),
+            )
+            path = Path(raw_path).expanduser().resolve()
+            if not key[1] or path.name != key[1] or not path.is_file():
+                raise ValueError("verified_artifact_path_invalid")
+            if key in merged and merged[key] != path:
+                raise ValueError("verified_artifact_path_conflict")
+            merged[key] = path
+        if not merged:
+            raise ValueError("verified_artifact_paths_required")
+        self.verified_artifact_paths = merged
+
     @staticmethod
     def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

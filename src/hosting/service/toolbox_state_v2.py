@@ -63,7 +63,8 @@ class AtomicJsonToolboxStateV2Repository:
         for profile_id, value in row["profiles"].items():
             profile_row = dict(value or {})
             if set(profile_row) != {
-                "profile", "manifest_hash", "engine_id", "tool_names", "environment_reference"
+                "profile", "manifest_hash", "engine_id", "tool_names", "environment_reference",
+                "resolved_environment",
             }:
                 raise ValueError("toolbox_state_v2_profile_fields_invalid")
             profile = ResolvedToolboxProfileSpec.from_dict(profile_row["profile"])
@@ -79,12 +80,20 @@ class AtomicJsonToolboxStateV2Repository:
             environment_reference = str(profile_row["environment_reference"] or "").strip()
             if not environment_reference:
                 raise ValueError("toolbox_state_v2_environment_reference_required")
+            resolved_environment = dict(profile_row["resolved_environment"] or {})
+            if profile.custom_resolved_lock_digest is not None:
+                from ..toolbox.hermetic_environment import ResolvedToolboxEnvironmentInput
+
+                resolved = ResolvedToolboxEnvironmentInput.from_dict(resolved_environment)
+                if resolved.environment_key != profile.environment_key:
+                    raise ValueError("toolbox_state_v2_resolved_environment_mismatch")
             profiles[profile_id] = {
                 "profile": profile.to_dict(),
                 "manifest_hash": manifest_hash,
                 "engine_id": engine_id,
                 "tool_names": tool_names,
                 "environment_reference": environment_reference,
+                "resolved_environment": resolved_environment,
             }
         routes: dict[str, dict[str, Any]] = {}
         for tool_name, value in row["tool_routes"].items():

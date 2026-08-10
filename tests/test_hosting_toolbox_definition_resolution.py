@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import io
 import json
@@ -11,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from packaging.utils import parse_wheel_filename
 
 from hosting.service.host_service import EngineHostService
+from hosting.daemon.local_ipc import EngineHostDaemon
 from hosting.service.toolbox_artifact_store import BUNDLE_CONTRACT, SIGNATURE_CONTRACT
 from hosting.service.toolbox_definition_resolution import ConfiguredToolboxPlanResolver
 from hosting.toolbox.catalog import (
@@ -19,9 +21,12 @@ from hosting.toolbox.catalog import (
     ToolboxTemplateProvenance,
 )
 from hosting.toolbox.definition_planner import (
+    ToolboxDefinitionPlanDraft,
     build_toolbox_environment_mutations,
     plan_toolbox_definition,
 )
+from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
+from hosting.toolbox.staging import ToolboxBundleStager
 from hosting.toolbox.identity import identity_digest
 
 
@@ -143,7 +148,7 @@ def _service_with_verified_closure(tmp_path: Path, *, policy=None):
     private = Ed25519PrivateKey.generate()
     public = _b64(private.public_key().public_bytes_raw())
     source = tmp_path / "source"
-    source.mkdir(exist_ok=True)
+    source.mkdir(parents=True, exist_ok=True)
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
         control_state_file=tmp_path / "control.json",
@@ -292,3 +297,213 @@ def test_configured_resolver_builds_exact_direct_transitive_verified_cas_offer(
     assert all(".mp13" not in str(item.to_dict()) for item in alternative.artifacts)
     assert offers[0].confirmation_required is True
     assert offers[0].dependency_approval_required is True
+
+
+def test_confirmed_custom_closure_flows_through_orchestration_to_real_builder(
+    tmp_path: Path,
+) -> None:
+    from test_hosting_toolbox_definition_service import _custom_policy
+
+    service, _template = _service_with_verified_closure(tmp_path, policy=_custom_policy())
+    started = service.toolbox_plan_definition(
+        definition=_definition(), request_id="plan-builder",
+        owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    planned = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    choices = [{
+        "environment_id": item["environment_id"],
+        "alternative_id": item["preferred_alternative_id"],
+        "accept_package_changes": True,
+    } for item in planned["environment_mutations"]]
+    confirmation = service.toolbox_confirm_definition_plan(
+        plan_id=planned["plan_id"], environment_choices=choices,
+        request_id="confirm-builder", owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    confirmed = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=confirmation["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    receipt = service._toolbox_confirmations.get(  # noqa: SLF001
+        confirmed["confirmation_ref"], owner_actor_id="actor:a",
+        authority_id="workspace:a", now_ms=0,
+    )
+    draft = ToolboxDefinitionPlanDraft.from_persisted_dict(receipt.confirmed_draft)
+    orchestrator = ToolboxSandboxOrchestrator(
+        service=service, stager=ToolboxBundleStager(service.hosting_root)
+    )
+    assignments = orchestrator.build_resolved_assignments(
+        toolbox_id=draft.definition.toolbox_id,
+        profiles=draft.profiles,
+        bundles=draft.bundles,
+        profile_changes=[{
+            "classification": "added", "active_profile_id": None,
+            "proposed_profile_id": draft.profiles[0].profile_id,
+            "changed_fields": [],
+        }],
+    )
+    service.spawn = lambda **kwargs: {  # type: ignore[method-assign]
+        "engine_id": kwargs["engine_id"],
+        "bundle": dict(kwargs["bundle"]),
+        "environment": dict(kwargs["environment"]),
+    }
+
+    spawned = orchestrator.spawn_resolved_assignments(
+        toolbox_id=draft.definition.toolbox_id,
+        definition_revision=draft.definition.revision,
+        assignments=assignments,
+        resolved_environments=receipt.resolved_environments,
+    )
+
+    assert spawned[0].registration is not None
+    assert spawned[0].registration["environment"]["environment_key"] == draft.profiles[0].environment_key
+    environment_root = Path(spawned[0].registration["environment"]["venv_path"])
+    receipt_payload = json.loads(
+        (environment_root / "verification-receipt.json").read_text(encoding="utf-8")
+    )
+    assert receipt_payload["resolved"]["custom_resolved_lock_digest"] == draft.profiles[0].custom_resolved_lock_digest
+
+
+def test_corrupt_confirmed_artifact_fails_before_atomic_publication(tmp_path: Path) -> None:
+    from test_hosting_toolbox_definition_service import _custom_policy
+
+    service, _template = _service_with_verified_closure(tmp_path, policy=_custom_policy())
+    started = service.toolbox_plan_definition(
+        definition=_definition(), request_id="plan-corrupt",
+        owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    plan = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    choices = [{
+        "environment_id": item["environment_id"],
+        "alternative_id": item["preferred_alternative_id"],
+        "accept_package_changes": True,
+    } for item in plan["environment_mutations"]]
+    confirmation_started = service.toolbox_confirm_definition_plan(
+        plan_id=plan["plan_id"], environment_choices=choices,
+        request_id="confirm-corrupt", owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    confirmation = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=confirmation_started["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    approval = service.toolbox_approve_confirmed_definition_plan(
+        confirmation_ref=confirmation["confirmation_ref"],
+        approver_actor_id="approver:dependencies",
+        dependency_approver_authorized=True,
+    )
+    receipt = service._toolbox_confirmations.get(  # noqa: SLF001
+        confirmation["confirmation_ref"], owner_actor_id="actor:a",
+        authority_id="workspace:a", now_ms=0,
+    )
+    resolved = next(iter(receipt.resolved_environments.values()))
+    corrupt = resolved["locked_artifacts"][-1]
+    service._toolbox_artifact_store.object_path(corrupt["sha256"]).write_bytes(b"corrupt")  # noqa: SLF001
+    references = service.hosting_root / "toolbox_environment_cache" / "references.json"
+
+    applied = service.toolbox_apply_definition(
+        plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
+        dependency_approval_ref=approval["approval_ref"],
+        request_id="apply-corrupt",
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=applied["operation"]["operation_id"], timeout_seconds=30
+    )
+
+    assert terminal["lifecycle"] == "terminal_failure"
+    assert service._toolbox_state_v2.get("custom-demo") is None  # noqa: SLF001
+    assert service._toolbox_executor_registrations("custom-demo") == []  # noqa: SLF001
+    if references.exists():
+        assert json.loads(references.read_text(encoding="utf-8"))["environments"] == {}
+
+
+def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(
+    tmp_path: Path,
+) -> None:
+    service, _template = _service_with_verified_closure(tmp_path)
+    service.auth_upsert_key(
+        key_id="consumer", key_secret="consumer-secret", role="worker_user",
+        auth_method="shared_secret",
+    )
+    service.set_control_config(
+        require_auth=True, access_profile={"connectivity_mode": "local_only"}
+    )
+    token = service.auth_issue_session(
+        key_id="consumer", key_secret="consumer-secret", scope="control"
+    )["token"]
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "unused-engines.json",
+        control_state_file=tmp_path / "unused-control.json",
+    )
+    daemon.svc = service
+    definition = _definition()
+    definition["toolbox_id"] = "multi-daemon"
+    definition["auto_requests"][0]["files"][0]["content"] = "def Fetch():\n    return 1\n"
+    definition["auto_requests"][0]["dependency"] = {
+        "mode": "auto", "template_id": None,
+        "declared_imports": [], "package_requirements": [],
+    }
+    second = json.loads(json.dumps(definition["auto_requests"][0]))
+    second["files"] = [{"relative_path": "pkg/second.py", "content": "def Second():\n    return 2\n"}]
+    second["module_name"] = "pkg.second"
+    second["callable_name"] = "Second"
+    definition["auto_requests"].append(second)
+    plan_request = {
+        "seq": 1,
+        "cmd": "op-start",
+        "payload": {
+            "session_token": token,
+            "command": "toolbox-plan-definition",
+            "payload": {"request_id": "multi-plan", "definition": definition},
+        },
+    }
+
+    first = asyncio.run(daemon._dispatch(  # noqa: SLF001
+        json.dumps(plan_request), peer_host="127.0.0.1", transport="local_ipc"
+    ))
+    duplicate = asyncio.run(daemon._dispatch(  # noqa: SLF001
+        json.dumps({**plan_request, "seq": 2}),
+        peer_host="127.0.0.1", transport="local_ipc",
+    ))
+    assert first["ok"] is duplicate["ok"] is True
+    assert first["result"]["operation"] == duplicate["result"]["operation"]
+    planned = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=first["result"]["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    offered_tools = {
+        item["tool_key"]
+        for offer in planned["environment_mutations"]
+        for item in offer["tool_mutations"]
+    }
+    assert offered_tools == {"pkg.fetch:Fetch", "pkg.second:Second"}
+    choices = [{
+        "environment_id": offer["environment_id"],
+        "alternative_id": offer["preferred_alternative_id"],
+        "accept_package_changes": True,
+    } for offer in planned["environment_mutations"]]
+    confirmed = asyncio.run(daemon._dispatch(  # noqa: SLF001
+        json.dumps({
+            "seq": 3,
+            "cmd": "op-start",
+            "payload": {
+                "session_token": token,
+                "command": "toolbox-confirm-definition-plan",
+                "payload": {
+                    "request_id": "multi-confirm",
+                    "plan_id": planned["plan_id"],
+                    "environment_choices": choices,
+                },
+            },
+        }),
+        peer_host="127.0.0.1", transport="local_ipc",
+    ))
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=confirmed["result"]["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    assert set(terminal["result"]["accepted_tool_keys"]) == offered_tools
+    assert not daemon._operations_state_file.exists()  # noqa: SLF001

@@ -79,6 +79,7 @@ def _install_active(service: EngineHostService, *, include_registration: bool = 
                 "engine_id": engine_id,
                 "tool_names": ["Alpha"],
                 "environment_reference": f"toolbox:demo:{profile.profile_id}:{definition.revision}",
+                "resolved_environment": {},
             }
         },
         tool_routes={

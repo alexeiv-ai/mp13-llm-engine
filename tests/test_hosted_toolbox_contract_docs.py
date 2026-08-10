@@ -99,8 +99,10 @@ def test_contract_freezes_strict_fields_scope_and_codes() -> None:
     assert "Applying an empty complete definition" in prose
     for signature in [
         "get_definition(*, operator_details: bool = False)",
-        "plan_definition(definition: dict, *, operator_details: bool = False)",
-        "approve_definition_plan(*, plan_id: str)",
+        "plan_definition(definition: dict, *, request_id: str, operator_details: bool = False)",
+        "confirm_definition_plan(*, plan_id: str, environment_choices: list[dict], request_id: str)",
+        "approve_confirmed_definition_plan(*, confirmation_ref: str)",
+        "confirmation_ref: str,",
         "dependency_approval_ref: str | None = None",
     ]:
         assert signature in text

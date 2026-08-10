@@ -80,6 +80,7 @@ def _runtime(character: str, tool_name: str, engine_id: str):
             "engine_id": engine_id,
             "tool_names": [tool_name],
             "environment_reference": f"toolbox:demo:{profile.profile_id}:revision",
+            "resolved_environment": {},
         }
     }
     routes = {

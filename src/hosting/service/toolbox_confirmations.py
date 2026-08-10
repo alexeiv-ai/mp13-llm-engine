@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..toolbox.bundle_models import ToolboxDefinitionSpec
-from ..toolbox.definition_planner import ToolboxConfirmationReduction
+from ..toolbox.definition_planner import ToolboxConfirmationReduction, ToolboxDefinitionPlanDraft
 from ..toolbox.identity import identity_digest, require_digest
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 
@@ -34,6 +34,7 @@ class ToolboxConfirmationReceipt:
     choices_digest: str
     reduction: Mapping[str, Any]
     confirmed_draft: Mapping[str, Any]
+    resolved_environments: Mapping[str, Any]
     created_at_ms: int
     expires_at_ms: int
     contract: str = CONFIRMATION_RECEIPT_CONTRACT
@@ -76,6 +77,21 @@ class ToolboxConfirmationReceipt:
         } or draft["definition"] != definition.to_dict() or draft["definition_revision"] != definition.revision:
             raise ValueError("toolbox_confirmation_draft_invalid")
         object.__setattr__(self, "confirmed_draft", draft)
+        environments = copy.deepcopy(dict(self.resolved_environments or {}))
+        from ..toolbox.hermetic_environment import ResolvedToolboxEnvironmentInput
+        if set(environments) != {item.profile_id for item in ToolboxDefinitionPlanDraft.from_persisted_dict(draft).profiles}:
+            raise ValueError("toolbox_confirmation_resolved_environments_incomplete")
+        for profile_id, raw in environments.items():
+            resolved = ResolvedToolboxEnvironmentInput.from_dict(raw)
+            profile = next(
+                item for item in ToolboxDefinitionPlanDraft.from_persisted_dict(draft).profiles
+                if item.profile_id == profile_id
+            )
+            if resolved.environment_key != profile.environment_key or (
+                resolved.custom_resolved_lock_digest or resolved.complete_lock_digest
+            ) != profile.effective_lock_digest:
+                raise ValueError("toolbox_confirmation_resolved_environment_mismatch")
+        object.__setattr__(self, "resolved_environments", environments)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +104,7 @@ class ToolboxConfirmationReceipt:
             "choices_digest": self.choices_digest,
             "reduction": copy.deepcopy(dict(self.reduction)),
             "confirmed_draft": copy.deepcopy(dict(self.confirmed_draft)),
+            "resolved_environments": copy.deepcopy(dict(self.resolved_environments)),
             "created_at_ms": self.created_at_ms,
             "expires_at_ms": self.expires_at_ms,
         }
@@ -99,6 +116,7 @@ class ToolboxConfirmationReceipt:
             "contract", "confirmation_ref_digest", "plan_id", "toolbox_id",
             "owner_actor_id", "authority_id", "choices_digest", "reduction",
             "confirmed_draft",
+            "resolved_environments",
             "created_at_ms", "expires_at_ms",
         }:
             raise ValueError("toolbox_confirmation_receipt_fields_invalid")
@@ -160,6 +178,7 @@ class AtomicJsonToolboxConfirmationRepository:
         choices: Sequence[Mapping[str, Any]],
         reduction: ToolboxConfirmationReduction,
         confirmed_draft: Mapping[str, Any],
+        resolved_environments: Mapping[str, Any],
         now_ms: int,
         expires_at_ms: int,
     ) -> tuple[str, ToolboxConfirmationReceipt]:
@@ -185,6 +204,7 @@ class AtomicJsonToolboxConfirmationRepository:
             choices_digest=choices_digest,
             reduction=reduction.to_dict(),
             confirmed_draft=dict(confirmed_draft),
+            resolved_environments=dict(resolved_environments),
             created_at_ms=int(now_ms),
             expires_at_ms=int(expires_at_ms),
         )

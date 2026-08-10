@@ -126,7 +126,9 @@ class _FakeOrchestrator:
 
     build_resolved_assignments = staticmethod(ToolboxSandboxOrchestrator.build_resolved_assignments)
 
-    def spawn_resolved_assignments(self, *, toolbox_id, definition_revision, assignments):
+    def spawn_resolved_assignments(
+        self, *, toolbox_id, definition_revision, assignments, resolved_environments=None
+    ):
         for assignment in assignments:
             if assignment.classification == "reused":
                 continue
@@ -201,6 +203,13 @@ def test_apply_publishes_routes_then_drains_old_and_keeps_terminal_result_user_s
     second_result = service._apply_resolved_toolbox_definition(
         draft=second,
         profile_changes=_changes(second, "replaced", first.profiles[0].profile_id),
+        confirmation_result={
+            "accepted_tool_keys": ["auto:pkg.tool:Beta"],
+            "skipped_tools": [{"tool_key": "auto:pkg.tool:Skipped", "reason": "package_changes_declined"}],
+            "preserved_active_tool_keys": [],
+            "removed_tool_keys": ["auto:pkg.tool:Alpha"],
+            "package_mutations": [{"distribution": "example", "mutation": "transition"}],
+        },
         operation_id=second_id,
     )
     snapshot = service._toolbox_state_v2.get("demo")
@@ -217,6 +226,9 @@ def test_apply_publishes_routes_then_drains_old_and_keeps_terminal_result_user_s
     assert "engine_id" not in terminal_text
     assert "profile_id" not in terminal_text
     assert "environment_key" not in terminal_text
+    assert second_result["result"]["accepted_tool_keys"] == ["auto:pkg.tool:Beta"]
+    assert second_result["result"]["removed_tool_keys"] == ["auto:pkg.tool:Alpha"]
+    assert second_result["result"]["package_mutations"][0]["distribution"] == "example"
     with pytest.raises(PermissionError, match="toolbox_operator_details_denied"):
         service.toolbox_definition_apply_operator_details(
             operation_id=second_id, operator_authorized=False

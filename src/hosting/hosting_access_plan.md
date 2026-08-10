@@ -666,7 +666,7 @@ boundary—not a double—passes.
 - [x] **R3-05** Return sanitized source alternatives and exact direct/transitive
   additions, removals, and transitions. Reject arbitrary URLs, paths, locks, and
   install commands supplied by consumers.
-- [ ] **R3-06** Prove multi-tool add/update/remove and idempotent plan/confirmation
+- [x] **R3-06** Prove multi-tool add/update/remove and idempotent plan/confirmation
   recovery through the real authenticated daemon channel.
 - [x] **R3-07** Add `EngineHostChannel.watch_host_operation` over changed
   `op-status` snapshots and optional bounded long polling. Prove human
@@ -681,13 +681,13 @@ boundary—not a double—passes.
 - [x] **R4-02** Bind approval to the confirmation receipt and exact complete
   locks/artifacts/config/source/policy revisions; reject stale or mismatched
   receipts before worker spawn.
-- [ ] **R4-03** Pass accepted custom resolved inputs from the persisted plan
+- [x] **R4-03** Pass accepted custom resolved inputs from the persisted plan
   through `toolbox/orchestration.py` to the real hermetic builder. Remove the
   template-only custom rejection.
-- [ ] **R4-04** Atomically publish the confirmed effective definition and return
+- [x] **R4-04** Atomically publish the confirmed effective definition and return
   accepted/skipped/removed tools plus logical package mutations in durable apply
   results.
-- [ ] **R4-05** Prove denied, missing, incompatible, corrupt, and air-gapped
+- [x] **R4-05** Prove denied, missing, incompatible, corrupt, and air-gapped
   artifacts leave the previous active definition unchanged.
 
 ### R5 - Removal, retention, and administrator environments

@@ -506,10 +506,42 @@ def setup_hosted_chat_demo(
         "manual_requests": [],
         "intrinsics": {"names": [], "include_guides": False, "sandbox_policy": {}},
     }
-    definition_plan = toolbox_ref.plan_definition(definition)
-    status = toolbox_ref.apply_definition(
-        definition=definition,
+    plan_status = toolbox_ref.plan_definition(
+        definition, request_id="hosted-chat-demo-plan:setup"
+    )
+    plan_operation = dict(plan_status.get("operation") or {})
+    plan_deadline = time.monotonic() + 15.0
+    while str(plan_status.get("lifecycle") or "") not in {"terminal_success", "terminal_failure"}:
+        if time.monotonic() >= plan_deadline:
+            raise TimeoutError("hosted_chat_demo_definition_plan_timeout")
+        time.sleep(0.02)
+        plan_status = service.hosted_operation_status(ref=plan_operation)
+    if plan_status.get("lifecycle") != "terminal_success":
+        raise RuntimeError("hosted_chat_demo_definition_plan_failed")
+    definition_plan = dict(plan_status.get("result") or {})
+    choices = [{
+        "environment_id": item["environment_id"],
+        "alternative_id": item["preferred_alternative_id"],
+        "accept_package_changes": True,
+    } for item in definition_plan["environment_mutations"]]
+    confirmation_status = toolbox_ref.confirm_definition_plan(
         plan_id=str(definition_plan["plan_id"]),
+        environment_choices=choices,
+        request_id="hosted-chat-demo-confirm:setup",
+    )
+    confirmation_operation = dict(confirmation_status.get("operation") or {})
+    confirmation_deadline = time.monotonic() + 15.0
+    while str(confirmation_status.get("lifecycle") or "") not in {"terminal_success", "terminal_failure"}:
+        if time.monotonic() >= confirmation_deadline:
+            raise TimeoutError("hosted_chat_demo_definition_confirmation_timeout")
+        time.sleep(0.02)
+        confirmation_status = service.hosted_operation_status(ref=confirmation_operation)
+    if confirmation_status.get("lifecycle") != "terminal_success":
+        raise RuntimeError("hosted_chat_demo_definition_confirmation_failed")
+    confirmation = dict(confirmation_status.get("result") or {})
+    status = toolbox_ref.apply_definition(
+        plan_id=str(definition_plan["plan_id"]),
+        confirmation_ref=str(confirmation["confirmation_ref"]),
         request_id=f"hosted-chat-demo-setup:{definition_plan['plan_id']}",
     )
     operation = dict(status.get("operation") or {})
@@ -555,10 +587,36 @@ def shutdown_hosted_chat_demo(runtime: Optional[HostedChatDemoRuntime]) -> None:
             "manual_requests": [],
             "intrinsics": {"names": [], "include_guides": False, "sandbox_policy": {}},
         }
-        plan = runtime.toolbox_ref.plan_definition(definition)
+        plan_status = runtime.toolbox_ref.plan_definition(
+            definition, request_id="hosted-chat-demo-plan:teardown"
+        )
+        plan_operation = dict(plan_status.get("operation") or {})
+        deadline = time.monotonic() + 15.0
+        while str(plan_status.get("lifecycle") or "") not in {"terminal_success", "terminal_failure"}:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("hosted_chat_demo_teardown_plan_timeout")
+            time.sleep(0.02)
+            plan_status = runtime.service.hosted_operation_status(ref=plan_operation)
+        plan = dict(plan_status["result"])
+        choices = [{
+            "environment_id": item["environment_id"],
+            "alternative_id": item["preferred_alternative_id"],
+            "accept_package_changes": True,
+        } for item in plan["environment_mutations"]]
+        confirmation_status = runtime.toolbox_ref.confirm_definition_plan(
+            plan_id=str(plan["plan_id"]), environment_choices=choices,
+            request_id="hosted-chat-demo-confirm:teardown",
+        )
+        confirmation_operation = dict(confirmation_status.get("operation") or {})
+        deadline = time.monotonic() + 15.0
+        while str(confirmation_status.get("lifecycle") or "") not in {"terminal_success", "terminal_failure"}:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("hosted_chat_demo_teardown_confirmation_timeout")
+            time.sleep(0.02)
+            confirmation_status = runtime.service.hosted_operation_status(ref=confirmation_operation)
         runtime.toolbox_ref.apply_definition(
-            definition=definition,
             plan_id=str(plan["plan_id"]),
+            confirmation_ref=str(confirmation_status["result"]["confirmation_ref"]),
             request_id=f"hosted-chat-demo-teardown:{plan['plan_id']}",
         )
     except Exception:

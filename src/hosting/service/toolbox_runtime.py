@@ -441,6 +441,109 @@ class ToolboxRuntimeMixin:
         worker.start()
         return status
 
+    def _pin_confirmed_toolbox_resolutions(
+        self,
+        *,
+        plan: Any,
+        draft: Any,
+        reduction: Any,
+        context: Dict[str, Any],
+    ) -> tuple[Any, Dict[str, Any]]:
+        from ..toolbox.bundle_models import ResolvedToolboxProfileSpec
+        from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec, ToolboxLockedDistributionSpec
+        from ..toolbox.definition_planner import ToolboxDefinitionPlanDraft
+        from ..toolbox.hermetic_environment import (
+            ResolvedToolboxEnvironmentInput,
+            ToolboxLockedArtifactSpec,
+        )
+
+        selected = {
+            item["environment_id"]: item["alternative_id"]
+            for item in reduction.selected_alternatives
+        }
+        catalog = dict(context["catalog"] or {})
+        profiles = []
+        bundles = []
+        resolved_environments: Dict[str, Any] = {}
+        for profile, bundle in zip(draft.profiles, draft.bundles, strict=True):
+            matching = [
+                offer for offer in plan.environment_mutations
+                if set(profile.assigned_tool_keys).issubset(
+                    {item.tool_key for item in offer.tool_mutations}
+                )
+            ]
+            if len(matching) != 1:
+                raise ValueError("toolbox_confirmation_profile_offer_mismatch")
+            offer = matching[0]
+            alternative = next(
+                item for item in offer.alternatives
+                if item.alternative_id == selected.get(offer.environment_id)
+            )
+            entry = next(
+                dict(item) for item in list(catalog.get("entries") or [])
+                if item.get("template_digest") == offer.base_template_revision
+                and item.get("template_id") == offer.base_template_id
+                and item.get("lifecycle") == "active"
+            )
+            template = ToolboxEnvironmentTemplateSpec.from_dict(entry["template"])
+            locked_artifacts = []
+            for artifact in alternative.artifacts:
+                path = self._toolbox_artifact_store.object_path(artifact.artifact_digest)
+                if not path.is_file():
+                    raise ValueError("toolbox_confirmation_artifact_missing")
+                locked_artifacts.append(ToolboxLockedArtifactSpec(
+                    distribution_name=artifact.distribution,
+                    version=artifact.version,
+                    source_id=artifact.source_id,
+                    filename=artifact.wheel_filename,
+                    sha256=artifact.artifact_digest,
+                    size_bytes=path.stat().st_size,
+                ))
+            custom_lock = (
+                alternative.lock_digest
+                if profile.custom_resolved_lock_digest is not None else None
+            )
+            resolved = ResolvedToolboxEnvironmentInput(
+                template_id=template.template_id,
+                template_digest=offer.base_template_revision,
+                runtime_version=str(context["runtime_identity"]["version"]),
+                runtime_artifact_digest=template.parent_worker_artifact_digest,
+                python_abi=context["python_abi"],
+                platform=context["platform"],
+                complete_lock_digest=template.lock_digest,
+                complete_lock=tuple(sorted(
+                    ToolboxLockedDistributionSpec(item.distribution, item.version)
+                    for item in alternative.artifacts
+                )),
+                locked_artifacts=tuple(sorted(locked_artifacts)),
+                custom_resolved_lock_digest=custom_lock,
+                isolation_policy_version=template.isolation_policy_version,
+                resolved_import_roots=profile.resolved_import_roots,
+            )
+            pinned_profile = ResolvedToolboxProfileSpec(
+                environment_key=resolved.environment_key,
+                template_id=profile.template_id,
+                template_lock_digest=profile.template_lock_digest,
+                custom_resolved_lock_digest=custom_lock,
+                sandbox_policy=profile.sandbox_policy,
+                assigned_tool_keys=profile.assigned_tool_keys,
+                resolved_import_roots=profile.resolved_import_roots,
+            )
+            bundle.resolved_profile = pinned_profile
+            bundle.dependency_lock_hash = pinned_profile.effective_lock_digest
+            profiles.append(pinned_profile)
+            bundles.append(bundle)
+            resolved_environments[pinned_profile.profile_id] = resolved.to_dict()
+        pinned = ToolboxDefinitionPlanDraft(
+            definition=draft.definition,
+            profiles=tuple(profiles),
+            bundles=tuple(bundles),
+            custom_environment_count=sum(
+                item.custom_resolved_lock_digest is not None for item in profiles
+            ),
+        )
+        return pinned, resolved_environments
+
     def _run_toolbox_definition_confirmation(
         self,
         *,
@@ -485,6 +588,12 @@ class ToolboxRuntimeMixin:
                 runtime_identity=context["runtime_identity"],
             )
             self._validate_definition_policy(confirmed_draft, context)
+            confirmed_draft, resolved_environments = self._pin_confirmed_toolbox_resolutions(
+                plan=plan,
+                draft=confirmed_draft,
+                reduction=reduction,
+                context=context,
+            )
             confirmation_ref, receipt = self._toolbox_confirmations.create(
                 plan_id=plan.plan_id,
                 toolbox_id=plan.toolbox_id,
@@ -493,6 +602,7 @@ class ToolboxRuntimeMixin:
                 choices=choices,
                 reduction=reduction,
                 confirmed_draft=confirmed_draft.to_persisted_dict(),
+                resolved_environments=resolved_environments,
                 now_ms=now_ms,
                 expires_at_ms=plan.expires_at_ms,
             )
@@ -741,6 +851,7 @@ class ToolboxRuntimeMixin:
                 "draft": draft,
                 "profile_changes": [dict(item) for item in profile_changes],
                 "confirmation_result": dict(receipt.reduction),
+                "resolved_environments": dict(receipt.resolved_environments),
                 "operation_id": operation_id,
             },
             name=f"toolbox-definition-apply-{operation_id[:12]}",
@@ -755,6 +866,7 @@ class ToolboxRuntimeMixin:
         draft: Any,
         profile_changes: List[Dict[str, Any]],
         confirmation_result: Optional[Dict[str, Any]] = None,
+        resolved_environments: Optional[Dict[str, Any]] = None,
         operation_id: str,
     ) -> Dict[str, Any]:
         from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
@@ -765,6 +877,7 @@ class ToolboxRuntimeMixin:
             draft=draft,
             profile_changes=profile_changes,
             confirmation_result=dict(confirmation_result or {}),
+            resolved_environments=dict(resolved_environments or {}),
             operation_id=str(operation_id or "").strip(),
         )
 

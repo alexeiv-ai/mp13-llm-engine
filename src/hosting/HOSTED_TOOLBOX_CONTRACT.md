@@ -595,6 +595,13 @@ fallback. Built-in prewarm and lazy acquisition use the same builder and the
 same resolved input. A dependent cannot supply an artifact source, wheel,
 lockfile, venv, or filesystem path.
 
+For definition apply, confirmation persists one `ResolvedToolboxEnvironmentInput`
+per effective profile. It is constructed from the selected offered alternative
+and verified CAS objects, then carried unchanged through rollout orchestration
+to the builder. Active custom profiles persist that exact resolved input so a
+later plan compares against the real active closure rather than an installed
+environment or a newly resolved approximation.
+
 Each cache miss creates a new candidate with `venv` configured as
 `with_pip=True` and `system_site_packages=False`. The candidate's own Python
 runs pip with `--no-index --no-deps` against the approved exact wheel set. The
@@ -610,6 +617,14 @@ are moved under the quarantine namespace with a bounded code and are never
 returned as ready. Per-environment OS file locks plus in-process locks
 deduplicate concurrent builders. Reference IDs are persisted separately;
 release removes only a reference, and deletion occurs only in grace-period GC.
+
+All environment builds, staging, spawn, and readiness checks occur before the
+single active-definition publication. A failure before publication retires
+candidate registrations and releases candidate environment references while
+leaving active definition state and routes unchanged. The durable success
+result reports the confirmed accepted, skipped, preserved, and removed tools
+plus logical package mutations; physical engine/profile/environment identities
+remain operator-only.
 
 Catalog prewarm commits the public materialization receipt only after this
 physical publication succeeds. A service configured with artifact sources

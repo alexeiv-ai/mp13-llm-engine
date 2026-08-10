@@ -160,7 +160,24 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R4-01/R4-02 (`average`) are complete. The ordinary
+Active slice: none. R3 and R4 are complete; pause before R5. R4-03/R4-04/R4-05
+(`high`) carry the selected exact verified CAS closure from confirmation through
+orchestration into the real offline hermetic builder. Active custom state keeps
+the exact resolved input for later comparisons. Apply builds/stages/warms
+before one atomic effective-definition publication, returns confirmed tool and
+package outcomes, and cleans candidate registrations/references on failure.
+The real builder/air-gap/corrupt-artifact/atomic-routing matrix passed 45 tests
+in 128.36s. The expanded authenticated daemon, definition service/transport,
+public guarantees, app migration, auth, operation, state, rollout, and atomic
+routing suite passed 140 tests in 48.75s; compile and `git diff --check` passed.
+Repository-wide validation reached 1189 passed and 3 skipped in 562.56s; two
+pre-existing workflow-helper timing tests failed in that suite order, while
+their immediate isolated reruns passed (the stream case in the two-test rerun
+and the capacity-shrink case alone in 3.96s). The preceding repository-wide run
+reached 1190 passed and 3 skipped with only the now-corrected stale contract
+signature assertion; the contract-doc suite then passed 10 tests in 0.09s.
+
+Completed slice evidence: R4-01/R4-02 (`average`) are complete. The ordinary
 consumer approval command and hosted-reference helper are removed. A distinct
 dependency-approver role and `toolbox-approve-confirmed-definition-plan`
 surface mint approval only after confirmation. The durable approval binds the

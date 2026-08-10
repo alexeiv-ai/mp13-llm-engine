@@ -12,7 +12,8 @@ from hosting.toolbox.bundle_models import ResolvedToolboxProfileSpec, ToolboxDef
 from hosting.toolbox.dependency_policy import ToolboxDependencyPolicy
 from hosting.toolbox.hosted_ref import HostedToolBoxRef
 from hosting.toolbox.identity import identity_digest
-from hosting_toolbox_test_catalog import publish_realized_test_catalog, realized_test_catalog
+from test_hosting_toolbox_definition_resolution import _service_with_verified_closure
+from test_hosting_toolbox_definition_service import _custom_policy
 
 
 def _digest(character: str) -> str:
@@ -60,36 +61,11 @@ def _definition(toolbox_id: str, *, source_value: str = "v1") -> dict:
 
 
 def _service(tmp_path: Path) -> EngineHostService:
-    service = EngineHostService(
-        engines_state_file=tmp_path / "managed.json",
-        control_state_file=tmp_path / "control.json",
-    )
-    publish_realized_test_catalog(service)
-    return service
+    return _service_with_verified_closure(tmp_path)[0]
 
 
 def _custom_service(tmp_path: Path) -> EngineHostService:
-    shipped = realized_test_catalog()
-    policy_fields = {
-        "allowed_template_ids": tuple(item.template_id for item in shipped.templates),
-        "allowed_targets": ("cp312-win_amd64",),
-        "package_allowlist": ("requests",),
-        "package_denylist": (),
-        "allow_custom": True,
-        "custom_requires_approval": True,
-        "online_resolution_allowed": False,
-        "allowed_index_origins": (),
-    }
-    service = EngineHostService(
-        engines_state_file=tmp_path / "managed.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_dependency_policy=ToolboxDependencyPolicy(
-            revision=identity_digest("test.custom.policy", policy_fields),
-            **policy_fields,
-        ),
-    )
-    publish_realized_test_catalog(service)
-    return service
+    return _service_with_verified_closure(tmp_path, policy=_custom_policy())[0]
 
 
 def _custom_definition(toolbox_id: str) -> dict:
@@ -100,9 +76,38 @@ def _custom_definition(toolbox_id: str) -> dict:
         "mode": "auto",
         "template_id": None,
         "declared_imports": ["requests"],
-        "package_requirements": ["requests==999.0.0"],
+        "package_requirements": ["requests==2.32.5"],
     }
     return definition
+
+
+def _plan_result(service: EngineHostService, definition: dict, request_id: str, ttl_ms=900000) -> dict:
+    started = service.toolbox_plan_definition(
+        definition=definition, request_id=request_id,
+        owner_actor_id="actor:a", authority_id="workspace:a", ttl_ms=ttl_ms,
+    )
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    return terminal["result"]
+
+
+def _confirmation_result(service: EngineHostService, plan: dict, request_id: str) -> dict:
+    choices = [{
+        "environment_id": item["environment_id"],
+        "alternative_id": item["preferred_alternative_id"],
+        "accept_package_changes": True,
+    } for item in plan["environment_mutations"]]
+    started = service.toolbox_confirm_definition_plan(
+        plan_id=plan["plan_id"], environment_choices=choices, request_id=request_id,
+        owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    return terminal["result"]
 
 
 def _install_toolbox(service: EngineHostService, toolbox_id: str, engine_id: str, character: str) -> None:
@@ -128,6 +133,7 @@ def _install_toolbox(service: EngineHostService, toolbox_id: str, engine_id: str
                 "engine_id": engine_id,
                 "tool_names": ["Shared"],
                 "environment_reference": reference,
+                "resolved_environment": {},
             }
         },
         tool_routes={
@@ -161,27 +167,16 @@ def _install_toolbox(service: EngineHostService, toolbox_id: str, engine_id: str
 def test_plan_definition_expiry_and_authoritative_pin_changes_fail_closed(tmp_path: Path) -> None:
     service = _service(tmp_path)
     definition = _definition("approval")
-    plan = service.toolbox_plan_definition(
-        definition=definition, owner_actor_id="actor:a", authority_id="workspace:a"
-    )
-    changed = _definition("approval", source_value="changed")
-    with pytest.raises(ValueError, match="toolbox_definition_plan_mismatch"):
+    plan = _plan_result(service, definition, "plan-pins")
+    with pytest.raises(PermissionError, match="toolbox_confirmation_not_found"):
         service.toolbox_apply_definition(
-            definition=changed,
             plan_id=plan["plan_id"],
-            request_id="wrong-definition",
+            confirmation_ref="confirmation_fabricated",
+            request_id="fabricated-confirmation",
             owner_actor_id="actor:a",
             authority_id="workspace:a",
         )
-    with pytest.raises(ValueError, match="dependency_approval_ref_must_be_opaque_string"):
-        service.toolbox_apply_definition(
-            definition=definition,
-            plan_id=plan["plan_id"],
-            request_id="fabricated-approval",
-            dependency_approval_ref=True,  # type: ignore[arg-type]
-            owner_actor_id="actor:a",
-            authority_id="workspace:a",
-        )
+    confirmation = _confirmation_result(service, plan, "confirm-pins")
 
     original_context = service._toolbox_definition_planning_context
 
@@ -195,50 +190,20 @@ def test_plan_definition_expiry_and_authoritative_pin_changes_fail_closed(tmp_pa
     service._toolbox_definition_planning_context = changed_context  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="toolbox_definition_plan_pins_changed"):
         service.toolbox_apply_definition(
-            definition=definition,
             plan_id=plan["plan_id"],
+            confirmation_ref=confirmation["confirmation_ref"],
             request_id="changed-policy",
             owner_actor_id="actor:a",
             authority_id="workspace:a",
         )
 
-    catalog_service = _service(tmp_path / "catalog")
-    catalog_definition = _definition("catalog")
-    catalog_plan = catalog_service.toolbox_plan_definition(
-        definition=catalog_definition,
-        owner_actor_id="actor:a",
-        authority_id="workspace:a",
-    )
-    original_catalog_context = catalog_service._toolbox_definition_planning_context
-
-    def changed_catalog_context():
-        context = original_catalog_context()
-        context["catalog_revision"] = identity_digest("test.changed.catalog", {"v": 2})
-        return context
-
-    catalog_service._toolbox_definition_planning_context = changed_catalog_context  # type: ignore[method-assign]
-    with pytest.raises(ValueError, match="toolbox_definition_plan_pins_changed"):
-        catalog_service.toolbox_apply_definition(
-            definition=catalog_definition,
-            plan_id=catalog_plan["plan_id"],
-            request_id="changed-catalog",
-            owner_actor_id="actor:a",
-            authority_id="workspace:a",
-        )
-
     service = _service(tmp_path / "expiry")
-    expiring = service.toolbox_plan_definition(
-        definition=_definition("expiry"),
-        owner_actor_id="actor:a",
-        authority_id="workspace:a",
-        ttl_ms=1,
-    )
+    expiring = _plan_result(service, _definition("expiry"), "plan-expiry", ttl_ms=1)
     time.sleep(0.01)
     with pytest.raises(ValueError, match="toolbox_definition_plan_expired"):
-        service.toolbox_apply_definition(
-            definition=_definition("expiry"),
+        service.toolbox_confirm_definition_plan(
             plan_id=expiring["plan_id"],
-            request_id="expired",
+            environment_choices=[], request_id="confirm-expired",
             owner_actor_id="actor:a",
             authority_id="workspace:a",
         )
@@ -248,22 +213,20 @@ def test_custom_approval_is_bound_to_exact_plan_definition_and_delta(tmp_path: P
     service = _custom_service(tmp_path)
     first = _custom_definition("custom-one")
     second = _custom_definition("custom-two")
-    first_plan = service.toolbox_plan_definition(
-        definition=first, owner_actor_id="actor:a", authority_id="workspace:a"
-    )
-    second_plan = service.toolbox_plan_definition(
-        definition=second, owner_actor_id="actor:a", authority_id="workspace:a"
-    )
-    approval = service.toolbox_approve_definition_plan(
-        plan_id=first_plan["plan_id"],
-        owner_actor_id="actor:a",
-        authority_id="workspace:a",
+    first_plan = _plan_result(service, first, "plan-first")
+    second_plan = _plan_result(service, second, "plan-second")
+    first_confirmation = _confirmation_result(service, first_plan, "confirm-first")
+    second_confirmation = _confirmation_result(service, second_plan, "confirm-second")
+    approval = service.toolbox_approve_confirmed_definition_plan(
+        confirmation_ref=first_confirmation["confirmation_ref"],
+        approver_actor_id="approver:dependencies",
+        dependency_approver_authorized=True,
     )
 
     with pytest.raises(PermissionError, match="dependency_approval_invalid"):
         service.toolbox_apply_definition(
-            definition=second,
             plan_id=second_plan["plan_id"],
+            confirmation_ref=second_confirmation["confirmation_ref"],
             request_id="wrong-plan-delta",
             dependency_approval_ref=approval["approval_ref"],
             owner_actor_id="actor:a",

@@ -437,6 +437,7 @@ class ToolboxSandboxAssignment:
     bundle_spec: "ToolboxBundleSpec"
     staged_bundle: Optional["StagedToolboxBundle"] = None
     registration: Optional[Dict[str, Any]] = None
+    materialization_reference_id: Optional[str] = None
 
 
 def _bounded_plan_text(value: Any, *, label: str, maximum: int = 512) -> str:

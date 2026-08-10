@@ -189,7 +189,7 @@ def test_apply_returns_immediately_reuses_request_and_rolls_out_once(tmp_path: P
     release = threading.Event()
     dispatches: list[str] = []
 
-    def fake_apply(*, draft, profile_changes, confirmation_result, operation_id):
+    def fake_apply(*, draft, profile_changes, confirmation_result, resolved_environments, operation_id):
         dispatches.append(operation_id)
         service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         entered.set()
@@ -323,7 +323,7 @@ def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_
     entered = threading.Event()
     release = threading.Event()
 
-    def fake_apply(*, draft, profile_changes, confirmation_result, operation_id):
+    def fake_apply(*, draft, profile_changes, confirmation_result, resolved_environments, operation_id):
         service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         entered.set()
         assert release.wait(2)

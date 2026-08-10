@@ -1184,6 +1184,25 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
         return 2
 
+    if cmd_name == "toolbox-state-archive-v1":
+        archive_root = Path(str(effective_payload.get("hosting_root") or "")).expanduser().resolve()
+        archive_service = EngineHostService(
+            engines_state_file=archive_root / "state" / "managed_engines.json",
+            control_state_file=archive_root / "access_control.json",
+        )
+        try:
+            _print_ok(archive_service.toolbox_state_archive_v1(
+                hosting_root=str(archive_root),
+                expected_state_sha256=str(effective_payload.get("expected_state_sha256") or ""),
+                acknowledge_version_1_archive=bool(
+                    effective_payload.get("acknowledge_version_1_archive", False)
+                ),
+            ))
+            return 0
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+            return 1
+
     # Fallback: direct EngineHostService call (original behavior)
     svc = EngineHostService(
         engines_state_file=args.engines_state_file,
