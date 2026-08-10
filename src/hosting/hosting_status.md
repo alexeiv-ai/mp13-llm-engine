@@ -59,6 +59,13 @@ Release/adoption pins retained for traceability:
     air-gap ingestion, or non-built-in environment retention/removal.
 11. No real-daemon end-to-end test covers built-in setup, multi-tool package
     confirmation, custom package add/removal, or restart healing.
+12. Plan, GC/repair/reconcile, duplicate toolbox-execution attach, and hosted
+    cancellation are client-blocking today. Running synchronous service methods
+    in `asyncio.to_thread` protects the daemon loop but does not make the public
+    request non-blocking.
+13. Online and air-gapped package ingress do not yet converge on a configured,
+    verified content-addressed wheel store through durable progress-reporting
+    operations.
 
 ## Progress ledger
 
@@ -67,7 +74,7 @@ transcript was intentionally removed because it obscured current truth.
 
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
-| R0 Corrective contract baseline | Active | R0-01 is complete and was corrected on 2026-08-09 to prohibit dependent edits, remove compatibility preservation, reference production seams, and specify confirmation/config behavior. R0-02 and R0-03 remain cross-slice obligations. No runtime behavior changed. |
+| R0 Corrective contract baseline | Active | R0-01 is complete and was corrected on 2026-08-09 to prohibit dependent edits, remove compatibility preservation, reference production seams, specify package ingress and confirmation/config behavior, audit blocking APIs, and allocate work by expertise. R0-02 and R0-03 remain cross-slice obligations. No runtime behavior changed. |
 | R1 Canonical current-host target | Pending | No implementation started. |
 | R2 Revisioned hosting configuration and built-ins | Pending | No implementation started. |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
