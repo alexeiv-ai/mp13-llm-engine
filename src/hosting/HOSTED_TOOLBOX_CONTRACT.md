@@ -439,6 +439,24 @@ through the approved deployment/artifact channel. Preseeding verifies manifest
 signature and artifact digest before the artifact becomes discoverable. Clients
 receive readiness/diagnostic projections, never the physical preseed path.
 
+The signed ZIP has exactly canonical `manifest.json`, canonical
+`signature.json`, and manifest-declared wheel files directly beneath
+`wheels/`. The manifest binds bundle ID, logical air-gap source ID,
+`source_set_revision`, the exact detected target, signing-key ID, and a
+distribution-sorted wheel list. Each wheel row binds normalized distribution,
+exact version, filename, byte size, SHA-256, the complete filename tag set, and
+bounded provenance. `signature.json` binds `ed25519`, the same key ID, and an
+unpadded base64url 64-byte signature over the exact canonical manifest bytes.
+
+Import rejects every extra, duplicate, directory, symlink/device, absolute,
+parent-traversing, backslash, unsupported-compression, or over-ratio ZIP entry.
+It independently validates wheel ZIP structure and bounded metadata, exact
+name/version and Python-version constraints, current-host tags, and every applicable
+`Requires-Dist` edge against the one-version-per-normalized-name bundle lock.
+Verified bytes are staged and hashed before moving under their digest; only one
+atomic index replacement makes the bundle discoverable. A failed import can
+leave at most unindexed digest bytes, never a discoverable partial bundle.
+
 ### Supported targets and timeouts
 
 The initial target families are CPython 3.12 on `win_amd64`, `win_arm64`,

@@ -602,6 +602,10 @@ boundary—not a double—passes.
     verified content-addressed artifact store with bounds and redaction.
   - [ ] **R2-05b** Implement configured read-only signed air-gap ZIP ingestion
     with strict manifest, signature, path, tag, digest, and closure checks.
+    - [x] **R2-05b1** Implement the Ed25519-verified strict ZIP importer and
+      atomically indexed content-addressed artifact store.
+    - [ ] **R2-05b2** Discover configured read-only bundles and feed verified
+      store artifacts into built-in resolution without exposing source paths.
   - [ ] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
     staged storage with bounded, expiring, idempotent commit.
 - [ ] **R2-06** Run/recover built-in realization as a system-owned hosted

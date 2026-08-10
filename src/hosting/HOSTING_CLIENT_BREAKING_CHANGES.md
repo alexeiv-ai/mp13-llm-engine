@@ -133,6 +133,12 @@ independent schema. Source credentials and filesystem paths remain daemon-owned.
 Air-gapped packages arrive only from a configured read-only store or the
 authenticated signed-bundle administrator upload lifecycle.
 
+The accepted bundle is a canonical Ed25519-signed ZIP containing only
+`manifest.json`, `signature.json`, and declared wheels under `wheels/`.
+Directories, links, traversal, undeclared entries, source distributions,
+incompatible tags, digest/metadata mismatches, and incomplete dependency
+closures are rejected before the content-addressed store index changes.
+
 Administrator setup logic must change as follows:
 
 - replace `EngineHostService(toolbox_environment_catalog=...,

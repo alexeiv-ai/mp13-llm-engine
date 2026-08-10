@@ -81,7 +81,7 @@ transcript was intentionally removed because it obscured current truth.
 | --- | --- | --- |
 | R0 Corrective contract baseline | Active | R0-01 is complete. R0-03 populated the corrective consumer/administrator handoff before implementation: removed target/configuration and mutation surfaces, replacement payload sequence, durable retry/watch/recovery behavior, dependent removals/additions, rollout order, and explicit pending implementation/adoption gates are recorded. Focused docs: 10 passed in 0.12s; `git diff --check` passed. R0-02 remains a cross-slice obligation. No runtime behavior changed. |
 | R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03a implements a five-runner GitHub Actions matrix; the local Windows x64 target/native-wheel probe passed and target/workflow tests are 9 passed in 0.73s. R1-03a remains unchecked until all native jobs execute successfully. R1-03b remains gated on R6-04, and no new target family is advertised. |
-| R2 Revisioned hosting configuration and built-ins | Active | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-01b atomically persists revision history; changes invalidate unconsumed plans and non-active receipts while active catalog/environment-reference state remains unchanged. Focused config/plan/receipt/docs: 34 passed in 3.22s. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. |
+| R2 Revisioned hosting configuration and built-ins | Active | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-01b atomically persists revision history; changes invalidate unconsumed plans and non-active receipts while active catalog/environment-reference state remains unchanged. Focused config/plan/receipt/docs: 34 passed in 3.22s. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. R2-05b1 adds canonical raw-Ed25519 bundle verification, adversarial ZIP/wheel/closure validation, and atomic content-addressed indexing. Focused signed-bundle/resolver/config/docs matrix: 29 passed in 13.40s; Poetry lock/check and `git diff --check` passed (existing Poetry deprecation warnings only). |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
 | R4 Privileged approval and immutable apply | Pending | No implementation started. |
 | R5 Removal, retention, and administrator environments | Pending | No implementation started. |
@@ -90,18 +90,19 @@ transcript was intentionally removed because it obscured current truth.
 
 ## Active implementation slice
 
-Active slice: R2-01b (`high`). Persist strict host configuration revisions in
-one atomic process-locked repository. When the current revision changes, prune
-unused definition plans and materialization receipts while preserving the
-active catalog revisions, active toolbox definitions, and hermetic environment
-references. Missing configuration remains unavailable rather than silently
-loading a prior revision.
+Active slice: R2-05b1 (`high`). Add the strict signed air-gap ZIP importer and
+one atomically indexed content-addressed artifact store. Verify canonical
+manifest shape/digest, raw Ed25519 signature and configured key binding, ZIP
+paths/types/compression bounds, current-target wheel tags, exact hashes/sizes,
+wheel metadata, and complete dependency closure before making a bundle
+discoverable. Failed imports leave no discoverable partial bundle.
 
 Required validation:
 
-- focused revision repository and restart/change tests
-- stale plan/unused receipt invalidation with active-revision receipt retention
-- active catalog/toolbox/environment-reference state remains byte-identical
+- focused valid/idempotent signed bundle and restart tests
+- invalid signature, traversal/symlink/extra-entry, zip-bomb, tag, digest,
+  metadata, and incomplete-closure rejection matrix
+- failed imports leave the artifact index byte-identical
 - `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q`
 - `git diff --check`
 
