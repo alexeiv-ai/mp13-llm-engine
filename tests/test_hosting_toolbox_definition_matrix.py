@@ -11,7 +11,7 @@ from hosting.toolbox.definition_planner import (
     plan_toolbox_definition,
     profile_snapshots_from_draft,
 )
-from hosting.toolbox.shipped_templates import load_shipped_toolbox_catalog
+from hosting_toolbox_test_catalog import realized_test_catalog
 
 
 MANUAL_KEY = "manual:pkg.manualecho:ManualEcho"
@@ -107,7 +107,7 @@ def _definition(*, autos=(), manuals=(), intrinsics=("scriptable_calculator",)) 
 def _plan(definition: dict):
     return plan_toolbox_definition(
         definition,
-        templates=load_shipped_toolbox_catalog().templates,
+        templates=realized_test_catalog().templates,
         python_abi=f"cp{sys.version_info.major}{sys.version_info.minor}",
         platform="win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64",
         runtime_identity={

@@ -11,7 +11,7 @@ import pytest
 from hosting.service.host_service import EngineHostService
 from hosting.toolbox.dependency_policy import ToolboxDependencyPolicy
 from hosting.toolbox.identity import identity_digest
-from hosting.toolbox.shipped_templates import load_shipped_toolbox_catalog
+from hosting_toolbox_test_catalog import publish_realized_test_catalog, realized_test_catalog
 
 
 def _dependency(*, imports=(), requirements=()):
@@ -59,15 +59,17 @@ def _definition(*, toolbox_id="demo", tool_name="Alpha", expected_revision=None,
 
 
 def _service(tmp_path: Path, *, policy: ToolboxDependencyPolicy | None = None) -> EngineHostService:
-    return EngineHostService(
+    service = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
         toolbox_dependency_policy=policy,
     )
+    publish_realized_test_catalog(service)
+    return service
 
 
 def _custom_policy() -> ToolboxDependencyPolicy:
-    shipped = load_shipped_toolbox_catalog()
+    shipped = realized_test_catalog()
     python_abi = f"cp{sys.version_info.major}{sys.version_info.minor}"
     platform = "win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64"
     payload = {

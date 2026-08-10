@@ -45,6 +45,9 @@ The following configuration fields and behaviors are removed:
   `toolbox_host_project` for sanitized effective configuration and
   `toolbox_readiness` for built-in readiness;
 - `resource` and the shipped realized-catalog resource contract;
+- `hosting.toolbox.shipped_templates`,
+  `initialize_shipped_toolbox_templates`, and automatic runtime fallback to
+  packaged realized locks;
 - `required_target`, including the literals `cp312-win_amd64` and
   `cp312-manylinux_2_28_x86_64` as administrator-selected build targets;
 - `required_template_ids` tied to shipped realized lock resources;
@@ -88,7 +91,7 @@ exact top-level/nested field shape is:
       "template_id": "builtin-data",
       "imports": ["numpy"],
       "package_requirements": ["numpy"],
-      "sandbox_policy": "compute_only",
+      "sandbox_policy": "compute-only",
       "required": true,
       "prewarm": true,
       "provenance": "parent-release"

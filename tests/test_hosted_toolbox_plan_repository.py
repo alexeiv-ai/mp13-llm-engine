@@ -14,7 +14,7 @@ from hosting.toolbox.definition_planner import (
     plan_toolbox_definition,
     profile_snapshots_from_draft,
 )
-from hosting.toolbox.shipped_templates import load_shipped_toolbox_catalog
+from hosting_toolbox_test_catalog import realized_test_catalog
 
 
 CATALOG_REVISION = "sha256:" + "c" * 64
@@ -64,7 +64,7 @@ def _definition(toolbox_id: str, requests: list[dict], *, expected_revision: str
 
 
 def _draft(definition: dict):
-    shipped = load_shipped_toolbox_catalog()
+    shipped = realized_test_catalog()
     return plan_toolbox_definition(
         definition,
         templates=shipped.templates,

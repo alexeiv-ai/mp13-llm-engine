@@ -12,7 +12,7 @@ from hosting.toolbox.bundle_models import ResolvedToolboxProfileSpec, ToolboxDef
 from hosting.toolbox.dependency_policy import ToolboxDependencyPolicy
 from hosting.toolbox.hosted_ref import HostedToolBoxRef
 from hosting.toolbox.identity import identity_digest
-from hosting.toolbox.shipped_templates import load_shipped_toolbox_catalog
+from hosting_toolbox_test_catalog import publish_realized_test_catalog, realized_test_catalog
 
 
 def _digest(character: str) -> str:
@@ -60,14 +60,16 @@ def _definition(toolbox_id: str, *, source_value: str = "v1") -> dict:
 
 
 def _service(tmp_path: Path) -> EngineHostService:
-    return EngineHostService(
+    service = EngineHostService(
         engines_state_file=tmp_path / "managed.json",
         control_state_file=tmp_path / "control.json",
     )
+    publish_realized_test_catalog(service)
+    return service
 
 
 def _custom_service(tmp_path: Path) -> EngineHostService:
-    shipped = load_shipped_toolbox_catalog()
+    shipped = realized_test_catalog()
     policy_fields = {
         "allowed_template_ids": tuple(item.template_id for item in shipped.templates),
         "allowed_targets": ("cp312-win_amd64",),
@@ -78,7 +80,7 @@ def _custom_service(tmp_path: Path) -> EngineHostService:
         "online_resolution_allowed": False,
         "allowed_index_origins": (),
     }
-    return EngineHostService(
+    service = EngineHostService(
         engines_state_file=tmp_path / "managed.json",
         control_state_file=tmp_path / "control.json",
         toolbox_dependency_policy=ToolboxDependencyPolicy(
@@ -86,6 +88,8 @@ def _custom_service(tmp_path: Path) -> EngineHostService:
             **policy_fields,
         ),
     )
+    publish_realized_test_catalog(service)
+    return service
 
 
 def _custom_definition(toolbox_id: str) -> dict:

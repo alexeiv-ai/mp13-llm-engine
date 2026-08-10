@@ -30,7 +30,6 @@ class ToolboxRuntimeMixin:
         from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec, normalize_distribution_name
         from ..toolbox.dependency_policy import ToolboxDependencyPolicy
         from ..toolbox.identity import identity_digest
-        from ..toolbox.shipped_templates import load_shipped_toolbox_catalog
         from ..toolbox.target import detect_current_toolbox_target
 
         catalog = self._toolbox_template_catalog.read()
@@ -47,15 +46,10 @@ class ToolboxRuntimeMixin:
             )
             if entry is not None:
                 active_templates.append(ToolboxEnvironmentTemplateSpec.from_dict(entry["template"]))
-        if active_templates:
-            templates = tuple(active_templates)
-            catalog_revision = str(catalog["catalog_revision"])
-        else:
-            shipped = load_shipped_toolbox_catalog()
-            templates = shipped.templates
-            catalog_revision = identity_digest(
-                "hosting.toolbox.builtin_catalog.v1", [item.to_dict() for item in templates]
-            )
+        if not active_templates:
+            raise ValueError("toolbox_builtins_not_ready")
+        templates = tuple(active_templates)
+        catalog_revision = str(catalog["catalog_revision"])
         current_target = detect_current_toolbox_target()
         python_abi = self._toolbox_required_python_abi or current_target.python_abi
         platform = self._toolbox_required_platform or current_target.platform

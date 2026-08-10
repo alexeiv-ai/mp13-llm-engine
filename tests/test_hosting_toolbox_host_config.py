@@ -15,15 +15,12 @@ from hosting.toolbox.host_project_config import (
     ToolboxHostProjectConfiguration,
 )
 from hosting.toolbox.identity import identity_digest
-from hosting.toolbox.shipped_templates import (
-    SHIPPED_TEMPLATE_IDS,
-    load_shipped_toolbox_catalog,
-)
-from hosting.toolbox import shipped_templates
 from hosting.toolbox.target import detect_current_toolbox_target
+from hosting_toolbox_test_catalog import realized_test_catalog
 
 
 TARGET = detect_current_toolbox_target()
+BUILTIN_IDS = ("core", "py-compute")
 
 
 class VerifiedMaterializer:
@@ -122,18 +119,9 @@ def _service(root: Path) -> EngineHostService:
     )
 
 
-def _wait_startup(service: EngineHostService) -> None:
-    for operation in service._toolbox_startup["operations"]:  # noqa: SLF001
-        terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
-            operation_id=operation["operation"]["operation_id"],
-            timeout_seconds=10,
-        )
-        assert terminal["lifecycle"] == "terminal_success"
-
-
 def test_host_project_configuration_is_strict_revisioned_and_current_target() -> None:
     config = ToolboxHostProjectConfiguration.from_dict(_configuration())
-    assert tuple(item.template_id for item in config.builtins) == SHIPPED_TEMPLATE_IDS
+    assert tuple(item.template_id for item in config.builtins) == BUILTIN_IDS
     assert config.target == TARGET
     assert config.config_revision.startswith("sha256:")
     assert config.source_set_revision.startswith("sha256:")
@@ -158,16 +146,17 @@ def test_host_project_configuration_is_strict_revisioned_and_current_target() ->
         ToolboxHostProjectConfiguration.from_dict(reordered)
 
 
-def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
+def test_configured_intents_remain_unpublished_until_exact_resolution(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    assert [item["template_id"] for item in service._toolbox_startup["published"]] == list(  # noqa: SLF001
-        SHIPPED_TEMPLATE_IDS
-    )
-    _wait_startup(service)
+    assert service._toolbox_startup["status"] == "resolution_required"  # noqa: SLF001
+    assert service._toolbox_startup["published"] == []  # noqa: SLF001
+    assert service._toolbox_startup["operations"] == []  # noqa: SLF001
+    assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
     summary = service.hosting_setup_summary()
-    assert summary["toolbox_readiness"]["status"] == "ready"
+    assert summary["toolbox_readiness"]["status"] == "degraded"
+    assert summary["toolbox_readiness"]["code"] == "required_template_missing"
     parsed = ToolboxHostProjectConfiguration.from_dict(_configuration())
     assert summary["toolbox_host_project"] == parsed.public_dict()
     assert "credential_ref" not in str(summary["toolbox_host_project"])
@@ -175,39 +164,6 @@ def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
     assert "artifact_source" not in serialized
     assert "python_executable" not in serialized
     assert "installer" not in serialized
-
-
-def test_nonstandard_deferred_materialization_stays_degraded_until_durable_prewarm(
-    tmp_path: Path,
-) -> None:
-    configuration = _configuration()
-    configuration["builtins"] = [
-        {**item, "prewarm": False} for item in configuration["builtins"]
-    ]
-    service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
-        toolbox_template_materializer=VerifiedMaterializer(),
-        toolbox_host_project_configuration=configuration,
-    )
-    assert service._toolbox_startup["operations"] == []  # noqa: SLF001
-    assert service.hosting_setup_summary()["toolbox_readiness"]["status"] == "degraded"
-
-    state = service._toolbox_template_catalog.read()  # noqa: SLF001
-    for template_id in SHIPPED_TEMPLATE_IDS:
-        started = service.toolbox_template_prewarm(
-            template_id=template_id,
-            template_digest=state["active"][template_id],
-            python_abi=TARGET.python_abi,
-            platform=TARGET.platform,
-            request_id=f"deferred-materialization:{template_id}",
-            owner_actor_id="admin:deferred-materialization-test",
-        )
-        terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
-            operation_id=started["operation"]["operation_id"], timeout_seconds=10
-        )
-        assert terminal["lifecycle"] == "terminal_success"
-    assert service.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
 
 
 def test_airgap_source_rejects_paths_credentials_and_https_mix() -> None:
@@ -226,28 +182,17 @@ def test_airgap_source_rejects_paths_credentials_and_https_mix() -> None:
         ToolboxHostProjectConfiguration.from_dict(configured)
 
 
-@pytest.mark.parametrize("failure", ["missing", "corrupt"])
-def test_missing_or_corrupt_shipped_lock_fails_with_stable_readiness_code(
-    monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    original = shipped_templates._read_json_resource
-
-    def broken_resource(name: str):
-        if name.endswith(".lock.json"):
-            if failure == "missing":
-                raise FileNotFoundError(name)
-            raise ValueError(f"shipped_template_resource_invalid:{name}")
-        return original(name)
-
-    monkeypatch.setattr(shipped_templates, "_read_json_resource", broken_resource)
-    with pytest.raises(ValueError, match="required_template_lock_invalid"):
-        shipped_templates.load_shipped_toolbox_catalog()
+def test_realized_shipped_catalog_and_lock_resources_are_absent() -> None:
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "src/hosting/toolbox/shipped_templates.py").exists()
+    resources = root / "src/hosting/resources/toolbox_templates"
+    assert not (resources / "catalog.json").exists()
+    assert not list(resources.glob("*.lock.json"))
 
 
 def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    _wait_startup(service)
-    shipped = load_shipped_toolbox_catalog()
+    shipped = realized_test_catalog()
     release = shipped.release("core")
     replacement = release.template.to_dict()
     replacement["provenance"] = {
@@ -283,11 +228,10 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     service.close()
 
     restarted = _service(tmp_path)
-    _wait_startup(restarted)
     state = restarted._toolbox_template_catalog.read()  # noqa: SLF001
     core_entries = [item for item in state["entries"] if item["template_id"] == "core"]
-    assert len(core_entries) == 2
+    assert len(core_entries) == 1
     assert state["active"]["core"] == published["template_digest"]
     status = restarted.hosting_setup_summary()["toolbox_readiness"]
-    assert status["status"] == "ready"
+    assert status["status"] == "degraded"
     assert status["templates"][0]["template_digest"] == published["template_digest"]

@@ -494,34 +494,34 @@ and grace period expire.
 
 ## Initial environment catalog
 
-The initial catalog exposes exactly two stable logical template IDs: `core` and
-`py-compute`. Logical IDs have no version suffix. A catalog update publishes a
-new immutable revision below the same logical ID; plans pin the selected
-revision and never resolve an unqualified ID again during apply.
+The release-owned configuration declares exactly two stable logical built-in
+intent IDs: `core` and `py-compute`. Logical IDs have no version suffix. Intent
+contains imports, package requirements, a sandbox-policy reference, readiness
+flags, and provenance only. It contains no resolved distribution lock, wheel
+filename, artifact digest, or target-selected manifest.
 
-Both templates ship as signed complete manifests with complete distribution
-locks for every advertised target. A template revision identity is the tuple of
-logical template ID, template manifest digest, complete lock digest, catalog
-revision, Python ABI, platform tag, parent worker artifact digest, and isolation
-policy version. Changing any tuple member creates a different revision.
+The package ships no realized built-in catalog or lock JSON. Normal host setup
+must resolve each intent from the configured source mode for the one detected
+current-host target. Until every required intent has one complete exact wheel
+closure, no entry from that configuration revision is published and toolbox
+readiness remains false with a stable bounded diagnostic.
 
-The initial package resource is implemented at
-`hosting.resources.toolbox_templates/catalog.json`, with complete independent
-`core.lock.json` and `py-compute.lock.json` resources. The strict loader
-recomputes lock, manifest, parent-worker, and resource-artifact identities and
-rejects unknown or capability-bearing package metadata before constructing a
-template. Normal host setup publishes both through the immutable catalog,
-starts both prewarms through the durable target-host materializer, and reports
-standard readiness only after both exact target receipts exist.
+After resolution and verification, each complete closure becomes a signed
+immutable template revision. Its identity includes the logical template ID,
+template manifest digest, complete lock digest, catalog revision, Python ABI,
+platform tag, parent worker artifact digest, and isolation policy version.
+Changing any member creates a different revision. Plans pin the selected
+revision and never resolve an unqualified logical ID again during apply.
 
 `core` contains the installed hosting/worker artifact and only its complete
 protocol, serialization, validation, and sandbox-harness dependency closure.
 It contains no optional mathematics, data, document, network-client, or model
 packages. Standard-library modules need no distribution entry.
 
-`py-compute` has its own complete independently materialized lock. It includes
-the same hosting/worker closure plus pinned NumPy, SymPy, NumExpr, and every
-third-party distribution imported by a shipped parent compute intrinsic.
+`py-compute` resolves to its own complete independently materialized lock. It
+includes the same hosting/worker closure plus exact versions of NumPy, SymPy,
+NumExpr, and every third-party distribution imported by a release-owned parent
+compute intrinsic.
 `py-compute` is not constructed by copying, layering, or inheriting the
 `core` site-packages directory. Sharing digest-addressed artifact bytes is
 allowed; sharing a mutable installation is not.

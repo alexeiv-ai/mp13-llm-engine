@@ -580,7 +580,7 @@ boundary—not a double—passes.
 - [ ] **R2-03** Replace realized shipped lock resources in
   `toolbox/shipped_templates.py` and `resources/toolbox_templates/` with built-in
   intent. Resolve exact transitive wheel closures for the current host.
-  - [ ] **R2-03a** Replace the shipped catalog and lock JSON resources with
+  - [x] **R2-03a** Replace the shipped catalog and lock JSON resources with
     strict release-owned built-in intents and remove lock-JSON artifact bridges.
   - [ ] **R2-03b** Resolve each intent to one exact current-host transitive wheel
     closure from the configured source mode with stable missing-wheel results.

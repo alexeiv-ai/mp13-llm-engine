@@ -29,7 +29,7 @@ from hosting.toolbox.dependency_policy import (
     ToolboxDependencyPolicy,
     validate_toolbox_dependency_policy,
 )
-from hosting.toolbox.shipped_templates import load_shipped_toolbox_catalog
+from hosting_toolbox_test_catalog import realized_test_catalog
 
 
 def _digest(char: str) -> str:
@@ -145,7 +145,7 @@ def test_healthy_installed_model_cannot_be_selected_by_planner_or_custom_builder
 
 
 def test_dependency_payload_cannot_smuggle_model_runtime_authority() -> None:
-    template = load_shipped_toolbox_catalog().release("core").template
+    template = realized_test_catalog().release("core").template
     dependencies = resolve_toolbox_dependencies(
         analyze_toolbox_bundle_imports(
             [ToolboxBundleFile(relative_path="main.py", content="import json\n")]

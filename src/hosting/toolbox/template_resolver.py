@@ -17,7 +17,7 @@ from .dependency_analysis import (
     select_toolbox_environment_template,
 )
 from .identity import identity_digest, require_digest
-from .shipped_templates import compute_only_sandbox_policy
+from .sandbox_policies import compute_only_sandbox_policy
 
 
 TEMPLATE_RUNTIME_BINDING_DOMAIN = "hosting.toolbox.template_runtime_binding.v1"

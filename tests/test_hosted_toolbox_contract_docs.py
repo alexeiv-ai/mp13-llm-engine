@@ -211,11 +211,13 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
     text = _contract_text()
     prose = " ".join(text.split())
     for required in [
-        "exactly two stable logical template IDs: `core` and `py-compute`",
+        "exactly two stable logical built-in intent IDs: `core` and `py-compute`",
         "Logical IDs have no version suffix.",
-        "signed complete manifests with complete distribution locks",
+        "It contains no resolved distribution lock, wheel filename, artifact digest",
+        "ships no realized built-in catalog or lock JSON",
+        "one complete exact wheel closure",
         "parent worker artifact digest, and isolation policy version",
-        "pinned NumPy, SymPy, NumExpr",
+        "exact versions of NumPy, SymPy, NumExpr",
         "independently materialized lock",
         "built-in `sandbox_policy` reference is `compute-only`",
         "`toolbox_host_project_configuration`",

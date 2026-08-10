@@ -8,7 +8,7 @@ import pytest
 
 from hosting.toolbox.bundle_models import ToolboxDefinitionSpec
 from hosting.toolbox.definition_planner import plan_toolbox_definition
-from hosting.toolbox.shipped_templates import load_shipped_toolbox_catalog
+from hosting_toolbox_test_catalog import realized_test_catalog
 
 
 def _dependency(*, mode: str = "auto", template_id: str | None = None, imports=(), requirements=()):
@@ -73,7 +73,7 @@ def _definition(*, toolbox_id="demo", autos=(), manuals=(), intrinsics=()):
 
 
 def _plan(definition):
-    shipped = load_shipped_toolbox_catalog()
+    shipped = realized_test_catalog()
     return plan_toolbox_definition(
         definition,
         templates=shipped.templates,

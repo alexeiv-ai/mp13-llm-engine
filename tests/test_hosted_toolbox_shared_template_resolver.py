@@ -15,6 +15,7 @@ from hosting.service.toolbox_materialization import (
     ToolboxTemplateMaterializationReceipt,
     derived_environment_digest,
 )
+from hosting_toolbox_test_catalog import realized_test_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,12 +52,26 @@ def _ready_service(tmp_path: Path) -> EngineHostService:
         control_state_file=tmp_path / "access_control.json",
         toolbox_template_materializer=ReceiptMaterializer(),
     )
-    started = service.initialize_shipped_toolbox_templates(
-        python_abi="cp312",
-        platform="win_amd64",
-        request_id_prefix="resolver-setup",
-    )
-    for operation in started["operations"]:
+    operations = []
+    for release in realized_test_catalog().releases:
+        published = service.toolbox_template_publish(
+            template=release.template.to_dict(),
+            artifact_references=[release.artifact_reference()],
+            manifest_signature=release.manifest_signature,
+            activate=True,
+            actor_id="test:resolver-setup",
+        )
+        operations.append(
+            service.toolbox_template_prewarm(
+                template_id=release.template.template_id,
+                template_digest=published["template_digest"],
+                python_abi="cp312",
+                platform="win_amd64",
+                request_id=f"resolver-setup:{release.template.template_id}",
+                owner_actor_id="test:resolver-setup",
+            )
+        )
+    for operation in operations:
         terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
             operation_id=operation["operation"]["operation_id"], timeout_seconds=10
         )

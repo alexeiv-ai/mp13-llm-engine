@@ -13,7 +13,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from ..toolbox.identity import identity_digest, require_digest
-from ..toolbox.shipped_templates import SHIPPED_TEMPLATE_IDS, load_shipped_toolbox_catalog
 from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
 from ..toolbox.template_resolver import (
     VerifiedTemplateCandidate,
@@ -524,17 +523,27 @@ class ToolboxTemplateCatalogMixin:
         self, *, python_abi: str, platform: str
     ) -> dict[str, Any]:
         target = materialization_target(python_abi=python_abi, platform=platform)
-        shipped = load_shipped_toolbox_catalog()
         configured = getattr(self, "_toolbox_host_project_config", None)
-        required_ids = (
-            tuple(item.template_id for item in configured.builtins if item.required)
-            if isinstance(configured, ToolboxHostProjectConfiguration)
-            else SHIPPED_TEMPLATE_IDS
-        )
+        if not isinstance(configured, ToolboxHostProjectConfiguration):
+            return {
+                "status": "unavailable",
+                "code": "toolbox_configuration_missing",
+                "config_revision": None,
+                "catalog_revision": self._toolbox_template_catalog.read()["catalog_revision"],
+                "target": target,
+                "templates": [],
+                "diagnostics": [
+                    {
+                        "code": "toolbox_configuration_missing",
+                        "summary": "Toolbox hosting configuration is not available.",
+                    }
+                ],
+            }
+        required_ids = tuple(item.template_id for item in configured.builtins if item.required)
         config_revision = (
             configured.config_revision
             if isinstance(configured, ToolboxHostProjectConfiguration)
-            else shipped.revision
+            else None
         )
         configured_trust_keys = (
             {key_id for source in configured.sources for key_id in source.trust_key_ids}
@@ -714,52 +723,6 @@ class ToolboxTemplateCatalogMixin:
         )
         return builder.materialize_environment(resolved, reference_id=reference_id)
 
-    def initialize_shipped_toolbox_templates(
-        self,
-        *,
-        python_abi: str,
-        platform: str,
-        request_id_prefix: str,
-        actor_id: str = "service:setup",
-    ) -> dict[str, Any]:
-        """Publish and prewarm both required resources through normal durable paths."""
-
-        prefix = str(request_id_prefix or "").strip()
-        if not prefix:
-            raise ValueError("template_setup_request_id_prefix_required")
-        materialization_target(python_abi=python_abi, platform=platform)
-        shipped = load_shipped_toolbox_catalog()
-        operations: list[dict[str, Any]] = []
-        published: list[dict[str, Any]] = []
-        for release in shipped.releases:
-            if python_abi not in release.template.python_abis or platform not in release.template.platforms:
-                raise ValueError("required_template_target_unsupported")
-            result = self.toolbox_template_publish(
-                template=release.template.to_dict(),
-                artifact_references=[release.artifact_reference()],
-                manifest_signature=release.manifest_signature,
-                activate=True,
-                actor_id=actor_id,
-            )
-            published.append(result)
-            operations.append(
-                self.toolbox_template_prewarm(
-                    template_id=release.template.template_id,
-                    template_digest=result["template_digest"],
-                    python_abi=python_abi,
-                    platform=platform,
-                    request_id=f"{prefix}:{release.template.template_id}:{result['template_digest']}",
-                    owner_actor_id=actor_id,
-                )
-            )
-        return {
-            "status": "started",
-            "resource": shipped.resource,
-            "target": materialization_target(python_abi=python_abi, platform=platform),
-            "published": published,
-            "operations": operations,
-        }
-
     def initialize_configured_toolbox_templates(
         self,
         *,
@@ -767,7 +730,7 @@ class ToolboxTemplateCatalogMixin:
         request_id_prefix: str,
         actor_id: str = "service:startup",
     ) -> dict[str, Any]:
-        """Ensure required IDs exist, then prewarm their exact active revisions."""
+        """Record that configured intents require exact current-host resolution."""
 
         if not isinstance(configuration, ToolboxHostProjectConfiguration):
             raise ValueError("toolbox_host_project_configuration_required")
@@ -777,65 +740,19 @@ class ToolboxTemplateCatalogMixin:
         python_abi = configuration.target.python_abi
         platform = configuration.target.platform
         materialization_target(python_abi=python_abi, platform=platform)
-        shipped = load_shipped_toolbox_catalog()
-        published: list[dict[str, Any]] = []
-        operations: list[dict[str, Any]] = []
-        required_intents = tuple(item for item in configuration.builtins if item.required)
-        configured_source_ids = {item.source_id for item in configuration.sources}
-        configured_trust_keys = {
-            key_id for source in configuration.sources for key_id in source.trust_key_ids
-        }
-        for intent in required_intents:
-            template_id = intent.template_id
-            state = self._toolbox_template_catalog.read()
-            active_digest = state["active"].get(template_id)
-            if active_digest is None:
-                release = shipped.release(template_id)
-                result = self.toolbox_template_publish(
-                    template=release.template.to_dict(),
-                    artifact_references=[release.artifact_reference()],
-                    manifest_signature=release.manifest_signature,
-                    activate=True,
-                    actor_id=actor_id,
-                )
-                published.append(result)
-                active_digest = result["template_digest"]
-                state = self._toolbox_template_catalog.read()
-            entry = next(
-                item for item in state["entries"]
-                if item["template_id"] == template_id
-                and item["template_digest"] == active_digest
-            )
-            if entry["template"]["provenance"]["signing_key_id"] not in configured_trust_keys:
-                raise ValueError("required_template_signature_invalid")
-            if any(
-                artifact["source_id"] not in configured_source_ids
-                for artifact in entry["artifacts"]
-            ):
-                raise ValueError("required_template_artifact_unavailable")
-            receipt = self._toolbox_materialization_receipts.get(
-                template_digest=active_digest,
-                python_abi=python_abi,
-                platform=platform,
-            )
-            if intent.prewarm and receipt is None:
-                operations.append(
-                    self.toolbox_template_prewarm(
-                        template_id=template_id,
-                        template_digest=active_digest,
-                        python_abi=python_abi,
-                        platform=platform,
-                        request_id=f"{prefix}:{template_id}:{active_digest}",
-                        owner_actor_id=actor_id,
-                    )
-                )
         return {
-            "status": "started" if operations else "configured",
+            "status": "resolution_required",
             "config_revision": configuration.config_revision,
             "source_set_revision": configuration.source_set_revision,
             "target": configuration.target.name,
-            "published": published,
-            "operations": operations,
+            "published": [],
+            "operations": [],
+            "diagnostics": [
+                {
+                    "code": "required_builtin_resolution_pending",
+                    "summary": "Configured built-in intents require exact current-host wheel resolution.",
+                }
+            ],
         }
 
     def toolbox_template_describe(
