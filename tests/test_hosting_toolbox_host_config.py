@@ -111,12 +111,16 @@ def _configuration() -> dict[str, Any]:
 
 
 def _service(root: Path) -> EngineHostService:
-    return EngineHostService(
+    service = EngineHostService(
         engines_state_file=root / "engines.json",
         control_state_file=root / "access_control.json",
         toolbox_template_materializer=VerifiedMaterializer(),
         toolbox_host_project_configuration=_configuration(),
     )
+    service._toolbox_startup = service._resolve_configured_toolbox_startup(  # noqa: SLF001
+        progress=lambda *_args: None
+    )
+    return service
 
 
 def _definition() -> dict[str, Any]:

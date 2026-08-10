@@ -588,7 +588,7 @@ boundary—not a double—passes.
       deterministic current-host closures with stable missing-wheel results.
     - [ ] **R2-03b2** Resolve HTTPS-backed modes through the verified artifact
       acquisition boundary delivered by R2-05a, using the same closure model.
-- [ ] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
+- [x] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
   the real `toolbox_catalog.py` and `hermetic_environment.py` boundary. Remove
   the lock-JSON-as-wheel bridge and tests that normalize it.
   - [x] **R2-04a** Carry resolved built-in wheel closures through catalog
@@ -598,7 +598,7 @@ boundary—not a double—passes.
       import probes without catalog publication.
     - [x] **R2-04a2** Atomically commit the complete required receipt/catalog
       batch and release candidate references on any pre-publication failure.
-  - [ ] **R2-04b** Make required/optional prewarm and readiness use only real
+  - [x] **R2-04b** Make required/optional prewarm and readiness use only real
     materialization receipts through normal daemon startup.
 - [ ] **R2-05** Implement revisioned source changes and both air-gap ingestion
   paths. Prove missing built-in wheels prevent readiness without partial catalog
@@ -613,13 +613,13 @@ boundary—not a double—passes.
       store artifacts into built-in resolution without exposing source paths.
   - [ ] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
     staged storage with bounded, expiring, idempotent commit.
-- [ ] **R2-06** Run/recover built-in realization as a system-owned hosted
+- [x] **R2-06** Run/recover built-in realization as a system-owned hosted
   operation with resolution, acquisition-byte, verification, build, probe, and
   prewarm progress while the control plane remains available and toolbox
   readiness remains false.
   - [x] **R2-06a** Add the system-owned hosted execution kind and phase/progress
     contract for built-in realization while readiness remains false.
-  - [ ] **R2-06b** Recover or terminally reconcile interrupted realization after
+  - [x] **R2-06b** Recover or terminally reconcile interrupted realization after
     restart and expose its canonical status without a parallel operation record.
 
 ### R3 - Multi-tool planning and consumer confirmation

@@ -48,7 +48,6 @@ from .toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
 from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationRepository
 from .toolbox_artifact_store import (
     AtomicToolboxArtifactStore,
-    ToolboxArtifactBundleError,
     validate_trust_public_keys,
 )
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
@@ -241,6 +240,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         }
         self._ensure_metrics_initialized()
         self._toolbox_startup = None
+        self._toolbox_setup_operation = None
         self._toolbox_config_transition = None
         self._toolbox_artifact_store = AtomicToolboxArtifactStore(
             self.hosting_root / "toolbox_artifact_store"
@@ -259,44 +259,16 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
                 self._toolbox_config_transition["invalidated_materialization_receipts"] = (
                     self._toolbox_materialization_receipts.retain_template_digests(active_digests)
                 )
-            if self._toolbox_trust_public_keys is not None:
-                try:
-                    for source in self._toolbox_host_project_config.sources:
-                        if source.kind != "airgap_store":
-                            continue
-                        source_root = self._toolbox_artifact_sources[source.source_id]
-                        for bundle_path in sorted(source_root.glob("*.zip")):
-                            self._toolbox_artifact_store.import_signed_bundle(
-                                bundle_path,
-                                configuration=self._toolbox_host_project_config,
-                                trust_public_keys=self._toolbox_trust_public_keys,
-                            )
-                        self._toolbox_verified_artifacts[source.source_id] = (
-                            self._toolbox_artifact_store.source_artifacts(source.source_id)
-                        )
-                    exact_artifact_paths = {
-                        (source_id, filename): path
-                        for source_id, artifacts in self._toolbox_verified_artifacts.items()
-                        for filename, path in artifacts.items()
-                    }
-                    if exact_artifact_paths and self._hermetic_toolbox_environment_builder is not None:
-                        self._hermetic_toolbox_environment_builder.configure_verified_artifact_paths(
-                            exact_artifact_paths
-                        )
-                except ToolboxArtifactBundleError as exc:
-                    self._toolbox_artifact_ingestion_diagnostic = {
-                        "code": exc.code,
-                        "summary": exc.summary,
-                    }
-                except (KeyError, OSError, ValueError):
-                    self._toolbox_artifact_ingestion_diagnostic = {
-                        "code": "artifact_store_invalid",
-                        "summary": "The verified toolbox artifact store is invalid.",
-                    }
-            self._toolbox_startup = self.initialize_configured_toolbox_templates(
-                configuration=self._toolbox_host_project_config,
-                request_id_prefix=f"host-startup-{self._toolbox_host_project_config.config_revision}",
-            )
+            self._toolbox_startup = {
+                "status": "pending",
+                "config_revision": self._toolbox_host_project_config.config_revision,
+                "source_set_revision": self._toolbox_host_project_config.source_set_revision,
+                "target": self._toolbox_host_project_config.target.name,
+                "closures": [],
+                "diagnostics": [],
+                "published": [],
+                "operations": [],
+            }
 
     @property
     def _hosted_operations(self) -> AtomicJsonHostedOperationRepository:

@@ -221,10 +221,15 @@ def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
         toolbox_dependency_policy=dependency_policy,
         toolbox_trust_public_keys=TRUST_PUBLIC_KEYS,
     )
+    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
+    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=operation["operation"]["operation_id"], timeout_seconds=10
+    )
 
     assert daemon.svc._toolbox_target == target  # noqa: SLF001
     assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
     assert daemon.svc._configured_toolbox_dependency_policy.to_dict() == dependency_policy  # noqa: SLF001
+    assert terminal["lifecycle"] == "terminal_failure"
     assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
     summary = daemon.svc.hosting_setup_summary()
     assert summary["toolbox_readiness"]["status"] == "degraded"

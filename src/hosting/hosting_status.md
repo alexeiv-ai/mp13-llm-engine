@@ -111,11 +111,20 @@ non-cancellable progress phases, verified-byte acquisition units, and bounded
 terminal success/failure. Toolbox readiness becomes ready only after complete
 atomic publication. The operation/repository/artifact-store/docs suite passed
 80 tests in 84.23s; `git diff --check` passed.
+R2-04b/R2-06b moves verified bundle ingestion and exact built-in resolution
+behind the automatically dispatched canonical setup worker, so normal daemon
+construction does not wait for source I/O or hermetic builds. Configured
+readiness is gated on the canonical operation and real active receipts. Restart
+redispatches an interrupted-before-dispatch record once on its original ID;
+interrupted-after-dispatch succeeds only from a durable committed-publication
+checkpoint plus current receipts and otherwise terminally fails on that same
+record. The focused daemon/artifact/config/restart suite passed 41 tests in
+98.24s. The expanded operation-repository/service/daemon/artifact/config/docs
+suite passed 107 tests in 101.56s; `git diff --check` passed.
 
 ## Active implementation slice
 
-Active slice: none. R2-06a (`high`) is complete. Automatic daemon start and
-restart reconciliation remain R2-04b/R2-06b; HTTPS acquisition and
+Active slice: none. R2-04b/R2-06b (`high`) are complete. HTTPS acquisition and
 administrator upload remain R2-03b2/R2-05a/R2-05c.
 
 Next-slice validation must be declared before implementation. R2-04b/R2-06b

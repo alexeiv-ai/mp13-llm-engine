@@ -300,6 +300,20 @@ class StateMixin:
         artifact_ingestion_diagnostic = getattr(
             self, "_toolbox_artifact_ingestion_diagnostic", None
         )
+        toolbox_setup_operation = getattr(self, "_toolbox_setup_operation", None)
+        if isinstance(toolbox_setup_operation, dict) and isinstance(
+            toolbox_setup_operation.get("operation"), dict
+        ):
+            try:
+                toolbox_setup_operation = self._hosted_operations.status(
+                    ref=toolbox_setup_operation["operation"],
+                    owner_actor_id="system:toolbox-setup",
+                )
+                self._toolbox_setup_operation = toolbox_setup_operation
+            except (KeyError, ValueError):
+                toolbox_setup_operation = None
+        if isinstance(toolbox_setup_operation, dict):
+            summary["toolbox_setup_operation"] = dict(toolbox_setup_operation)
         if isinstance(toolbox_setup_diagnostic, dict):
             summary["toolbox_readiness"] = {
                 "status": "unavailable",
@@ -317,6 +331,37 @@ class StateMixin:
                 "target": getattr(self, "_toolbox_target").to_dict(),
                 "templates": [],
                 "diagnostics": [dict(artifact_ingestion_diagnostic)],
+            }
+        elif (
+            self._toolbox_host_project_config is not None
+            and isinstance(toolbox_setup_operation, dict)
+            and toolbox_setup_operation.get("lifecycle") != "terminal_success"
+        ):
+            result = dict(toolbox_setup_operation.get("result") or {})
+            lifecycle = str(toolbox_setup_operation.get("lifecycle") or "queued")
+            code = str(
+                result.get("code")
+                or (
+                    "toolbox_setup_interrupted"
+                    if lifecycle.startswith("interrupted_")
+                    else "toolbox_setup_in_progress"
+                )
+            )
+            diagnostic = {
+                "code": code,
+                "summary": str(
+                    result.get("summary")
+                    or "Toolbox setup has not completed atomic publication."
+                ),
+            }
+            summary["toolbox_readiness"] = {
+                "status": "degraded",
+                "code": code,
+                "config_revision": self._toolbox_host_project_config.config_revision,
+                "catalog_revision": self._toolbox_template_catalog.read()["catalog_revision"],
+                "target": getattr(self, "_toolbox_target").to_dict(),
+                "templates": [],
+                "diagnostics": [diagnostic],
             }
         elif required_abi and required_platform:
             summary["toolbox_readiness"] = self.toolbox_required_template_status(

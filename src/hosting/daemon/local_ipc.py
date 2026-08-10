@@ -135,6 +135,20 @@ class EngineHostDaemon:
         )
         self.svc._toolbox_setup_diagnostic = toolbox_setup_diagnostic  # noqa: SLF001
         self.svc.assert_runtime_policy_safe()
+        if toolbox_setup_diagnostic is None:
+            try:
+                self.svc._toolbox_setup_operation = self.svc.toolbox_setup_start()  # noqa: SLF001
+            except Exception:
+                self.svc._toolbox_startup = {  # noqa: SLF001
+                    **dict(self.svc._toolbox_startup or {}),  # noqa: SLF001
+                    "status": "not_ready",
+                    "diagnostics": [
+                        {
+                            "code": "toolbox_setup_dispatch_failed",
+                            "summary": "The toolbox setup worker could not be started.",
+                        }
+                    ],
+                }
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None

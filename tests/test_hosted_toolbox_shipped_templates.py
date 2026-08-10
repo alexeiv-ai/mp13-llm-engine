@@ -132,8 +132,13 @@ def test_normal_daemon_does_not_publish_intent_before_exact_resolution(tmp_path:
         toolbox_dependency_policy=_policy(),
         toolbox_trust_public_keys=TRUST_PUBLIC_KEYS,
     )
+    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
+    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=operation["operation"]["operation_id"], timeout_seconds=10
+    )
 
     assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
+    assert terminal["lifecycle"] == "terminal_failure"
     assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
     assert daemon.svc._toolbox_startup["closures"] == []  # noqa: SLF001
     assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
@@ -144,6 +149,6 @@ def test_normal_daemon_does_not_publish_intent_before_exact_resolution(tmp_path:
     assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
     readiness = daemon.svc.hosting_setup_summary()["toolbox_readiness"]
     assert readiness["status"] == "degraded"
-    assert readiness["code"] == "required_template_missing"
+    assert readiness["code"] == "required_template_requirements_missing"
     with pytest.raises(ValueError, match="toolbox_builtins_not_ready"):
         daemon.svc._toolbox_definition_planning_context()  # noqa: SLF001

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -18,10 +19,77 @@ from hosting.service.toolbox_artifact_store import (
     ToolboxArtifactBundleError,
 )
 from hosting.service.toolbox_catalog import AtomicJsonToolboxTemplateCatalog
+from hosting.service.host_service import EngineHostService
+from hosting.operation_contract import (
+    HostedExecutionKind,
+    HostedOperationSelector,
+    hosted_execution_fingerprint,
+)
 from hosting.daemon import EngineHostDaemon
 from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.target import detect_current_toolbox_target
+
+
+def _wait_daemon_setup(daemon: EngineHostDaemon, *, timeout_seconds: float = 60) -> dict:
+    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
+    return daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=operation["operation"]["operation_id"],
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _manual_resolved_service(
+    tmp_path: Path,
+    *,
+    configuration: ToolboxHostProjectConfiguration,
+    source: Path,
+    public: dict[str, str],
+) -> EngineHostService:
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    service._toolbox_startup = service._resolve_configured_toolbox_startup(  # noqa: SLF001
+        progress=lambda *_args: None
+    )
+    return service
+
+
+def _prepare_unstarted_setup(service: EngineHostService) -> dict:
+    configuration = service._toolbox_host_project_config  # noqa: SLF001
+    return service._hosted_operations.prepare(  # noqa: SLF001
+        owner_actor_id="system:toolbox-setup",
+        execution_kind=HostedExecutionKind.TOOLBOX_SETUP,
+        selector=HostedOperationSelector(kind="host_scope", id="toolbox-host"),
+        namespace="toolbox_setup:toolbox-host",
+        request_id=(
+            f"toolbox-setup-{configuration.config_revision.removeprefix('sha256:')}"
+        ),
+        fingerprint=hosted_execution_fingerprint(
+            {
+                "execution_kind": "toolbox_setup",
+                "host_scope": "toolbox-host",
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+                "target": configuration.target.name,
+            }
+        ),
+        metadata={
+            "config_revision": configuration.config_revision,
+            "source_set_revision": configuration.source_set_revision,
+            "target": configuration.target.name,
+        },
+    )
+
+
+def _drop_operation_repository(service: EngineHostService) -> None:
+    path = str((service.hosting_root / "state" / "hosted_operations.json").resolve())
+    EngineHostService._operation_repositories.pop(path, None)  # noqa: SLF001
 
 
 def _canonical(value: dict) -> bytes:
@@ -363,6 +431,9 @@ def test_normal_daemon_discovers_signed_bundles_and_resolves_only_verified_cas_o
         )
 
     daemon = construct()
+    terminal = _wait_daemon_setup(daemon)
+    assert terminal["lifecycle"] == "terminal_failure"
+    assert terminal["result"]["code"] == "required_template_runtime_artifact_missing"
     assert daemon.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
     assert [item["template_id"] for item in daemon.svc._toolbox_startup["closures"]] == ["core"]  # noqa: SLF001
     assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
@@ -371,10 +442,11 @@ def test_normal_daemon_discovers_signed_bundles_and_resolves_only_verified_cas_o
     daemon.svc.close()
 
     restarted = construct()
-    assert restarted.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
+    replayed = _wait_daemon_setup(restarted)
+    assert replayed["lifecycle"] == "terminal_failure"
+    assert replayed["result"]["code"] == "required_template_runtime_artifact_missing"
     assert len(restarted.svc._toolbox_artifact_store.read()["bundles"]) == 1  # noqa: SLF001
-    with pytest.raises(ValueError, match="required_template_runtime_artifact_missing"):
-        restarted.svc.prepare_configured_toolbox_templates()
+    assert restarted.svc._toolbox_startup["status"] == "pending"  # noqa: SLF001
     assert restarted.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
 
 
@@ -395,6 +467,8 @@ def test_normal_daemon_invalid_bundle_is_degraded_without_catalog_publication(tm
         toolbox_trust_public_keys=public,
     )
 
+    terminal = _wait_daemon_setup(daemon)
+    assert terminal["lifecycle"] == "terminal_failure"
     readiness = daemon.svc.hosting_setup_summary()["toolbox_readiness"]
     assert readiness["status"] == "degraded"
     assert readiness["code"] == "artifact_bundle_signature_invalid"
@@ -455,16 +529,13 @@ def test_normal_daemon_never_treats_unsigned_raw_wheels_as_verified_source_conte
         toolbox_trust_public_keys=public,
     )
 
+    terminal = _wait_daemon_setup(daemon)
+    assert terminal["lifecycle"] == "terminal_failure"
     assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
     assert daemon.svc._toolbox_startup["closures"] == []  # noqa: SLF001
     assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
         "required_template_source_unavailable"
     )
-    started = daemon.svc.toolbox_setup_start(request_id="unsigned-source-setup")
-    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
-        operation_id=started["operation"]["operation_id"], timeout_seconds=10
-    )
-    assert terminal["lifecycle"] == "terminal_failure"
     assert terminal["result"]["code"] == "required_template_source_unavailable"
     assert str(source) not in str(terminal["result"])
     assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
@@ -478,18 +549,12 @@ def test_prepublication_candidate_build_uses_exact_cas_path_and_real_import_prob
     source = tmp_path / "read-only-source"
     source.mkdir()
     _runtime_bundle(source / "runtime.zip", configuration, private)
-    daemon = EngineHostDaemon(
-        pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=configuration.to_dict(),
-        toolbox_artifact_sources={"offline-release": source},
-        toolbox_dependency_policy=_policy(),
-        toolbox_trust_public_keys=public,
+    service = _manual_resolved_service(
+        tmp_path, configuration=configuration, source=source, public=public
     )
-    assert daemon.svc._toolbox_startup["status"] == "resolved"  # noqa: SLF001
+    assert service._toolbox_startup["status"] == "resolved"  # noqa: SLF001
 
-    prepared = daemon.svc.prepare_configured_toolbox_templates()
+    prepared = service.prepare_configured_toolbox_templates()
 
     assert prepared["status"] == "prepared"
     assert len(prepared["candidates"]) == 1
@@ -499,8 +564,8 @@ def test_prepublication_candidate_build_uses_exact_cas_path_and_real_import_prob
         candidate["artifact_references"][0]["sha256"]
     )
     assert candidate["receipt"]["verified_import_roots"] == ["hosting", "mp13_engine"]
-    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
-    assert daemon.svc._toolbox_materialization_receipts.get(  # noqa: SLF001
+    assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert service._toolbox_materialization_receipts.get(  # noqa: SLF001
         template_digest=candidate["template_digest"],
         python_abi=configuration.target.python_abi,
         platform=configuration.target.platform,
@@ -513,25 +578,19 @@ def test_prepublication_candidate_failure_leaves_catalog_and_receipts_empty(tmp_
     source = tmp_path / "read-only-source"
     source.mkdir()
     _runtime_bundle(source / "runtime.zip", configuration, private)
-    daemon = EngineHostDaemon(
-        pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=configuration.to_dict(),
-        toolbox_artifact_sources={"offline-release": source},
-        toolbox_dependency_policy=_policy(),
-        toolbox_trust_public_keys=public,
+    service = _manual_resolved_service(
+        tmp_path, configuration=configuration, source=source, public=public
     )
     artifact = next(
-        iter(daemon.svc._toolbox_verified_artifacts["offline-release"].values())  # noqa: SLF001
+        iter(service._toolbox_verified_artifacts["offline-release"].values())  # noqa: SLF001
     )
     artifact.write_bytes(b"corrupt-after-resolution")
 
     with pytest.raises(Exception, match="environment_artifact_verification_failed"):
-        daemon.svc.prepare_configured_toolbox_templates()
+        service.prepare_configured_toolbox_templates()
 
-    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
-    assert not daemon.svc._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
+    assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert not service._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
 
 
 def test_prepublication_import_probe_failure_releases_reference_and_publishes_nothing(
@@ -544,22 +603,16 @@ def test_prepublication_import_probe_failure_releases_reference_and_publishes_no
     _runtime_bundle(
         source / "runtime.zip", configuration, private, packages=("mp13_engine",)
     )
-    daemon = EngineHostDaemon(
-        pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=configuration.to_dict(),
-        toolbox_artifact_sources={"offline-release": source},
-        toolbox_dependency_policy=_policy(),
-        toolbox_trust_public_keys=public,
+    service = _manual_resolved_service(
+        tmp_path, configuration=configuration, source=source, public=public
     )
 
     with pytest.raises(Exception, match="environment_import_probe_failed"):
-        daemon.svc.prepare_configured_toolbox_templates()
+        service.prepare_configured_toolbox_templates()
 
-    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
-    assert not daemon.svc._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
-    references = daemon.svc._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
+    assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert not service._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
+    references = service._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
     assert not references.exists() or json.loads(references.read_text())["environments"] == {}
 
 
@@ -601,13 +654,13 @@ def test_complete_prepared_batch_publishes_atomically_and_is_restart_idempotent(
         )
 
     daemon = construct()
-    prepared = daemon.svc.prepare_configured_toolbox_templates()
-    published = daemon.svc.publish_prepared_configured_toolbox_templates(prepared)
-    repeated = daemon.svc.publish_prepared_configured_toolbox_templates(prepared)
+    terminal = _wait_daemon_setup(daemon)
 
-    assert published["status"] == "published"
-    assert {item["template_id"] for item in published["templates"]} == {"core", "py-compute"}
-    assert {item["outcome"] for item in repeated["templates"]} == {"idempotent"}
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["code"] == "toolbox_setup_ready"
+    assert {item["template_id"] for item in terminal["result"]["templates"]} == {
+        "core", "py-compute"
+    }
     catalog = daemon.svc._toolbox_template_catalog.read()  # noqa: SLF001
     assert set(catalog["active"]) == {"core", "py-compute"}
     assert len(catalog["entries"]) == 2
@@ -615,6 +668,8 @@ def test_complete_prepared_batch_publishes_atomically_and_is_restart_idempotent(
     daemon.svc.close()
 
     restarted = construct()
+    replayed = _wait_daemon_setup(restarted)
+    assert replayed["operation"]["operation_id"] == terminal["operation"]["operation_id"]
     assert restarted.svc.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
     assert len(restarted.svc._toolbox_template_catalog.read()["entries"]) == 2  # noqa: SLF001
 
@@ -627,16 +682,10 @@ def test_catalog_batch_failure_rolls_back_new_receipt_and_candidate_reference(
     source = tmp_path / "read-only-source"
     source.mkdir()
     _runtime_bundle(source / "runtime.zip", configuration, private)
-    daemon = EngineHostDaemon(
-        pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=configuration.to_dict(),
-        toolbox_artifact_sources={"offline-release": source},
-        toolbox_dependency_policy=_policy(),
-        toolbox_trust_public_keys=public,
+    service = _manual_resolved_service(
+        tmp_path, configuration=configuration, source=source, public=public
     )
-    prepared = daemon.svc.prepare_configured_toolbox_templates()
+    prepared = service.prepare_configured_toolbox_templates()
 
     monkeypatch.setattr(
         AtomicJsonToolboxTemplateCatalog,
@@ -644,16 +693,16 @@ def test_catalog_batch_failure_rolls_back_new_receipt_and_candidate_reference(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected-batch-failure")),
     )
     with pytest.raises(RuntimeError, match="injected-batch-failure"):
-        daemon.svc.publish_prepared_configured_toolbox_templates(prepared)
+        service.publish_prepared_configured_toolbox_templates(prepared)
 
-    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
     candidate = prepared["candidates"][0]
-    assert daemon.svc._toolbox_materialization_receipts.get(  # noqa: SLF001
+    assert service._toolbox_materialization_receipts.get(  # noqa: SLF001
         template_digest=candidate["template_digest"],
         python_abi=configuration.target.python_abi,
         platform=configuration.target.platform,
     ) is None
-    references = daemon.svc._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
+    references = service._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
     assert json.loads(references.read_text())["environments"] == {}
 
 
@@ -676,8 +725,8 @@ def test_system_setup_operation_returns_immediately_is_idempotent_and_publishes_
     )
 
     started_at = time.monotonic()
-    started = daemon.svc.toolbox_setup_start(request_id="system-setup-one")
-    duplicate = daemon.svc.toolbox_setup_start(request_id="system-setup-one")
+    started = daemon.svc._toolbox_setup_operation  # noqa: SLF001
+    duplicate = daemon.svc.toolbox_setup_start()
     elapsed = time.monotonic() - started_at
 
     assert elapsed < 2
@@ -695,7 +744,121 @@ def test_system_setup_operation_returns_immediately_is_idempotent_and_publishes_
     recovered = daemon.svc.hosted_operation_resolve_request(
         execution_kind="toolbox_setup",
         selector={"kind": "host_scope", "id": "toolbox-host"},
-        request_id="system-setup-one",
+        request_id=started["operation"]["request_id"],
         owner_actor_id="system:toolbox-setup",
     )
     assert recovered["operation"]["operation_id"] == started["operation"]["operation_id"]
+
+
+def test_normal_daemon_constructor_does_not_wait_for_bundle_ingestion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    release = threading.Event()
+    entered = threading.Event()
+    original = AtomicToolboxArtifactStore.import_signed_bundle
+
+    def delayed_import(self, *args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(AtomicToolboxArtifactStore, "import_signed_bundle", delayed_import)
+    started_at = time.monotonic()
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 2
+    assert entered.wait(2)
+    summary = daemon.svc.hosting_setup_summary()
+    assert summary["toolbox_readiness"]["code"] == "toolbox_setup_in_progress"
+    assert summary["toolbox_setup_operation"]["operation"] == (
+        daemon.svc._toolbox_setup_operation["operation"]  # noqa: SLF001
+    )
+    release.set()
+    assert _wait_daemon_setup(daemon)["lifecycle"] == "terminal_success"
+
+
+def test_restart_redispatches_interrupted_before_dispatch_on_same_canonical_record(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    queued = _prepare_unstarted_setup(service)
+    operation_id = queued["status"]["operation"]["operation_id"]
+    _drop_operation_repository(service)
+
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    terminal = _wait_daemon_setup(daemon)
+
+    assert terminal["operation"]["operation_id"] == operation_id
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["code"] == "toolbox_setup_ready"
+
+
+def test_restart_terminally_reconciles_interrupted_after_dispatch_without_parallel_record(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration()
+    _private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    queued = _prepare_unstarted_setup(service)
+    operation_id = queued["status"]["operation"]["operation_id"]
+    service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)  # noqa: SLF001
+    _drop_operation_repository(service)
+
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    terminal = _wait_daemon_setup(daemon)
+
+    assert terminal["operation"]["operation_id"] == operation_id
+    assert terminal["lifecycle"] == "terminal_failure"
+    assert terminal["result"]["code"] == "toolbox_setup_interrupted_after_dispatch"
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001

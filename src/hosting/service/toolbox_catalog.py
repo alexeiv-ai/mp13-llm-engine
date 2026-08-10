@@ -26,6 +26,7 @@ from ..operation_contract import (
     hosted_execution_fingerprint,
 )
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
+from .toolbox_artifact_store import ToolboxArtifactBundleError
 from .toolbox_materialization import (
     AtomicJsonToolboxMaterializationReceipts,
     HermeticToolboxTemplateMaterializer,
@@ -876,6 +877,65 @@ class ToolboxTemplateCatalogMixin:
         ).resolve().to_dict()
         return {**resolution, "published": [], "operations": []}
 
+    def _resolve_configured_toolbox_startup(
+        self,
+        *,
+        progress: Callable[[str, str, int | None, int | None, str, bool], None],
+    ) -> dict[str, Any]:
+        """Ingest verified sources and resolve intent inside the setup worker."""
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        if not isinstance(configuration, ToolboxHostProjectConfiguration):
+            raise ValueError("toolbox_host_project_configuration_required")
+        self._toolbox_verified_artifacts = {}
+        self._toolbox_artifact_ingestion_diagnostic = None
+        progress(
+            "resolution", "builtin_resolution_started", 0, 1,
+            "The configured built-in closure is being resolved.", False,
+        )
+        if getattr(self, "_toolbox_trust_public_keys", None) is not None:
+            try:
+                for source in configuration.sources:
+                    if source.kind != "airgap_store":
+                        continue
+                    source_root = self._toolbox_artifact_sources[source.source_id]
+                    for bundle_path in sorted(source_root.glob("*.zip")):
+                        self._toolbox_artifact_store.import_signed_bundle(
+                            bundle_path,
+                            configuration=configuration,
+                            trust_public_keys=self._toolbox_trust_public_keys,
+                        )
+                    self._toolbox_verified_artifacts[source.source_id] = (
+                        self._toolbox_artifact_store.source_artifacts(source.source_id)
+                    )
+                exact_artifact_paths = {
+                    (source_id, filename): path
+                    for source_id, artifacts in self._toolbox_verified_artifacts.items()
+                    for filename, path in artifacts.items()
+                }
+                builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+                if exact_artifact_paths and builder is not None:
+                    builder.configure_verified_artifact_paths(exact_artifact_paths)
+            except ToolboxArtifactBundleError as exc:
+                self._toolbox_artifact_ingestion_diagnostic = {
+                    "code": exc.code,
+                    "summary": exc.summary,
+                }
+            except (KeyError, OSError, ValueError):
+                self._toolbox_artifact_ingestion_diagnostic = {
+                    "code": "artifact_store_invalid",
+                    "summary": "The verified toolbox artifact store is invalid.",
+                }
+        startup = self.initialize_configured_toolbox_templates(
+            configuration=configuration,
+            request_id_prefix=f"host-startup-{configuration.config_revision}",
+        )
+        self._toolbox_startup = startup
+        progress(
+            "resolution", "builtin_resolution_checked", 1, 1,
+            "The configured built-in closure resolution was checked.", False,
+        )
+        return startup
+
     def prepare_configured_toolbox_templates(
         self,
         *,
@@ -1108,7 +1168,13 @@ class ToolboxTemplateCatalogMixin:
             status = prepared.get("status")
             if status is None:
                 raise RuntimeError("hosted_operation_capacity")
-            return dict(status)
+            current = dict(status)
+            if current.get("lifecycle") == (
+                HostedOperationLifecycle.INTERRUPTED_AFTER_DISPATCH_UNKNOWN.value
+            ):
+                current = self._reconcile_interrupted_toolbox_setup(current)
+            self._toolbox_setup_operation = current
+            return current
         operation_id = str(prepared["status"]["operation"]["operation_id"])
         thread = threading.Thread(
             target=self._run_toolbox_setup,
@@ -1119,7 +1185,7 @@ class ToolboxTemplateCatalogMixin:
         try:
             thread.start()
         except Exception:
-            self._hosted_operations.finish(
+            self._toolbox_setup_operation = self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
                 envelope={
@@ -1130,7 +1196,52 @@ class ToolboxTemplateCatalogMixin:
                 reason="toolbox_setup_dispatch_failed",
             )
             raise
-        return dict(prepared["status"])
+        status = dict(prepared["status"])
+        self._toolbox_setup_operation = status
+        return status
+
+    def _reconcile_interrupted_toolbox_setup(
+        self, status: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Fail closed unless the durable post-publication checkpoint proves commit."""
+        row = dict(status or {})
+        operation_id = str(dict(row.get("operation") or {}).get("operation_id") or "")
+        progress = dict(row.get("progress") or {})
+        publication_proven = (
+            progress.get("phase") == "publication"
+            and progress.get("code") == "builtin_publication_committed"
+            and progress.get("completed_units") == 1
+            and progress.get("total_units") == 1
+        )
+        readiness = self.toolbox_required_template_status(
+            python_abi=self._toolbox_host_project_config.target.python_abi,
+            platform=self._toolbox_host_project_config.target.platform,
+        )
+        if publication_proven and readiness.get("status") == "ready":
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "status": "ok",
+                    "code": "toolbox_setup_ready",
+                    "catalog_revision": readiness.get("catalog_revision"),
+                    "templates": readiness.get("templates", []),
+                    "reconciled_after_restart": True,
+                },
+            )
+        return self._hosted_operations.finish(
+            operation_id=operation_id,
+            lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+            envelope={
+                "status": "error",
+                "code": "toolbox_setup_interrupted_after_dispatch",
+                "summary": (
+                    "Toolbox setup was interrupted without a durable complete-publication "
+                    "checkpoint. Readiness remains false."
+                ),
+            },
+            reason="toolbox_setup_interrupted_after_dispatch",
+        )
 
     def _run_toolbox_setup(self, *, operation_id: str) -> None:
         self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
@@ -1157,11 +1268,7 @@ class ToolboxTemplateCatalogMixin:
             )
 
         try:
-            startup = getattr(self, "_toolbox_startup", None)
-            checkpoint(
-                "resolution", "builtin_resolution_checked", 1, 1,
-                "The configured built-in closure resolution was checked."
-            )
+            startup = self._resolve_configured_toolbox_startup(progress=checkpoint)
             if not isinstance(startup, dict) or startup.get("status") != "resolved":
                 diagnostic = dict((startup or {}).get("diagnostics", [{}])[0] or {})
                 code = str(diagnostic.get("code") or "required_builtin_resolution_not_ready")
@@ -1169,7 +1276,7 @@ class ToolboxTemplateCatalogMixin:
                     diagnostic.get("summary")
                     or "The required built-in wheel closure is not ready."
                 )
-                self._hosted_operations.finish(
+                self._toolbox_setup_operation = self._hosted_operations.finish(
                     operation_id=operation_id,
                     lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
                     envelope={"status": "not_ready", "code": code, "summary": summary},
@@ -1202,14 +1309,19 @@ class ToolboxTemplateCatalogMixin:
                 "publication", "builtin_publication_committed", 1, 1,
                 "The complete built-in receipt and catalog batch is active."
             )
-            self._hosted_operations.finish(
+            self._toolbox_setup_operation = self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
                 envelope={**result, "status": "ok", "code": "toolbox_setup_ready"},
             )
         except Exception as exc:
-            code = str(getattr(exc, "code", "toolbox_setup_failed"))
-            self._hosted_operations.finish(
+            candidate_code = str(getattr(exc, "code", "") or str(exc)).strip()
+            code = (
+                candidate_code
+                if re.fullmatch(r"[a-z][a-z0-9_]{0,127}", candidate_code)
+                else "toolbox_setup_failed"
+            )
+            self._toolbox_setup_operation = self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
                 envelope={

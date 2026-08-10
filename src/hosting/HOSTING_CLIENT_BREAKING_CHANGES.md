@@ -183,6 +183,16 @@ until terminal success reports `toolbox_setup_ready` after complete atomic
 receipt/catalog publication. Terminal failures carry stable bounded codes and
 must not be interpreted by parsing their summaries.
 
+Normal daemon construction now dispatches or attaches to this operation and
+does not wait for source scanning, resolution, build, or probes. Hosting setup
+responses expose its sanitized canonical status as `toolbox_setup_operation`.
+After restart, an interrupted-before-dispatch record resumes once on the same
+operation ID. An interrupted-after-dispatch record is reconciled as success
+only from a durable complete-publication checkpoint plus current real receipts;
+otherwise that same record fails with
+`toolbox_setup_interrupted_after_dispatch`. Clients must not create a retry
+record or infer success from an active catalog entry alone.
+
 Configuration revision transitions invalidate unconsumed definition plans and
 materialization receipts for non-active template revisions. Consumers must
 re-plan after a change. Active catalog revisions and already published toolbox

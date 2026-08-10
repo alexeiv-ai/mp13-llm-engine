@@ -666,10 +666,12 @@ canonical detected target. Supplying only part of the strict setup or omitting
 a required air-gap binding is invalid; the normal daemon does not construct an
 unconfigured parallel materializer.
 
-At startup the normal daemon scans only direct `*.zip` children of each bound
-read-only air-gap root. It imports them through the verified artifact store and
-passes only rehashed CAS object paths to resolution. Raw wheel files beside a
-bundle are never eligible. Invalid bundle ingestion produces a bounded degraded
+Normal daemon construction starts or attaches to the canonical system setup
+operation without waiting for source I/O, resolution, installation, or probes.
+That worker scans only direct `*.zip` children of each bound read-only air-gap
+root, imports them through the verified artifact store, and passes only rehashed
+CAS object paths to resolution. Raw wheel files beside a bundle are never
+eligible. Invalid bundle ingestion produces a bounded degraded
 toolbox-readiness diagnostic while the general control plane remains available;
 no physical source path or public-key value is projected.
 
@@ -726,6 +728,15 @@ succeeded. Clients recover it through the generic hosted-operation
 status/result/request-recovery APIs and never create an actor-owned parallel
 record.
 
+On restart, a queued operation that had not claimed dispatch is redispatched
+once on the same operation ID. An operation interrupted after dispatch is never
+blindly replayed: it is reconciled as success only when its durable
+`builtin_publication_committed` checkpoint and current real materialization
+receipts prove complete publication. Otherwise the same record becomes terminal
+failure with `toolbox_setup_interrupted_after_dispatch`, readiness stays false,
+and no replacement or parallel setup record is created. The sanitized canonical
+status is projected as `toolbox_setup_operation` in the hosting setup summary.
+
 The daemon control plane remains available when toolbox setup is absent,
 partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no
 template entries, and uses exactly one of `toolbox_configuration_missing`,
@@ -762,14 +773,15 @@ and remains independent of dependency approval. A package being importable
 never grants filesystem, network, subprocess, artifact, broker, or host API
 capability.
 
-At daemon startup, the host validates catalog and manifest signatures, complete
-locks, artifact availability, target tags, worker artifact digest, and the
-ability to enforce compute-only isolation. It then materializes and import
-probes both required templates before standard readiness succeeds. If the
-platform cannot enforce the policy, the host neither advertises nor launches
-the affected revision. A required intent with `prewarm: false` is an explicit
-non-standard deployment; it reports degraded readiness until that built-in has
-passed the same checks.
+In the startup worker, the host validates catalog and manifest signatures,
+complete locks, artifact availability, target tags, worker artifact digest, and
+the ability to enforce compute-only isolation. It then materializes and import
+probes both required templates before standard readiness succeeds. Readiness is
+derived from the active catalog plus real materialization receipts, never from
+intent or a queued/running setup record. If the platform cannot enforce the
+policy, the host neither advertises nor launches the affected revision. A
+required intent with `prewarm: false` is an explicit non-standard deployment;
+it reports degraded readiness until that built-in has passed the same checks.
 
 Readiness diagnostics use the stable codes `required_template_missing`,
 `required_template_signature_invalid`, `required_template_lock_invalid`,
