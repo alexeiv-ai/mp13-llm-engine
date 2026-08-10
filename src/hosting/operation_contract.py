@@ -84,6 +84,10 @@ TOOLBOX_DEFINITION_APPLY_PHASES = frozenset(
         "cleanup",
     }
 )
+TOOLBOX_DEFINITION_PLAN_PHASES = frozenset({"resolution", "offer_persistence"})
+TOOLBOX_DEFINITION_CONFIRMATION_PHASES = frozenset(
+    {"validation", "acquisition", "receipt_commit"}
+)
 TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES = frozenset({"publication", "draining", "cleanup"})
 TOOLBOX_TEMPLATE_PREWARM_PHASES = frozenset(
     {"validation", "artifact_verification", "environment_build", "import_probe", "receipt_commit"}
@@ -107,6 +111,8 @@ TOOLBOX_ARTIFACT_IMPORT_PHASES = frozenset(
 class HostedExecutionKind(StrEnum):
     TOOLBOX = "toolbox"
     TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
+    TOOLBOX_DEFINITION_PLAN = "toolbox_definition_plan"
+    TOOLBOX_DEFINITION_CONFIRMATION = "toolbox_definition_confirmation"
     TOOLBOX_TEMPLATE_PREWARM = "toolbox_template_prewarm"
     TOOLBOX_SETUP = "toolbox_setup"
     TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
@@ -495,6 +501,12 @@ class HostedOperationStatus:
                     and self.progress.cancellable
                 ):
                     raise ValueError("toolbox_definition_apply_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_PLAN:
+                if self.progress.phase not in TOOLBOX_DEFINITION_PLAN_PHASES:
+                    raise ValueError("toolbox_definition_plan_progress_phase_invalid")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION:
+                if self.progress.phase not in TOOLBOX_DEFINITION_CONFIRMATION_PHASES:
+                    raise ValueError("toolbox_definition_confirmation_progress_phase_invalid")
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
                 if self.progress.phase not in TOOLBOX_TEMPLATE_PREWARM_PHASES:
                     raise ValueError("toolbox_template_prewarm_progress_phase_invalid")
@@ -587,6 +599,8 @@ __all__ = [
     "TERMINAL_OPERATION_LIFECYCLES",
     "TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES",
     "TOOLBOX_DEFINITION_APPLY_PHASES",
+    "TOOLBOX_DEFINITION_PLAN_PHASES",
+    "TOOLBOX_DEFINITION_CONFIRMATION_PHASES",
     "TOOLBOX_TEMPLATE_PREWARM_PHASES",
     "TOOLBOX_SETUP_PHASES",
     "TOOLBOX_ARTIFACT_IMPORT_PHASES",

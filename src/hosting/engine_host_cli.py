@@ -117,6 +117,9 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-plan-definition": [
         "Get-Content toolbox-definition.json | python -m hosting.engine_host_cli --payload-stdin toolbox-plan-definition",
     ],
+    "toolbox-confirm-definition-plan": [
+        "Get-Content toolbox-confirmation.json | python -m hosting.engine_host_cli --payload-stdin toolbox-confirm-definition-plan",
+    ],
     "toolbox-approve-definition-plan": [
         "'{\"plan_id\":\"plan-id\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-approve-definition-plan",
     ],
@@ -885,6 +888,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-gc",
         "toolbox-get-definition",
         "toolbox-plan-definition",
+        "toolbox-confirm-definition-plan",
         "toolbox-approve-definition-plan",
         "toolbox-apply-definition",
         "toolbox-template-list",
@@ -1944,8 +1948,18 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(
                 svc.toolbox_plan_definition(
                     definition=dict(payload.get("definition") or {}),
+                    request_id=str(payload.get("request_id") or ""),
                     operator_details=bool(payload.get("operator_details", False)),
                     ttl_ms=int(payload.get("ttl_ms") or 15 * 60 * 1000),
+                )
+            )
+            return 0
+        if cmd == "toolbox-confirm-definition-plan":
+            _print_ok(
+                svc.toolbox_confirm_definition_plan(
+                    plan_id=str(payload.get("plan_id") or ""),
+                    environment_choices=list(payload.get("environment_choices") or []),
+                    request_id=str(payload.get("request_id") or ""),
                 )
             )
             return 0

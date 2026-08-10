@@ -2379,6 +2379,15 @@ class EngineHostDaemon:
                         "error_details": dict(acl.get("error_details") or {}),
                     }
                 target_payload = dict(acl.get("payload") or target_payload)
+                if target_cmd in {
+                    "toolbox-plan-definition",
+                    "toolbox-confirm-definition-plan",
+                    "toolbox-apply-definition",
+                }:
+                    result = await asyncio.to_thread(
+                        self._call_service, target_cmd, target_payload
+                    )
+                    return {"seq": seq, "ok": True, "result": result}
                 op_snapshot = self._create_operation(command=target_cmd, payload=target_payload)
                 operation_id = str(op_snapshot.get("operation_id") or "")
                 task = asyncio.create_task(self._run_operation(operation_id, target_cmd, target_payload))
@@ -2432,6 +2441,28 @@ class EngineHostDaemon:
                     "error_code": "operation_id_required",
                     "error_details": {},
                 }
+            canonical = self.svc._hosted_operations.get_by_operation_id(op_id)
+            if canonical is not None:
+                try:
+                    self.svc.authorize_command(cmd, payload)
+                    acl = self.svc.enforce_daemon_claim_policy(
+                        cmd, payload, peer_host=peer_host, is_localhost=is_localhost
+                    )
+                    if not bool(acl.get("ok", False)):
+                        raise PermissionError(str(acl.get("error_code") or "access_denied"))
+                    actor = str(dict(acl.get("payload") or {}).get("_claim_actor_id") or "service:local")
+                    result = self.svc.hosted_operation_status(
+                        ref=dict(canonical["operation"]), owner_actor_id=actor
+                    )
+                    return {"seq": seq, "ok": True, "result": result}
+                except PermissionError as exc:
+                    return {
+                        "seq": seq,
+                        "ok": False,
+                        "error": "auth_failed",
+                        "error_code": str(exc or "auth_failed"),
+                        "error_details": {"operation_id": op_id},
+                    }
             op = self._get_operation(op_id)
             if not op:
                 return {
@@ -2466,6 +2497,30 @@ class EngineHostDaemon:
                     "error_code": "operation_id_required",
                     "error_details": {},
                 }
+            canonical = self.svc._hosted_operations.get_by_operation_id(op_id)
+            if canonical is not None:
+                try:
+                    self.svc.authorize_command(cmd, payload)
+                    acl = self.svc.enforce_daemon_claim_policy(
+                        cmd, payload, peer_host=peer_host, is_localhost=is_localhost
+                    )
+                    if not bool(acl.get("ok", False)):
+                        raise PermissionError(str(acl.get("error_code") or "access_denied"))
+                    actor = str(dict(acl.get("payload") or {}).get("_claim_actor_id") or "service:local")
+                    result = self.svc.hosted_operation_cancel(
+                        ref=dict(canonical["operation"]),
+                        reason=str(payload.get("reason") or "client_requested"),
+                        owner_actor_id=actor,
+                    )
+                    return {"seq": seq, "ok": True, "result": result}
+                except PermissionError as exc:
+                    return {
+                        "seq": seq,
+                        "ok": False,
+                        "error": "auth_failed",
+                        "error_code": str(exc or "auth_failed"),
+                        "error_details": {"operation_id": op_id},
+                    }
             op = self._get_operation(op_id)
             if not op:
                 return {
@@ -2511,6 +2566,18 @@ class EngineHostDaemon:
                     "error_details": dict(acl.get("error_details") or {}),
                 }
             payload = dict(acl.get("payload") or payload)
+            if cmd in {
+                "toolbox-plan-definition",
+                "toolbox-confirm-definition-plan",
+                "toolbox-apply-definition",
+            }:
+                return {
+                    "seq": seq,
+                    "ok": False,
+                    "error": "operation_wrapper_required",
+                    "error_code": "operation_wrapper_required",
+                    "error_details": {"command": cmd},
+                }
             if cmd == "host-capability-session-register":
                 result = self._register_host_capability_session(
                     payload,
@@ -3228,10 +3295,20 @@ class EngineHostDaemon:
             actor = str(payload.get("_claim_actor_id") or "service:local")
             return svc.toolbox_plan_definition(
                 definition=dict(payload.get("definition") or {}),
+                request_id=str(payload.get("request_id") or ""),
                 operator_details=bool(payload.get("operator_details", False)),
                 owner_actor_id=actor,
                 authority_id=actor,
                 ttl_ms=int(payload.get("ttl_ms") or 15 * 60 * 1000),
+            )
+        if cmd == "toolbox-confirm-definition-plan":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_confirm_definition_plan(
+                plan_id=str(payload.get("plan_id") or ""),
+                environment_choices=list(payload.get("environment_choices") or []),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=actor,
+                authority_id=actor,
             )
         if cmd == "toolbox-approve-definition-plan":
             actor = str(payload.get("_claim_actor_id") or "service:local")

@@ -973,45 +973,12 @@ their `model_path` inputs do not pass through the generic guard.
 
 ## Planning
 
-`plan_definition(definition)` is actor-authorized and side-effect-free with
-respect to logical toolbox state, package installation, bundle staging, and
-workers. It returns a `ToolboxDefinitionPlan`:
-
-```json
-{
-  "contract": "hosting.toolbox.definition_plan",
-  "plan_id": "plan_01JABCDEF0123456789",
-  "toolbox_id": "workspace-tools",
-  "definition_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-  "expected_revision": null,
-  "catalog_revision": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-  "package_policy_revision": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-  "expires_at_ms": 1786233600000,
-  "can_apply": false,
-  "approval_required": true,
-  "custom_delta_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-  "imports": [],
-  "environments": [],
-  "profile_diff": {
-    "reused": 0,
-    "added": 1,
-    "replaced": 0,
-    "removed": 0
-  },
-  "diagnostics": [],
-  "user_projection": {
-    "state": "approval_required",
-    "code": "custom_dependency_approval_required",
-    "summary": "Review is required for additional packages."
-  }
-}
-```
-
-The bounded `imports` and `environments` projections carry detected import
-roots, source evidence, reviewed distribution mappings, selected template IDs,
-custom deltas, unresolved imports, and stable policy diagnostics. Internal
-environment/profile identities and physical paths are not part of the normal
-plan result.
+`plan_definition(definition, request_id=...)` is actor-authorized and starts a
+canonical `toolbox_definition_plan` hosted operation. Planning is side-effect-
+free with respect to logical toolbox state, package installation, bundle
+staging, and workers. Its terminal result is the complete immutable
+`hosting.toolbox.definition_plan.v2` record described below. Identical retries
+return current canonical status; they never wait or create a second receipt.
 
 Each bounded `imports` entry contains exactly `import_root`, `classification`
 (`standard_library`, `local_staged`, `parent_runtime`, `known_third_party`,
@@ -1283,12 +1250,13 @@ The supported client calls are:
 
 ```python
 get_definition(*, operator_details: bool = False) -> dict
-plan_definition(definition: dict, *, operator_details: bool = False) -> dict
-approve_definition_plan(*, plan_id: str) -> dict
+plan_definition(definition: dict, *, request_id: str, operator_details: bool = False) -> dict
+confirm_definition_plan(*, plan_id: str, environment_choices: list[dict], request_id: str) -> dict
+approve_confirmed_definition_plan(*, confirmation_ref: str) -> dict
 apply_definition(
     *,
-    definition: dict,
     plan_id: str,
+    confirmation_ref: str,
     request_id: str,
     dependency_approval_ref: str | None = None,
 ) -> dict
@@ -1298,9 +1266,9 @@ describe_environment_template(*, template_id: str) -> dict
 
 `operator_details=True` requests but does not grant the separate operator
 projection; authorization still decides whether that object is present.
-Long-running apply observation, result retrieval, cancellation, and request
-recovery use generic hosted-operation client calls and the returned operation
-ref. Environment template lifecycle and physical materialization controls are
+Planning, confirmation, and apply observation, result retrieval, cancellation,
+request recovery, and changed-snapshot watching use generic hosted-operation
+client calls and the returned operation ref. Environment template lifecycle and physical materialization controls are
 administrative surfaces, not toolbox-client calls.
 
 ## Actor authorization

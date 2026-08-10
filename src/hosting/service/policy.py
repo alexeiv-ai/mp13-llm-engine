@@ -184,6 +184,7 @@ class PolicyMixin:
             "toolbox-artifact-upload-commit",
             "toolbox-get-definition",
             "toolbox-plan-definition",
+            "toolbox-confirm-definition-plan",
             "toolbox-approve-definition-plan",
             "toolbox-apply-definition",
             "toolbox-template-list",

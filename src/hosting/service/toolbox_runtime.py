@@ -192,6 +192,81 @@ class ToolboxRuntimeMixin:
         self,
         *,
         definition: Dict[str, Any],
+        request_id: str,
+        operator_details: bool = False,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+        ttl_ms: int = 15 * 60 * 1000,
+    ) -> Dict[str, Any]:
+        from ..toolbox.bundle_models import ToolboxDefinitionSpec
+
+        model = ToolboxDefinitionSpec.from_dict(definition)
+        actor = str(owner_actor_id or "").strip()
+        rid = str(request_id or "").strip()
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "definition": model.to_dict(),
+                "operator_details": bool(operator_details),
+                "ttl_ms": int(ttl_ms),
+                "authority_id": str(authority_id or "").strip(),
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=actor,
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_PLAN,
+            selector={"kind": "toolbox_id", "id": model.toolbox_id},
+            namespace=f"toolbox-definition-plan:{model.toolbox_id}",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "toolbox_id": model.toolbox_id,
+                "retain_terminal_result": True,
+            },
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status["operation"])["operation_id"])
+        worker = threading.Thread(
+            target=self._run_toolbox_definition_plan,
+            kwargs={
+                "operation_id": operation_id,
+                "definition": model.to_dict(),
+                "operator_details": bool(operator_details),
+                "owner_actor_id": actor,
+                "authority_id": str(authority_id or "").strip(),
+                "ttl_ms": int(ttl_ms),
+            },
+            name=f"toolbox-definition-plan-{operation_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        return status
+
+    def _run_toolbox_definition_plan(self, *, operation_id: str, **kwargs: Any) -> Dict[str, Any]:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        try:
+            result = self._build_toolbox_definition_plan(**kwargs)
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope=result,
+            )
+        except Exception as exc:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_plan_failure.v1",
+                    "status": "failed",
+                    "code": "toolbox_definition_plan_failed",
+                },
+            )
+
+    def _build_toolbox_definition_plan(
+        self,
+        *,
+        definition: Dict[str, Any],
         operator_details: bool = False,
         owner_actor_id: str = "service:local",
         authority_id: str = "authority:local",
@@ -309,6 +384,119 @@ class ToolboxRuntimeMixin:
                 ),
             },
         }
+
+    def toolbox_confirm_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        environment_choices: List[Dict[str, Any]],
+        request_id: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        from ..toolbox.definition_planner import ToolboxEnvironmentConfirmationChoice
+
+        now_ms = int(time.time() * 1000)
+        plan = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
+        actor = str(owner_actor_id or "").strip()
+        authority = str(authority_id or "").strip()
+        if plan.owner_actor_id != actor or plan.authority_id != authority:
+            raise PermissionError("toolbox_definition_plan_not_found")
+        choices = tuple(
+            ToolboxEnvironmentConfirmationChoice.from_dict(item)
+            for item in environment_choices
+        )
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "plan_id": plan.plan_id,
+                "choices": [item.to_dict() for item in choices],
+                "authority_id": authority,
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=actor,
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION,
+            selector={"kind": "toolbox_id", "id": plan.toolbox_id},
+            namespace=f"toolbox-definition-confirmation:{plan.toolbox_id}",
+            request_id=str(request_id or "").strip(),
+            fingerprint=fingerprint,
+            metadata={"toolbox_id": plan.toolbox_id, "plan_id": plan.plan_id},
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status["operation"])["operation_id"])
+        worker = threading.Thread(
+            target=self._run_toolbox_definition_confirmation,
+            kwargs={
+                "operation_id": operation_id,
+                "plan_id": plan.plan_id,
+                "choices": [item.to_dict() for item in choices],
+                "owner_actor_id": actor,
+                "authority_id": authority,
+            },
+            name=f"toolbox-definition-confirm-{operation_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        return status
+
+    def _run_toolbox_definition_confirmation(
+        self,
+        *,
+        operation_id: str,
+        plan_id: str,
+        choices: List[Dict[str, Any]],
+        owner_actor_id: str,
+        authority_id: str,
+    ) -> Dict[str, Any]:
+        from ..toolbox.definition_planner import reduce_toolbox_confirmation
+
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        try:
+            now_ms = int(time.time() * 1000)
+            plan = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
+            if plan.owner_actor_id != owner_actor_id or plan.authority_id != authority_id:
+                raise PermissionError("toolbox_definition_plan_not_found")
+            reduction = reduce_toolbox_confirmation(
+                active_definition=plan.active_definition,
+                proposed_definition=plan.proposed_definition,
+                environment_mutations=plan.environment_mutations,
+                choices=choices,
+            )
+            confirmation_ref, receipt = self._toolbox_confirmations.create(
+                plan_id=plan.plan_id,
+                toolbox_id=plan.toolbox_id,
+                owner_actor_id=owner_actor_id,
+                authority_id=authority_id,
+                choices=choices,
+                reduction=reduction,
+                now_ms=now_ms,
+                expires_at_ms=plan.expires_at_ms,
+            )
+            result = {
+                "contract": "hosting.toolbox.definition_confirmation_result.v1",
+                "status": "confirmed",
+                "confirmation_ref": confirmation_ref,
+                "plan_id": plan.plan_id,
+                "expires_at_ms": receipt.expires_at_ms,
+                **reduction.to_dict(),
+            }
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope=result,
+            )
+        except Exception as exc:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_confirmation_failure.v1",
+                    "status": "failed",
+                    "code": "toolbox_definition_confirmation_failed",
+                },
+            )
 
     def toolbox_approve_definition_plan(
         self,

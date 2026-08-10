@@ -290,11 +290,16 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
     published_entry = next(
         item for item in catalog["entries"] if item["template_digest"] == published_digest
     )
-    plan = service.toolbox_plan_definition(
+    started_plan = service.toolbox_plan_definition(
         definition=_definition(),
+        request_id="config-transition-plan",
         owner_actor_id="actor:test",
         authority_id="workspace:test",
     )
+    terminal_plan = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started_plan["operation"]["operation_id"], timeout_seconds=10
+    )
+    plan = terminal_plan["result"]
     assert service._toolbox_definition_plans.list(now_ms=int(time.time() * 1000))  # noqa: SLF001
     artifact_digest = published_entry["artifacts"][0]["sha256"]
     active_receipt = ToolboxTemplateMaterializationReceipt(

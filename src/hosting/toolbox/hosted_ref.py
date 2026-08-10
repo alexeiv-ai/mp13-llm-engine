@@ -89,13 +89,28 @@ class HostedToolBoxRef:
         self,
         definition: Dict[str, Any],
         *,
+        request_id: str,
         operator_details: bool = False,
         ttl_ms: int = 15 * 60 * 1000,
     ) -> Dict[str, Any]:
         return dict(self.host.toolbox_plan_definition(
             definition=dict(definition or {}),
+            request_id=str(request_id or "").strip(),
             operator_details=bool(operator_details),
             ttl_ms=int(ttl_ms),
+        ) or {})
+
+    def confirm_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        environment_choices: list[Dict[str, Any]],
+        request_id: str,
+    ) -> Dict[str, Any]:
+        return dict(self.host.toolbox_confirm_definition_plan(
+            plan_id=str(plan_id or "").strip(),
+            environment_choices=[dict(item) for item in environment_choices],
+            request_id=str(request_id or "").strip(),
         ) or {})
 
     def approve_definition_plan(self, *, plan_id: str) -> Dict[str, Any]:

@@ -52,6 +52,7 @@ from .toolbox_artifact_store import (
     validate_trust_public_keys,
 )
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
+from .toolbox_confirmations import AtomicJsonToolboxConfirmationRepository
 from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from ..toolbox.host_project_config import (
     ToolboxHostProjectConfiguration,
@@ -201,6 +202,9 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         )
         self._toolbox_dependency_approvals = AtomicJsonToolboxDependencyApprovalRepository(
             self.hosting_root / "state" / "toolbox_dependency_approvals.json"
+        )
+        self._toolbox_confirmations = AtomicJsonToolboxConfirmationRepository(
+            self.hosting_root / "state" / "toolbox_definition_confirmations.json"
         )
         self._configured_toolbox_dependency_policy = (
             toolbox_dependency_policy

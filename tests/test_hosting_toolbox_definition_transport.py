@@ -37,7 +37,10 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
 
     definition = {"contract": "hosting.toolbox.definition", "toolbox_id": "tb"}
     channel.toolbox_get_definition(toolbox_id="tb")
-    channel.toolbox_plan_definition(definition=definition, ttl_ms=42)
+    channel.toolbox_plan_definition(definition=definition, request_id="plan-1", ttl_ms=42)
+    channel.toolbox_confirm_definition_plan(
+        plan_id="plan-1", environment_choices=[], request_id="confirm-1"
+    )
     channel.toolbox_approve_definition_plan(plan_id="plan-1")
     channel.toolbox_apply_definition(
         definition=definition,
@@ -48,13 +51,35 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
 
     assert [command for command, _ in connection.calls] == [
         "toolbox-get-definition",
-        "toolbox-plan-definition",
+        "op-start",
+        "op-start",
         "toolbox-approve-definition-plan",
         "toolbox-apply-definition",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
-    assert connection.calls[1][1]["ttl_ms"] == 42
-    assert connection.calls[3][1]["dependency_approval_ref"] == "opaque-approval"
+    assert connection.calls[1][1]["payload"]["ttl_ms"] == 42
+    assert connection.calls[4][1]["dependency_approval_ref"] == "opaque-approval"
+
+
+def test_operation_watch_emits_changed_snapshots_and_stops_at_terminal() -> None:
+    channel = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    snapshots = iter(
+        [
+            {"updated_at_ms": 1, "lifecycle": "queued"},
+            {"updated_at_ms": 1, "lifecycle": "queued"},
+            {"updated_at_ms": 2, "lifecycle": "running"},
+            {"updated_at_ms": 3, "lifecycle": "terminal_success"},
+        ]
+    )
+    channel.get_host_operation_status = (  # type: ignore[method-assign]
+        lambda **_kwargs: next(snapshots)
+    )
+
+    changed = channel.watch_host_operation(
+        operation_id="op-test", timeout_seconds=1, poll_interval_seconds=0.01
+    )
+
+    assert [item["updated_at_ms"] for item in changed] == [1, 2, 3]
 
 
 def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers() -> None:
@@ -74,7 +99,10 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
     definition = {"toolbox_id": "tb"}
 
     ref.get_definition()
-    ref.plan_definition(definition, ttl_ms=99)
+    ref.plan_definition(definition, request_id="plan-1", ttl_ms=99)
+    ref.confirm_definition_plan(
+        plan_id="plan-1", environment_choices=[], request_id="confirm-1"
+    )
     ref.approve_definition_plan(plan_id="plan-1")
     ref.apply_definition(
         definition=definition,
@@ -88,12 +116,13 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
     assert [name for name, _ in host.calls] == [
         "toolbox_get_definition",
         "toolbox_plan_definition",
+        "toolbox_confirm_definition_plan",
         "toolbox_approve_definition_plan",
         "toolbox_apply_definition",
         "toolbox_template_list",
         "toolbox_template_describe",
     ]
-    assert host.calls[3][1]["request_id"] == "request-1"
+    assert host.calls[4][1]["request_id"] == "request-1"
     assert not hasattr(type(ref), "publish_template")
 
 
@@ -133,13 +162,16 @@ def test_daemon_dispatch_preserves_actor_and_opaque_approval(
             json.dumps(
                 {
                     "seq": 1,
-                    "cmd": "toolbox-apply-definition",
-                    "payload": {
-                        "definition": {"toolbox_id": "tb"},
-                        "plan_id": "plan-1",
-                        "request_id": "request-1",
-                        "dependency_approval_ref": {"forged": True},
-                    },
+                        "cmd": "op-start",
+                        "payload": {
+                            "command": "toolbox-apply-definition",
+                            "payload": {
+                                "definition": {"toolbox_id": "tb"},
+                                "plan_id": "plan-1",
+                                "request_id": "request-1",
+                                "dependency_approval_ref": {"forged": True},
+                            },
+                        },
                 }
             ),
             peer_host="127.0.0.1",

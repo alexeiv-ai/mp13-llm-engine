@@ -52,6 +52,14 @@ class HostedOperationsMixin:
             if target.kind != "toolbox_id":
                 raise ValueError("toolbox_definition_apply_selector_must_be_toolbox_id")
             namespace = f"toolbox-definition:{target.id}"
+        elif kind == HostedExecutionKind.TOOLBOX_DEFINITION_PLAN:
+            if target.kind != "toolbox_id":
+                raise ValueError("toolbox_definition_plan_selector_must_be_toolbox_id")
+            namespace = f"toolbox-definition-plan:{target.id}"
+        elif kind == HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION:
+            if target.kind != "toolbox_id":
+                raise ValueError("toolbox_definition_confirmation_selector_must_be_toolbox_id")
+            namespace = f"toolbox-definition-confirmation:{target.id}"
         elif kind == HostedExecutionKind.TOOLBOX_SETUP:
             if target.kind != "host_scope" or target.id != "toolbox-host":
                 raise ValueError("toolbox_setup_selector_must_be_host_scope")
@@ -107,7 +115,11 @@ class HostedOperationsMixin:
                 timeout_seconds=float(timeout_seconds or 8.0),
                 respawn=bool(respawn),
             )
-        if operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
+        if operation.execution_kind in {
+            HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM,
+            HostedExecutionKind.TOOLBOX_DEFINITION_PLAN,
+            HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION,
+        }:
             canceled = self._hosted_operations.cancel_before_dispatch(
                 operation_id=operation.operation_id,
                 reason=str(reason or "client_requested"),

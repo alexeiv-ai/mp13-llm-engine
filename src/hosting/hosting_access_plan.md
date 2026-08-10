@@ -647,12 +647,12 @@ boundary—not a double—passes.
     offers, and three-choice truncation from already verified exact candidates.
   - [x] **R3-01c** Populate the builder from the configured-source exact
     resolver and active definition without manufactured or unverified inputs.
-- [ ] **R3-02** Convert planning to a new hosted execution kind, route generic
+- [x] **R3-02** Convert planning to a new hosted execution kind, route generic
   `op-start`/`op-status`/`op-cancel` to its canonical hosted record, and make
   duplicate request IDs return current status instead of waiting. Terminal
   result contains the immutable plan and bounded alternatives; no
   `operations.json` mirror is written.
-- [ ] **R3-03** Add the durable confirmation/acquisition operation and receipt
+- [x] **R3-03** Add the durable confirmation/acquisition operation and receipt
   repository in `toolbox_runtime.py`, `daemon/local_ipc.py`,
   `engine_host_channel.py`, and `engine_host_cli.py`.
 - [ ] **R3-04** Implement accepted, declined, skipped, preserved-active-update,
@@ -668,7 +668,7 @@ boundary—not a double—passes.
   install commands supplied by consumers.
 - [ ] **R3-06** Prove multi-tool add/update/remove and idempotent plan/confirmation
   recovery through the real authenticated daemon channel.
-- [ ] **R3-07** Add `EngineHostChannel.watch_host_operation` over changed
+- [x] **R3-07** Add `EngineHostChannel.watch_host_operation` over changed
   `op-status` snapshots and optional bounded long polling. Prove human
   confirmation/approval occurs between terminal operations without an open
   request, callback lease, or in-memory workflow/proxy stream dependency.

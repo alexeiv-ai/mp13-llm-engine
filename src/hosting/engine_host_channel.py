@@ -3166,6 +3166,30 @@ class EngineHostControlChannel:
         )
         return dict(res or {}) if isinstance(res, dict) else {}
 
+    def watch_host_operation(
+        self,
+        *,
+        operation_id: str,
+        timeout_seconds: float = 30.0,
+        poll_interval_seconds: float = 0.1,
+        after_updated_at_ms: Optional[int] = None,
+    ) -> list[Dict[str, Any]]:
+        """Return only changed canonical snapshots until terminal or timeout."""
+        deadline = time.monotonic() + max(0.0, min(float(timeout_seconds), 300.0))
+        interval = max(0.01, min(float(poll_interval_seconds), 5.0))
+        last_updated = int(after_updated_at_ms or -1)
+        snapshots: list[Dict[str, Any]] = []
+        terminal = {"terminal_success", "terminal_failure", "terminal_cancellation"}
+        while True:
+            snapshot = self.get_host_operation_status(operation_id=operation_id)
+            updated = int(snapshot.get("updated_at_ms") or 0)
+            if updated > last_updated:
+                snapshots.append(snapshot)
+                last_updated = updated
+            if str(snapshot.get("lifecycle") or "") in terminal or time.monotonic() >= deadline:
+                return snapshots
+            time.sleep(interval)
+
     def cancel_host_operation(self, *, operation_id: str, reason: str = "") -> Dict[str, Any]:
         res = self._invoke(
             "op-cancel",
@@ -3497,18 +3521,35 @@ class EngineHostControlChannel:
         self,
         *,
         definition: Dict[str, Any],
+        request_id: str,
         operator_details: bool = False,
         ttl_ms: int = 15 * 60 * 1000,
     ) -> Dict[str, Any]:
-        res = self._invoke(
-            "toolbox-plan-definition",
-            {
+        return self.start_host_operation(
+            command="toolbox-plan-definition",
+            payload={
+                "request_id": str(request_id or "").strip(),
                 "definition": dict(definition or {}),
                 "operator_details": bool(operator_details),
                 "ttl_ms": int(ttl_ms),
             },
         )
-        return dict(res or {})
+
+    def toolbox_confirm_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        environment_choices: list[Dict[str, Any]],
+        request_id: str,
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-confirm-definition-plan",
+            payload={
+                "request_id": str(request_id or "").strip(),
+                "plan_id": str(plan_id or "").strip(),
+                "environment_choices": [dict(item) for item in environment_choices],
+            },
+        )
 
     def toolbox_approve_definition_plan(self, *, plan_id: str) -> Dict[str, Any]:
         res = self._invoke(

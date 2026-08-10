@@ -160,7 +160,18 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R3-01c (`high`) is complete. Definition planning now
+Active slice: none. R3-02/R3-03/R3-07 (`high`) are complete. Planning and
+confirmation/acquisition now use canonical hosted execution kinds and the
+shared operation repository; identical request IDs return current status and
+one deterministic immutable confirmation receipt. Daemon `op-*` routes these
+families without `operations.json`, raw long-command dispatch fails closed,
+and the channel watch emits changed snapshots until a bounded timeout or
+terminal state. The focused service/operation/transport/config suite passed 43
+tests in 5.37s. The expanded daemon startup/ACL/auth, CLI, transport,
+operation-repository, and apply-operation suite passed 179 tests in 27.23s;
+compile and `git diff --check` passed.
+
+Completed slice evidence: R3-01c (`high`) is complete. Definition planning now
 resolves exact wheel-only candidates from configured verified CAS sources,
 reconstructs the active template closure from verified catalog references, and
 persists the complete v2 plan with target/config/source/policy pins. Sanitized
