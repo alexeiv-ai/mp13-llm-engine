@@ -516,8 +516,27 @@ class HermeticToolboxEnvironmentBuilder:
         root = Path(spec.environment_root)
         python = Path(spec.python_executable)
         receipt = self._read_json(root / "verification-receipt.json")
-        expected = self._receipt_payload(spec, verified_at_ms=int(receipt.get("verified_at_ms", -1)))
-        if receipt != expected or not python.is_file():
+        resolved_receipt = dict(receipt.get("resolved") or {})
+        resolved_expected = spec.resolved.to_dict()
+        physical_fields = {
+            "runtime_version", "runtime_artifact_digest", "python_abi", "platform",
+            "complete_lock_digest", "complete_lock", "locked_artifacts",
+            "custom_resolved_lock_digest", "isolation_policy_version",
+        }
+        if (
+            receipt.get("contract") != _ENVIRONMENT_RECEIPT_CONTRACT
+            or receipt.get("state") != "verified"
+            or receipt.get("environment_key") != spec.environment_key
+            or {key: resolved_receipt.get(key) for key in physical_fields}
+            != {key: resolved_expected[key] for key in physical_fields}
+            or receipt.get("artifact_digests")
+            != sorted(item.sha256 for item in spec.resolved.locked_artifacts)
+            or receipt.get("installed_distributions")
+            != {item.name: item.version for item in spec.resolved.complete_lock}
+            or receipt.get("system_site_packages") is not False
+            or receipt.get("installer") != "venv-pip-offline-no-deps"
+            or not python.is_file()
+        ):
             raise HermeticToolboxEnvironmentBuildError(
                 "environment_receipt_mismatch", "The published environment does not match its resolved identity."
             )
@@ -527,6 +546,25 @@ class HermeticToolboxEnvironmentBuilder:
                 "environment_site_packages_inherited", "The toolbox environment inherits ambient site packages."
             )
         return receipt
+
+    def _probe_imports(self, python: Path, import_roots: tuple[str, ...]) -> None:
+        probe_script = (
+            "import importlib,json,sys;"
+            "r=json.loads(sys.argv[1]);"
+            "[importlib.import_module(x) for x in r];"
+            "sys.stdout.write(json.dumps(r))"
+        )
+        probed = self._run(
+            python,
+            ["-c", probe_script, json.dumps(list(import_roots))],
+            code="environment_import_probe_failed",
+            summary="A resolved import root failed under the final environment interpreter.",
+        )
+        if tuple(json.loads(probed.stdout or "[]")) != import_roots:
+            raise HermeticToolboxEnvironmentBuildError(
+                "environment_import_probe_failed",
+                "A resolved import root failed under the final environment interpreter.",
+            )
 
     def _build_candidate(self, spec: HermeticToolboxEnvironmentSpec, candidate: Path) -> None:
         self._validate_target(spec.resolved)
@@ -559,23 +597,7 @@ class HermeticToolboxEnvironmentBuilder:
                 "environment_lock_receipt_failed",
                 "The final interpreter did not contain the complete resolved distribution lock.",
             )
-        probe_script = (
-            "import importlib,json,sys;"
-            "r=json.loads(sys.argv[1]);"
-            "[importlib.import_module(x) for x in r];"
-            "sys.stdout.write(json.dumps(r))"
-        )
-        probed = self._run(
-            python,
-            ["-c", probe_script, json.dumps(list(spec.resolved.resolved_import_roots))],
-            code="environment_import_probe_failed",
-            summary="A resolved import root failed under the final environment interpreter.",
-        )
-        if tuple(json.loads(probed.stdout or "[]")) != spec.resolved.resolved_import_roots:
-            raise HermeticToolboxEnvironmentBuildError(
-                "environment_import_probe_failed",
-                "A resolved import root failed under the final environment interpreter.",
-            )
+        self._probe_imports(python, spec.resolved.resolved_import_roots)
         candidate_spec = HermeticToolboxEnvironmentSpec(
             resolved=spec.resolved,
             environment_key=spec.environment_key,
@@ -602,6 +624,9 @@ class HermeticToolboxEnvironmentBuilder:
             root = Path(spec.environment_root)
             if root.exists():
                 self._validate_published(spec)
+                self._probe_imports(
+                    Path(spec.python_executable), spec.resolved.resolved_import_roots
+                )
             else:
                 candidate = self.candidates_root / f"{key}.{os.getpid()}.{uuid.uuid4().hex}"
                 try:

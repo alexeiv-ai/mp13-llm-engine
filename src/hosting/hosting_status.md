@@ -98,22 +98,27 @@ without catalog or public receipt mutation. The focused success/corruption/
 runtime-artifact/ambiguous-evidence/probe-failure matrix passed 19 tests in
 33.92s. The expanded artifact/hermetic/prewarm/docs suite passed 48 tests in
 138.19s; `git diff --check` passed.
+R2-04a2 atomically replaces the complete receipt set and complete active
+catalog set, with rollback of newly inserted receipts/references on ordinary
+failure and idempotent restart/retry. It also fixes physical environment reuse
+across logical templates by comparing only physical receipt identity and
+rerunning each template's import probes. The expanded catalog/prewarm/hermetic/
+docs suite passed 61 tests in 171.78s; `git diff --check` passed.
 
 ## Active implementation slice
 
-Active slice: R2-04a1 (`high`). Construct strict immutable template candidates
-from configured intent, exact resolved CAS closure, detected target, and the one
-signed source-bundle evidence covering every artifact. Teach the real hermetic
-builder to accept only the exact verified CAS path map, then build and run every
-declared import probe through an explicit pre-publication service boundary.
-Catalog and public receipt state remain unchanged until R2-04a2.
+Active slice: R2-04a2 (`high`). Validate that the prepared candidate set exactly
+covers configured built-ins. Commit the complete receipt set with one atomic
+receipt-store replacement, then publish/activate the complete catalog set with
+one atomic catalog replacement. Any ordinary failure removes only receipts
+inserted by this attempt and releases every candidate reference; idempotent
+retry returns the same active revisions without duplicate entries.
 
 Required validation:
 
-- exact candidate identity/provenance and single-bundle evidence tests
-- real CAS-backed hermetic build with complete installed-lock/import probes
-- missing runtime artifact, mixed-bundle evidence, corrupt CAS, and probe
-  failure leave catalog/receipt state empty
+- complete two-template batch and restart/idempotency test
+- injected receipt/catalog conflicts prove zero partial active publication
+- publication failure rolls back new receipts and candidate references
 - `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q`
 - `git diff --check`
 

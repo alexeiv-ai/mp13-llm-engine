@@ -690,6 +690,22 @@ runs every declared import probe. This pre-publication boundary returns strict
 candidate receipts but writes neither the catalog nor the public receipt store.
 Any candidate failure releases all references created by that batch.
 
+Publication accepts only a prepared batch whose config/source revisions and
+target still match and whose template IDs exactly cover configured built-ins.
+It validates all candidate identities before mutation, writes the complete
+receipt set with one atomic receipt-store replacement, then publishes and
+activates the complete template set with one atomic catalog replacement.
+Ordinary catalog failure removes only receipts inserted by that attempt and
+releases candidate references. Retrying the identical prepared batch is
+idempotent and creates no duplicate revision.
+
+Physical environment identity deliberately permits templates with the same
+runtime artifact, complete lock, custom lock and isolation policy to share one
+immutable environment. Its physical verification receipt therefore compares
+only those physical fields, not logical template ID/digest. Every reuse still
+reruns the requesting template's complete import-root probes before a
+template-specific public receipt can be committed.
+
 The daemon control plane remains available when toolbox setup is absent,
 partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no
 template entries, and uses exactly one of `toolbox_configuration_missing`,

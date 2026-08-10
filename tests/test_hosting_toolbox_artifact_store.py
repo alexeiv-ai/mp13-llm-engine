@@ -16,6 +16,7 @@ from hosting.service.toolbox_artifact_store import (
     AtomicToolboxArtifactStore,
     ToolboxArtifactBundleError,
 )
+from hosting.service.toolbox_catalog import AtomicJsonToolboxTemplateCatalog
 from hosting.daemon import EngineHostDaemon
 from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
 from hosting.toolbox.identity import identity_digest
@@ -188,10 +189,14 @@ def _keys() -> tuple[Ed25519PrivateKey, dict[str, str]]:
     return private, {"release-key": _b64(private.public_key().public_bytes_raw())}
 
 
-def _runtime_configuration() -> ToolboxHostProjectConfiguration:
+def _runtime_configuration(*, two_templates: bool = False) -> ToolboxHostProjectConfiguration:
     payload = _configuration().to_dict()
     payload["builtins"][0]["imports"] = ["hosting", "mp13_engine"]
     payload["builtins"][0]["package_requirements"] = ["mp13-engine==0.9.0"]
+    if two_templates:
+        payload["builtins"].append(
+            {**payload["builtins"][0], "template_id": "py-compute"}
+        )
     return ToolboxHostProjectConfiguration.from_dict(payload)
 
 
@@ -564,3 +569,80 @@ def test_candidate_provenance_requires_one_unambiguous_signed_bundle(tmp_path: P
 
     with pytest.raises(ValueError, match="artifact_evidence_ambiguous"):
         store.bundle_evidence_for_artifacts(set(imported["artifact_digests"]))
+
+
+def test_complete_prepared_batch_publishes_atomically_and_is_restart_idempotent(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration(two_templates=True)
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+
+    def construct() -> EngineHostDaemon:
+        return EngineHostDaemon(
+            pid_file=tmp_path / "daemon.pid",
+            engines_state_file=tmp_path / "engines.json",
+            control_state_file=tmp_path / "control.json",
+            toolbox_host_project_configuration=configuration.to_dict(),
+            toolbox_artifact_sources={"offline-release": source},
+            toolbox_dependency_policy=_policy(),
+            toolbox_trust_public_keys=public,
+        )
+
+    daemon = construct()
+    prepared = daemon.svc.prepare_configured_toolbox_templates()
+    published = daemon.svc.publish_prepared_configured_toolbox_templates(prepared)
+    repeated = daemon.svc.publish_prepared_configured_toolbox_templates(prepared)
+
+    assert published["status"] == "published"
+    assert {item["template_id"] for item in published["templates"]} == {"core", "py-compute"}
+    assert {item["outcome"] for item in repeated["templates"]} == {"idempotent"}
+    catalog = daemon.svc._toolbox_template_catalog.read()  # noqa: SLF001
+    assert set(catalog["active"]) == {"core", "py-compute"}
+    assert len(catalog["entries"]) == 2
+    assert daemon.svc.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
+    daemon.svc.close()
+
+    restarted = construct()
+    assert restarted.svc.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
+    assert len(restarted.svc._toolbox_template_catalog.read()["entries"]) == 2  # noqa: SLF001
+
+
+def test_catalog_batch_failure_rolls_back_new_receipt_and_candidate_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "read-only-source"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=configuration.to_dict(),
+        toolbox_artifact_sources={"offline-release": source},
+        toolbox_dependency_policy=_policy(),
+        toolbox_trust_public_keys=public,
+    )
+    prepared = daemon.svc.prepare_configured_toolbox_templates()
+
+    monkeypatch.setattr(
+        AtomicJsonToolboxTemplateCatalog,
+        "publish_batch",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected-batch-failure")),
+    )
+    with pytest.raises(RuntimeError, match="injected-batch-failure"):
+        daemon.svc.publish_prepared_configured_toolbox_templates(prepared)
+
+    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+    candidate = prepared["candidates"][0]
+    assert daemon.svc._toolbox_materialization_receipts.get(  # noqa: SLF001
+        template_digest=candidate["template_digest"],
+        python_abi=configuration.target.python_abi,
+        platform=configuration.target.platform,
+    ) is None
+    references = daemon.svc._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
+    assert json.loads(references.read_text())["environments"] == {}

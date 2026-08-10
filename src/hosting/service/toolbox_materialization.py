@@ -367,6 +367,52 @@ class AtomicJsonToolboxMaterializationReceipts:
             self._write_unlocked(state)
         return receipt
 
+    def put_many(
+        self, receipts: Sequence[ToolboxTemplateMaterializationReceipt]
+    ) -> tuple[
+        tuple[ToolboxTemplateMaterializationReceipt, ...],
+        tuple[ToolboxTemplateMaterializationReceipt, ...],
+    ]:
+        batch = tuple(receipts)
+        if not batch or any(
+            not isinstance(item, ToolboxTemplateMaterializationReceipt) for item in batch
+        ):
+            raise ValueError("materialization_receipt_batch_invalid")
+        keys = [f"{item.template_digest}|{item.target}" for item in batch]
+        if len(set(keys)) != len(keys):
+            raise ValueError("materialization_receipt_batch_duplicate")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            inserted: list[ToolboxTemplateMaterializationReceipt] = []
+            for key, receipt in zip(keys, batch):
+                existing = state["receipts"].get(key)
+                if existing is not None and existing != receipt.to_dict():
+                    raise ValueError("materialization_receipt_conflict")
+                if existing is None:
+                    state["receipts"][key] = receipt.to_dict()
+                    inserted.append(receipt)
+            if len(state["receipts"]) > MAX_MATERIALIZATION_RECEIPTS:
+                raise ValueError("materialization_receipt_capacity")
+            if inserted:
+                self._write_unlocked(state)
+        return batch, tuple(inserted)
+
+    def remove_exact(
+        self, receipts: Sequence[ToolboxTemplateMaterializationReceipt]
+    ) -> int:
+        batch = tuple(receipts)
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            removed = 0
+            for receipt in batch:
+                key = f"{receipt.template_digest}|{receipt.target}"
+                if state["receipts"].get(key) == receipt.to_dict():
+                    state["receipts"].pop(key)
+                    removed += 1
+            if removed:
+                self._write_unlocked(state)
+        return removed
+
     def retain_template_digests(self, template_digests: set[str]) -> int:
         """Drop receipts not belonging to revisions active in the catalog."""
         retained = {

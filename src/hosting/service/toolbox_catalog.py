@@ -407,6 +407,117 @@ class AtomicJsonToolboxTemplateCatalog:
                 "active_revision": state["active"].get(template.template_id) == digest,
             }
 
+    def publish_batch(
+        self,
+        *,
+        releases: Sequence[Mapping[str, Any]],
+        actor_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        batch: list[
+            tuple[
+                ToolboxEnvironmentTemplateSpec,
+                tuple[ToolboxTemplateArtifactReference, ...],
+                str,
+                str,
+            ]
+        ] = []
+        for raw in releases:
+            row = dict(raw or {})
+            if set(row) != {
+                "template", "template_digest", "artifact_references", "manifest_signature"
+            }:
+                raise ValueError("template_publish_batch_fields_invalid")
+            template = ToolboxEnvironmentTemplateSpec.from_dict(row["template"])
+            artifacts = tuple(
+                ToolboxTemplateArtifactReference.from_dict(item)
+                for item in row["artifact_references"]
+            )
+            signature = str(row["manifest_signature"] or "")
+            if (
+                not artifacts
+                or len({item.sha256 for item in artifacts}) != len(artifacts)
+                or len({(item.source_id, item.filename) for item in artifacts})
+                != len(artifacts)
+                or not _SIGNATURE_RE.fullmatch(signature)
+            ):
+                raise ValueError("template_publish_batch_invalid")
+            digest = _template_digest(template, artifacts, signature)
+            if require_digest(row["template_digest"], label="template_digest") != digest:
+                raise ValueError("template_publish_batch_digest_mismatch")
+            batch.append((template, artifacts, signature, digest))
+        identities = [
+            f"{item.template_id}|{item.provenance.manifest_digest}|{item.lock_digest}"
+            for item, _artifacts, _signature, _digest in batch
+        ]
+        if (
+            not batch
+            or len({item.template_id for item, *_rest in batch}) != len(batch)
+            or len(set(identities)) != len(identities)
+        ):
+            raise ValueError("template_publish_batch_duplicate")
+        actor = _bounded_id(actor_id, label="template_actor_id")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            results: list[dict[str, Any]] = []
+            now_ms = int(self.clock() * 1000)
+            for (template, artifacts, signature, digest), identity_key in zip(
+                batch, identities
+            ):
+                collision = next(
+                    (item for item in state["entries"] if item["identity_key"] == identity_key),
+                    None,
+                )
+                if collision is not None and collision["template_digest"] != digest:
+                    raise ValueError("template_immutable_publish_conflict")
+                entry = next(
+                    (item for item in state["entries"] if item["template_digest"] == digest),
+                    None,
+                )
+                outcome = "idempotent"
+                if entry is None:
+                    entry = {
+                        "template_id": template.template_id,
+                        "template_digest": digest,
+                        "identity_key": identity_key,
+                        "template": template.to_dict(),
+                        "artifacts": [item.to_dict() for item in sorted(artifacts)],
+                        "manifest_signature": signature,
+                        "lifecycle": "active",
+                        "published_at_ms": now_ms,
+                        "published_by": actor,
+                    }
+                    state["entries"].append(entry)
+                    outcome = "published_and_activated"
+                elif entry["lifecycle"] != "active":
+                    raise ValueError("template_activate_lifecycle_invalid")
+                elif state["active"].get(template.template_id) != digest:
+                    outcome = "activated"
+                state["active"][template.template_id] = digest
+                self._audit(
+                    state,
+                    actor_id=actor,
+                    action="publish",
+                    template_id=template.template_id,
+                    template_digest=digest,
+                    outcome=outcome,
+                )
+                results.append(
+                    {
+                        "template_id": template.template_id,
+                        "template_digest": digest,
+                        "outcome": outcome,
+                        "active_revision": True,
+                    }
+                )
+            if len(state["entries"]) > MAX_CATALOG_REVISIONS:
+                raise ValueError("template_catalog_capacity")
+            state["catalog_revision"] = self._catalog_revision(
+                state["entries"], state["active"]
+            )
+            self._write_unlocked(state)
+            catalog_revision = state["catalog_revision"]
+        return tuple({**item, "catalog_revision": catalog_revision} for item in results)
+
     def set_lifecycle(
         self,
         *,
@@ -867,6 +978,77 @@ class ToolboxTemplateCatalogMixin:
             "target": configuration.target.name,
             "candidates": prepared,
         }
+
+    def publish_prepared_configured_toolbox_templates(
+        self,
+        prepared: Mapping[str, Any],
+        *,
+        actor_id: str = "service:setup",
+    ) -> dict[str, Any]:
+        """Commit a complete prepared receipt/catalog batch without partial activation."""
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        if not isinstance(configuration, ToolboxHostProjectConfiguration):
+            raise ValueError("toolbox_host_project_configuration_required")
+        row = dict(prepared or {})
+        if set(row) != {
+            "status", "config_revision", "source_set_revision", "target", "candidates"
+        } or row.get("status") != "prepared":
+            raise ValueError("prepared_builtin_batch_invalid")
+        if (
+            row["config_revision"] != configuration.config_revision
+            or row["source_set_revision"] != configuration.source_set_revision
+            or row["target"] != configuration.target.name
+            or not isinstance(row["candidates"], list)
+        ):
+            raise ValueError("prepared_builtin_batch_stale")
+        candidates = [dict(item or {}) for item in row["candidates"]]
+        expected_ids = {item.template_id for item in configuration.builtins}
+        actual_ids = {dict(item.get("template") or {}).get("template_id") for item in candidates}
+        if not candidates or actual_ids != expected_ids or len(actual_ids) != len(candidates):
+            raise ValueError("prepared_builtin_batch_incomplete")
+        receipts = tuple(
+            ToolboxTemplateMaterializationReceipt.from_dict(item["receipt"])
+            for item in candidates
+        )
+        catalog_before = self._toolbox_template_catalog.read()
+        active_before = set(catalog_before["active"].values())
+        inserted: tuple[ToolboxTemplateMaterializationReceipt, ...] = ()
+        try:
+            _all_receipts, inserted = self._toolbox_materialization_receipts.put_many(receipts)
+            published = self._toolbox_template_catalog.publish_batch(
+                releases=[
+                    {
+                        "template": item["template"],
+                        "template_digest": item["template_digest"],
+                        "artifact_references": item["artifact_references"],
+                        "manifest_signature": item["manifest_signature"],
+                    }
+                    for item in candidates
+                ],
+                actor_id=actor_id,
+            )
+        except Exception:
+            if inserted:
+                self._toolbox_materialization_receipts.remove_exact(inserted)
+            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+            if builder is not None:
+                for item in candidates:
+                    if item["template_digest"] not in active_before:
+                        builder.release_reference(
+                            environment_key=item["environment_key"],
+                            reference_id=item["reference_id"],
+                        )
+            raise
+        result = {
+            "status": "published",
+            "config_revision": configuration.config_revision,
+            "source_set_revision": configuration.source_set_revision,
+            "target": configuration.target.name,
+            "catalog_revision": published[0]["catalog_revision"],
+            "templates": [dict(item) for item in published],
+        }
+        self._toolbox_startup = {**result, "closures": [], "diagnostics": []}
+        return result
 
     def toolbox_template_describe(
         self, *, template_id: str, template_digest: str | None = None

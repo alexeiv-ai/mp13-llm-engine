@@ -146,6 +146,10 @@ Built-in candidate provenance must be covered by exactly one verified source
 bundle. The host binds its signed manifest to configured intent and the exact
 resolved closure, then builds/probes through verified CAS paths before any
 catalog or public receipt mutation.
+The complete configured built-in set becomes visible together: all candidate
+receipts are committed in one receipt-store replacement, followed by one
+catalog activation replacement. An ordinary publication failure rolls back
+new receipts/references; identical retry is idempotent.
 
 Administrator setup logic must change as follows:
 
