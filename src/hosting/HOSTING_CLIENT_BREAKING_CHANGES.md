@@ -1,20 +1,337 @@
 # Hosting client breaking changes
 
-Status: reset after dependent adoption (2026-08-09)
+Status: migration required before corrective hosting rollout (2026-08-10)
 
-The `HOSTED-TOOLBOX-DEFINITION` migration handoff has been consumed by every
-listed dependent project. `mp13-docs` adopted parent release
-`83b35e20604c8f0c2fbe27467980b6a49385d918` at dependent commit
-`125d20f232bf5b755d18c1b23bc1e4b8929edf21`. No pending client-breaking-change
-action remains in this handoff.
+This handoff supersedes the consumed `HOSTED-TOOLBOX-DEFINITION` migration.
+The prior adoption remains recorded below, but it does not authorize adoption
+of the replacements in this document.
 
-Supported behavior is defined by:
+Normative behavior is defined by:
 
 - [Hosting Access §11.6](HOSTING_ACCESS.md#116-durable-hosted-operation-and-capability-contract)
 - [Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md)
 - [Toolbox Worker](sandbox/TOOLBOX_WORKER.md)
 
-This file is intentionally retained as the canonical path for a future
-client-visible breaking change. When a new break is introduced, replace this
-reset marker with the complete migration instructions before the replacement
-is released.
+The parent product is unreleased. These replacements remove the old paths in
+the same implementation slices; there is no compatibility adapter, alias, or
+deprecation period. Dependent repositories must be migrated by their own
+maintainers and must not be edited from this repository.
+
+## Adoption gate and pins
+
+- Last adopted parent baseline: `83b35e20604c8f0c2fbe27467980b6a49385d918`
+- Last adopted `mp13-docs` commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
+- Corrective parent implementation pin: not yet available; adoption is
+  prohibited until the implementing slice is committed and this field is
+  replaced with that exact commit or release pin.
+- Dependent adoption receipt: not yet supplied. It must identify the dependent
+  commit and its migration-test command/results.
+
+Rollout order is fixed:
+
+1. Commit this handoff before the first client-visible parent implementation.
+2. Land the parent target/configuration and operation replacements, then record
+   their exact parent pin here.
+3. Dependent maintainers update their code, configuration, tests, and docs
+   against that pin and supply an adoption receipt.
+4. Keep this file populated until every listed dependent has confirmed
+   adoption. Only then may the handoff be reset.
+
+## Removed target and host-configuration contract
+
+The following configuration fields and behaviors are removed:
+
+- `resource` and the shipped realized-catalog resource contract;
+- `required_target`, including the literals `cp312-win_amd64` and
+  `cp312-manylinux_2_28_x86_64` as administrator-selected build targets;
+- `required_template_ids` tied to shipped realized lock resources;
+- `artifact_source_ids` and `offline_preseed_source_id` as source references
+  without strict source definitions and a source-set revision;
+- the assumption that a missing/non-Windows target is Linux x64;
+- treating shipped lock JSON as if it were an installable wheel artifact; and
+- cross-target environment construction.
+
+The daemon now detects exactly one current-host identity from the running
+CPython interpreter and ordered `packaging.tags.sys_tags()`. Internal target
+identity contains the Python ABI, operating system, architecture, platform
+baseline, and compatible wheel tags. Supported families are CPython 3.12 on
+Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64. Administrators do not
+select a different build target. A wheel incompatible with the detected target
+is rejected before download or construction.
+
+Remove configurations shaped like:
+
+```json
+{
+  "resource": "hosting.resources.toolbox_templates.catalog.v1.json",
+  "trusted_signing_key_ids": ["parent-release-toolbox-v1"],
+  "required_template_ids": ["builtin-data", "builtin-web"],
+  "required_target": "cp312-win_amd64",
+  "prewarm_required": true,
+  "artifact_source_ids": ["parent-release-resources"],
+  "offline_preseed_source_id": null,
+  "cache_grace_seconds": 604800,
+  "build_timeout_seconds": 1800
+}
+```
+
+Replace them with the strict revisioned host-owned configuration model. A
+representative shape is:
+
+```json
+{
+  "builtins": [
+    {
+      "template_id": "builtin-data",
+      "imports": ["numpy"],
+      "package_requirements": ["numpy"],
+      "sandbox_policy": "compute_only",
+      "required": true,
+      "prewarm": true,
+      "provenance": "parent-release"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "approved-index",
+      "kind": "https_index",
+      "origin": "https://packages.example.invalid/simple/",
+      "credential_ref": "host-secret:approved-index",
+      "allowed_package_namespaces": ["*"],
+      "priority": 100,
+      "trust_key_ids": ["packages-2026"],
+      "maximum_download_bytes": 536870912
+    }
+  ],
+  "resolution": {
+    "mode": "online",
+    "timeout_seconds": 60,
+    "maximum_bytes": 536870912,
+    "maximum_artifacts": 256,
+    "allowed_redirect_origins": ["https://packages.example.invalid"],
+    "wheel_only": true
+  },
+  "retention": {
+    "artifact_cache_grace_seconds": 604800,
+    "maximum_cache_bytes": 10737418240,
+    "maximum_cache_artifacts": 4096,
+    "protected_digests": [],
+    "remove_unreferenced_custom_revisions_on_apply": false
+  }
+}
+```
+
+The implementing schema is strict: dependents must use the exact field names
+published by the implementing parent pin and must not copy the example as an
+independent schema. Source credentials and filesystem paths remain daemon-owned.
+Air-gapped packages arrive only from a configured read-only store or the
+authenticated signed-bundle administrator upload lifecycle.
+
+Administrator setup logic must change as follows:
+
+- stop generating `required_target`; verify the daemon-reported detected target;
+- define built-in intent and ordered sources instead of realized locks;
+- treat configuration application as revision creation, not in-place mutation;
+- wait for the system-owned setup operation while toolbox readiness is false;
+- handle a missing compatible exact wheel as a stable not-ready result; and
+- never upload a venv, source distribution, install script, arbitrary index URL,
+  or consumer filesystem path.
+
+## Removed toolbox mutation commands and fields
+
+The following current surface is removed:
+
+- raw top-level long calls to `toolbox-plan-definition` and
+  `toolbox-apply-definition`;
+- `toolbox-approve-definition-plan` on the ordinary toolbox-consumer route;
+- `toolbox_apply_definition(definition=...)` and the wire-level apply
+  `definition` field;
+- apply-time re-resolution of the submitted definition;
+- approval bound only to `plan_id` and a custom-delta digest;
+- synchronous client waiting during plan/apply, duplicate attachment,
+  cancellation teardown, or a human decision; and
+- the daemon's separate 200-snapshot `operations.json` operation mirror for
+  these commands.
+
+The replacement semantic sequence is:
+
+1. `toolbox-get-definition` — bounded synchronous read.
+2. `toolbox-plan-definition` — durable operation submitted through `op-start`.
+3. `toolbox-confirm-definition-plan` — durable confirmation/acquisition
+   operation submitted through `op-start`.
+4. `toolbox-approve-confirmed-definition-plan` — bounded synchronous operation,
+   callable only by a dependency approver when policy requires it.
+5. `toolbox-apply-definition` — durable operation submitted through `op-start`.
+
+High-level channel helpers remain the preferred entry points, but plan,
+confirmation, and apply helpers return durable operation status rather than a
+terminal plan/result. Raw dispatch of a command classified as long fails; it
+must be wrapped by `op-start`.
+
+## Exact replacement request sequence
+
+First read the active definition:
+
+```json
+{
+  "toolbox_id": "toolbox-demo",
+  "operator_details": false
+}
+```
+
+Submit planning once with a stable request ID in the command payload:
+
+```json
+{
+  "command": "toolbox-plan-definition",
+  "payload": {
+    "request_id": "plan-2026-08-10-001",
+    "definition": {
+      "contract": "hosting.toolbox.definition",
+      "toolbox_id": "toolbox-demo",
+      "expected_revision": null,
+      "auto_requests": [],
+      "manual_requests": []
+    },
+    "operator_details": false,
+    "ttl_ms": 900000
+  }
+}
+```
+
+The immediate response is a durable operation snapshot containing an opaque
+`operation_id`. Poll `op-status`, or use the channel watch helper, until the
+operation is terminal. Read the immutable plan and bounded alternatives from
+the terminal result; do not keep the planning request open.
+
+Confirm one offered alternative for every offered environment and accept or
+decline its package group:
+
+```json
+{
+  "command": "toolbox-confirm-definition-plan",
+  "payload": {
+    "request_id": "confirm-2026-08-10-001",
+    "plan_id": "opaque-plan-id",
+    "environment_choices": [
+      {
+        "environment_id": "offered-environment-id",
+        "alternative_id": "offered-alternative-id",
+        "accept_package_changes": true
+      }
+    ]
+  }
+}
+```
+
+Observe that operation independently. Its terminal result supplies an opaque
+`confirmation_ref`, accepted tool keys, skipped tool keys and stable reasons,
+explicit removals, exact package mutations, and whether privileged approval is
+required. A client cannot provide a version, URL, source, lock, digest, path, or
+install command in this request.
+
+When required, a separately authenticated dependency approver submits:
+
+```json
+{
+  "confirmation_ref": "opaque-confirmation-ref"
+}
+```
+
+to `toolbox-approve-confirmed-definition-plan`. The returned opaque
+`dependency_approval_ref` binds the confirmation, exact locks/artifacts, and all
+configuration/source/policy revisions.
+
+Finally submit apply without another definition copy:
+
+```json
+{
+  "command": "toolbox-apply-definition",
+  "payload": {
+    "request_id": "apply-2026-08-10-001",
+    "plan_id": "opaque-plan-id",
+    "confirmation_ref": "opaque-confirmation-ref",
+    "dependency_approval_ref": "opaque-approval-ref"
+  }
+}
+```
+
+Omit `dependency_approval_ref` only when the confirmation receipt states that
+approval is not required. Apply publishes exactly the confirmed effective
+definition and never reinterprets the original request.
+
+## Retry, watch, confirmation, and recovery logic
+
+Dependents must make these control-flow changes:
+
+- generate a stable printable `request_id` before every plan, confirmation, and
+  apply submission and persist it before sending;
+- after a lost response, resubmit the identical command/payload or resolve the
+  canonical durable operation by request ID; never create a replacement ID;
+- treat duplicate submission as a status lookup, not permission to wait for or
+  launch a second worker;
+- poll/watch changed `op-status` snapshots and fetch the terminal result from
+  the canonical hosted-operation repository;
+- perform package review and human approval only between terminal operations;
+- on daemon restart, recover by request ID/operation ID rather than an in-memory
+  callback, workflow stream, proxy stream, or open request;
+- treat cancellation as `cancel_requested` acknowledgement and continue
+  observing durable teardown progress; and
+- replan after any target, active definition, catalog, host-config, source-set,
+  dependency-policy, artifact, or expiry pin becomes stale.
+
+Confirmation branching must preserve the specified semantics: declining a
+required package skips affected new tools; a skipped update preserves its
+active version; explicit removals proceed; and an incomplete shared environment
+skips all affected accepted tools with `shared_environment_incomplete`.
+
+## Stable behavior and error changes
+
+Remove client branches that assume planning returns a terminal plan directly,
+that approval is consumer-callable, or that apply accepts the original
+definition. Add handling for the implementing contract's stable codes covering:
+
+- operation submission required for raw long commands;
+- stale target/config/source/policy/artifact/expiry pins;
+- missing or incompatible exact wheels;
+- invalid/unoffered confirmation choices;
+- `shared_environment_incomplete` and namespace conflicts;
+- dependency-approver authorization failure;
+- cancellation requested versus terminal cancellation; and
+- toolbox setup not ready while built-ins are being realized or cannot be
+  realized.
+
+Exact spellings not already frozen above must be copied from the implementing
+parent contract and pin before dependent adoption; clients must not infer codes
+from exception text.
+
+## Dependent code, configuration, tests, and documentation
+
+Remove:
+
+- target-selection configuration and x64/Linux fallback logic;
+- shipped catalog/lock-resource fixtures and lock-JSON-as-wheel normalization;
+- direct synchronous plan/apply invocations and terminal return assumptions;
+- calls to `toolbox-approve-definition-plan` as a consumer;
+- apply payload construction containing `definition`;
+- in-memory wait/callback logic spanning human confirmation or approval;
+- arbitrary package URL/path/archive/install-command inputs; and
+- tests and documentation for all of those paths.
+
+Add or change:
+
+- detected-target reporting and all five supported target-family fixtures;
+- strict built-in/source/mode/retention configuration owned by administrators;
+- online and air-gap missing-wheel/not-ready handling;
+- durable plan/confirm/apply submission, retry, status/watch, restart recovery,
+  and immediate cancellation acknowledgement;
+- a distinct dependency-approver credential/role path;
+- confirmation UI/logic for alternatives, exact direct/transitive mutations,
+  accept/decline choices, skips, preserved active updates, and removals;
+- apply construction from `plan_id` plus receipts only; and
+- migration tests pinned to the exact parent implementation commit.
+
+Required dependent evidence must cover at least: detected native target, strict
+configuration rejection, lost-response retry, daemon restart, no request held
+during a human decision, partial decline/skip, separate approver authority,
+apply without a definition copy, and stale-pin recovery.

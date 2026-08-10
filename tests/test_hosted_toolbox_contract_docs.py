@@ -120,21 +120,29 @@ def test_contract_contains_only_supported_vocabulary() -> None:
     assert not {item for item in forbidden if item in text}
 
 
-def test_handoff_is_reset_after_dependent_adoption() -> None:
+def test_handoff_specifies_pending_corrective_migration() -> None:
     text = HANDOFF.read_text(encoding="utf-8")
     prose = " ".join(text.split())
     assert "[Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md)" in text
     assert "[Hosting Access §11.6]" in text
-    assert "Status: reset after dependent adoption (2026-08-09)" in text
+    assert "Status: migration required before corrective hosting rollout (2026-08-10)" in text
     assert "mp13-docs" in prose
     assert "125d20f232bf5b755d18c1b23bc1e4b8929edf21" in text
-    assert "No pending client-breaking-change action remains" in prose
-    for retired_section in [
-        "### Required dependent-project logic change",
-        "### Deprecated behavior to remove from dependents",
-        "### Old-to-new dependent code",
+    for required in [
+        "## Adoption gate and pins",
+        "## Removed target and host-configuration contract",
+        "## Removed toolbox mutation commands and fields",
+        "## Exact replacement request sequence",
+        "## Retry, watch, confirmation, and recovery logic",
+        "## Dependent code, configuration, tests, and documentation",
+        '"command": "toolbox-confirm-definition-plan"',
+        '"confirmation_ref": "opaque-confirmation-ref"',
+        "toolbox-approve-confirmed-definition-plan",
+        "shared_environment_incomplete",
     ]:
-        assert retired_section not in text
+        assert required in text
+    assert "adoption is prohibited" in prose
+    assert "No pending client-breaking-change action remains" not in prose
 
 
 def test_generic_operation_contract_is_consolidated_into_hosting_access() -> None:

@@ -536,7 +536,7 @@ boundary—not a double—passes.
 - [ ] **R0-02** Update `HOSTED_TOOLBOX_CONTRACT.md` and
   `sandbox/TOOLBOX_WORKER.md` as each replacement slice becomes real. Remove
   superseded normative text rather than retain compatibility notes.
-- [ ] **R0-03** Before the first client-visible implementation break, replace
+- [x] **R0-03** Before the first client-visible implementation break, replace
   the reset marker in `HOSTING_CLIENT_BREAKING_CHANGES.md` with the complete
   dependent handoff described above. Do not edit dependent repositories.
 

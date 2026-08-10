@@ -1,6 +1,6 @@
 # Hosting toolbox corrective status
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 ## Overall status
 
@@ -79,7 +79,7 @@ transcript was intentionally removed because it obscured current truth.
 
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
-| R0 Corrective contract baseline | Active | R0-01 is complete and was corrected on 2026-08-09 to prohibit dependent edits, remove compatibility preservation, reference production seams, specify package ingress and confirmation/config behavior, file the blocking interactive/network defect, select the generic operation façade, allocate average/medium/high work with code guidance, and require checkbox-bearing commits at every slice/expertise boundary. R0-02 and R0-03 remain cross-slice obligations. No runtime behavior changed. |
+| R0 Corrective contract baseline | Active | R0-01 is complete. R0-03 populated the corrective consumer/administrator handoff before implementation: removed target/configuration and mutation surfaces, replacement payload sequence, durable retry/watch/recovery behavior, dependent removals/additions, rollout order, and explicit pending implementation/adoption gates are recorded. Focused docs: 10 passed in 0.12s; `git diff --check` passed. R0-02 remains a cross-slice obligation. No runtime behavior changed. |
 | R1 Canonical current-host target | Pending | No implementation started. |
 | R2 Revisioned hosting configuration and built-ins | Pending | No implementation started. |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
@@ -90,16 +90,12 @@ transcript was intentionally removed because it obscured current truth.
 
 ## Next implementation slice
 
-No code slice is active. The next declared slice is R0-03 (`medium`): replace
-the breaking-change reset marker with the exact consumer/admin migration for
-the first client-visible target/config replacement. Its commit must check R0-03
-only after the handoff is complete. Verify a clean worktree before switching
-expertise to the following `high` slice, R1-01 and R1-02, which establishes one
-canonical current-host target model and removes x86-only defaults/validators.
-
-Before either slice begins, replace this paragraph with its active slice ID(s),
-required expertise, production boundary, and exact focused, native-platform,
-regression, and documentation test commands.
+R0-03 (`medium`) is validated and ready for its isolated commit. After that
+commit, verify a clean worktree and declare R1-01/R1-02 (`high`) active before
+changing production code. That slice establishes one canonical detected
+current-host target model and removes configured/x86-only defaults and
+validators. Its exact focused, native-platform, regression, and documentation
+commands must be recorded here before implementation begins.
 
 ## Status update rules
 
