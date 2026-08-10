@@ -79,7 +79,7 @@ transcript was intentionally removed because it obscured current truth.
 
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
-| R0 Corrective contract baseline | Active | R0-01 is complete and was corrected on 2026-08-09 to prohibit dependent edits, remove compatibility preservation, reference production seams, specify package ingress and confirmation/config behavior, file the blocking interactive/network defect, select the generic operation façade, and allocate average/medium/high work with code guidance. R0-02 and R0-03 remain cross-slice obligations. No runtime behavior changed. |
+| R0 Corrective contract baseline | Active | R0-01 is complete and was corrected on 2026-08-09 to prohibit dependent edits, remove compatibility preservation, reference production seams, specify package ingress and confirmation/config behavior, file the blocking interactive/network defect, select the generic operation façade, allocate average/medium/high work with code guidance, and require checkbox-bearing commits at every slice/expertise boundary. R0-02 and R0-03 remain cross-slice obligations. No runtime behavior changed. |
 | R1 Canonical current-host target | Pending | No implementation started. |
 | R2 Revisioned hosting configuration and built-ins | Pending | No implementation started. |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
@@ -90,27 +90,38 @@ transcript was intentionally removed because it obscured current truth.
 
 ## Next implementation slice
 
-No code slice is active. The next slice should be R1-01 and R1-02: establish one
-canonical current-host target model and replace the existing x86-only defaults
-and validators. Because those replacements are client-visible, R0-03 must first
-replace the breaking-change reset marker with exact migration instructions.
-Before implementation, record the exact focused, native-platform, regression,
-and documentation test commands in this section.
+No code slice is active. The next declared slice is R0-03 (`medium`): replace
+the breaking-change reset marker with the exact consumer/admin migration for
+the first client-visible target/config replacement. Its commit must check R0-03
+only after the handoff is complete. Verify a clean worktree before switching
+expertise to the following `high` slice, R1-01 and R1-02, which establishes one
+canonical current-host target model and removes x86-only defaults/validators.
+
+Before either slice begins, replace this paragraph with its active slice ID(s),
+required expertise, production boundary, and exact focused, native-platform,
+regression, and documentation test commands.
 
 ## Status update rules
 
-1. Record an active slice and its test commands before changing code.
-2. Commit one coherent slice at a time.
-3. Check plan items only after the real production boundary passes; test doubles
+1. Record active slice IDs, required expertise, boundary, and tests before
+   changing code.
+2. Commit one coherent slice at a time; never mix expertise labels in a commit.
+3. Switching expertise requires validated checkbox/status updates, a commit, and
+   a clean worktree before the next slice begins.
+4. Check completed plan items/subitems in the same slice commit after the real
+   production boundary passes; test doubles
    may supplement but never replace the boundary test.
-4. Record concise test results and the commit subject after completion.
-5. Keep failures and partial work visible as Active or Blocked.
-6. Put durable behavior in the contracts, not in this ledger.
-7. Populate `HOSTING_CLIENT_BREAKING_CHANGES.md` before releasing any required
+5. Split oversized items into ordered verifiable sub-checkboxes before
+   implementation; never use a later bulk commit to mark prior work complete.
+6. Record concise test results and the commit subject after completion.
+7. Keep failures and partial work visible as Active or Blocked with boxes
+   unchecked.
+8. Put durable behavior in the contracts, not in this ledger.
+9. Populate `HOSTING_CLIENT_BREAKING_CHANGES.md` before releasing any required
    consumer or administrator migration.
-8. Never edit a dependent project; record all dependent work in the handoff and
+10. Never edit a dependent project; record all dependent work in the handoff and
    accept adoption/test evidence produced by that project.
-9. Remove superseded code, tests, commands, and documentation in the same slice;
+11. Remove superseded code, tests, commands, and documentation in the same slice;
    do not add compatibility adapters or deprecated aliases.
 
 ## Documentation correction

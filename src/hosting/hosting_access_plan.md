@@ -467,6 +467,41 @@ Execution order is P0 contract decisions, P0 platform/package implementation,
 P1 lifecycle/safety, then P2 acceptance. R0-03 is prepared immediately before
 each client-visible P0/P1 slice, not deferred to final closeout.
 
+### Slice and commit discipline
+
+Every implementation commit is one declared plan slice. The following rules are
+mandatory during execution:
+
+1. Start from a clean worktree and record the slice ID(s), required expertise
+   (`average`, `medium`, or `high`), production boundary, and exact tests in
+   `hosting_status.md` before changing production code.
+2. One slice may contain multiple plan items only when they are tightly coupled,
+   adjacent in dependency order, and have the same required expertise label.
+3. A change from one identified expertise label to another always ends the
+   current slice. Finish validation, update checkboxes/status, commit, and verify
+   a clean worktree before the next expertise level begins. This applies even if
+   the same person or agent performs both slices.
+4. The slice commit contains its production code, focused tests, normative docs,
+   breaking-change handoff updates, `hosting_status.md` evidence, and `[x]`
+   updates for every plan item completed by that commit. Checkbox updates are
+   not deferred to a later bulk documentation commit.
+5. Mark an item `[x]` only after its named production boundary and required tests
+   pass. If an item cannot reasonably fit in one reviewable commit, first split
+   it in this plan into ordered, independently verifiable sub-checkboxes; check
+   only the subitems completed by each slice and check the parent when all pass.
+6. An incomplete or failing slice leaves its boxes unchecked. Diagnostic work
+   may be committed only as an explicitly declared diagnostic slice with its own
+   scope/evidence; it must not be mixed with the next implementation level.
+7. Use a concise commit subject containing the principal work ID, for example
+   `hosting: detect current target (R1-01)`. After the commit, report its hash and
+   confirm the worktree is clean; a commit cannot record its own hash in its
+   contents.
+
+The already adopted consumer baseline does not authorize parent-side consumer
+edits. Only newly implemented breaks create new handoff work, and the medium
+handoff slice must be committed before switching to the implementation slice's
+expertise level.
+
 ### Code guidance for high work
 
 | Items | Start at these production seams | Required proof |
@@ -490,9 +525,8 @@ each client-visible P0/P1 slice, not deferred to final closeout.
 
 ## Itemized corrective work
 
-Every slice declares focused tests before implementation, updates normative and
-breaking-change documentation in the same slice, passes `git diff --check`, and
-is committed separately. A checkbox is completed only after its production
+Every slice follows the discipline above, passes `git diff --check`, and is
+committed separately. A checkbox is completed only after its production
 boundary—not a double—passes.
 
 ### R0 - Corrective contract baseline
