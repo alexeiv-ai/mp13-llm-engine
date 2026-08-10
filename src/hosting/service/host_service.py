@@ -49,7 +49,6 @@ from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from ..toolbox.dependency_policy import ToolboxDependencyPolicy
 from ..toolbox.host_project_config import (
     ToolboxHostProjectConfiguration,
-    validate_toolbox_sandbox_policies,
 )
 from ..toolbox.target import detect_current_toolbox_target
 from .workflow_helpers import WorkflowHelperMixin
@@ -78,8 +77,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         toolbox_artifact_sources: Optional[Dict[str, Path]] = None,
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
-        toolbox_environment_catalog: Optional[Mapping[str, Any]] = None,
-        toolbox_sandbox_policies: Optional[Mapping[str, Any]] = None,
+        toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
         toolbox_dependency_policy: Optional[Dict[str, Any] | ToolboxDependencyPolicy] = None,
     ):
@@ -93,29 +91,27 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self.control_state_file = self.hosting_root / "access_control.json"
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
-        if (toolbox_environment_catalog is None) != (toolbox_sandbox_policies is None):
-            raise ValueError("toolbox_host_project_configuration_incomplete")
         self._toolbox_host_project_config = (
-            ToolboxHostProjectConfiguration.from_dict(toolbox_environment_catalog)
-            if toolbox_environment_catalog is not None
-            else None
-        )
-        self._toolbox_sandbox_policies = (
-            validate_toolbox_sandbox_policies(toolbox_sandbox_policies)
-            if toolbox_sandbox_policies is not None
+            ToolboxHostProjectConfiguration.from_dict(toolbox_host_project_configuration)
+            if toolbox_host_project_configuration is not None
             else None
         )
         current_target = detect_current_toolbox_target()
         configured_abi = ""
         configured_platform = ""
         if self._toolbox_host_project_config is not None:
-            configured_abi, configured_platform = self._toolbox_host_project_config.target
+            configured_abi = self._toolbox_host_project_config.target.python_abi
+            configured_platform = self._toolbox_host_project_config.target.platform
             if toolbox_required_python_abi and toolbox_required_python_abi != configured_abi:
                 raise ValueError("toolbox_required_python_abi_conflict")
             if toolbox_required_platform and toolbox_required_platform != configured_platform:
                 raise ValueError("toolbox_required_platform_conflict")
             if toolbox_artifact_sources is not None:
-                configured_sources = set(self._toolbox_host_project_config.artifact_source_ids)
+                configured_sources = {
+                    item.source_id
+                    for item in self._toolbox_host_project_config.sources
+                    if item.kind == "airgap_store"
+                }
                 if not configured_sources.issubset(set(toolbox_artifact_sources)):
                     raise ValueError("toolbox_artifact_sources_incomplete")
         if toolbox_template_materializer is not None and toolbox_artifact_sources is not None:
@@ -125,12 +121,12 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
                 self.hosting_root,
                 artifact_sources=toolbox_artifact_sources,
                 gc_grace_ms=(
-                    self._toolbox_host_project_config.cache_grace_seconds * 1000
+                    self._toolbox_host_project_config.retention.artifact_cache_grace_seconds * 1000
                     if self._toolbox_host_project_config is not None
                     else 24 * 60 * 60 * 1000
                 ),
                 build_timeout_seconds=(
-                    self._toolbox_host_project_config.build_timeout_seconds
+                    self._toolbox_host_project_config.resolution.timeout_seconds
                     if self._toolbox_host_project_config is not None
                     else 300
                 ),
@@ -224,7 +220,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         if self._toolbox_host_project_config is not None:
             self._toolbox_startup = self.initialize_configured_toolbox_templates(
                 configuration=self._toolbox_host_project_config,
-                request_id_prefix=f"host-startup-{self._toolbox_host_project_config.required_target}",
+                request_id_prefix=f"host-startup-{self._toolbox_host_project_config.config_revision}",
             )
 
     @property

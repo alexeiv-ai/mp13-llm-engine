@@ -595,23 +595,30 @@ Pydantic 2.12.5, and the exact Pydantic validation closure (`pydantic-core`
 NumPy 2.4.3, SymPy 1.14.0, NumExpr 2.14.1, and mpmath 1.3.0. These versions are
 release-owned immutable inputs, not consumer-selectable constraints.
 
-The host project configuration namespace is `toolbox_environment_catalog` and
-has these exact keys:
+The host project configuration input is `toolbox_host_project_configuration`
+and has exactly four top-level keys:
 
 | Key | Required value and meaning |
 | --- | --- |
-| `resource` | Required package-resource reference for the signed catalog manifest. The initial value is `pkg:hosting.resources/toolbox_templates/catalog.json`. |
-| `trusted_signing_key_ids` | Non-empty list of secret-store public-key IDs accepted for catalog and manifest signatures. |
-| `required_template_ids` | Exactly `core` and `py-compute` for the initial release. |
-| `required_target` | Transitional exact detected host target; configuring a different supported family is rejected as cross-target construction. This field is removed by the revisioned host-configuration replacement. |
-| `prewarm_required` | Boolean; must be `true` for standard hosting readiness. |
-| `artifact_source_ids` | Ordered non-empty list of administrator-configured digest-addressed sources. |
-| `offline_preseed_source_id` | Optional administrator source ID; never a client path. |
-| `cache_grace_seconds` | Integer from 86,400 through 7,776,000; default 604,800. |
-| `build_timeout_seconds` | Integer from 60 through 1,800; default 1,800. |
+| `builtins` | Non-empty ordered built-in intents. Each has exactly `template_id`, `imports`, `package_requirements`, `sandbox_policy`, `required`, `prewarm`, and `provenance`. A prewarmed intent must be required. Requirements cannot contain direct URLs. |
+| `sources` | Non-empty priority-ordered logical sources. Each has exactly `source_id`, `kind`, sanitized `origin`, daemon-owned `credential_ref`, `allowed_package_namespaces`, `priority`, `trust_key_ids`, and `maximum_download_bytes`. Kinds are `https_index`, `https_artifact`, or `airgap_store`. |
+| `resolution` | Exact `mode`, `timeout_seconds`, `maximum_bytes`, `maximum_artifacts`, `allowed_redirect_origins`, and required `wheel_only: true`. Modes are `online`, `prefer_airgap`, or `air_gapped`. |
+| `retention` | Exact `artifact_cache_grace_seconds`, `maximum_cache_bytes`, `maximum_cache_artifacts`, `protected_digests`, and `remove_unreferenced_custom_revisions_on_apply`. |
 
-The required sandbox configuration is
-`toolbox_sandbox_policies.compute_only`. Its exact effective policy is:
+The daemon derives the target; configuration contains no target selector. An
+`airgap_store` origin is the logical `airgap://<source_id>`, never a filesystem
+path. HTTPS origins reject embedded credentials, query strings, and fragments.
+`air_gapped` mode rejects HTTPS sources; online mode requires an HTTPS source;
+air-gap modes require an air-gap store. Source order is descending priority.
+
+Canonical JSON of the complete configuration produces an immutable
+`config_revision`. Canonical sources plus resolution policy produce a distinct
+`source_set_revision`. Normal readiness projections include those revisions,
+the detected target, built-in intent, sanitized origins, and bounds, but omit
+every `credential_ref` and daemon path.
+
+The required built-in `sandbox_policy` reference is `compute-only`. Its exact
+effective policy is:
 
 ```json
 {
@@ -642,9 +649,9 @@ locks, artifact availability, target tags, worker artifact digest, and the
 ability to enforce compute-only isolation. It then materializes and import
 probes both required templates before standard readiness succeeds. If the
 platform cannot enforce the policy, the host neither advertises nor launches
-the affected revision. `prewarm_required: false` may be used only for an
-explicit non-standard deployment; it reports degraded readiness until both
-templates have passed the same checks.
+the affected revision. A required intent with `prewarm: false` is an explicit
+non-standard deployment; it reports degraded readiness until that built-in has
+passed the same checks.
 
 Readiness diagnostics use the stable codes `required_template_missing`,
 `required_template_signature_invalid`, `required_template_lock_invalid`,

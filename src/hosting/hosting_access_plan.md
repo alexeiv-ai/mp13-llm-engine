@@ -564,22 +564,50 @@ boundary—not a double—passes.
 - [ ] **R2-01** Replace the current shipped-catalog-only schema in
   `toolbox/host_project_config.py` with the strict built-in/source/mode/retention
   schema above; remove old schema parsing and standard-config fixtures.
+  - [x] **R2-01a** Land strict built-in intent, source, resolution, and retention
+    models with deterministic config/source-set revisions; switch
+    `EngineHostService` to the new schema and delete every old field parser.
+  - [ ] **R2-01b** Persist atomic configuration revisions, invalidate unused
+    plans/receipts on revision changes, and leave active environments pinned.
 - [ ] **R2-02** Wire configuration, sources, policy, and target detection through
   `daemon/local_ipc.py::EngineHostDaemon` into `EngineHostService`; refuse
   toolbox readiness on invalid or incomplete setup.
+  - [ ] **R2-02a** Add strict daemon construction inputs for configuration,
+    logical source bindings, dependency policy, and detected target; prove the
+    normal daemon supplies them to `EngineHostService`.
+  - [ ] **R2-02b** Publish bounded not-ready diagnostics for missing, invalid, or
+    incomplete setup without partially publishing built-ins.
 - [ ] **R2-03** Replace realized shipped lock resources in
   `toolbox/shipped_templates.py` and `resources/toolbox_templates/` with built-in
   intent. Resolve exact transitive wheel closures for the current host.
+  - [ ] **R2-03a** Replace the shipped catalog and lock JSON resources with
+    strict release-owned built-in intents and remove lock-JSON artifact bridges.
+  - [ ] **R2-03b** Resolve each intent to one exact current-host transitive wheel
+    closure from the configured source mode with stable missing-wheel results.
 - [ ] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
   the real `toolbox_catalog.py` and `hermetic_environment.py` boundary. Remove
   the lock-JSON-as-wheel bridge and tests that normalize it.
+  - [ ] **R2-04a** Carry resolved built-in wheel closures through catalog
+    publication into the real hermetic builder and import probes.
+  - [ ] **R2-04b** Make required/optional prewarm and readiness use only real
+    materialization receipts through normal daemon startup.
 - [ ] **R2-05** Implement revisioned source changes and both air-gap ingestion
   paths. Prove missing built-in wheels prevent readiness without partial catalog
   publication.
+  - [ ] **R2-05a** Implement revisioned HTTPS index/artifact acquisition into the
+    verified content-addressed artifact store with bounds and redaction.
+  - [ ] **R2-05b** Implement configured read-only signed air-gap ZIP ingestion
+    with strict manifest, signature, path, tag, digest, and closure checks.
+  - [ ] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
+    staged storage with bounded, expiring, idempotent commit.
 - [ ] **R2-06** Run/recover built-in realization as a system-owned hosted
   operation with resolution, acquisition-byte, verification, build, probe, and
   prewarm progress while the control plane remains available and toolbox
   readiness remains false.
+  - [ ] **R2-06a** Add the system-owned hosted execution kind and phase/progress
+    contract for built-in realization while readiness remains false.
+  - [ ] **R2-06b** Recover or terminally reconcile interrupted realization after
+    restart and expose its canonical status without a parallel operation record.
 
 ### R3 - Multi-tool planning and consumer confirmation
 

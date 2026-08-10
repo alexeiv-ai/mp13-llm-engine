@@ -180,7 +180,7 @@ def test_normal_setup_publishes_prewarms_and_gates_bounded_readiness(tmp_path: P
         toolbox_required_python_abi="cp312",
         toolbox_required_platform="win_amd64",
     )
-    before = service.hosting_setup_summary()["toolbox_environment_catalog"]
+    before = service.hosting_setup_summary()["toolbox_readiness"]
     assert before["status"] == "degraded"
     assert before["code"] == "required_template_missing"
     started = service.initialize_shipped_toolbox_templates(
@@ -195,7 +195,7 @@ def test_normal_setup_publishes_prewarms_and_gates_bounded_readiness(tmp_path: P
             timeout_seconds=10,
         )
         assert terminal["lifecycle"] == "terminal_success"
-    status = service.hosting_setup_summary()["toolbox_environment_catalog"]
+    status = service.hosting_setup_summary()["toolbox_readiness"]
     assert status["status"] == "ready"
     assert status["code"] == "required_templates_ready"
     assert status["diagnostics"] == []

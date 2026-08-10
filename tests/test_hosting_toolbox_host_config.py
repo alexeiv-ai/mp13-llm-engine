@@ -13,13 +13,10 @@ from hosting.service.toolbox_materialization import (
 )
 from hosting.toolbox.host_project_config import (
     ToolboxHostProjectConfiguration,
-    standard_toolbox_host_project_configuration,
-    validate_toolbox_sandbox_policies,
 )
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.shipped_templates import (
     SHIPPED_TEMPLATE_IDS,
-    compute_only_sandbox_policy,
     load_shipped_toolbox_catalog,
 )
 from hosting.toolbox import shipped_templates
@@ -62,7 +59,58 @@ class VerifiedMaterializer:
 
 
 def _configuration() -> dict[str, Any]:
-    return standard_toolbox_host_project_configuration()
+    return {
+        "builtins": [
+            {
+                "template_id": "core",
+                "imports": ["hosting", "mp13_engine", "packaging", "pydantic"],
+                "package_requirements": [],
+                "sandbox_policy": "compute-only",
+                "required": True,
+                "prewarm": True,
+                "provenance": "parent-release",
+            },
+            {
+                "template_id": "py-compute",
+                "imports": [
+                    "hosting", "mp13_engine", "mpmath", "numexpr", "numpy",
+                    "packaging", "pydantic", "sympy",
+                ],
+                "package_requirements": ["numpy", "sympy", "numexpr", "mpmath"],
+                "sandbox_policy": "compute-only",
+                "required": True,
+                "prewarm": True,
+                "provenance": "parent-release",
+            },
+        ],
+        "sources": [
+            {
+                "source_id": "parent-release-resources",
+                "kind": "airgap_store",
+                "origin": "airgap://parent-release-resources",
+                "credential_ref": None,
+                "allowed_package_namespaces": ["*"],
+                "priority": 100,
+                "trust_key_ids": ["parent-release-toolbox-v1"],
+                "maximum_download_bytes": 536_870_912,
+            }
+        ],
+        "resolution": {
+            "mode": "air_gapped",
+            "timeout_seconds": 300,
+            "maximum_bytes": 536_870_912,
+            "maximum_artifacts": 256,
+            "allowed_redirect_origins": [],
+            "wheel_only": True,
+        },
+        "retention": {
+            "artifact_cache_grace_seconds": 604_800,
+            "maximum_cache_bytes": 10_737_418_240,
+            "maximum_cache_artifacts": 4096,
+            "protected_digests": [],
+            "remove_unreferenced_custom_revisions_on_apply": False,
+        },
+    }
 
 
 def _service(root: Path) -> EngineHostService:
@@ -70,8 +118,7 @@ def _service(root: Path) -> EngineHostService:
         engines_state_file=root / "engines.json",
         control_state_file=root / "access_control.json",
         toolbox_template_materializer=VerifiedMaterializer(),
-        toolbox_environment_catalog=_configuration(),
-        toolbox_sandbox_policies={"compute_only": compute_only_sandbox_policy()},
+        toolbox_host_project_configuration=_configuration(),
     )
 
 
@@ -84,27 +131,31 @@ def _wait_startup(service: EngineHostService) -> None:
         assert terminal["lifecycle"] == "terminal_success"
 
 
-def test_host_project_configuration_is_exact_and_compute_only() -> None:
+def test_host_project_configuration_is_strict_revisioned_and_current_target() -> None:
     config = ToolboxHostProjectConfiguration.from_dict(_configuration())
-    assert config.required_template_ids == SHIPPED_TEMPLATE_IDS
-    assert config.target == (TARGET.python_abi, TARGET.platform)
-    assert validate_toolbox_sandbox_policies(
-        {"compute_only": compute_only_sandbox_policy()}
-    )["compute_only"]["policy_id"] == "compute-only"
+    assert tuple(item.template_id for item in config.builtins) == SHIPPED_TEMPLATE_IDS
+    assert config.target == TARGET
+    assert config.config_revision.startswith("sha256:")
+    assert config.source_set_revision.startswith("sha256:")
+    assert ToolboxHostProjectConfiguration.from_dict(config.to_dict()) == config
 
-    invalid = _configuration() | {"required_template_ids": ["core"]}
-    with pytest.raises(ValueError, match="required_template_ids_invalid"):
+    invalid = _configuration() | {"required_target": TARGET.name}
+    with pytest.raises(ValueError, match="unknown_fields:required_target"):
         ToolboxHostProjectConfiguration.from_dict(invalid)
     with pytest.raises(ValueError, match="unknown_fields"):
         ToolboxHostProjectConfiguration.from_dict(_configuration() | {"toolbox_id": "mutable"})
-    foreign_target = "cp312-win_arm64" if TARGET.platform != "win_arm64" else "cp312-win_amd64"
-    with pytest.raises(ValueError, match="required_target_cross_target"):
-        ToolboxHostProjectConfiguration.from_dict(
-            _configuration() | {"required_target": foreign_target}
-        )
-    widened = compute_only_sandbox_policy() | {"network": True}
-    with pytest.raises(ValueError, match="compute_only_policy_invalid"):
-        validate_toolbox_sandbox_policies({"compute_only": widened})
+    reordered = _configuration()
+    reordered["sources"] = [
+        {**reordered["sources"][0], "priority": 1},
+        {
+            **reordered["sources"][0],
+            "source_id": "higher-priority",
+            "origin": "airgap://higher-priority",
+            "priority": 2,
+        },
+    ]
+    with pytest.raises(ValueError, match="source_priority_order_invalid"):
+        ToolboxHostProjectConfiguration.from_dict(reordered)
 
 
 def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
@@ -116,15 +167,11 @@ def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
     )
     _wait_startup(service)
     summary = service.hosting_setup_summary()
-    assert summary["toolbox_environment_catalog"]["status"] == "ready"
-    assert summary["toolbox_host_project"] == {
-        "resource": _configuration()["resource"],
-        "required_template_ids": list(SHIPPED_TEMPLATE_IDS),
-        "required_target": TARGET.name,
-        "prewarm_required": True,
-        "compute_only_policy_id": "compute-only",
-    }
-    serialized = str(summary["toolbox_environment_catalog"])
+    assert summary["toolbox_readiness"]["status"] == "ready"
+    parsed = ToolboxHostProjectConfiguration.from_dict(_configuration())
+    assert summary["toolbox_host_project"] == parsed.public_dict()
+    assert "credential_ref" not in str(summary["toolbox_host_project"])
+    serialized = str(summary["toolbox_readiness"])
     assert "artifact_source" not in serialized
     assert "python_executable" not in serialized
     assert "installer" not in serialized
@@ -133,16 +180,18 @@ def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
 def test_nonstandard_deferred_materialization_stays_degraded_until_durable_prewarm(
     tmp_path: Path,
 ) -> None:
-    configuration = _configuration() | {"prewarm_required": False}
+    configuration = _configuration()
+    configuration["builtins"] = [
+        {**item, "prewarm": False} for item in configuration["builtins"]
+    ]
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
         control_state_file=tmp_path / "access_control.json",
         toolbox_template_materializer=VerifiedMaterializer(),
-        toolbox_environment_catalog=configuration,
-        toolbox_sandbox_policies={"compute_only": compute_only_sandbox_policy()},
+        toolbox_host_project_configuration=configuration,
     )
     assert service._toolbox_startup["operations"] == []  # noqa: SLF001
-    assert service.hosting_setup_summary()["toolbox_environment_catalog"]["status"] == "degraded"
+    assert service.hosting_setup_summary()["toolbox_readiness"]["status"] == "degraded"
 
     state = service._toolbox_template_catalog.read()  # noqa: SLF001
     for template_id in SHIPPED_TEMPLATE_IDS:
@@ -158,20 +207,23 @@ def test_nonstandard_deferred_materialization_stays_degraded_until_durable_prewa
             operation_id=started["operation"]["operation_id"], timeout_seconds=10
         )
         assert terminal["lifecycle"] == "terminal_success"
-    assert service.hosting_setup_summary()["toolbox_environment_catalog"]["status"] == "ready"
+    assert service.hosting_setup_summary()["toolbox_readiness"]["status"] == "ready"
 
 
-def test_offline_preseed_source_must_be_one_of_the_host_artifact_sources() -> None:
-    configured = _configuration() | {
-        "artifact_source_ids": ["parent-release-resources", "offline-cache"],
-        "offline_preseed_source_id": "offline-cache",
-    }
-    parsed = ToolboxHostProjectConfiguration.from_dict(configured)
-    assert parsed.offline_preseed_source_id == "offline-cache"
-    with pytest.raises(ValueError, match="offline_preseed_source_id_invalid"):
-        ToolboxHostProjectConfiguration.from_dict(
-            configured | {"offline_preseed_source_id": "unconfigured-cache"}
-        )
+def test_airgap_source_rejects_paths_credentials_and_https_mix() -> None:
+    configured = _configuration()
+    configured["sources"] = [
+        {**configured["sources"][0], "origin": "C:/packages"}
+    ]
+    with pytest.raises(ValueError, match="package_source_origin_invalid"):
+        ToolboxHostProjectConfiguration.from_dict(configured)
+
+    configured = _configuration()
+    configured["sources"] = [
+        {**configured["sources"][0], "credential_ref": "secret:airgap"}
+    ]
+    with pytest.raises(ValueError, match="credential_ref_forbidden"):
+        ToolboxHostProjectConfiguration.from_dict(configured)
 
 
 @pytest.mark.parametrize("failure", ["missing", "corrupt"])
@@ -236,6 +288,6 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     core_entries = [item for item in state["entries"] if item["template_id"] == "core"]
     assert len(core_entries) == 2
     assert state["active"]["core"] == published["template_digest"]
-    status = restarted.hosting_setup_summary()["toolbox_environment_catalog"]
+    status = restarted.hosting_setup_summary()["toolbox_readiness"]
     assert status["status"] == "ready"
     assert status["templates"][0]["template_digest"] == published["template_digest"]

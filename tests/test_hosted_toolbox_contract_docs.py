@@ -217,8 +217,8 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
         "parent worker artifact digest, and isolation policy version",
         "pinned NumPy, SymPy, NumExpr",
         "independently materialized lock",
-        "`pkg:hosting.resources/toolbox_templates/catalog.json`",
-        "`toolbox_sandbox_policies.compute_only`",
+        "built-in `sandbox_policy` reference is `compute-only`",
+        "`toolbox_host_project_configuration`",
         "`required_template_missing`",
         "`required_template_signature_invalid`",
         "`required_template_lock_invalid`",
@@ -230,15 +230,15 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
     ]:
         assert required in prose
     for key in [
-        "`resource`",
-        "`trusted_signing_key_ids`",
-        "`required_template_ids`",
-        "`required_target`",
-        "`prewarm_required`",
-        "`artifact_source_ids`",
-        "`offline_preseed_source_id`",
-        "`cache_grace_seconds`",
-        "`build_timeout_seconds`",
+        "`builtins`",
+        "`sources`",
+        "`resolution`",
+        "`retention`",
+        "`package_requirements`",
+        "`credential_ref`",
+        "`source_set_revision`",
+        "`artifact_cache_grace_seconds`",
+        "`remove_unreferenced_custom_revisions_on_apply`",
     ]:
         assert key in text
     policy_block = next(

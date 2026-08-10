@@ -41,6 +41,9 @@ Rollout order is fixed:
 
 The following configuration fields and behaviors are removed:
 
+- the `toolbox_environment_catalog` setup/readiness projection name; use
+  `toolbox_host_project` for sanitized effective configuration and
+  `toolbox_readiness` for built-in readiness;
 - `resource` and the shipped realized-catalog resource contract;
 - `required_target`, including the literals `cp312-win_amd64` and
   `cp312-manylinux_2_28_x86_64` as administrator-selected build targets;
@@ -75,8 +78,8 @@ Remove configurations shaped like:
 }
 ```
 
-Replace them with the strict revisioned host-owned configuration model. A
-representative shape is:
+Replace them with the strict revisioned host-owned configuration model. Its
+exact top-level/nested field shape is:
 
 ```json
 {

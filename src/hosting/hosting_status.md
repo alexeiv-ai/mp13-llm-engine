@@ -81,7 +81,7 @@ transcript was intentionally removed because it obscured current truth.
 | --- | --- | --- |
 | R0 Corrective contract baseline | Active | R0-01 is complete. R0-03 populated the corrective consumer/administrator handoff before implementation: removed target/configuration and mutation surfaces, replacement payload sequence, durable retry/watch/recovery behavior, dependent removals/additions, rollout order, and explicit pending implementation/adoption gates are recorded. Focused docs: 10 passed in 0.12s; `git diff --check` passed. R0-02 remains a cross-slice obligation. No runtime behavior changed. |
 | R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03a implements a five-runner GitHub Actions matrix; the local Windows x64 target/native-wheel probe passed and target/workflow tests are 9 passed in 0.73s. R1-03a remains unchecked until all native jobs execute successfully. R1-03b remains gated on R6-04, and no new target family is advertised. |
-| R2 Revisioned hosting configuration and built-ins | Pending | No implementation started. |
+| R2 Revisioned hosting configuration and built-ins | Active | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit and `git diff --check` passed. |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
 | R4 Privileged approval and immutable apply | Pending | No implementation started. |
 | R5 Removal, retention, and administrator environments | Pending | No implementation started. |
@@ -90,14 +90,12 @@ transcript was intentionally removed because it obscured current truth.
 
 ## Next implementation slice
 
-R1-03a (`high`) is locally validated and ready for its isolated implementation
-commit, but remains unchecked pending execution of all five native jobs.
-R1-03b remains gated on R6-04 and no target family is newly advertised.
-
-After the R1-03a commit and a clean-worktree check, declare the first reviewable
-R2 (`high`) configuration/built-in sub-slice active before production changes.
-R2-01..R2-06 must be split into ordered independently verifiable sub-checkboxes
-because the complete group cannot fit one reviewable commit.
+R2-01a (`high`) is validated and ready for its isolated commit. After the
+commit and clean-worktree check, declare R2-02a (`high`) active. Its production
+boundary is normal `EngineHostDaemon` construction with strict configuration,
+logical source bindings, dependency policy, and detected target passed into
+`EngineHostService`; tests must instantiate the real daemon rather than the
+service directly.
 
 ## Status update rules
 

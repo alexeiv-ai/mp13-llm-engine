@@ -527,11 +527,20 @@ class ToolboxTemplateCatalogMixin:
         shipped = load_shipped_toolbox_catalog()
         configured = getattr(self, "_toolbox_host_project_config", None)
         required_ids = (
-            configured.required_template_ids
+            tuple(item.template_id for item in configured.builtins if item.required)
             if isinstance(configured, ToolboxHostProjectConfiguration)
             else SHIPPED_TEMPLATE_IDS
         )
-        resource = configured.resource if isinstance(configured, ToolboxHostProjectConfiguration) else shipped.resource
+        config_revision = (
+            configured.config_revision
+            if isinstance(configured, ToolboxHostProjectConfiguration)
+            else shipped.revision
+        )
+        configured_trust_keys = (
+            {key_id for source in configured.sources for key_id in source.trust_key_ids}
+            if isinstance(configured, ToolboxHostProjectConfiguration)
+            else set()
+        )
         state = self._toolbox_template_catalog.read()
         diagnostics: list[dict[str, str]] = []
         templates: list[dict[str, Any]] = []
@@ -559,7 +568,7 @@ class ToolboxTemplateCatalogMixin:
             elif (
                 isinstance(configured, ToolboxHostProjectConfiguration)
                 and entry["template"]["provenance"]["signing_key_id"]
-                not in configured.trusted_signing_key_ids
+                not in configured_trust_keys
             ):
                 code = "required_template_signature_invalid"
                 ready = False
@@ -601,7 +610,7 @@ class ToolboxTemplateCatalogMixin:
         return {
             "status": "ready" if ready else "degraded",
             "code": "required_templates_ready" if ready else diagnostics[0]["code"],
-            "resource": resource,
+            "config_revision": config_revision,
             "catalog_revision": state["catalog_revision"],
             "target": target,
             "templates": templates,
@@ -765,12 +774,19 @@ class ToolboxTemplateCatalogMixin:
         prefix = str(request_id_prefix or "").strip()
         if not prefix:
             raise ValueError("template_setup_request_id_prefix_required")
-        python_abi, platform = configuration.target
+        python_abi = configuration.target.python_abi
+        platform = configuration.target.platform
         materialization_target(python_abi=python_abi, platform=platform)
         shipped = load_shipped_toolbox_catalog()
         published: list[dict[str, Any]] = []
         operations: list[dict[str, Any]] = []
-        for template_id in configuration.required_template_ids:
+        required_intents = tuple(item for item in configuration.builtins if item.required)
+        configured_source_ids = {item.source_id for item in configuration.sources}
+        configured_trust_keys = {
+            key_id for source in configuration.sources for key_id in source.trust_key_ids
+        }
+        for intent in required_intents:
+            template_id = intent.template_id
             state = self._toolbox_template_catalog.read()
             active_digest = state["active"].get(template_id)
             if active_digest is None:
@@ -790,10 +806,10 @@ class ToolboxTemplateCatalogMixin:
                 if item["template_id"] == template_id
                 and item["template_digest"] == active_digest
             )
-            if entry["template"]["provenance"]["signing_key_id"] not in configuration.trusted_signing_key_ids:
+            if entry["template"]["provenance"]["signing_key_id"] not in configured_trust_keys:
                 raise ValueError("required_template_signature_invalid")
             if any(
-                artifact["source_id"] not in configuration.artifact_source_ids
+                artifact["source_id"] not in configured_source_ids
                 for artifact in entry["artifacts"]
             ):
                 raise ValueError("required_template_artifact_unavailable")
@@ -802,7 +818,7 @@ class ToolboxTemplateCatalogMixin:
                 python_abi=python_abi,
                 platform=platform,
             )
-            if configuration.prewarm_required and receipt is None:
+            if intent.prewarm and receipt is None:
                 operations.append(
                     self.toolbox_template_prewarm(
                         template_id=template_id,
@@ -815,8 +831,9 @@ class ToolboxTemplateCatalogMixin:
                 )
         return {
             "status": "started" if operations else "configured",
-            "resource": configuration.resource,
-            "target": configuration.required_target,
+            "config_revision": configuration.config_revision,
+            "source_set_revision": configuration.source_set_revision,
+            "target": configuration.target.name,
             "published": published,
             "operations": operations,
         }
