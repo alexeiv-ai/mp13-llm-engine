@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .toolbox.identity import require_digest
+from .toolbox.target import SUPPORTED_PYTHON_ABI, validate_target_platform
 
 
 MODEL_RUNTIME_STATUS_FIELDS = frozenset(
@@ -73,10 +74,9 @@ class ModelRuntimeIdentity:
     updated_at_ms: int
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r"cp[0-9]{3,4}", str(self.python_abi or "")):
+        if self.python_abi != SUPPORTED_PYTHON_ABI:
             raise ValueError("model_runtime_python_abi_invalid")
-        if self.platform not in {"win_amd64", "manylinux_2_28_x86_64"}:
-            raise ValueError("model_runtime_platform_invalid")
+        validate_target_platform(self.platform, label="model_runtime_platform")
         require_digest(self.engine_artifact_digest, label="model_runtime_engine_artifact_digest")
         require_digest(self.complete_lock_digest, label="model_runtime_complete_lock_digest")
         _text(self.optional_package_set, label="model_runtime_optional_package_set", optional=True)
@@ -116,10 +116,10 @@ class ModelRuntimeStatus:
             raise ValueError("model_runtime_status_state_invalid")
         _text(self.code, label="model_runtime_status_code", maximum=128)
         _text(self.summary, label="model_runtime_status_summary")
-        if self.python_abi is not None and not re.fullmatch(r"cp[0-9]{3,4}", self.python_abi):
+        if self.python_abi is not None and self.python_abi != SUPPORTED_PYTHON_ABI:
             raise ValueError("model_runtime_status_python_abi_invalid")
-        if self.platform is not None and self.platform not in {"win_amd64", "manylinux_2_28_x86_64"}:
-            raise ValueError("model_runtime_status_platform_invalid")
+        if self.platform is not None:
+            validate_target_platform(self.platform, label="model_runtime_status_platform")
         for name, value in (
             ("engine_artifact_digest", self.engine_artifact_digest),
             ("complete_lock_digest", self.complete_lock_digest),

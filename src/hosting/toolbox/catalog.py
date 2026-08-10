@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from .target import SUPPORTED_PYTHON_ABI, validate_target_platform
+
 
 _CANONICAL_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _DISTRIBUTION_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -207,7 +209,7 @@ class ToolboxEnvironmentTemplateSpec:
                 normalizer=lambda item: _required_text(item, label="template_python_abi").lower(),
             ),
         )
-        if not self.python_abis or any(not re.fullmatch(r"cp[0-9]{3,4}", item) for item in self.python_abis):
+        if not self.python_abis or any(item != SUPPORTED_PYTHON_ABI for item in self.python_abis):
             raise ValueError("template_python_abis_invalid")
         runtime_kind = _required_text(self.runtime_kind, label="template_runtime_kind")
         if runtime_kind != "toolbox_python":
@@ -231,10 +233,13 @@ class ToolboxEnvironmentTemplateSpec:
                 normalizer=lambda item: _required_text(item, label="template_platform").lower(),
             ),
         )
-        if not self.platforms or any(
-            item not in {"win_amd64", "manylinux_2_28_x86_64"} for item in self.platforms
-        ):
+        if not self.platforms:
             raise ValueError("template_platforms_invalid")
+        try:
+            for item in self.platforms:
+                validate_target_platform(item, label="template_platform")
+        except ValueError as exc:
+            raise ValueError("template_platforms_invalid") from exc
         distributions = tuple(self.locked_distributions)
         if not distributions or len(distributions) > MAX_TEMPLATE_DISTRIBUTIONS:
             raise ValueError("template_locked_distributions_invalid")

@@ -51,6 +51,7 @@ from ..toolbox.host_project_config import (
     ToolboxHostProjectConfiguration,
     validate_toolbox_sandbox_policies,
 )
+from ..toolbox.target import detect_current_toolbox_target
 from .workflow_helpers import WorkflowHelperMixin
 
 
@@ -104,6 +105,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             if toolbox_sandbox_policies is not None
             else None
         )
+        current_target = detect_current_toolbox_target()
         configured_abi = ""
         configured_platform = ""
         if self._toolbox_host_project_config is not None:
@@ -144,8 +146,15 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             )
         else:
             self._toolbox_template_materializer = UnconfiguredToolboxTemplateMaterializer()
-        self._toolbox_required_python_abi = str(configured_abi or toolbox_required_python_abi or "").strip()
-        self._toolbox_required_platform = str(configured_platform or toolbox_required_platform or "").strip()
+        selected_abi = str(configured_abi or toolbox_required_python_abi or current_target.python_abi).strip()
+        selected_platform = str(
+            configured_platform or toolbox_required_platform or current_target.platform
+        ).strip()
+        if selected_abi != current_target.python_abi or selected_platform != current_target.platform:
+            raise ValueError("toolbox_required_target_cross_target")
+        self._toolbox_target = current_target
+        self._toolbox_required_python_abi = selected_abi
+        self._toolbox_required_platform = selected_platform
         self._toolbox_state_v2 = AtomicJsonToolboxStateV2Repository(
             self.hosting_root / "state" / "toolbox_sandboxes_v2.json",
             legacy_path=self.hosting_root / "state" / "toolbox_sandboxes.json",

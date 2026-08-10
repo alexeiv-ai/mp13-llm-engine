@@ -9,6 +9,7 @@ import sys
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,10 @@ from hosting.toolbox.hermetic_environment import (
 )
 from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 from hosting.toolbox.staging import ToolboxBundleStager
+from hosting.toolbox.target import detect_current_toolbox_target
+
+
+TARGET = detect_current_toolbox_target()
 
 
 def _digest(character: str) -> str:
@@ -87,8 +92,8 @@ def _resolved(
         template_digest=_digest("1"),
         runtime_version=".".join(str(item) for item in sys.version_info[:3]),
         runtime_artifact_digest=_digest("2"),
-        python_abi=f"cp{sys.version_info.major}{sys.version_info.minor}",
-        platform="win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64",
+        python_abi=TARGET.python_abi,
+        platform=TARGET.platform,
         complete_lock_digest=lock_digest,
         complete_lock=tuple(
             ToolboxLockedDistributionSpec(name=item.distribution_name, version=item.version)
@@ -119,6 +124,26 @@ def _materialize_in_process(host: str, source: str, payload: dict, reference: st
         queue.put({"ok": True, "environment_root": spec.environment_root})
     except Exception as exc:  # pragma: no cover - asserted through child result
         queue.put({"ok": False, "error": type(exc).__name__, "detail": str(exc)})
+
+
+def test_builder_rejects_cross_target_wheel_before_source_access(tmp_path: Path) -> None:
+    source = tmp_path / "approved"
+    source.mkdir()
+    portable = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
+    foreign_platform = "win_arm64" if TARGET.platform != "win_arm64" else "win_amd64"
+    foreign = replace(
+        portable,
+        filename=f"alpha_package-1.0.0-cp312-cp312-{foreign_platform}.whl",
+    )
+    resolved = _resolved((foreign,))
+    builder = HermeticToolboxEnvironmentBuilder(
+        tmp_path / "host", artifact_sources={"approved": tmp_path / "missing-source"}
+    )
+
+    with pytest.raises(HermeticToolboxEnvironmentBuildError) as captured:
+        builder.materialize_environment(resolved, reference_id="cross-target")
+
+    assert captured.value.code == "environment_artifact_target_mismatch"
 
 
 def test_offline_preseed_builds_non_inheriting_venv_and_publishes_verified_receipt(tmp_path: Path) -> None:
@@ -300,10 +325,10 @@ def test_catalog_prewarm_adapter_builds_complete_wheel_lock_on_target_host(tmp_p
     template = ToolboxEnvironmentTemplateSpec(
         template_id="core",
         python_requires=">=3.12,<3.13",
-        python_abis=(f"cp{sys.version_info.major}{sys.version_info.minor}",),
+        python_abis=(TARGET.python_abi,),
         runtime_kind="toolbox_python",
         worker_protocol_version="1.0.0",
-        platforms=("win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64",),
+        platforms=(TARGET.platform,),
         locked_distributions=(ToolboxLockedDistributionSpec(name="alpha-package", version="1.0.0"),),
         exposed_import_roots=("alpha_pkg",),
         lock_digest=_digest("3"),

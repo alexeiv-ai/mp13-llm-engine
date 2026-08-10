@@ -83,7 +83,6 @@ def test_environment_key_uses_only_frozen_runtime_lock_and_isolation_identity() 
     changes = (
         {"runtime_version": "3.12.9"},
         {"runtime_artifact_digest": _digest("4")},
-        {"python_abi": "cp313"},
         {"platform": "manylinux_2_28_x86_64"},
         {"complete_lock_digest": _digest("5")},
         {"custom_resolved_lock_digest": _digest("6")},
@@ -91,6 +90,11 @@ def test_environment_key_uses_only_frozen_runtime_lock_and_isolation_identity() 
     )
     for change in changes:
         assert replace(resolved, **change).environment_key != expected
+
+    with pytest.raises(ValueError, match="resolved_python_abi_invalid"):
+        replace(resolved, python_abi="cp313")
+    with pytest.raises(ValueError, match="resolved_platform_invalid"):
+        replace(resolved, platform="linux_x86_64")
 
 
 def test_template_labels_and_per_function_import_subsets_do_not_change_key() -> None:

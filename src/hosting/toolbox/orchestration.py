@@ -1,7 +1,6 @@
 """Sandboxed toolbox assignment orchestration."""
 from __future__ import annotations
 
-import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -18,6 +17,7 @@ from .bundle_models import (
 )
 from .environment import ToolboxEnvironmentManager
 from .staging import ToolboxBundleStager
+from .target import detect_current_toolbox_target
 from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 
 
@@ -107,6 +107,7 @@ class ToolboxSandboxOrchestrator:
         if not tid or not revision:
             raise ValueError("resolved_rollout_identity_required")
         out = list(assignments or [])
+        current_target = detect_current_toolbox_target()
         for item in out:
             if item.toolbox_id != tid:
                 raise ValueError("resolved_assignment_toolbox_mismatch")
@@ -120,9 +121,9 @@ class ToolboxSandboxOrchestrator:
             hermetic = self.service.materialize_toolbox_environment_for_bundle(
                 files=list(staged.manifest.get("files") or []),
                 python_abi=str(getattr(self.service, "_toolbox_required_python_abi", "") or "").strip()
-                or f"cp{sys.version_info.major}{sys.version_info.minor}",
+                or current_target.python_abi,
                 platform=str(getattr(self.service, "_toolbox_required_platform", "") or "").strip()
-                or ("win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64"),
+                or current_target.platform,
                 declared_imports=profile.resolved_import_roots,
                 intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
                 allowed_template_ids=(profile.template_id,),
@@ -326,10 +327,11 @@ class ToolboxSandboxOrchestrator:
             revision = str(staged.manifest.get("bundle_revision") or "")
             engine_id = self._engine_id(toolbox_id, item.sandbox_profile, revision)
             if getattr(self.service, "_hermetic_toolbox_environment_builder", None) is not None:
+                current_target = detect_current_toolbox_target()
                 python_abi = str(getattr(self.service, "_toolbox_required_python_abi", "") or "").strip()
                 platform = str(getattr(self.service, "_toolbox_required_platform", "") or "").strip()
-                python_abi = python_abi or f"cp{sys.version_info.major}{sys.version_info.minor}"
-                platform = platform or ("win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64")
+                python_abi = python_abi or current_target.python_abi
+                platform = platform or current_target.platform
                 hermetic = self.service.materialize_toolbox_environment_for_bundle(
                     files=list(staged.manifest.get("files") or []),
                     python_abi=python_abi,

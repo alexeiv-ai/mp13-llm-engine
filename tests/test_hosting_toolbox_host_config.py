@@ -23,6 +23,10 @@ from hosting.toolbox.shipped_templates import (
     load_shipped_toolbox_catalog,
 )
 from hosting.toolbox import shipped_templates
+from hosting.toolbox.target import detect_current_toolbox_target
+
+
+TARGET = detect_current_toolbox_target()
 
 
 class VerifiedMaterializer:
@@ -58,7 +62,7 @@ class VerifiedMaterializer:
 
 
 def _configuration() -> dict[str, Any]:
-    return standard_toolbox_host_project_configuration(target="cp312-win_amd64")
+    return standard_toolbox_host_project_configuration()
 
 
 def _service(root: Path) -> EngineHostService:
@@ -83,7 +87,7 @@ def _wait_startup(service: EngineHostService) -> None:
 def test_host_project_configuration_is_exact_and_compute_only() -> None:
     config = ToolboxHostProjectConfiguration.from_dict(_configuration())
     assert config.required_template_ids == SHIPPED_TEMPLATE_IDS
-    assert config.target == ("cp312", "win_amd64")
+    assert config.target == (TARGET.python_abi, TARGET.platform)
     assert validate_toolbox_sandbox_policies(
         {"compute_only": compute_only_sandbox_policy()}
     )["compute_only"]["policy_id"] == "compute-only"
@@ -93,6 +97,11 @@ def test_host_project_configuration_is_exact_and_compute_only() -> None:
         ToolboxHostProjectConfiguration.from_dict(invalid)
     with pytest.raises(ValueError, match="unknown_fields"):
         ToolboxHostProjectConfiguration.from_dict(_configuration() | {"toolbox_id": "mutable"})
+    foreign_target = "cp312-win_arm64" if TARGET.platform != "win_arm64" else "cp312-win_amd64"
+    with pytest.raises(ValueError, match="required_target_cross_target"):
+        ToolboxHostProjectConfiguration.from_dict(
+            _configuration() | {"required_target": foreign_target}
+        )
     widened = compute_only_sandbox_policy() | {"network": True}
     with pytest.raises(ValueError, match="compute_only_policy_invalid"):
         validate_toolbox_sandbox_policies({"compute_only": widened})
@@ -111,7 +120,7 @@ def test_configured_startup_publishes_prewarms_and_reports_bounded_readiness(
     assert summary["toolbox_host_project"] == {
         "resource": _configuration()["resource"],
         "required_template_ids": list(SHIPPED_TEMPLATE_IDS),
-        "required_target": "cp312-win_amd64",
+        "required_target": TARGET.name,
         "prewarm_required": True,
         "compute_only_policy_id": "compute-only",
     }
@@ -140,8 +149,8 @@ def test_nonstandard_deferred_materialization_stays_degraded_until_durable_prewa
         started = service.toolbox_template_prewarm(
             template_id=template_id,
             template_digest=state["active"][template_id],
-            python_abi="cp312",
-            platform="win_amd64",
+            python_abi=TARGET.python_abi,
+            platform=TARGET.platform,
             request_id=f"deferred-materialization:{template_id}",
             owner_actor_id="admin:deferred-materialization-test",
         )
@@ -207,8 +216,8 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     operation = service.toolbox_template_prewarm(
         template_id="core",
         template_digest=published["template_digest"],
-        python_abi="cp312",
-        platform="win_amd64",
+        python_abi=TARGET.python_abi,
+        platform=TARGET.platform,
         request_id="admin-replacement-core-v2",
         owner_actor_id="admin:replacement-test",
     )
@@ -217,7 +226,7 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     )
     assert terminal["lifecycle"] == "terminal_success"
     assert service.toolbox_required_template_status(
-        python_abi="cp312", platform="win_amd64"
+        python_abi=TARGET.python_abi, platform=TARGET.platform
     )["templates"][0]["template_digest"] == published["template_digest"]
     service.close()
 

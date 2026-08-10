@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sys
 import threading
@@ -32,6 +31,7 @@ class ToolboxRuntimeMixin:
         from ..toolbox.dependency_policy import ToolboxDependencyPolicy
         from ..toolbox.identity import identity_digest
         from ..toolbox.shipped_templates import load_shipped_toolbox_catalog
+        from ..toolbox.target import detect_current_toolbox_target
 
         catalog = self._toolbox_template_catalog.read()
         active_templates = []
@@ -56,10 +56,9 @@ class ToolboxRuntimeMixin:
             catalog_revision = identity_digest(
                 "hosting.toolbox.builtin_catalog.v1", [item.to_dict() for item in templates]
             )
-        python_abi = self._toolbox_required_python_abi or f"cp{sys.version_info.major}{sys.version_info.minor}"
-        platform = self._toolbox_required_platform or (
-            "win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64"
-        )
+        current_target = detect_current_toolbox_target()
+        python_abi = self._toolbox_required_python_abi or current_target.python_abi
+        platform = self._toolbox_required_platform or current_target.platform
         configured = getattr(self, "_configured_toolbox_dependency_policy", None)
         if configured is None:
             allowed_packages = sorted(

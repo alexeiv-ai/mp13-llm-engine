@@ -193,8 +193,10 @@ def test_contract_freezes_deployment_administration_policy() -> None:
     for required in [
         "The signature algorithm is `ed25519`.",
         "Online index resolution is denied by default.",
-        "CPython 3.12 on `win_amd64`",
-        "CPython 3.12\non `manylinux_2_28_x86_64`",
+        "CPython 3.12 on `win_amd64`, `win_arm64`",
+        "`manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`",
+        "`macosx_11_0_arm64`",
+        "`packaging.tags.sys_tags()`",
         "300 seconds per artifact fetch",
         "1,800 seconds for one environment materialization",
         "3,600 seconds for one prewarm or",

@@ -542,11 +542,11 @@ boundary—not a double—passes.
 
 ### R1 - Canonical current-host target
 
-- [ ] **R1-01** Add one detector module using the running interpreter and
+- [x] **R1-01** Add one detector module using the running interpreter and
   `packaging.tags.sys_tags()`. Replace target defaults in
   `host_project_config.py`, `dependency_policy.py`, `catalog.py`,
   `hermetic_environment.py`, `orchestration.py`, and `toolbox_runtime.py`.
-- [ ] **R1-02** Update strict target/lock/catalog/cache models for the five
+- [x] **R1-02** Update strict target/lock/catalog/cache models for the five
   target families listed above and reject cross-target wheels before download or
   build.
 - [ ] **R1-03** Add native CI jobs and production-boundary tests. A target is not

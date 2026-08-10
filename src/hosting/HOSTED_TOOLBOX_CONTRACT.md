@@ -441,12 +441,16 @@ receive readiness/diagnostic projections, never the physical preseed path.
 
 ### Supported targets and timeouts
 
-The initial supported targets are CPython 3.12 on `win_amd64` and CPython 3.12
-on `manylinux_2_28_x86_64`. Their ABI tag is `cp312`. A template revision is
-advertised only when its complete lock has compatible artifacts for the exact
-target and the configured sandbox policy is enforceable. Other Python ABIs,
-32-bit targets, macOS, musl, ARM, and free-threaded Python are unsupported until
-a later signed catalog revision explicitly adds them.
+The initial target families are CPython 3.12 on `win_amd64`, `win_arm64`,
+`manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`, and
+`macosx_11_0_arm64`. Their ABI tag is `cp312`. One canonical detector derives
+the current daemon's interpreter ABI, operating system, architecture, platform
+baseline, and ordered tag set from `packaging.tags.sys_tags()`.
+Configuration cannot select a different construction target. A template
+revision is advertised only when its complete lock has compatible artifacts for
+the exact detected target and the configured sandbox policy is enforceable.
+Other Python ABIs, 32-bit targets, Linux musl, macOS x64, and free-threaded
+Python are unsupported.
 
 Timeout ceilings are 300 seconds per artifact fetch, 600 seconds for approved
 custom lock resolution, 1,800 seconds for one environment materialization, 120
@@ -599,7 +603,7 @@ has these exact keys:
 | `resource` | Required package-resource reference for the signed catalog manifest. The initial value is `pkg:hosting.resources/toolbox_templates/catalog.json`. |
 | `trusted_signing_key_ids` | Non-empty list of secret-store public-key IDs accepted for catalog and manifest signatures. |
 | `required_template_ids` | Exactly `core` and `py-compute` for the initial release. |
-| `required_target` | Exactly one host-supported target: `cp312-win_amd64` or `cp312-manylinux_2_28_x86_64`. |
+| `required_target` | Transitional exact detected host target; configuring a different supported family is rejected as cross-target construction. This field is removed by the revisioned host-configuration replacement. |
 | `prewarm_required` | Boolean; must be `true` for standard hosting readiness. |
 | `artifact_source_ids` | Ordered non-empty list of administrator-configured digest-addressed sources. |
 | `offline_preseed_source_id` | Optional administrator source ID; never a client path. |

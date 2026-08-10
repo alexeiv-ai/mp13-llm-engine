@@ -21,6 +21,7 @@ from ..toolbox.hermetic_environment import (
     ResolvedToolboxEnvironmentInput,
     ToolboxLockedArtifactSpec,
 )
+from ..toolbox.target import SUPPORTED_PYTHON_ABI, validate_target_platform
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 
 
@@ -28,7 +29,6 @@ MATERIALIZATION_STATE_CONTRACT = "hosting.toolbox.materialization_state.v1"
 MATERIALIZATION_RECEIPT_CONTRACT = "hosting.toolbox.materialization_receipt.v1"
 MATERIALIZATION_ENVIRONMENT_DOMAIN = "hosting.toolbox.materialized_environment.v1"
 MAX_MATERIALIZATION_RECEIPTS = 1024
-_TARGET_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _VERIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
@@ -49,10 +49,9 @@ class ToolboxTemplateMaterializationError(RuntimeError):
 def materialization_target(*, python_abi: str, platform: str) -> str:
     abi = str(python_abi or "").strip()
     platform_name = str(platform or "").strip()
-    if not _TARGET_RE.fullmatch(abi):
+    if abi != SUPPORTED_PYTHON_ABI:
         raise ValueError("template_python_abi_invalid")
-    if not _TARGET_RE.fullmatch(platform_name):
-        raise ValueError("template_platform_invalid")
+    validate_target_platform(platform_name, label="template_platform")
     return f"{abi}@{platform_name}"
 
 

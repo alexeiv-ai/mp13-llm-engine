@@ -15,6 +15,7 @@ from mp13_engine.mp13_intrinsics_metadata import intrinsic_dependency_metadata
 from .catalog import normalize_distribution_name
 from .dependency_analysis import ToolboxResolvedDependencies, ToolboxTemplateSelection
 from .identity import require_digest
+from .target import validate_target_name
 
 
 _FORBIDDEN_AUTHORITY_KEYS = frozenset(
@@ -118,11 +119,10 @@ class ToolboxDependencyPolicy:
         targets = _strings(self.allowed_targets, label="policy_allowed_targets", maximum=32)
         if not targets:
             raise ValueError("policy_allowed_targets_required")
-        if any(
-            not re.fullmatch(r"cp[0-9]{3,4}-(?:win_amd64|manylinux_2_28_x86_64)", item)
-            for item in targets
-        ):
-            raise ValueError("policy_allowed_target_invalid")
+        try:
+            targets = tuple(validate_target_name(item, label="policy_allowed_target") for item in targets)
+        except ValueError as exc:
+            raise ValueError("policy_allowed_target_invalid") from exc
         object.__setattr__(self, "allowed_targets", targets)
         allowlist = tuple(
             sorted(

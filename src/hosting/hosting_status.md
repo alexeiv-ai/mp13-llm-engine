@@ -80,7 +80,7 @@ transcript was intentionally removed because it obscured current truth.
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
 | R0 Corrective contract baseline | Active | R0-01 is complete. R0-03 populated the corrective consumer/administrator handoff before implementation: removed target/configuration and mutation surfaces, replacement payload sequence, durable retry/watch/recovery behavior, dependent removals/additions, rollout order, and explicit pending implementation/adoption gates are recorded. Focused docs: 10 passed in 0.12s; `git diff --check` passed. R0-02 remains a cross-slice obligation. No runtime behavior changed. |
-| R1 Canonical current-host target | Pending | No implementation started. |
+| R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03 native CI remains pending. |
 | R2 Revisioned hosting configuration and built-ins | Pending | No implementation started. |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
 | R4 Privileged approval and immutable apply | Pending | No implementation started. |
@@ -90,12 +90,11 @@ transcript was intentionally removed because it obscured current truth.
 
 ## Next implementation slice
 
-R0-03 (`medium`) is validated and ready for its isolated commit. After that
-commit, verify a clean worktree and declare R1-01/R1-02 (`high`) active before
-changing production code. That slice establishes one canonical detected
-current-host target model and removes configured/x86-only defaults and
-validators. Its exact focused, native-platform, regression, and documentation
-commands must be recorded here before implementation begins.
+R1-01/R1-02 (`high`) are validated and ready for their isolated commit. After
+that commit and a clean-worktree check, declare R1-03 (`high`) active. Its
+boundary is native CI for every advertised target family, asserting the
+detected machine, native-extension import, sandbox ownership, restart, and
+cleanup. A family remains unadvertised until its native job passes.
 
 ## Status update rules
 

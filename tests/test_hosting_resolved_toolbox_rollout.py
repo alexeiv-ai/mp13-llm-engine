@@ -16,6 +16,10 @@ from hosting.toolbox.bundle_models import (
 )
 from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 from hosting.toolbox.staging import ToolboxBundleStager
+from hosting.toolbox.target import detect_current_toolbox_target
+
+
+TARGET = detect_current_toolbox_target()
 
 
 def _digest(character: str) -> str:
@@ -69,8 +73,8 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
     )
 
     class Service:
-        _toolbox_required_python_abi = "cp312"
-        _toolbox_required_platform = "win_amd64"
+        _toolbox_required_python_abi = TARGET.python_abi
+        _toolbox_required_platform = TARGET.platform
         engines_state_file = tmp_path / "engines.json"
         control_state_file = tmp_path / "access.json"
 

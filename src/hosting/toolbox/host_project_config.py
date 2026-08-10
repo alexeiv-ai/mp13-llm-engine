@@ -9,6 +9,7 @@ from .shipped_templates import (
     SHIPPED_TEMPLATE_IDS,
     compute_only_sandbox_policy,
 )
+from .target import SUPPORTED_PYTHON_ABI, detect_current_toolbox_target, validate_target_name
 
 
 _FIELDS = {
@@ -22,12 +23,6 @@ _FIELDS = {
     "cache_grace_seconds",
     "build_timeout_seconds",
 }
-_SUPPORTED_TARGETS = {
-    "cp312-win_amd64": ("cp312", "win_amd64"),
-    "cp312-manylinux_2_28_x86_64": ("cp312", "manylinux_2_28_x86_64"),
-}
-
-
 def _strict_id_list(value: Any, *, label: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
         raise ValueError(f"{label}_invalid")
@@ -69,9 +64,9 @@ class ToolboxHostProjectConfiguration:
         required = _strict_id_list(row["required_template_ids"], label="required_template_ids")
         if required != SHIPPED_TEMPLATE_IDS:
             raise ValueError("required_template_ids_invalid")
-        target = str(row["required_target"] or "").strip().lower()
-        if target not in _SUPPORTED_TARGETS:
-            raise ValueError("required_target_invalid")
+        target = validate_target_name(row["required_target"], label="required_target")
+        if target != detect_current_toolbox_target().name:
+            raise ValueError("required_target_cross_target")
         if not isinstance(row["prewarm_required"], bool):
             raise ValueError("prewarm_required_must_be_boolean")
         sources = _strict_id_list(row["artifact_source_ids"], label="artifact_source_ids")
@@ -99,7 +94,7 @@ class ToolboxHostProjectConfiguration:
 
     @property
     def target(self) -> tuple[str, str]:
-        return _SUPPORTED_TARGETS[self.required_target]
+        return SUPPORTED_PYTHON_ABI, self.required_target.removeprefix(f"{SUPPORTED_PYTHON_ABI}-")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,13 +120,17 @@ def validate_toolbox_sandbox_policies(value: Mapping[str, Any]) -> dict[str, Any
     return {"compute_only": expected}
 
 
-def standard_toolbox_host_project_configuration(*, target: str) -> dict[str, Any]:
+def standard_toolbox_host_project_configuration(*, target: str | None = None) -> dict[str, Any]:
+    current = detect_current_toolbox_target()
+    selected = current.name if target is None else validate_target_name(target, label="required_target")
+    if selected != current.name:
+        raise ValueError("required_target_cross_target")
     return ToolboxHostProjectConfiguration.from_dict(
         {
             "resource": SHIPPED_CATALOG_RESOURCE,
             "trusted_signing_key_ids": ["parent-release-toolbox-v1"],
             "required_template_ids": list(SHIPPED_TEMPLATE_IDS),
-            "required_target": target,
+            "required_target": selected,
             "prewarm_required": True,
             "artifact_source_ids": ["parent-release-resources"],
             "offline_preseed_source_id": None,

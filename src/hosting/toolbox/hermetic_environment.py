@@ -25,6 +25,12 @@ from .catalog import (
     normalize_import_root,
 )
 from .identity import ENVIRONMENT_IDENTITY_DOMAIN, environment_identity, require_digest
+from .target import (
+    SUPPORTED_PYTHON_ABI,
+    detect_current_toolbox_target,
+    validate_target_platform,
+    wheel_is_compatible,
+)
 
 
 TOOLBOX_ENVIRONMENT_KEY_DOMAIN = ENVIRONMENT_IDENTITY_DOMAIN
@@ -161,10 +167,9 @@ class ResolvedToolboxEnvironmentInput:
         object.__setattr__(self, "template_digest", require_digest(self.template_digest, label="resolved_template_digest"))
         object.__setattr__(self, "runtime_version", _id(self.runtime_version, label="resolved_runtime_version"))
         object.__setattr__(self, "runtime_artifact_digest", require_digest(self.runtime_artifact_digest, label="resolved_runtime_artifact_digest"))
-        if not re.fullmatch(r"cp[0-9]{3,4}", str(self.python_abi or "")):
+        if self.python_abi != SUPPORTED_PYTHON_ABI:
             raise ValueError("resolved_python_abi_invalid")
-        if self.platform not in {"win_amd64", "manylinux_2_28_x86_64"}:
-            raise ValueError("resolved_platform_invalid")
+        validate_target_platform(self.platform, label="resolved_platform")
         object.__setattr__(self, "complete_lock_digest", require_digest(self.complete_lock_digest, label="resolved_complete_lock_digest"))
         lock = tuple(self.complete_lock)
         if any(not isinstance(item, ToolboxLockedDistributionSpec) for item in lock):
@@ -402,17 +407,26 @@ class HermeticToolboxEnvironmentBuilder:
 
     @staticmethod
     def _validate_target(resolved: ResolvedToolboxEnvironmentInput) -> None:
-        current_abi = f"cp{sys.version_info.major}{sys.version_info.minor}"
-        current_platform = "win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64"
+        current = detect_current_toolbox_target()
         current_version = ".".join(str(item) for item in sys.version_info[:3])
         if (
-            resolved.python_abi != current_abi
-            or resolved.platform != current_platform
+            resolved.python_abi != current.python_abi
+            or resolved.platform != current.platform
             or resolved.runtime_version != current_version
         ):
             raise HermeticToolboxEnvironmentBuildError(
                 "environment_runtime_target_mismatch",
                 "The resolved runtime identity does not match this materialization host.",
+            )
+        incompatible = [
+            artifact.filename
+            for artifact in resolved.locked_artifacts
+            if not wheel_is_compatible(artifact.filename, current)
+        ]
+        if incompatible:
+            raise HermeticToolboxEnvironmentBuildError(
+                "environment_artifact_target_mismatch",
+                f"Locked wheel '{incompatible[0]}' is incompatible with this materialization host.",
             )
 
     def _artifact_paths(self, resolved: ResolvedToolboxEnvironmentInput) -> tuple[Path, ...]:
