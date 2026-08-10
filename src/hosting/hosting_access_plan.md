@@ -584,6 +584,10 @@ boundary—not a double—passes.
     strict release-owned built-in intents and remove lock-JSON artifact bridges.
   - [ ] **R2-03b** Resolve each intent to one exact current-host transitive wheel
     closure from the configured source mode with stable missing-wheel results.
+    - [x] **R2-03b1** Resolve bounded read-only air-gap wheelhouses into exact
+      deterministic current-host closures with stable missing-wheel results.
+    - [ ] **R2-03b2** Resolve HTTPS-backed modes through the verified artifact
+      acquisition boundary delivered by R2-05a, using the same closure model.
 - [ ] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
   the real `toolbox_catalog.py` and `hermetic_environment.py` boundary. Remove
   the lock-JSON-as-wheel bridge and tests that normalize it.

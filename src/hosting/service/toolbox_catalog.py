@@ -730,7 +730,7 @@ class ToolboxTemplateCatalogMixin:
         request_id_prefix: str,
         actor_id: str = "service:startup",
     ) -> dict[str, Any]:
-        """Record that configured intents require exact current-host resolution."""
+        """Resolve configured intent without publishing a partial catalog."""
 
         if not isinstance(configuration, ToolboxHostProjectConfiguration):
             raise ValueError("toolbox_host_project_configuration_required")
@@ -740,20 +740,13 @@ class ToolboxTemplateCatalogMixin:
         python_abi = configuration.target.python_abi
         platform = configuration.target.platform
         materialization_target(python_abi=python_abi, platform=platform)
-        return {
-            "status": "resolution_required",
-            "config_revision": configuration.config_revision,
-            "source_set_revision": configuration.source_set_revision,
-            "target": configuration.target.name,
-            "published": [],
-            "operations": [],
-            "diagnostics": [
-                {
-                    "code": "required_builtin_resolution_pending",
-                    "summary": "Configured built-in intents require exact current-host wheel resolution.",
-                }
-            ],
-        }
+        from ..toolbox.builtin_resolver import AirgapBuiltinWheelResolver
+
+        resolution = AirgapBuiltinWheelResolver(
+            configuration,
+            artifact_sources=getattr(self, "_toolbox_artifact_sources", {}),
+        ).resolve().to_dict()
+        return {**resolution, "published": [], "operations": []}
 
     def toolbox_template_describe(
         self, *, template_id: str, template_digest: str | None = None

@@ -81,7 +81,7 @@ transcript was intentionally removed because it obscured current truth.
 | --- | --- | --- |
 | R0 Corrective contract baseline | Active | R0-01 is complete. R0-03 populated the corrective consumer/administrator handoff before implementation: removed target/configuration and mutation surfaces, replacement payload sequence, durable retry/watch/recovery behavior, dependent removals/additions, rollout order, and explicit pending implementation/adoption gates are recorded. Focused docs: 10 passed in 0.12s; `git diff --check` passed. R0-02 remains a cross-slice obligation. No runtime behavior changed. |
 | R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03a implements a five-runner GitHub Actions matrix; the local Windows x64 target/native-wheel probe passed and target/workflow tests are 9 passed in 0.73s. R1-03a remains unchecked until all native jobs execute successfully. R1-03b remains gated on R6-04, and no new target family is advertised. |
-| R2 Revisioned hosting configuration and built-ins | Active | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. |
+| R2 Revisioned hosting configuration and built-ins | Active | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
 | R4 Privileged approval and immutable apply | Pending | No implementation started. |
 | R5 Removal, retention, and administrator environments | Pending | No implementation started. |
@@ -90,20 +90,20 @@ transcript was intentionally removed because it obscured current truth.
 
 ## Active implementation slice
 
-Active slice: R2-03a (`high`). The production boundary removes
-`shipped_templates.py`, shipped catalog/lock JSON, the
-`initialize_shipped_toolbox_templates` API, and every runtime fallback to a
-realized shipped lock. Compute-only policy moves to its own module. Configured
-built-in intent remains unpublished and readiness stays false until R2-03b
-produces a real exact current-host wheel closure.
+Active slice: R2-03b1 (`high`). Add one strict read-only air-gap resolver that
+turns each built-in intent into a complete exact transitive wheel closure for
+the detected current-host target. Resolution is deterministic and bounded,
+rejects source distributions and incompatible/ambiguous wheels, and returns
+stable missing-wheel diagnostics. All required intents resolve before any
+catalog entry is published; HTTPS-backed resolution is R2-03b2/R2-05a and
+publication/materialization remain R2-04 work.
 
 Required validation:
 
-- `python -m pytest tests/test_hosted_toolbox_shipped_templates.py -q`
-- focused planner/service/resolver tests migrated to explicit test-only
-  realized-template fixtures
+- focused built-in resolver tests for exact transitives, target compatibility,
+  deterministic source choice, and stable missing-wheel diagnostics
+- normal daemon/config integration proves zero partial publication
 - `python -m pytest tests/test_hosted_toolbox_contract_docs.py -q`
-- `rg` finds no shipped catalog/lock resource, loader, or initializer symbol
 - `git diff --check`
 
 ## Status update rules

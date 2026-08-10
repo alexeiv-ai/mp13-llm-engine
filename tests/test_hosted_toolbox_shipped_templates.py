@@ -127,7 +127,11 @@ def test_normal_daemon_does_not_publish_intent_before_exact_resolution(tmp_path:
     )
 
     assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
-    assert daemon.svc._toolbox_startup["status"] == "resolution_required"  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["closures"] == []  # noqa: SLF001
+    assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
+        "required_template_requirements_missing"
+    )
     assert daemon.svc._toolbox_startup["published"] == []  # noqa: SLF001
     assert daemon.svc._toolbox_startup["operations"] == []  # noqa: SLF001
     assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001

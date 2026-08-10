@@ -91,6 +91,10 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self.control_state_file = self.hosting_root / "access_control.json"
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
+        self._toolbox_artifact_sources = {
+            str(source_id): Path(path).expanduser().resolve()
+            for source_id, path in dict(toolbox_artifact_sources or {}).items()
+        }
         self._toolbox_host_project_config = (
             ToolboxHostProjectConfiguration.from_dict(toolbox_host_project_configuration)
             if toolbox_host_project_configuration is not None
@@ -119,7 +123,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._hermetic_toolbox_environment_builder = (
             HermeticToolboxEnvironmentBuilder(
                 self.hosting_root,
-                artifact_sources=toolbox_artifact_sources,
+                artifact_sources=self._toolbox_artifact_sources,
                 gc_grace_ms=(
                     self._toolbox_host_project_config.retention.artifact_cache_grace_seconds * 1000
                     if self._toolbox_host_project_config is not None

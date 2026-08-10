@@ -506,6 +506,19 @@ current-host target. Until every required intent has one complete exact wheel
 closure, no entry from that configuration revision is published and toolbox
 readiness remains false with a stable bounded diagnostic.
 
+Read-only air-gap resolution invokes the bundled installer only as a bounded
+offline dependency solver: dry-run report, no indexes, no installed-state
+reuse, and wheels only. The host then independently verifies every reported
+artifact is a direct child of a configured source root, allowed by that
+source's package namespaces, compatible with the detected target, consistent
+with its wheel name/version metadata, and within per-source and aggregate
+artifact bounds. It hashes each artifact itself and derives the lock identity
+from the exact distributions, artifact identities, and target. A timeout,
+missing transitive wheel, or incompatible wheel produces
+`required_template_wheel_missing`; malformed or escaped report data produces
+`required_template_resolution_invalid`. No filesystem path or installer output
+appears in either diagnostic.
+
 After resolution and verification, each complete closure becomes a signed
 immutable template revision. Its identity includes the logical template ID,
 template manifest digest, complete lock digest, catalog revision, Python ABI,

@@ -154,6 +154,13 @@ codes `toolbox_configuration_missing`, `toolbox_configuration_incomplete`,
 `toolbox_configuration_invalid`, or `toolbox_source_binding_invalid`; do not
 parse the bounded summary.
 
+For read-only air-gap stores, every wheel must be a direct child of the bound
+source root. Built-in resolution is offline and wheel-only, verifies the exact
+transitive closure against the detected target and configured bounds, and
+publishes nothing if any required intent reports
+`required_template_wheel_missing`, `required_template_resolution_invalid`, or
+`required_template_resolution_bounds_exceeded`.
+
 ## Removed toolbox mutation commands and fields
 
 The following current surface is removed:

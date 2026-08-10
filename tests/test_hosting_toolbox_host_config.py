@@ -150,7 +150,8 @@ def test_configured_intents_remain_unpublished_until_exact_resolution(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    assert service._toolbox_startup["status"] == "resolution_required"  # noqa: SLF001
+    assert service._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
+    assert service._toolbox_startup["closures"] == []  # noqa: SLF001
     assert service._toolbox_startup["published"] == []  # noqa: SLF001
     assert service._toolbox_startup["operations"] == []  # noqa: SLF001
     assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
