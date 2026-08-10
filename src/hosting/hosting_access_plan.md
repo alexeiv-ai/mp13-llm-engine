@@ -2,342 +2,440 @@
 
 Status: Active corrective work
 
-This plan replaces the completed 2026-08-08 implementation ledger. It keeps
-the useful toolbox-definition foundation, records the integration defects found
-after acceptance, and defines the remaining work needed for usable package
-environments, target-local templates, ARM64 hosts, and safe restart recovery.
+This plan replaces the completed 2026-08-08 ledger. It describes only the
+remaining corrective work and the code boundaries that must change. Progress is
+recorded in [hosting_status.md](hosting_status.md); normative behavior belongs in
+[HOSTED_TOOLBOX_CONTRACT.md](HOSTED_TOOLBOX_CONTRACT.md).
 
-Progress is recorded in [hosting_status.md](hosting_status.md). Durable public
-behavior belongs in [HOSTED_TOOLBOX_CONTRACT.md](HOSTED_TOOLBOX_CONTRACT.md).
-Client migrations belong in
-[HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md).
+The product is unreleased. When a final design supersedes an existing public or
+internal compatibility path, the implementation slice must remove the old path,
+tests, commands, models, aliases, fallbacks, and documentation. It must not keep
+a legacy adapter or deprecation period.
+
+## Ownership and dependent-project rule
+
+This repository must not modify a dependent project. In particular, no slice in
+this plan may edit `mp13-docs`. Read-only inspection may be used to understand a
+consumer, but its maintainers perform and validate their own migration.
+
+Before a parent change requires any consumer or administrator action,
+[HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) must be
+populated with all of the following:
+
+- removed contract names, payload fields, commands, error codes, and behavior;
+- the exact replacement request/response sequence with representative payloads;
+- changes to client branching, retry, approval, confirmation, and recovery logic;
+- code, configuration, tests, and documentation the dependent must remove;
+- code, configuration, tests, and documentation the dependent must add or change;
+- parent release/commit pin, rollout order, and an adoption receipt supplied by
+  the dependent project.
+
+The handoff file remains populated until every listed dependent confirms
+adoption. Parent code must not infer adoption by changing a dependent worktree.
 
 ## Objective
 
-An authenticated consumer submits one complete desired toolbox definition. The
-daemon must analyze its source and dependency intent, prepare an isolated
-environment for the daemon's current host target, warm changed workers, and
-atomically publish the complete route map.
+An authenticated consumer submits a complete desired toolbox definition that
+may add, update, or remove more than one tool. The daemon analyzes imports,
+offers exact current-host package mutations for confirmation, obtains distinct
+privileged approval when policy requires it, constructs immutable environments,
+warms changed workers, and atomically publishes the confirmed effective
+definition.
 
-The supported result must include all of the following:
+The result must support:
 
-- a new tool can add packages not present in a built-in template;
-- removing a tool or removing its package requirement releases packages that
-  are no longer needed without mutating a live environment;
-- built-in and administrator-created templates are constructed for the one
-  architecture on which the daemon is running;
-- Linux ARM64, macOS ARM64, and Windows ARM64 are supported alongside existing
-  x64 hosts;
-- air-gapped setup fails clearly when an exact required artifact is absent;
-- daemon restart does not restore workers automatically, corrupt persisted
-  truth, leak workers, or make competing consumer healing operations conflict.
+- packages absent from built-in templates without a local terminal session;
+- deterministic notification and confirmation of package additions, version
+  transitions, and removals, including transitive packages;
+- partial consumer decline: affected proposed tools are skipped and identified
+  without silently removing their currently active versions;
+- host-configured built-in realization, package sources, air-gapped artifacts,
+  and safe removal of unreferenced non-built-in environments;
+- CPython 3.12 on Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64;
+- consumer-triggered, conflict-safe healing after daemon restart without
+  restoring stale workers or leaking daemon/runtime state.
 
-## Fixed design decisions
+## Existing code map and defects
 
-### Complete definitions remain the consumer contract
+Implementation work must start from these seams rather than introduce a second
+parallel subsystem.
 
-The existing `get_definition`, `plan_definition`,
-`approve_definition_plan`, and durable `apply_definition` sequence remains the
-normal toolbox mutation boundary. Consumers submit source plus dependency
-intent; they never submit a venv, interpreter path, wheel path, lockfile, or
-installation command.
+1. Definition and dependency request models are in
+   `toolbox/bundle_models.py` (`ToolboxDependencyRequest`,
+   `ToolboxDefinitionSpec`, and the V2 assignment requests). They currently
+   represent one complete requested definition but not confirmation choices or
+   an effective definition after skips.
+2. Import analysis and reviewed import-to-distribution mapping are in
+   `toolbox/dependency_analysis.py` and `toolbox/catalog.py`. They select a
+   template or unresolved custom delta; they do not produce bounded alternative
+   exact locks from configured sources.
+3. `toolbox/definition_planner.py::_resolve_member` computes a custom lock digest
+   from the direct delta and literal `"artifacts": []`. It therefore cannot be
+   passed to the real hermetic builder.
+4. `service/toolbox_plans.py::PersistedToolboxDefinitionPlan` pins catalog and
+   package-policy revisions but has no source/config revision, exact resolved
+   artifacts, confirmation choices, effective definition, or skip receipt.
+5. `service/toolbox_runtime.py::toolbox_plan_definition`,
+   `toolbox_approve_definition_plan`, and `toolbox_apply_definition` expose the
+   current sequence. Approval is minted through the ordinary consumer route and
+   apply requires the original definition, so consumer confirmation and
+   privileged dependency approval are incorrectly conflated.
+6. `toolbox/host_project_config.py::ToolboxHostProjectConfiguration` accepts a
+   shipped catalog resource, two x86 targets, and source IDs. It does not model
+   built-in intent, source definitions/mode/revision, resolver policy, imported
+   air-gap artifacts, or non-built-in environment retention/removal.
+7. `daemon/local_ipc.py::EngineHostDaemon` constructs `EngineHostService`
+   without the configuration and source inputs accepted by
+   `service/host_service.py`, leaving normal daemon startup disconnected from
+   real materialization.
+8. `service/toolbox_catalog.py::materialize_toolbox_environment_for_bundle`
+   accepts a verified template. `toolbox/shipped_templates.py` publishes lock
+   JSON as an artifact, while `toolbox/hermetic_environment.py` requires one
+   compatible exact wheel per locked distribution. Existing setup tests bridge
+   this mismatch with doubles.
+9. Target defaults and validators are duplicated in
+   `toolbox/host_project_config.py`, `toolbox/dependency_policy.py`,
+   `toolbox/catalog.py`, `toolbox/hermetic_environment.py`,
+   `toolbox/orchestration.py`, and `service/toolbox_runtime.py`. Non-Windows is
+   often assumed to be Linux x64; ARM64 and macOS are not modeled consistently.
+10. Rollout and persisted-state paths in `toolbox/orchestration.py`,
+    `service/toolbox_rollout.py`, `service/toolbox_state_v2.py`,
+    `service/toolbox_env.py`, and `service/engines.py` have manifest-normalization,
+    identical-reapply, deterministic candidate-ID, and runtime-repair defects.
+11. POSIX `sandbox/launcher.py` uses `plain_subprocess`; daemon-death containment
+    is absent. Orphan scanning and cleanup must cover
+    `hosting.toolbox_executor_ipc` and its IPC/spec/candidate resources before a
+    POSIX target can be advertised for untrusted toolbox execution.
 
-`declared_imports` is for dynamic, optional, or conditional imports that source
-analysis cannot prove. `package_requirements` contains reviewed PEP 508
-distribution requirements. Import names and distribution names remain separate.
+## Final mutation protocol
 
-### Only the daemon's current target is realized
+### Roles are separate
 
-A daemon never builds or distributes environments for another architecture.
-Setup detects the current Python ABI, OS, architecture, and compatible wheel
-tags. A stable logical template such as `core` may therefore have different
-immutable realized revision digests on different hosts.
+The final protocol has three distinct authorities:
 
-Cross-platform support still requires native CI, because compatible wheel
-selection, native extensions, process containment, and sandbox enforcement must
-work on every advertised host. It does not require a daemon-side cross-target
-template matrix.
+- the toolbox consumer requests a complete definition and confirms offered
+  package choices;
+- a dependency approver authorizes the exact accepted custom lock when host
+  policy requires privileged review;
+- a host administrator configures built-ins, artifact sources, trust, air-gap
+  ingestion, retention, and explicit environment removal.
 
-### Templates are immutable realized environments
+No operation may silently borrow another role. The existing consumer-callable
+approval minting path is removed when the replacement approver path lands.
 
-Built-in configuration supplies logical template intent: stable ID, imports,
-package requirements, sandbox policy, and provenance. Hosting setup resolves
-that intent for the current target, obtains exact artifacts, creates a complete
-lock, materializes and probes the environment, and then publishes its immutable
-local revision.
+### Plan response and bounded alternatives
 
-An administrator may construct another named template from a base template and
-additional import/package intent. Publication and activation remain separate.
-Existing revisions are never modified in place.
+One plan may contain multiple tool additions, updates, and removals. Planning
+must resolve the complete definition against the active definition and return
+an ordered `environment_mutations` offer. Each proposed environment entry must
+contain:
 
-### Custom environments solve the one-tool long tail
+- stable affected tool keys and whether each is added, updated, unchanged, or
+  explicitly removed;
+- selected base template ID and immutable revision;
+- exact direct and transitive package additions and removals compared with the
+  active lock, with upgrades/downgrades represented as an explicit version
+  transition;
+- import root, mapped distribution, dependency reason, version, wheel filename,
+  artifact digest, current-host compatibility tags, provenance, and logical
+  source ID for every exact artifact;
+- at most three deterministic viable resolution/source alternatives, including
+  the policy-preferred selection; and
+- whether consumer confirmation and separate privileged approval are required.
 
-A tool does not need a named template merely because it requires an additional
-package. Planning may derive a complete custom environment from an allowed base
-template. The complete base-plus-delta lock and artifacts are parent-resolved,
-approval-bound when policy requires it, independently materialized, and cached
-by immutable identity.
+Alternatives may use only administrator-configured sources. Responses expose a
+logical source ID and sanitized origin URL, never credentials, signed query
+parameters, or daemon filesystem paths. If the solver has more viable outcomes,
+it reports that alternatives were truncated; it does not enumerate an
+unbounded dependency solution space. A missing compatible exact wheel is a
+bounded planning/setup error rather than permission to compile an sdist.
 
-Frequently reused custom locks may later seed an administrator-created template,
-but promotion is explicit and never triggered by usage frequency alone.
+The persisted plan in `service/toolbox_plans.py` must pin the definition, active
+revision, target identity, catalog revision, host-config revision, dependency
+policy revision, source-set revision, every offered exact lock/artifact digest,
+and expiry. Any pin change makes confirmation or apply stale and requires a new
+plan.
 
-### Restart recovery is consumer-triggered
+### Consumer confirmation and skip semantics
 
-Daemon startup validates persisted state but does not automatically restore
-toolbox workers. After reconnect, a consumer may safely reapply its complete
-desired definition. An identical reapply must repair missing runtime bindings
-without creating a new semantic definition revision.
+Add a confirmation operation between plan and approval/apply. Its request names
+the plan and, for every offered environment, selects one offered alternative
+and accepts or declines its package additions. It cannot submit a new version,
+URL, source, lock, artifact, path, or install command.
 
-## Retained foundation
+The final consumer sequence is `toolbox_get_definition`,
+`toolbox_plan_definition`, `toolbox_confirm_definition_plan`, and
+`toolbox_apply_definition`. The confirmation response supplies an opaque
+`confirmation_ref`. Apply accepts `plan_id`, `confirmation_ref`, `request_id`,
+and, only when required, `dependency_approval_ref`; it no longer accepts or
+re-resolves a second copy of the definition. The privileged operation is
+`toolbox_approve_confirmed_definition_plan`. Remove
+`toolbox_approve_definition_plan` and its dispatch/channel/CLI surface when the
+replacement is available.
 
-The following implemented behavior remains in scope and must not be replaced:
+The daemon returns a durable, idempotently recoverable confirmation receipt
+bound to the actor, plan, target, selected exact resolutions, accepted and
+declined package groups, and resulting effective-definition hash. The receipt
+must list:
 
-- strict complete definition/request models and canonical identities;
-- source import analysis and reviewed import-to-distribution mapping;
-- immutable definition plans and exact approval-reference binding;
-- durable hosted apply operations and terminal result recovery;
-- non-inheriting venv construction with offline `--no-index --no-deps`
-  installation from a complete exact wheel set;
-- exact lock verification, final-interpreter import probes, quarantine, atomic
-  cache publication, reference tracking, and grace-period GC;
-- candidate/active/retired worker states and atomic complete route publication;
-- digest-validated, process-safe persisted toolbox state;
-- the dependent project's adopted complete-definition integration.
+- accepted tool keys;
+- skipped tool keys with stable reason codes and the declined direct or
+  transitive package choice that affected each tool;
+- explicit tool removals that will proceed;
+- exact package additions, removals, and version transitions for the effective
+  definition; and
+- whether privileged dependency approval is still required.
 
-## Confirmed defects
+Skip behavior is deterministic:
 
-These are acceptance failures, not optional enhancements.
+1. Declining any required package skips every proposed new tool that depends on
+   it directly or transitively.
+2. If an update to an active tool is skipped, the previous active tool remains
+   in the effective definition; it is not treated as an implicit removal.
+3. Explicit removals still proceed because they require no package install.
+4. Accepted tools may proceed only if their complete shared environment remains
+   resolvable after all declines. Otherwise they are also skipped with
+   `shared_environment_incomplete`.
+5. Namespace/file conflicts are revalidated on the effective definition. A
+   conflict cannot be resolved by arbitrary tool ordering; affected entries are
+   rejected with a stable diagnostic and apply does not start.
+6. Apply accepts the plan plus confirmation receipt and publishes exactly the
+   pinned effective definition. It must not reinterpret the original request.
 
-1. **Custom plan/build disconnect.** Planning records a custom requirement
-   delta but does not resolve a complete transitive lock or artifact set. The
-   production materialization path accepts only an already verified template
-   and rejects the custom delta.
-2. **Invalid shipped artifact bridge.** Shipped template publication references
-   lock JSON as the artifact, while the real materializer requires one exact
-   compatible wheel per locked distribution.
-3. **Daemon configuration disconnect.** The ordinary daemon constructs its host
-   service without the toolbox project configuration and artifact sources needed
-   by the real materializer.
-4. **No target-local setup resolver.** `online_resolution_allowed` is policy
-   data only; there is no controlled current-target resolver/downloader. The
-   air-gapped local wheel path exists only after an exact resolved input has
-   already been manufactured elsewhere.
-5. **Persisted reuse mismatch.** Planned bundle manifest hashes and persisted
-   prefixed hashes are compared in different forms, so an unchanged persisted
-   profile can be classified as replaced.
-6. **Unsafe identical replacement.** Semantic revision identity does not change
-   for an identical reapply, candidate engine IDs are deterministic, and a new
-   registration can overwrite an existing registration without first owning or
-   retiring its process.
-7. **Repair does not heal.** Consistency and repair report
-   `definition_reapply_required`, but the reapply path is not yet a safe
-   non-conflicting runtime repair.
-8. **Abrupt-process leakage.** POSIX toolbox workers lack parent-death/process
-   containment, runtime registrations are not persisted, and the external
-   orphan scan does not include `hosting.toolbox_executor_ipc`.
-9. **Target validation is x86-only.** Target regexes, defaults, catalogs, and
-   runtime checks do not model Linux, macOS, or Windows ARM64 correctly.
-10. **Approval authority mismatch.** The contract describes dependency approval
-    as distinct parent authority, while an ordinary worker user can currently
-    request and mint the approval through the deployment channel.
-11. **False end-to-end acceptance.** Builder tests hand-construct complete
-    resolved inputs and setup tests use materializer doubles, so the real
-    daemon/control-channel path was never proven.
+An offer containing only removals still produces a notification receipt but
+requires no install acceptance. Package removal means removal from the new
+logical lock; physical wheel/environment deletion remains reference-safe GC.
 
-## Required add/remove behavior
+### Privileged approval and apply
 
-### Adding a tool with additional packages
+After confirmation, policy may require a dependency approver to authorize the
+exact effective custom locks and artifacts. Approval binds the confirmation
+receipt and all plan/config/source/policy pins. It cannot approve declined or
+unoffered choices. Apply validates and consumes the confirmation and approval
+receipts, builds or reuses immutable environments, probes required imports,
+warms unique candidates, and atomically publishes the complete route map.
 
-1. The consumer reads the active definition and submits the complete replacement
-   with the new tool, source, imports, and package requirements.
-2. Planning analyzes all tools, selects the smallest compatible active template,
-   or derives a custom environment from an allowed base.
-3. The daemon resolves a complete exact lock and compatible artifact closure for
-   its current target. Missing, ambiguous, denied, incompatible, or unavailable
-   artifacts fail during planning/setup, before worker spawn.
-4. If policy requires review, approval binds the exact plan, definition, target,
-   complete custom lock, artifact digests, catalog revision, and policy revision.
-5. Apply builds or reuses the immutable environment, probes every required
-   import, warms a unique candidate worker, and atomically publishes the new
-   complete route map.
+No environment is mutated or uninstalled in place. Failure before publication
+leaves the previous definition active. Publication failure drains candidates and
+releases only their references.
 
-### Removing a tool or package
+## Host configuration and setup contract
 
-The daemon never uninstalls a package from a live environment.
+Extend `ToolboxHostProjectConfiguration` rather than add terminal-only state.
+The strict, revisioned host-owned configuration must model:
 
-- Removing a tool means omitting it from the next complete definition.
-- Removing or changing a remaining tool's dependency means changing its source
-  and dependency intent in that definition.
-- Planning recomputes requirements across every remaining tool. Tools that still
-  resolve to the same environment retain it; tools whose complete lock changes
-  move to a newly materialized or already cached immutable environment.
-- Publication removes the route atomically, drains replaced/removed workers,
-  releases their environment references, and leaves physical deletion to
-  grace-period GC.
-- If no remaining tool needs a custom delta, the replacement resolves back to a
-  built-in or administrator template.
-- Removing a package from a named template creates and activates a new immutable
-  template revision. Existing definitions remain pinned until explicitly
-  replanned and applied.
+- current-target detection policy; never a configured cross-target build;
+- built-in template intents (`template_id`, imports, package requirements,
+  sandbox policy, required/prewarm flags, and provenance);
+- ordered package sources with logical ID, kind (`https_index`,
+  `https_artifact`, or `airgap_store`), sanitized origin, credential reference,
+  allowed package namespaces, priority, trust keys, and download bounds;
+- resolution mode (`online`, `prefer_airgap`, or `air_gapped`), timeouts, maximum
+  bytes/artifacts, allowed redirects/origins, and wheel-only policy;
+- immutable artifact-cache and non-built-in-environment retention policy,
+  including grace period, byte/count bounds, protected digests, and whether
+  unreferenced custom revisions are removed on config apply.
 
-## Target and artifact behavior
+Configuration apply is atomic and creates a new config/source-set revision. It
+invalidates unused plans and confirmation/approval receipts, but never mutates
+an active environment. Existing definitions remain pinned until explicitly
+replanned. Source credentials stay daemon-owned.
 
-Initial supported host targets after this plan are:
+Air-gapped operation has two administrator paths: a configured read-only
+artifact store, or a bounded signed artifact bundle uploaded through an
+authenticated chunked admin control operation and committed into that store.
+Normal toolbox consumers cannot supply archives or paths. Setup verifies the
+manifest, hashes, signatures, exact target tags, and complete closure before
+publication. If a required built-in wheel is unavailable, setup reports the
+missing distribution/tags/source IDs and does not enter toolbox-ready state.
 
-- CPython 3.12 Windows x64 and Windows ARM64;
-- CPython 3.12 Linux glibc x64 and Linux glibc ARM64;
-- CPython 3.12 macOS ARM64.
+The upload lifecycle is begin/chunk/commit/cancel, with one durable operation ID,
+declared total size and archive digest, bounded chunk and archive sizes, expiry,
+and idempotent commit. It stages outside the trusted store and publishes only
+after full verification; interruption leaves no partially visible source.
 
-Target detection must use the interpreter's compatible packaging tags rather
-than infer every non-Windows host as Linux x64. Internal target identity must be
-canonical and must distinguish ABI, OS, architecture, and minimum platform tag
-where wheel compatibility requires it.
+Environment deletion is not encoded as a repeatedly executed list of paths in
+configuration. The configuration authorizes retention/automatic GC, while a
+separate authenticated admin operation removes an exact non-built-in
+environment digest. Removal is refused while any active, candidate, persisted
+operation, confirmation, or plan reference exists. Built-in revisions cannot be
+explicitly removed; they are replaced through built-in config revision and
+setup, with old revisions reclaimed only when unreferenced.
 
-Online setup may contact only configured HTTPS indexes/artifact origins using
-daemon-owned credentials and bounded downloads. Air-gapped setup resolves only
-from configured local or imported immutable artifacts. If any required built-in
-package lacks a compatible verified artifact, standard hosting setup reports a
-stable bounded error and the daemon does not enter ready service.
+Name the explicit operation `toolbox_environment_remove`. Its result reports
+`removed`, `already_absent`, or a stable list of blocking reference kinds. It
+never accepts a path, glob, logical template ID, or `force` bypass.
 
-No prebuilt venv is portable or accepted across hosts. Artifact bundles may
-transport signed manifests, locks, and wheels, but environments are always
-constructed and verified on the destination daemon host.
+## Target and artifact contract
+
+The initial target set is CPython 3.12 Windows x64/ARM64, Linux glibc
+x64/ARM64, and macOS ARM64. One detector must derive interpreter ABI and
+compatible `packaging.tags.sys_tags()` from the running daemon. Exact internal
+target identity includes Python ABI, OS, architecture, and the platform baseline
+needed for wheel compatibility.
+
+Setup resolves and downloads only for that identity. A daemon never builds or
+ships a venv for another host. Signed locks and wheels may be transported; the
+destination always constructs and probes its own environment. Native CI must
+prove resolution, compatible wheel selection, native-extension import, sandbox
+containment, restart, and cleanup on every advertised target.
+
+Source builds are intentionally outside this plan. If an allowed package has no
+compatible verified wheel for the daemon target, the resolution fails. Adding
+reproducible sdist compilation would require a separately reviewed compiler,
+toolchain, build-sandbox, provenance, and cache contract.
 
 ## Itemized corrective work
 
-Every slice must declare focused tests before implementation, update durable
-documentation with behavior changes, pass `git diff --check`, and be committed
-separately. A checkbox is completed only after its production boundary—not a
-test double—passes.
+Every slice declares focused tests before implementation, updates normative and
+breaking-change documentation in the same slice, passes `git diff --check`, and
+is committed separately. A checkbox is completed only after its production
+boundary—not a double—passes.
 
-### R0 - Documentation reset
+### R0 - Corrective contract baseline
 
-- [x] **R0-01** Replace the obsolete long plan and historical status ledger with
-  this corrective plan and compact current-state ledger.
-- [ ] **R0-02** Update the normative toolbox contract and worker architecture as
-  each implementation slice establishes replacement behavior.
+- [x] **R0-01** Replace the obsolete ledger with this code-referenced plan and
+  compact current-state ledger; record that no runtime behavior changed.
+- [ ] **R0-02** Update `HOSTED_TOOLBOX_CONTRACT.md` and
+  `sandbox/TOOLBOX_WORKER.md` as each replacement slice becomes real. Remove
+  superseded normative text rather than retain compatibility notes.
+- [ ] **R0-03** Before the first client-visible implementation break, replace
+  the reset marker in `HOSTING_CLIENT_BREAKING_CHANGES.md` with the complete
+  dependent handoff described above. Do not edit dependent repositories.
 
-### R1 - Current-target platform model
+### R1 - Canonical current-host target
 
-- [ ] **R1-01** Add one canonical current-host target detector based on Python
-  ABI and compatible packaging tags. Remove duplicated OS-name defaults.
-- [ ] **R1-02** Support Windows x64/ARM64, Linux glibc x64/ARM64, and macOS
-  ARM64 in catalog, policy, configuration, lock, materializer, and cache models.
-- [ ] **R1-03** Reject cross-target artifacts and unsupported Python/OS targets
-  with stable setup diagnostics.
-- [ ] **R1-04** Add native platform test jobs; do not claim sandbox support from
-  emulation-only results.
+- [ ] **R1-01** Add one detector module using the running interpreter and
+  `packaging.tags.sys_tags()`. Replace target defaults in
+  `host_project_config.py`, `dependency_policy.py`, `catalog.py`,
+  `hermetic_environment.py`, `orchestration.py`, and `toolbox_runtime.py`.
+- [ ] **R1-02** Update strict target/lock/catalog/cache models for the five
+  target families listed above and reject cross-target wheels before download or
+  build.
+- [ ] **R1-03** Add native CI jobs and production-boundary tests. A target is not
+  advertised until its sandbox, worker ownership, restart, and cleanup tests
+  pass natively.
 
-### R2 - Target-local built-in construction
+### R2 - Revisioned hosting configuration and built-ins
 
-- [ ] **R2-01** Replace shipped realized cross-target manifests with strict
-  built-in intent resources for `core` and `py-compute`.
-- [ ] **R2-02** Load toolbox project/artifact configuration in the real daemon
-  startup path and validate it before accepting clients.
-- [ ] **R2-03** Implement controlled current-target dependency resolution and
-  artifact acquisition with exact transitive pins, hashes, provenance, bounds,
-  and policy enforcement.
-- [ ] **R2-04** Construct, sign/attest, publish, materialize, probe, and prewarm
-  current-target built-in revisions during setup.
-- [ ] **R2-05** In air-gapped mode, use only approved local/imported artifacts;
-  fail startup when a required compatible artifact is absent.
+- [ ] **R2-01** Replace the current shipped-catalog-only schema in
+  `toolbox/host_project_config.py` with the strict built-in/source/mode/retention
+  schema above; remove old schema parsing and standard-config fixtures.
+- [ ] **R2-02** Wire configuration, sources, policy, and target detection through
+  `daemon/local_ipc.py::EngineHostDaemon` into `EngineHostService`; refuse
+  toolbox readiness on invalid or incomplete setup.
+- [ ] **R2-03** Replace realized shipped lock resources in
+  `toolbox/shipped_templates.py` and `resources/toolbox_templates/` with built-in
+  intent. Resolve exact transitive wheel closures for the current host.
+- [ ] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
+  the real `toolbox_catalog.py` and `hermetic_environment.py` boundary. Remove
+  the lock-JSON-as-wheel bridge and tests that normalize it.
+- [ ] **R2-05** Implement revisioned source changes and both air-gap ingestion
+  paths. Prove missing built-in wheels prevent readiness without partial catalog
+  publication.
 
-### R3 - End-to-end custom environments
+### R3 - Multi-tool planning and consumer confirmation
 
-- [ ] **R3-01** Extend internal plan state with the complete resolved
-  base-plus-delta lock, compatible artifacts, provenance, and import obligations.
-- [ ] **R3-02** Bind dependency approval to that exact complete resolution and
-  revalidate every pin at apply.
-- [ ] **R3-03** Pass the pinned custom resolved input through rollout to the real
-  hermetic builder; remove the template-only rejection on this path.
-- [ ] **R3-04** Prove add-package behavior through authenticated daemon control:
-  plan, approval, materialization, import, execution, and durable result.
-- [ ] **R3-05** Prove denied, missing, incompatible, corrupt, and air-gapped
-  custom artifacts fail before worker spawn and leave the old revision active.
+- [ ] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
+  `toolbox_plans.py` with exact complete resolutions, package diffs, bounded
+  alternatives, source/config pins, and affected-tool dependency edges.
+- [ ] **R3-02** Add the confirmation request/receipt repository and authenticated
+  control-channel operation in `toolbox_runtime.py`, `daemon/local_ipc.py`,
+  `engine_host_channel.py`, and `engine_host_cli.py`.
+- [ ] **R3-03** Implement accepted, declined, skipped, preserved-active-update,
+  explicit-removal, shared-environment, and namespace-conflict semantics exactly
+  as specified above. Remove the old apply-original-definition behavior.
+- [ ] **R3-04** Return sanitized source alternatives and exact direct/transitive
+  additions, removals, and transitions. Reject arbitrary URLs, paths, locks, and
+  install commands supplied by consumers.
+- [ ] **R3-05** Prove multi-tool add/update/remove and idempotent confirmation
+  recovery through the real authenticated daemon channel.
 
-### R4 - Package and tool removal
+### R4 - Privileged approval and immutable apply
 
-- [ ] **R4-01** Recompute complete dependency closure after tool removal and
-  after a remaining tool removes or changes package intent.
-- [ ] **R4-02** Reuse unaffected profiles, replace only changed locks/policies,
-  atomically remove routes, and drain removed workers.
-- [ ] **R4-03** Release obsolete environment references only after publication;
-  verify shared references and grace-period GC prevent premature deletion.
-- [ ] **R4-04** Prove custom-to-template contraction when the last additional
-  package requirement disappears.
+- [ ] **R4-01** Move approval minting behind distinct dependency-approver
+  authorization in `service/auth.py`, `service/policy.py`, daemon dispatch, and
+  channel/CLI surfaces. Remove ordinary-consumer approval minting.
+- [ ] **R4-02** Bind approval to the confirmation receipt and exact complete
+  locks/artifacts/config/source/policy revisions; reject stale or mismatched
+  receipts before worker spawn.
+- [ ] **R4-03** Pass accepted custom resolved inputs from the persisted plan
+  through `toolbox/orchestration.py` to the real hermetic builder. Remove the
+  template-only custom rejection.
+- [ ] **R4-04** Atomically publish the confirmed effective definition and return
+  accepted/skipped/removed tools plus logical package mutations in durable apply
+  results.
+- [ ] **R4-05** Prove denied, missing, incompatible, corrupt, and air-gapped
+  artifacts leave the previous active definition unchanged.
 
-### R5 - Safe consumer-triggered healing
+### R5 - Removal, retention, and administrator environments
 
-- [ ] **R5-01** Normalize manifest identities at every plan/state boundary and
-  add a persisted real-state unchanged-profile reuse test.
-- [ ] **R5-02** Classify a missing/mismatched live registration as runtime repair
-  even when semantic definition content is unchanged.
-- [ ] **R5-03** Give candidates unique runtime IDs and forbid registration
-  replacement without explicit ownership and cleanup.
-- [ ] **R5-04** Add atomic comparison of the old runtime-binding digest as well
-  as semantic revision. A competing healer must replan or return already healthy.
-- [ ] **R5-05** Keep runtime-only healing out of semantic rollout history while
-  preserving durable operation status and bounded diagnostics.
-- [ ] **R5-06** Contain toolbox workers on daemon death on every supported OS,
-  scan the correct worker command, and clean stale IPC/spec/candidate resources.
-- [ ] **R5-07** Test graceful restart, abrupt daemon death, identical reapply,
-  two concurrent healers, and failures on both sides of route publication.
+- [ ] **R5-01** Recompute complete closure after tool/package removal, reuse
+  unaffected immutable environments, release references after publication, and
+  prove custom-to-built-in contraction.
+- [ ] **R5-02** Implement revisioned retention/GC config and the exact-digest
+  non-built-in environment removal operation with active/candidate/plan/receipt/
+  operation reference checks.
+- [ ] **R5-03** Add administrator construction of a named template from an exact
+  base revision plus imports/package requirements using the same resolver,
+  sources, builder, probes, and immutable publication path.
+- [ ] **R5-04** Keep publication inactive until explicit activation; support
+  prewarm, replace, deprecate, and revoke as final APIs. Remove superseded raw
+  publication payloads and commands rather than preserve both designs.
 
-### R6 - Administrator template construction
+### R6 - Restart-safe consumer healing
 
-- [ ] **R6-01** Add an authenticated additive admin operation accepting a new
-  logical template ID, exact base revision, imports, and package requirements.
-- [ ] **R6-02** Use the same current-target resolver, artifact policy, builder,
-  probes, and immutable publication used by custom environments.
-- [ ] **R6-03** Keep publication inactive until explicit activation; support
-  prewarm, deprecate, revoke, and immutable replacement.
-- [ ] **R6-04** Allow an approved custom lock to seed construction intent, but
-  re-resolve/revalidate it and never promote automatically.
+- [ ] **R6-01** Normalize manifest identities across plan and persisted state;
+  classify missing/mismatched registrations as runtime repair even when the
+  semantic definition is unchanged.
+- [ ] **R6-02** Give candidates unique runtime IDs, forbid implicit registration
+  replacement, and compare the prior runtime-binding digest atomically. Two
+  healers must yield one repair and one already-healthy/conflict result.
+- [ ] **R6-03** Keep repair out of semantic rollout history while preserving
+  durable operation status. Startup validates state but does not restore workers;
+  consumer reapply safely reconstructs them.
+- [ ] **R6-04** Add OS-native parent-death/process containment, correct orphan
+  scans, and cleanup of worker IPC/spec/candidate artifacts.
+- [ ] **R6-05** Test graceful restart, abrupt death, identical reapply,
+  concurrent healers, and failures immediately before and after route
+  publication on every advertised host.
 
-### R7 - Authority and consumer compatibility
+### R7 - Breaking-change handoff and acceptance
 
-- [ ] **R7-01** Preserve existing normal consumer definition payloads, operation
-  refs, logical template IDs, and opaque digest semantics.
-- [ ] **R7-02** Decide and implement the distinct dependency-approver authority.
-  If ordinary worker approval is removed, publish the complete migration in the
-  breaking-change handoff before release.
-- [ ] **R7-03** Keep raw immutable template publication for existing admins and
-  add construction as a new API rather than changing the old payload in place.
-- [ ] **R7-04** Validate `mp13-docs` add/remove, approval, restart reapply,
-  operation recovery, projection, and empty-definition behavior against the
-  real parent daemon.
-
-### R8 - Acceptance and closeout
-
-- [ ] **R8-01** Add one no-double end-to-end suite covering configured daemon
-  startup, built-ins, custom add/remove, restart healing, and GC.
-- [ ] **R8-02** Run focused parent tests, native platform tests, complete parent
-  regression, and affected dependent tests with exact results in the status
-  ledger.
-- [ ] **R8-03** Reconcile plan, status, durable contracts, setup documentation,
-  worker architecture, and any breaking-change handoff with actual code.
-- [ ] **R8-04** Check every acceptance item only from reviewable production-path
-  evidence and commit the final audit separately.
+- [ ] **R7-01** For every removed/replaced API, populate the breaking-change
+  handoff before its implementation commit and obtain dependent-provided
+  adoption evidence; never modify the dependent project.
+- [ ] **R7-02** Add one no-double end-to-end suite covering configured daemon
+  startup, built-ins, source alternatives, confirmation decline/skip, approval,
+  custom add/remove, restart healing, environment removal, and GC.
+- [ ] **R7-03** Run focused parent tests, native target suites, and complete
+  parent regression. Dependents run their own migration tests and report pins.
+- [ ] **R7-04** Reconcile plan, status, contracts, setup docs, worker
+  architecture, and breaking-change handoff with actual code; remove obsolete
+  tests/docs/code and commit the audit separately.
 
 ## Acceptance criteria
 
-- [ ] Real daemon setup constructs and probes `core` and `py-compute` for only
-  its current target.
-- [ ] Missing required artifacts stop air-gapped setup with a stable error.
-- [ ] A new tool can add a previously absent allowed package through the normal
-  control channel and execute from a verified isolated environment.
-- [ ] Removing a tool or package requirement never mutates a live environment,
-  preserves shared users, and eventually garbage-collects unreferenced state.
-- [ ] Custom locks are complete, exact, approval-bound when required, and do not
-  inherit host or base-environment packages.
-- [ ] Linux ARM64, macOS ARM64, and Windows ARM64 pass native setup, worker,
-  package, sandbox, restart, and cleanup tests.
-- [ ] An identical consumer reapply after restart heals missing workers without
-  changing semantic definition revision or conflicting with another healer.
-- [ ] Graceful and abrupt daemon termination leave no live unowned toolbox
-  worker, stale routable registration, partial cache publication, or leaked
-  candidate reference.
-- [ ] Normal consumers do not gain template publication, artifact-source,
-  interpreter, filesystem-path, or package-install authority.
-- [ ] Every client-visible break, if any, has complete migration instructions
-  and dependent adoption evidence before the handoff is reset again.
+- [ ] Normal daemon setup constructs and probes required built-ins for only its
+  current target from the configured source mode.
+- [ ] Missing exact wheels stop air-gapped setup with stable bounded diagnostics.
+- [ ] One definition can add, update, and remove multiple tools; its plan offers
+  bounded exact package/source alternatives and complete package notifications.
+- [ ] Consumer confirmation can decline packages; the receipt identifies every
+  skipped affected tool, preserves skipped active updates, and applies explicit
+  removals without ambiguity.
+- [ ] Privileged approval is distinct from consumer confirmation and binds only
+  accepted exact locks and artifacts.
+- [ ] Package/source/config changes invalidate stale receipts but never mutate an
+  active environment.
+- [ ] Removal releases references only after publication; non-built-in deletion
+  cannot remove referenced or built-in environments.
+- [ ] Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64 pass native setup,
+  wheel, sandbox, worker, restart, and cleanup tests.
+- [ ] Identical reapply after restart heals missing runtime state without a new
+  semantic revision, state corruption, leaked workers, or healer conflict.
+- [ ] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
+  upload artifacts, supply filesystem/interpreter paths, or install packages.
+- [ ] Superseded compatibility code and documentation are removed, and every
+  dependent action is recorded in the breaking-change handoff with independent
+  adoption evidence.

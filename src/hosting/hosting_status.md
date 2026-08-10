@@ -9,7 +9,9 @@ Status: Active corrective work
 The complete-definition migration remains adopted, but the environment/template
 implementation is not accepted as complete. A post-acceptance audit found that
 tests proved isolated planner and builder components without proving the real
-daemon/control-channel bridge. The corrective scope is defined in
+daemon/control-channel bridge. The corrected plan now also requires an explicit
+multi-tool package-confirmation protocol and removes all superseded compatibility
+paths because the product is unreleased. The corrective scope is defined in
 [hosting_access_plan.md](hosting_access_plan.md).
 
 ## Retained completed baseline
@@ -50,8 +52,13 @@ Release/adoption pins retained for traceability:
 7. Abrupt POSIX daemon death can leave toolbox workers outside daemon ownership.
 8. Dependency approval authority does not match the distinct role described by
    the contract.
-9. No real-daemon end-to-end test covers built-in setup, custom package add and
-   removal, or restart healing.
+9. Plans do not present exact direct/transitive package mutations or bounded
+   configured-source alternatives, and no consumer confirmation/skip receipt
+   exists for multi-tool changes.
+10. Hosting configuration does not own built-in intent, source modes/revisions,
+    air-gap ingestion, or non-built-in environment retention/removal.
+11. No real-daemon end-to-end test covers built-in setup, multi-tool package
+    confirmation, custom package add/removal, or restart healing.
 
 ## Progress ledger
 
@@ -60,22 +67,23 @@ transcript was intentionally removed because it obscured current truth.
 
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
-| R0 Documentation reset | Active | R0-01 is complete: the obsolete plan and status ledger were replaced with current decisions, confirmed defects, itemized corrective work, and acceptance criteria. R0-02 remains a cross-slice documentation obligation. No runtime behavior changed. |
-| R1 Current-target platform model | Pending | No implementation started. |
-| R2 Target-local built-in construction | Pending | No implementation started. |
-| R3 End-to-end custom environments | Pending | No implementation started. |
-| R4 Package and tool removal | Pending | No implementation started. |
-| R5 Safe consumer-triggered healing | Pending | No implementation started. |
-| R6 Administrator template construction | Pending | No implementation started. |
-| R7 Authority and consumer compatibility | Pending | No implementation started. |
-| R8 Acceptance and closeout | Pending | No implementation started. |
+| R0 Corrective contract baseline | Active | R0-01 is complete and was corrected on 2026-08-09 to prohibit dependent edits, remove compatibility preservation, reference production seams, and specify confirmation/config behavior. R0-02 and R0-03 remain cross-slice obligations. No runtime behavior changed. |
+| R1 Canonical current-host target | Pending | No implementation started. |
+| R2 Revisioned hosting configuration and built-ins | Pending | No implementation started. |
+| R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
+| R4 Privileged approval and immutable apply | Pending | No implementation started. |
+| R5 Removal, retention, and administrator environments | Pending | No implementation started. |
+| R6 Restart-safe consumer healing | Pending | No implementation started. |
+| R7 Breaking-change handoff and acceptance | Pending | No implementation started. |
 
 ## Next implementation slice
 
-No code slice is active. The next slice should be R1-01 through R1-03: establish
-one canonical current-host target model and replace the existing x86-only
-defaults and validators. Before implementation, record the exact focused,
-native-platform, regression, and documentation test commands in this section.
+No code slice is active. The next slice should be R1-01 and R1-02: establish one
+canonical current-host target model and replace the existing x86-only defaults
+and validators. Because those replacements are client-visible, R0-03 must first
+replace the breaking-change reset marker with exact migration instructions.
+Before implementation, record the exact focused, native-platform, regression,
+and documentation test commands in this section.
 
 ## Status update rules
 
@@ -88,6 +96,10 @@ native-platform, regression, and documentation test commands in this section.
 6. Put durable behavior in the contracts, not in this ledger.
 7. Populate `HOSTING_CLIENT_BREAKING_CHANGES.md` before releasing any required
    consumer or administrator migration.
+8. Never edit a dependent project; record all dependent work in the handoff and
+   accept adoption/test evidence produced by that project.
+9. Remove superseded code, tests, commands, and documentation in the same slice;
+   do not add compatibility adapters or deprecated aliases.
 
 ## Documentation correction
 
