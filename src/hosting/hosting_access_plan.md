@@ -569,13 +569,13 @@ boundary—not a double—passes.
     `EngineHostService` to the new schema and delete every old field parser.
   - [ ] **R2-01b** Persist atomic configuration revisions, invalidate unused
     plans/receipts on revision changes, and leave active environments pinned.
-- [ ] **R2-02** Wire configuration, sources, policy, and target detection through
+- [x] **R2-02** Wire configuration, sources, policy, and target detection through
   `daemon/local_ipc.py::EngineHostDaemon` into `EngineHostService`; refuse
   toolbox readiness on invalid or incomplete setup.
   - [x] **R2-02a** Add strict daemon construction inputs for configuration,
     logical source bindings, dependency policy, and detected target; prove the
     normal daemon supplies them to `EngineHostService`.
-  - [ ] **R2-02b** Publish bounded not-ready diagnostics for missing, invalid, or
+  - [x] **R2-02b** Publish bounded not-ready diagnostics for missing, invalid, or
     incomplete setup without partially publishing built-ins.
 - [ ] **R2-03** Replace realized shipped lock resources in
   `toolbox/shipped_templates.py` and `resources/toolbox_templates/` with built-in

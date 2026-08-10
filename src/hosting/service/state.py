@@ -296,7 +296,17 @@ class StateMixin:
         }
         required_abi = str(getattr(self, "_toolbox_required_python_abi", "") or "").strip()
         required_platform = str(getattr(self, "_toolbox_required_platform", "") or "").strip()
-        if required_abi and required_platform:
+        toolbox_setup_diagnostic = getattr(self, "_toolbox_setup_diagnostic", None)
+        if isinstance(toolbox_setup_diagnostic, dict):
+            summary["toolbox_readiness"] = {
+                "status": "unavailable",
+                "code": str(toolbox_setup_diagnostic["code"]),
+                "summary": str(toolbox_setup_diagnostic["summary"]),
+                "target": getattr(self, "_toolbox_target").to_dict(),
+                "templates": [],
+                "diagnostics": [dict(toolbox_setup_diagnostic)],
+            }
+        elif required_abi and required_platform:
             summary["toolbox_readiness"] = self.toolbox_required_template_status(
                 python_abi=required_abi,
                 platform=required_platform,

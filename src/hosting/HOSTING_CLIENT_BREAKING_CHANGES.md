@@ -144,6 +144,13 @@ Administrator setup logic must change as follows:
 - never upload a venv, source distribution, install script, arbitrary index URL,
   or consumer filesystem path.
 
+An absent, partial, invalid, or incorrectly bound configuration no longer
+silently uses shipped defaults and does not take down the general control
+plane. Branch on `toolbox_readiness.status == "unavailable"` and the stable
+codes `toolbox_configuration_missing`, `toolbox_configuration_incomplete`,
+`toolbox_configuration_invalid`, or `toolbox_source_binding_invalid`; do not
+parse the bounded summary.
+
 ## Removed toolbox mutation commands and fields
 
 The following current surface is removed:

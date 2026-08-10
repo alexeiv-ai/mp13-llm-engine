@@ -21,6 +21,68 @@ class _FakePidFile:
         self._events.append("pid_remove")
 
 
+def _toolbox_configuration() -> dict[str, Any]:
+    return {
+        "builtins": [
+            {
+                "template_id": template_id,
+                "imports": ["hosting"],
+                "package_requirements": [],
+                "sandbox_policy": "compute-only",
+                "required": True,
+                "prewarm": False,
+                "provenance": "parent-release",
+            }
+            for template_id in ("core", "py-compute")
+        ],
+        "sources": [
+            {
+                "source_id": "parent-release-resources",
+                "kind": "airgap_store",
+                "origin": "airgap://parent-release-resources",
+                "credential_ref": None,
+                "allowed_package_namespaces": ["*"],
+                "priority": 100,
+                "trust_key_ids": ["parent-release-toolbox-v1"],
+                "maximum_download_bytes": 536_870_912,
+            }
+        ],
+        "resolution": {
+            "mode": "air_gapped",
+            "timeout_seconds": 300,
+            "maximum_bytes": 536_870_912,
+            "maximum_artifacts": 256,
+            "allowed_redirect_origins": [],
+            "wheel_only": True,
+        },
+        "retention": {
+            "artifact_cache_grace_seconds": 604_800,
+            "maximum_cache_bytes": 10_737_418_240,
+            "maximum_cache_artifacts": 4096,
+            "protected_digests": [],
+            "remove_unreferenced_custom_revisions_on_apply": False,
+        },
+    }
+
+
+def _toolbox_dependency_policy() -> dict[str, Any]:
+    target = detect_current_toolbox_target()
+    body = {
+        "allowed_template_ids": ["core", "py-compute"],
+        "allowed_targets": [target.name],
+        "package_allowlist": [],
+        "package_denylist": [],
+        "allow_custom": False,
+        "custom_requires_approval": True,
+        "online_resolution_allowed": False,
+        "allowed_index_origins": [],
+    }
+    return {
+        "revision": identity_digest("hosting.toolbox.test.policy.v1", body),
+        **body,
+    }
+
+
 def test_daemon_run_writes_pid_after_local_listener_ready(monkeypatch) -> None:
     events: list[str] = []
     daemon = EngineHostDaemon(
@@ -141,61 +203,8 @@ def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
     target = detect_current_toolbox_target()
     source_root = tmp_path / "airgap"
     source_root.mkdir()
-    configuration = {
-        "builtins": [
-            {
-                "template_id": template_id,
-                "imports": ["hosting"],
-                "package_requirements": [],
-                "sandbox_policy": "compute-only",
-                "required": True,
-                "prewarm": False,
-                "provenance": "parent-release",
-            }
-            for template_id in ("core", "py-compute")
-        ],
-        "sources": [
-            {
-                "source_id": "parent-release-resources",
-                "kind": "airgap_store",
-                "origin": "airgap://parent-release-resources",
-                "credential_ref": None,
-                "allowed_package_namespaces": ["*"],
-                "priority": 100,
-                "trust_key_ids": ["parent-release-toolbox-v1"],
-                "maximum_download_bytes": 536_870_912,
-            }
-        ],
-        "resolution": {
-            "mode": "air_gapped",
-            "timeout_seconds": 300,
-            "maximum_bytes": 536_870_912,
-            "maximum_artifacts": 256,
-            "allowed_redirect_origins": [],
-            "wheel_only": True,
-        },
-        "retention": {
-            "artifact_cache_grace_seconds": 604_800,
-            "maximum_cache_bytes": 10_737_418_240,
-            "maximum_cache_artifacts": 4096,
-            "protected_digests": [],
-            "remove_unreferenced_custom_revisions_on_apply": False,
-        },
-    }
-    policy_body = {
-        "allowed_template_ids": ["core", "py-compute"],
-        "allowed_targets": [target.name],
-        "package_allowlist": [],
-        "package_denylist": [],
-        "allow_custom": False,
-        "custom_requires_approval": True,
-        "online_resolution_allowed": False,
-        "allowed_index_origins": [],
-    }
-    dependency_policy = {
-        "revision": identity_digest("hosting.toolbox.test.policy.v1", policy_body),
-        **policy_body,
-    }
+    configuration = _toolbox_configuration()
+    dependency_policy = _toolbox_dependency_policy()
 
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
@@ -214,3 +223,43 @@ def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
     assert summary["toolbox_readiness"]["status"] == "degraded"
     assert summary["toolbox_host_project"]["target"]["platform"] == target.platform
     assert "credential_ref" not in str(summary["toolbox_host_project"])
+
+
+def test_missing_partial_and_invalid_toolbox_setup_are_bounded_and_publish_nothing(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        ({}, "toolbox_configuration_missing"),
+        (
+            {"toolbox_host_project_configuration": _toolbox_configuration()},
+            "toolbox_configuration_incomplete",
+        ),
+        (
+            {
+                "toolbox_host_project_configuration": {
+                    **_toolbox_configuration(),
+                    "credential": "must-not-leak",
+                },
+                "toolbox_artifact_sources": {
+                    "parent-release-resources": tmp_path / "secret-packages"
+                },
+                "toolbox_dependency_policy": _toolbox_dependency_policy(),
+            },
+            "toolbox_configuration_invalid",
+        ),
+    ]
+    for index, (kwargs, expected_code) in enumerate(cases):
+        daemon = EngineHostDaemon(
+            pid_file=tmp_path / f"daemon-{index}.pid",
+            engines_state_file=tmp_path / f"engines-{index}.json",
+            control_state_file=tmp_path / f"control-{index}.json",
+            **kwargs,
+        )
+        summary = daemon.svc.hosting_setup_summary()
+        readiness = summary["toolbox_readiness"]
+        assert readiness["status"] == "unavailable"
+        assert readiness["code"] == expected_code
+        assert readiness["templates"] == []
+        assert "must-not-leak" not in str(readiness)
+        assert "secret-packages" not in str(readiness)
+        assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001

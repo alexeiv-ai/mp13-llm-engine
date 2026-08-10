@@ -624,6 +624,15 @@ both use the same canonical detected target. Supplying only part of the strict
 setup or omitting a required air-gap binding is invalid; the normal daemon does
 not construct an unconfigured parallel materializer.
 
+The daemon control plane remains available when toolbox setup is absent,
+partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no
+template entries, and uses exactly one of `toolbox_configuration_missing`,
+`toolbox_configuration_incomplete`, `toolbox_configuration_invalid`, or
+`toolbox_source_binding_invalid`. The normal projection contains a bounded
+summary and detected target but no parser exception, credential, signed query,
+origin path, or daemon path. No built-in catalog entry is published from an
+invalid or incomplete setup.
+
 The required built-in `sandbox_policy` reference is `compute-only`. Its exact
 effective policy is:
 

@@ -239,6 +239,10 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
         "`source_set_revision`",
         "`toolbox_artifact_sources`",
         "`toolbox_dependency_policy`",
+        "`toolbox_configuration_missing`",
+        "`toolbox_configuration_incomplete`",
+        "`toolbox_configuration_invalid`",
+        "`toolbox_source_binding_invalid`",
         "`artifact_cache_grace_seconds`",
         "`remove_unreferenced_custom_revisions_on_apply`",
     ]:

@@ -28,6 +28,8 @@ from ..sandbox.host_capabilities import (
     HostCapabilitySession,
 )
 from ..service.host_service import EngineHostService
+from ..toolbox.dependency_policy import ToolboxDependencyPolicy
+from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
 from .constants import DEFAULT_DAEMON_PORT
 from .diagnostics import write_daemon_report
 from .paths import _daemon_local_ipc_endpoint
@@ -63,21 +65,68 @@ class EngineHostDaemon:
         self.shutdown_token = secrets.token_urlsafe(24)
         local_transport = _daemon_local_ipc_endpoint(self.pid_file.path)
         self._local_transport = dict(local_transport)
+        toolbox_setup_diagnostic: Optional[Dict[str, Any]] = None
+        toolbox_service_kwargs: Dict[str, Any] = {}
+        provided = (
+            toolbox_host_project_configuration is not None,
+            toolbox_artifact_sources is not None,
+            toolbox_dependency_policy is not None,
+        )
+        if not any(provided):
+            toolbox_setup_diagnostic = {
+                "code": "toolbox_configuration_missing",
+                "summary": "Toolbox hosting configuration is not available.",
+            }
+        elif not provided[0] or not provided[2]:
+            toolbox_setup_diagnostic = {
+                "code": "toolbox_configuration_incomplete",
+                "summary": "Toolbox hosting configuration is incomplete.",
+            }
+        else:
+            try:
+                parsed_configuration = ToolboxHostProjectConfiguration.from_dict(
+                    toolbox_host_project_configuration or {}
+                )
+                parsed_policy = ToolboxDependencyPolicy.from_dict(toolbox_dependency_policy or {})
+                bindings = {
+                    str(key): Path(value).expanduser().resolve()
+                    for key, value in dict(toolbox_artifact_sources or {}).items()
+                }
+                airgap_source_ids = {
+                    item.source_id
+                    for item in parsed_configuration.sources
+                    if item.kind == "airgap_store"
+                }
+                if set(bindings) != airgap_source_ids or any(
+                    not path.is_dir() for path in bindings.values()
+                ):
+                    raise ValueError("toolbox_source_binding_invalid")
+                toolbox_service_kwargs = {
+                    "toolbox_host_project_configuration": parsed_configuration.to_dict(),
+                    "toolbox_artifact_sources": bindings or None,
+                    "toolbox_dependency_policy": parsed_policy.to_dict(),
+                }
+            except Exception as exc:
+                reason = str(exc or "")
+                code = (
+                    "toolbox_source_binding_invalid"
+                    if reason == "toolbox_source_binding_invalid"
+                    else "toolbox_configuration_invalid"
+                )
+                toolbox_setup_diagnostic = {
+                    "code": code,
+                    "summary": (
+                        "Toolbox source bindings are invalid."
+                        if code == "toolbox_source_binding_invalid"
+                        else "Toolbox hosting configuration is invalid."
+                    ),
+                }
         self.svc = EngineHostService(
             engines_state_file=engines_state_file,
             control_state_file=control_state_file,
-            toolbox_host_project_configuration=toolbox_host_project_configuration,
-            toolbox_artifact_sources=(
-                {str(key): Path(value) for key, value in toolbox_artifact_sources.items()}
-                if toolbox_artifact_sources is not None
-                else None
-            ),
-            toolbox_dependency_policy=(
-                dict(toolbox_dependency_policy)
-                if toolbox_dependency_policy is not None
-                else None
-            ),
+            **toolbox_service_kwargs,
         )
+        self.svc._toolbox_setup_diagnostic = toolbox_setup_diagnostic  # noqa: SLF001
         self.svc.assert_runtime_policy_safe()
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
