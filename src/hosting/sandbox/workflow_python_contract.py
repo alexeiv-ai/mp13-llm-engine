@@ -5,9 +5,6 @@ import hashlib
 import time
 from typing import Any, Dict, List, Optional
 
-from .runtime_base import hosted_log_summary
-
-
 NODE_REQUEST_FIELDS = [
     "request_id",
     "module_source",
@@ -376,52 +373,6 @@ def validate_workflow_python_node_request(request: Optional[Dict[str, Any]]) -> 
     }
 
 
-def workflow_python_node_not_implemented_response(
-    *,
-    environment_key: str = "",
-    engine_id: str = "",
-    request: Optional[Dict[str, Any]] = None,
-    reason: str = "workflow_python_node_profile_not_implemented",
-) -> Dict[str, Any]:
-    validation = validate_workflow_python_node_request(request)
-    normalized = dict(validation.get("request") or {})
-    return {
-        "status": "error",
-        "ok": False,
-        "profile": "node",
-        "environment_key": _clean(environment_key) or None,
-        "engine_id": _clean(engine_id) or None,
-        "request_id": _clean(normalized.get("request_id")) or None,
-        "reason": reason,
-        "error": {
-            "code": reason,
-            "message": "workflow_python(profile=node) contract is defined, but the node worker is not implemented yet",
-            "missing_request_fields": list(validation.get("missing") or []),
-        },
-        "output": None,
-        "state_patch": None,
-        "artifacts": [],
-        "artifact_store": {
-            "status": "unavailable",
-            "reason": "artifact_store_not_implemented",
-            "message": "artifact refs are part of the node-profile contract, but no workflow artifact store is wired yet",
-        },
-        "progress": None,
-        "logs": hosted_log_summary(
-            max_bytes=int(_dict(normalized.get("limits")).get("output_limit_bytes") or 4096)
-        ),
-        "metrics": {},
-        "audit": {
-            "package_id": _clean(normalized.get("package_id")) or None,
-            "workflow_id": _clean(normalized.get("workflow_id")) or None,
-            "package_source_digest": _clean(normalized.get("package_source_digest")) or None,
-            "module_sha256": _clean(normalized.get("module_sha256")) or None,
-            "provenance": _dict(normalized.get("provenance")),
-        },
-        "contract": dict(validation.get("contract") or workflow_python_node_contract()),
-    }
-
-
 __all__ = [
     "build_workflow_python_node_module_request",
     "build_workflow_python_node_project_request",
@@ -430,5 +381,4 @@ __all__ = [
     "normalize_workflow_python_node_request",
     "validate_workflow_python_node_request",
     "workflow_python_node_contract",
-    "workflow_python_node_not_implemented_response",
 ]

@@ -38,7 +38,6 @@ from ..sandbox.workflow_python_contract import (
     normalize_workflow_python_node_request,
     validate_workflow_python_node_request,
     workflow_python_node_contract,
-    workflow_python_node_not_implemented_response,
 )
 
 WORKFLOW_ACTION_MANIFEST_CONTRACT = "hosting.sandbox.action_manifest.v1"
@@ -402,19 +401,6 @@ class WorkflowHelperMixin:
         if value not in {"helper", "node"}:
             raise ValueError("profile must be 'helper' or 'node'")
         return value
-
-    def _workflow_python_node_unavailable(
-        self,
-        *,
-        request: Optional[Dict[str, Any]] = None,
-        environment_key: Optional[str] = None,
-        engine_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return workflow_python_node_not_implemented_response(
-            environment_key=str(environment_key or ""),
-            engine_id=str(engine_id or ""),
-            request=dict(request or {}),
-        )
 
     @staticmethod
     def _workflow_python_node_response_from_execution(

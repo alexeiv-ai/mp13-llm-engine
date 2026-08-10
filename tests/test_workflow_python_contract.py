@@ -10,7 +10,6 @@ from hosting.sandbox.workflow_python_contract import (
     normalize_workflow_python_node_request,
     validate_workflow_python_node_request,
     workflow_python_node_contract,
-    workflow_python_node_not_implemented_response,
 )
 
 
@@ -250,35 +249,3 @@ def test_validate_node_request_accepts_payload_omission_as_empty_object() -> Non
 
     assert out["status"] == "ok"
     assert out["request"]["payload"] == {}
-
-
-def test_node_not_implemented_response_uses_node_envelope() -> None:
-    out = workflow_python_node_not_implemented_response(
-        environment_key="env-node",
-        engine_id="wf-node",
-        request={
-            "request_id": "req-node",
-            "module_source": "def run(payload):\n    return payload\n",
-            "module_sha256": "sha",
-            "package_id": "pkg",
-            "workflow_id": "wf",
-            "package_source_digest": "digest",
-            "operation": "run",
-            "payload": {},
-            "limits": {"output_limit_bytes": 3},
-        },
-    )
-
-    assert out["status"] == "error"
-    assert out["ok"] is False
-    assert out["profile"] == "node"
-    assert out["environment_key"] == "env-node"
-    assert out["request_id"] == "req-node"
-    assert out["output"] is None
-    assert out["state_patch"] is None
-    assert out["artifacts"] == []
-    assert out["artifact_store"]["reason"] == "artifact_store_not_implemented"
-    assert out["logs"]["output_limit_bytes"] == 3
-    assert out["logs"]["stdout_truncated"] is False
-    assert out["error"]["code"] == "workflow_python_node_profile_not_implemented"
-    assert out["audit"]["package_id"] == "pkg"

@@ -467,7 +467,7 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
                     {"kind": "log", "logs": {"output_limit_bytes": 4096, "summary": ""}},
                     {"kind": "artifact", "name": "report", "ref": "@artifacts/a/report.txt", "size_bytes": 12},
                     {"kind": "artifact", "name": "summary", "artifact_kind": "inline", "filename": "summary.txt", "size_bytes": 7},
-                    {"kind": "error", "error": {"code": "workflow_python_node_profile_not_implemented"}},
+                    {"kind": "error", "error": {"code": "workflow_python_node_execution_failed"}},
                 ],
             }
         raise AssertionError(cmd)
@@ -487,7 +487,7 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
     assert "Events" in out
     assert "@artifacts/a/report.txt" in out
     assert "summary inline summary.txt" in out
-    assert "workflow_python_node_profile_not_implemented" in out
+    assert "workflow_python_node_execution_failed" in out
 
 
 def test_manage_workflow_runtimes_show_js_resources_without_legacy_request_status(
