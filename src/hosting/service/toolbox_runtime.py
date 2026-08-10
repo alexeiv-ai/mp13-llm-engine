@@ -78,10 +78,13 @@ class ToolboxRuntimeMixin:
             )
         return {
             "templates": templates,
+            "catalog": catalog,
             "catalog_revision": catalog_revision,
             "policy": configured,
             "python_abi": python_abi,
             "platform": platform,
+            "target": current_target.name,
+            "configuration": getattr(self, "_toolbox_host_project_config", None),
             "runtime_identity": {
                 "version": ".".join(str(item) for item in sys.version_info[:3]),
                 "artifact_digest": templates[0].parent_worker_artifact_digest,
@@ -194,9 +197,14 @@ class ToolboxRuntimeMixin:
         authority_id: str = "authority:local",
         ttl_ms: int = 15 * 60 * 1000,
     ) -> Dict[str, Any]:
-        from ..toolbox.bundle_models import ToolboxDefinitionSpec
-        from ..toolbox.definition_planner import ActiveToolboxProfileSnapshot, plan_toolbox_definition
+        from ..toolbox.bundle_models import ToolboxDefinitionSpec, ToolboxPlanPins
+        from ..toolbox.definition_planner import (
+            ActiveToolboxProfileSnapshot,
+            build_toolbox_environment_mutations,
+            plan_toolbox_definition,
+        )
         from ..toolbox.identity import identity_digest
+        from .toolbox_definition_resolution import ConfiguredToolboxPlanResolver
 
         model = ToolboxDefinitionSpec.from_dict(definition)
         active = self._toolbox_state_v2.get(model.toolbox_id)
@@ -206,6 +214,9 @@ class ToolboxRuntimeMixin:
 
             raise ToolboxRevisionConflictError("toolbox_revision_conflict")
         context = self._toolbox_definition_planning_context()
+        configuration = context["configuration"]
+        if configuration is None:
+            raise ValueError("toolbox_host_project_configuration_required")
         draft = plan_toolbox_definition(
             model,
             templates=context["templates"],
@@ -228,69 +239,61 @@ class ToolboxRuntimeMixin:
                     assigned_tool_keys=tuple(profile["assigned_tool_keys"]),
                 )
             )
+        resolver = ConfiguredToolboxPlanResolver(
+            configuration=configuration,
+            artifact_store=self._toolbox_artifact_store,
+            catalog_state=context["catalog"],
+        )
+        candidates = resolver.candidates_for_draft(draft)
+        active_environments = resolver.active_environments(active)
+        approval_required = bool(
+            draft.custom_environment_count and context["policy"].custom_requires_approval
+        )
+        environment_mutations = build_toolbox_environment_mutations(
+            active_definition=ToolboxDefinitionSpec.from_dict(
+                self.toolbox_get_definition(toolbox_id=model.toolbox_id)["definition"]
+            ),
+            draft=draft,
+            candidates=candidates,
+            active_environments=active_environments,
+            dependency_approval_required=approval_required,
+        )
+        pins = ToolboxPlanPins(
+            active_definition_revision=active_revision,
+            target=context["target"],
+            catalog_revision=context["catalog_revision"],
+            host_config_revision=configuration.config_revision,
+            dependency_policy_revision=context["policy"].revision,
+            source_set_revision=configuration.source_set_revision,
+        )
         now_ms = int(time.time() * 1000)
         record = self._toolbox_definition_plans.create(
             draft,
+            active_definition=ToolboxDefinitionSpec.from_dict(
+                self.toolbox_get_definition(toolbox_id=model.toolbox_id)["definition"]
+            ),
+            pins=pins,
+            environment_mutations=environment_mutations,
             active_profiles=active_profiles,
-            catalog_revision=context["catalog_revision"],
-            package_policy_revision=context["policy"].revision,
             now_ms=now_ms,
             ttl_ms=int(ttl_ms),
             owner_actor_id=str(owner_actor_id or "").strip(),
             authority_id=str(authority_id or "").strip(),
         )
-        approval_required = bool(
-            draft.custom_environment_count and context["policy"].custom_requires_approval
-        )
-        imports = sorted(
-            {
-                root
-                for request in (*model.auto_requests, *model.manual_requests)
-                for root in request.dependency.declared_imports
-            }
-        )
-        environments = [
-            {
-                "request_keys": list(profile.assigned_tool_keys),
-                "mode": "custom" if profile.custom_resolved_lock_digest else "template",
-                "template_id": profile.template_id,
-                "package_requirements": sorted(
-                    {
-                        requirement
-                        for request in (*model.auto_requests, *model.manual_requests)
-                        if request.stable_key in set(profile.assigned_tool_keys)
-                        for requirement in request.dependency.package_requirements
-                    }
-                ),
-                "approval_required": bool(profile.custom_resolved_lock_digest and approval_required),
-                "diagnostics": [],
-            }
-            for profile in draft.profiles
-        ]
-        state = "approval_required" if approval_required else "ready"
-        code = "custom_dependency_approval_required" if approval_required else "toolbox_definition_plan_ready"
+        state = "confirmation_required"
+        code = "toolbox_definition_confirmation_required"
         return {
-            "contract": "hosting.toolbox.definition_plan",
+            "contract": "hosting.toolbox.definition_plan.v2",
             "plan_id": record.plan_id,
             "toolbox_id": record.toolbox_id,
-            "definition_hash": record.definition_revision,
-            "expected_revision": record.expected_revision,
-            "catalog_revision": record.catalog_revision,
-            "package_policy_revision": record.package_policy_revision,
+            "definition_hash": record.proposed_definition.revision,
+            "expected_revision": record.proposed_definition.expected_revision,
+            "pins": record.pins.to_dict(),
             "expires_at_ms": record.expires_at_ms,
-            "can_apply": not approval_required,
+            "can_apply": False,
+            "confirmation_required": True,
             "approval_required": approval_required,
-            "custom_delta_digest": self._toolbox_custom_delta_digest(draft),
-            "imports": [
-                {
-                    "import_root": root,
-                    "classification": "declared_dynamic",
-                    "distribution": None,
-                    "evidence": [],
-                }
-                for root in imports
-            ],
-            "environments": environments,
+            "environment_mutations": [item.to_dict() for item in environment_mutations],
             "profile_diff": {
                 classification: sum(
                     item["classification"] == classification for item in record.profile_changes
@@ -302,9 +305,7 @@ class ToolboxRuntimeMixin:
                 "state": state,
                 "code": code,
                 "summary": (
-                    "Review is required for additional packages."
-                    if approval_required
-                    else "The toolbox definition is ready to apply."
+                    "Review and confirm the exact package alternatives before apply."
                 ),
             },
         }
@@ -327,8 +328,8 @@ class ToolboxRuntimeMixin:
             raise PermissionError("toolbox_definition_plan_not_found")
         context = self._toolbox_definition_planning_context()
         if (
-            context["catalog_revision"] != record.catalog_revision
-            or context["policy"].revision != record.package_policy_revision
+            context["catalog_revision"] != record.pins.catalog_revision
+            or context["policy"].revision != record.pins.dependency_policy_revision
             or not context["policy"].allow_custom
             or not context["policy"].custom_requires_approval
         ):
@@ -336,20 +337,20 @@ class ToolboxRuntimeMixin:
         pinned = type(
             "PinnedDraft",
             (),
-            {"profiles": tuple(ResolvedToolboxProfileSpec.from_dict(item) for item in record.plan["profiles"])},
+            {"profiles": tuple(ResolvedToolboxProfileSpec.from_dict(item) for item in record.draft_plan["profiles"])},
         )()
         custom_delta_digest = self._toolbox_custom_delta_digest(pinned)
-        if int(record.plan["custom_environment_count"]) < 1:
+        if int(record.draft_plan["custom_environment_count"]) < 1:
             raise ValueError("dependency_approval_not_required")
         return self._toolbox_dependency_approvals.mint(
             owner_actor_id=record.owner_actor_id,
             authority_id=record.authority_id,
             toolbox_id=record.toolbox_id,
             plan_id=record.plan_id,
-            definition_revision=record.definition_revision,
+            definition_revision=record.proposed_definition.revision,
             custom_delta_digest=custom_delta_digest,
-            catalog_revision=record.catalog_revision,
-            package_policy_revision=record.package_policy_revision,
+            catalog_revision=record.pins.catalog_revision,
+            package_policy_revision=record.pins.dependency_policy_revision,
             now_ms=now_ms,
             expires_at_ms=min(record.expires_at_ms, now_ms + 60 * 60 * 1000),
         )
@@ -380,7 +381,10 @@ class ToolboxRuntimeMixin:
         if record.owner_actor_id != actor or record.authority_id != authority:
             raise PermissionError("toolbox_definition_plan_not_found")
         model = ToolboxDefinitionSpec.from_dict(definition)
-        if model.to_dict() != record.plan["definition"] or model.revision != record.definition_revision:
+        if (
+            model.to_dict() != record.proposed_definition.to_dict()
+            or model.revision != record.proposed_definition.revision
+        ):
             raise ValueError("toolbox_definition_plan_mismatch")
         active = self._toolbox_state_v2.get(model.toolbox_id)
         if dict(active or {}).get("active_revision") != model.expected_revision:
@@ -389,8 +393,8 @@ class ToolboxRuntimeMixin:
             raise ToolboxRevisionConflictError("toolbox_revision_conflict")
         context = self._toolbox_definition_planning_context()
         if (
-            context["catalog_revision"] != record.catalog_revision
-            or context["policy"].revision != record.package_policy_revision
+            context["catalog_revision"] != record.pins.catalog_revision
+            or context["policy"].revision != record.pins.dependency_policy_revision
         ):
             raise ValueError("toolbox_definition_plan_pins_changed")
         draft = plan_toolbox_definition(
@@ -401,7 +405,7 @@ class ToolboxRuntimeMixin:
             runtime_identity=context["runtime_identity"],
         )
         self._validate_definition_policy(draft, context)
-        if draft.to_dict() != record.plan:
+        if draft.to_dict() != record.draft_plan:
             raise ValueError("toolbox_definition_plan_resolution_changed")
         custom_delta_digest = self._toolbox_custom_delta_digest(draft)
         approval_identity = None
@@ -416,8 +420,8 @@ class ToolboxRuntimeMixin:
                 plan_id=record.plan_id,
                 definition_revision=model.revision,
                 custom_delta_digest=custom_delta_digest,
-                catalog_revision=record.catalog_revision,
-                package_policy_revision=record.package_policy_revision,
+                catalog_revision=record.pins.catalog_revision,
+                package_policy_revision=record.pins.dependency_policy_revision,
                 request_id=rid,
                 now_ms=now_ms,
             )
@@ -434,8 +438,8 @@ class ToolboxRuntimeMixin:
                 "plan_id": record.plan_id,
                 "custom_delta_digest": custom_delta_digest,
                 "approval_identity": approval_identity,
-                "catalog_revision": record.catalog_revision,
-                "package_policy_revision": record.package_policy_revision,
+                "catalog_revision": record.pins.catalog_revision,
+                "package_policy_revision": record.pins.dependency_policy_revision,
             }
         )
         prepared = self._hosted_operations.prepare(

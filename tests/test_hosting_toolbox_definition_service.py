@@ -11,7 +11,8 @@ import pytest
 from hosting.service.host_service import EngineHostService
 from hosting.toolbox.dependency_policy import ToolboxDependencyPolicy
 from hosting.toolbox.identity import identity_digest
-from hosting_toolbox_test_catalog import publish_realized_test_catalog, realized_test_catalog
+from hosting_toolbox_test_catalog import realized_test_catalog
+from test_hosting_toolbox_definition_resolution import _service_with_verified_closure
 
 
 def _dependency(*, imports=(), requirements=()):
@@ -59,12 +60,7 @@ def _definition(*, toolbox_id="demo", tool_name="Alpha", expected_revision=None,
 
 
 def _service(tmp_path: Path, *, policy: ToolboxDependencyPolicy | None = None) -> EngineHostService:
-    service = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-        toolbox_dependency_policy=policy,
-    )
-    publish_realized_test_catalog(service)
+    service, _template = _service_with_verified_closure(tmp_path, policy=policy)
     return service
 
 
@@ -104,8 +100,9 @@ def test_authoritative_read_is_side_effect_free_and_plan_is_actor_owned(tmp_path
     plan = service.toolbox_plan_definition(
         definition=_definition(), owner_actor_id="actor:a", authority_id="workspace:a"
     )
-    assert plan["contract"] == "hosting.toolbox.definition_plan"
-    assert plan["can_apply"] is True
+    assert plan["contract"] == "hosting.toolbox.definition_plan.v2"
+    assert plan["can_apply"] is False
+    assert plan["confirmation_required"] is True
     assert plan["approval_required"] is False
     assert "profile_id" not in str(plan)
     assert "environment_key" not in str(plan)
@@ -191,7 +188,7 @@ def test_apply_returns_immediately_reuses_request_and_rolls_out_once(tmp_path: P
 def test_custom_delta_requires_exact_parent_approval_and_consumption_is_request_bound(tmp_path: Path) -> None:
     service = _service(tmp_path, policy=_custom_policy())
     definition = _definition(
-        dependency=_dependency(imports=("requests",), requirements=("requests==999.0.0",)),
+        dependency=_dependency(imports=("requests",), requirements=("requests==2.32.5",)),
         source="import requests\ndef Alpha():\n    return requests.__name__\n",
     )
     plan = service.toolbox_plan_definition(

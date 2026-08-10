@@ -160,13 +160,15 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R3-01b (`average`) is complete. The pure builder
-compares active/proposed tool ownership and exact locks, accepts only already
-verified configured-source candidate alternatives, computes direct/transitive
-add/remove/transition mutations and complete dependency edges, selects the
-policy-preferred outcome, and truncates to three. Production-source candidate
-discovery remains R3-01c/R3-05. Focused validation passed 42 planner/model/
-repository/contract tests in 5.00s; `git diff --check` passed.
+Active slice: none. R3-01c (`high`) is complete. Definition planning now
+resolves exact wheel-only candidates from configured verified CAS sources,
+reconstructs the active template closure from verified catalog references, and
+persists the complete v2 plan with target/config/source/policy pins. Sanitized
+source-set alternatives expose exact template/direct/transitive artifacts
+without credentials, signed queries, filesystem paths, or installed-
+environment discovery. The focused configured resolver, definition service,
+host-config transition, planner matrix, and repository suite passed 31 tests
+in 9.91s; `git diff --check` passed.
 
 Completed slice evidence: R3-01a added the strict v2 complete-plan record and
 process-safe immutable repository. Focused planner/repository/model/service/

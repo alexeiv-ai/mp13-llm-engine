@@ -114,8 +114,8 @@ def _complete_inputs(definition: dict):
     alternative_payload = {"artifact": artifact.to_dict(), "mutation": mutation.to_dict()}
     alternative = ToolboxResolutionAlternativeSpec(
         alternative_id=identity_digest("test.toolbox.complete.alternative.v1", alternative_payload),
-        source_id="release",
-        source_origin="https://packages.example.invalid/simple",
+        source_ids=("release",),
+        source_origins=("https://packages.example.invalid/simple",),
         lock_digest=identity_digest("test.toolbox.complete.lock.v1", alternative_payload),
         artifacts=(artifact,),
         package_mutations=(mutation,),

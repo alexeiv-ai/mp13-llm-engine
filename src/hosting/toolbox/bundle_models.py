@@ -666,26 +666,40 @@ class ToolboxDependencyEdgeSpec:
 @dataclass(frozen=True)
 class ToolboxResolutionAlternativeSpec:
     alternative_id: str
-    source_id: str
-    source_origin: str
+    source_ids: tuple[str, ...]
+    source_origins: tuple[str, ...]
     lock_digest: str
     artifacts: tuple[ToolboxExactArtifactSpec, ...]
     package_mutations: tuple[ToolboxPackageMutationSpec, ...]
 
     def __post_init__(self) -> None:
         alternative = require_digest(self.alternative_id, label="toolbox_plan_alternative_id")
-        source = _bounded_plan_text(self.source_id, label="toolbox_plan_source_id", maximum=128)
-        origin = _sanitized_source_origin(self.source_origin)
+        sources = tuple(
+            sorted(
+                _bounded_plan_text(item, label="toolbox_plan_source_id", maximum=128)
+                for item in self.source_ids
+            )
+        )
+        origins = tuple(sorted(_sanitized_source_origin(item) for item in self.source_origins))
+        if (
+            not sources
+            or len(set(sources)) != len(sources)
+            or len(sources) != len(origins)
+            or len(set(origins)) != len(origins)
+        ):
+            raise ValueError("toolbox_plan_alternative_sources_invalid")
         lock = require_digest(self.lock_digest, label="toolbox_plan_alternative_lock_digest")
         artifacts = tuple(sorted(self.artifacts, key=lambda item: (item.distribution, item.version, item.artifact_digest)))
         mutations = tuple(sorted(self.package_mutations, key=lambda item: (item.distribution, item.mutation)))
         if len(artifacts) > 512 or len({item.distribution for item in artifacts}) != len(artifacts):
             raise ValueError("toolbox_plan_alternative_artifacts_invalid")
+        if not {item.source_id for item in artifacts} <= set(sources):
+            raise ValueError("toolbox_plan_alternative_artifact_source_invalid")
         if len(mutations) > 1024 or len({item.distribution for item in mutations}) != len(mutations):
             raise ValueError("toolbox_plan_alternative_mutations_invalid")
         object.__setattr__(self, "alternative_id", alternative)
-        object.__setattr__(self, "source_id", source)
-        object.__setattr__(self, "source_origin", origin)
+        object.__setattr__(self, "source_ids", sources)
+        object.__setattr__(self, "source_origins", origins)
         object.__setattr__(self, "lock_digest", lock)
         object.__setattr__(self, "artifacts", artifacts)
         object.__setattr__(self, "package_mutations", mutations)
@@ -693,8 +707,8 @@ class ToolboxResolutionAlternativeSpec:
     def to_dict(self) -> dict[str, Any]:
         return {
             "alternative_id": self.alternative_id,
-            "source_id": self.source_id,
-            "source_origin": self.source_origin,
+            "source_ids": list(self.source_ids),
+            "source_origins": list(self.source_origins),
             "lock_digest": self.lock_digest,
             "artifacts": [item.to_dict() for item in self.artifacts],
             "package_mutations": [item.to_dict() for item in self.package_mutations],
@@ -705,12 +719,14 @@ class ToolboxResolutionAlternativeSpec:
         row = dict(payload or {})
         _strict_model_fields(
             row,
-            {"alternative_id", "source_id", "source_origin", "lock_digest", "artifacts", "package_mutations"},
+            {"alternative_id", "source_ids", "source_origins", "lock_digest", "artifacts", "package_mutations"},
             label="toolbox_resolution_alternative",
         )
         return cls(
             **{
                 **row,
+                "source_ids": tuple(row["source_ids"]),
+                "source_origins": tuple(row["source_origins"]),
                 "artifacts": tuple(ToolboxExactArtifactSpec.from_dict(item) for item in row["artifacts"]),
                 "package_mutations": tuple(ToolboxPackageMutationSpec.from_dict(item) for item in row["package_mutations"]),
             }

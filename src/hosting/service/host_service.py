@@ -45,7 +45,7 @@ from .toolbox_materialization import (
 )
 from .toolbox_runtime import ToolboxRuntimeMixin
 from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
-from .toolbox_plans import AtomicJsonToolboxDefinitionPlanRepository
+from .toolbox_plans import AtomicJsonCompleteToolboxDefinitionPlanRepository
 from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationRepository
 from .toolbox_artifact_store import (
     AtomicToolboxArtifactStore,
@@ -193,7 +193,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             self.hosting_root / "state" / "toolbox_sandboxes_v2.json",
             legacy_path=self.hosting_root / "state" / "toolbox_sandboxes.json",
         )
-        self._toolbox_definition_plans = AtomicJsonToolboxDefinitionPlanRepository(
+        self._toolbox_definition_plans = AtomicJsonCompleteToolboxDefinitionPlanRepository(
             self.hosting_root / "state" / "toolbox_definition_plans.json"
         )
         self._toolbox_host_config_revisions = AtomicJsonToolboxHostConfigurationRepository(

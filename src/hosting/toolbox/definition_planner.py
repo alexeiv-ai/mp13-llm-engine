@@ -488,8 +488,8 @@ class VerifiedToolboxResolutionCandidate:
     environment_id: str
     base_template_id: str
     base_template_revision: str
-    source_id: str
-    source_origin: str
+    source_ids: tuple[str, ...]
+    source_origins: tuple[str, ...]
     source_priority: int
     lock_digest: str
     artifacts: tuple[ToolboxExactArtifactSpec, ...]
@@ -511,22 +511,25 @@ class VerifiedToolboxResolutionCandidate:
                 self.base_template_revision, label="verified_candidate_template_revision"
             ),
         )
-        source = str(self.source_id or "").strip()
-        if not source:
-            raise ValueError("verified_candidate_source_id_required")
-        object.__setattr__(self, "source_id", source)
-        origin = str(self.source_origin or "").strip()
-        parsed = urlsplit(origin)
-        if (
-            parsed.scheme not in {"https", "airgap"}
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("verified_candidate_source_origin_invalid")
-        object.__setattr__(self, "source_origin", origin)
+        sources = tuple(sorted(str(item or "").strip() for item in self.source_ids))
+        origins = tuple(sorted(str(item or "").strip() for item in self.source_origins))
+        if not sources or any(not item for item in sources) or len(set(sources)) != len(sources):
+            raise ValueError("verified_candidate_source_ids_invalid")
+        if len(sources) != len(origins) or len(set(origins)) != len(origins):
+            raise ValueError("verified_candidate_source_origins_invalid")
+        for origin in origins:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme not in {"https", "airgap"}
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("verified_candidate_source_origin_invalid")
+        object.__setattr__(self, "source_ids", sources)
+        object.__setattr__(self, "source_origins", origins)
         if isinstance(self.source_priority, bool) or not isinstance(self.source_priority, int):
             raise ValueError("verified_candidate_source_priority_invalid")
         object.__setattr__(
@@ -539,7 +542,7 @@ class VerifiedToolboxResolutionCandidate:
         )
         if len({item.distribution for item in artifacts}) != len(artifacts):
             raise ValueError("verified_candidate_artifact_duplicate")
-        if any(item.source_id != source for item in artifacts):
+        if not {item.source_id for item in artifacts} <= set(sources):
             raise ValueError("verified_candidate_artifact_source_mismatch")
         object.__setattr__(self, "artifacts", artifacts)
 
@@ -550,8 +553,8 @@ class ActiveToolboxEnvironmentResolution:
     tool_keys: tuple[str, ...]
     base_template_id: str
     base_template_revision: str
-    source_id: str
-    source_origin: str
+    source_ids: tuple[str, ...]
+    source_origins: tuple[str, ...]
     lock_digest: str
     artifacts: tuple[ToolboxExactArtifactSpec, ...]
 
@@ -574,22 +577,25 @@ class ActiveToolboxEnvironmentResolution:
             "base_template_revision",
             require_digest(self.base_template_revision, label="active_environment_template_revision"),
         )
-        source = str(self.source_id or "").strip()
-        if not source:
-            raise ValueError("active_environment_source_id_required")
-        object.__setattr__(self, "source_id", source)
-        origin = str(self.source_origin or "").strip()
-        parsed = urlsplit(origin)
-        if (
-            parsed.scheme not in {"https", "airgap"}
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("active_environment_source_origin_invalid")
-        object.__setattr__(self, "source_origin", origin)
+        sources = tuple(sorted(str(item or "").strip() for item in self.source_ids))
+        origins = tuple(sorted(str(item or "").strip() for item in self.source_origins))
+        if not sources or any(not item for item in sources) or len(set(sources)) != len(sources):
+            raise ValueError("active_environment_source_ids_invalid")
+        if len(sources) != len(origins) or len(set(origins)) != len(origins):
+            raise ValueError("active_environment_source_origins_invalid")
+        for origin in origins:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme not in {"https", "airgap"}
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("active_environment_source_origin_invalid")
+        object.__setattr__(self, "source_ids", sources)
+        object.__setattr__(self, "source_origins", origins)
         object.__setattr__(
             self, "lock_digest", require_digest(self.lock_digest, label="active_environment_lock_digest")
         )
@@ -598,7 +604,7 @@ class ActiveToolboxEnvironmentResolution:
         )
         if len({item.distribution for item in artifacts}) != len(artifacts):
             raise ValueError("active_environment_artifact_duplicate")
-        if any(item.source_id != source for item in artifacts):
+        if not {item.source_id for item in artifacts} <= set(sources):
             raise ValueError("active_environment_artifact_source_mismatch")
         object.__setattr__(self, "artifacts", artifacts)
 
@@ -705,10 +711,12 @@ def build_toolbox_environment_mutations(
             raise ValueError("toolbox_plan_verified_candidate_identity_mismatch")
         ordered = sorted(
             group,
-            key=lambda item: (item.source_priority, item.source_id, item.lock_digest),
+            key=lambda item: (item.source_priority, item.source_ids, item.lock_digest),
         )
-        expected_lock = profile.custom_resolved_lock_digest or profile.template_lock_digest
-        if ordered[0].lock_digest != expected_lock:
+        if (
+            profile.custom_resolved_lock_digest is None
+            and ordered[0].lock_digest != profile.template_lock_digest
+        ):
             raise ValueError("toolbox_plan_preferred_candidate_lock_mismatch")
         truncated = len(ordered) > 3
         selected_candidates = ordered[:3]
@@ -727,8 +735,8 @@ def build_toolbox_environment_mutations(
             mutations = _package_mutations(tuple(active_artifacts.values()), candidate.artifacts)
             alternative_payload = {
                 "environment_id": candidate.environment_id,
-                "source_id": candidate.source_id,
-                "source_origin": candidate.source_origin,
+                "source_ids": list(candidate.source_ids),
+                "source_origins": list(candidate.source_origins),
                 "lock_digest": candidate.lock_digest,
                 "artifacts": [item.to_dict() for item in candidate.artifacts],
                 "package_mutations": [item.to_dict() for item in mutations],
@@ -738,8 +746,8 @@ def build_toolbox_environment_mutations(
                     alternative_id=identity_digest(
                         "hosting.toolbox.resolution_alternative.v1", alternative_payload
                     ),
-                    source_id=candidate.source_id,
-                    source_origin=candidate.source_origin,
+                    source_ids=candidate.source_ids,
+                    source_origins=candidate.source_origins,
                     lock_digest=candidate.lock_digest,
                     artifacts=candidate.artifacts,
                     package_mutations=mutations,
@@ -800,8 +808,8 @@ def build_toolbox_environment_mutations(
             alternative_id=identity_digest(
                 "hosting.toolbox.removal_alternative.v1", payload
             ),
-            source_id=environment.source_id,
-            source_origin=environment.source_origin,
+            source_ids=environment.source_ids,
+            source_origins=environment.source_origins,
             lock_digest=identity_digest("hosting.toolbox.empty_lock.v1", []),
             artifacts=(),
             package_mutations=mutations,

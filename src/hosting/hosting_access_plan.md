@@ -636,7 +636,7 @@ boundary—not a double—passes.
 
 ### R3 - Multi-tool planning and consumer confirmation
 
-- [ ] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
+- [x] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
   `toolbox_plans.py` with exact complete resolutions, package diffs, bounded
   alternatives, source/config pins, and affected-tool dependency edges.
   - [x] **R3-01a** Add strict immutable environment-offer, exact-artifact,
@@ -645,7 +645,7 @@ boundary—not a double—passes.
   - [x] **R3-01b** Deterministically derive tool classifications, exact package
     mutations, complete dependency edges, policy preference, removal-only
     offers, and three-choice truncation from already verified exact candidates.
-  - [ ] **R3-01c** Populate the builder from the configured-source exact
+  - [x] **R3-01c** Populate the builder from the configured-source exact
     resolver and active definition without manufactured or unverified inputs.
 - [ ] **R3-02** Convert planning to a new hosted execution kind, route generic
   `op-start`/`op-status`/`op-cancel` to its canonical hosted record, and make

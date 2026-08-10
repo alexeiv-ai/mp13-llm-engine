@@ -167,8 +167,14 @@ class AirgapBuiltinWheelResolver:
             return source.source_id, source.maximum_download_bytes
         raise ValueError("resolved_artifact_source_invalid")
 
-    def _resolve_one(self, intent: ToolboxBuiltinIntent) -> ResolvedBuiltinWheelClosure:
-        if not intent.package_requirements:
+    def resolve_requirements(
+        self, *, template_id: str, package_requirements: tuple[str, ...]
+    ) -> ResolvedBuiltinWheelClosure:
+        logical_template_id = str(template_id or "").strip()
+        if not logical_template_id:
+            raise ValueError("resolved_template_id_required")
+        requirements = tuple(str(item or "").strip() for item in package_requirements)
+        if not requirements or any(not item for item in requirements):
             raise RuntimeError("required_template_requirements_missing")
         wheelhouses = [
             self.sources[item.source_id]
@@ -203,7 +209,7 @@ class AirgapBuiltinWheelResolver:
             ]
             for root in wheelhouses:
                 command.extend(("--find-links", str(root)))
-            command.extend(intent.package_requirements)
+            command.extend(requirements)
             environment = {
                 **os.environ,
                 "PIP_CONFIG_FILE": os.devnull,
@@ -275,7 +281,7 @@ class AirgapBuiltinWheelResolver:
         lock = tuple(distributions)
         artifact_tuple = tuple(artifacts)
         return ResolvedBuiltinWheelClosure(
-            template_id=intent.template_id,
+            template_id=logical_template_id,
             lock_digest=identity_digest(
                 "hosting.toolbox.builtin_lock.v1",
                 {
@@ -286,6 +292,12 @@ class AirgapBuiltinWheelResolver:
             ),
             locked_distributions=lock,
             locked_artifacts=artifact_tuple,
+        )
+
+    def _resolve_one(self, intent: ToolboxBuiltinIntent) -> ResolvedBuiltinWheelClosure:
+        return self.resolve_requirements(
+            template_id=intent.template_id,
+            package_requirements=intent.package_requirements,
         )
 
     def resolve(self) -> BuiltinWheelResolutionResult:

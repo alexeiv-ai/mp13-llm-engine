@@ -17,6 +17,10 @@ from hosting.toolbox.host_project_config import (
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.target import detect_current_toolbox_target
 from hosting_toolbox_test_catalog import realized_test_catalog
+from test_hosting_toolbox_definition_resolution import (
+    _configuration as _definition_resolution_configuration,
+    _service_with_verified_closure,
+)
 
 
 TARGET = detect_current_toolbox_target()
@@ -280,14 +284,11 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
 def test_configuration_revision_change_invalidates_unused_state_but_preserves_active_pins(
     tmp_path: Path,
 ) -> None:
-    service = _service(tmp_path)
-    release = realized_test_catalog().release("core")
-    published = service.toolbox_template_publish(
-        template=release.template.to_dict(),
-        artifact_references=[release.artifact_reference()],
-        manifest_signature=release.manifest_signature,
-        activate=True,
-        actor_id="test:config-transition",
+    service, template = _service_with_verified_closure(tmp_path)
+    catalog = service._toolbox_template_catalog.read()  # noqa: SLF001
+    published_digest = catalog["active"]["core"]
+    published_entry = next(
+        item for item in catalog["entries"] if item["template_digest"] == published_digest
     )
     plan = service.toolbox_plan_definition(
         definition=_definition(),
@@ -295,15 +296,15 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
         authority_id="workspace:test",
     )
     assert service._toolbox_definition_plans.list(now_ms=int(time.time() * 1000))  # noqa: SLF001
-    artifact_digest = release.artifact_reference()["sha256"]
+    artifact_digest = published_entry["artifacts"][0]["sha256"]
     active_receipt = ToolboxTemplateMaterializationReceipt(
         template_id="core",
-        template_digest=published["template_digest"],
+        template_digest=published_digest,
         python_abi=TARGET.python_abi,
         platform=TARGET.platform,
         environment_digest=identity_digest("test.active.environment.v1", {}),
         artifact_digests=(artifact_digest,),
-        verified_import_roots=release.template.exposed_import_roots,
+        verified_import_roots=template.exposed_import_roots,
         verified_at_ms=1,
         verifier="config-transition-test-v1",
     )
@@ -327,7 +328,7 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
     references_before = references.read_bytes()
     service.close()
 
-    changed = _configuration()
+    changed = _definition_resolution_configuration()
     changed["retention"]["artifact_cache_grace_seconds"] += 1
     restarted = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
@@ -342,7 +343,7 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
     assert restarted._toolbox_definition_plans.list(now_ms=int(time.time() * 1000)) == ()  # noqa: SLF001
     assert restarted._toolbox_template_catalog.read() == catalog_before  # noqa: SLF001
     assert restarted._toolbox_materialization_receipts.get(  # noqa: SLF001
-        template_digest=published["template_digest"],
+        template_digest=published_digest,
         python_abi=TARGET.python_abi,
         platform=TARGET.platform,
     ) == active_receipt

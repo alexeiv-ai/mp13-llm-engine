@@ -168,8 +168,8 @@ def _alternative(
     }
     return ToolboxResolutionAlternativeSpec(
         alternative_id=identity_digest("test.toolbox.alternative.v1", payload),
-        source_id="release",
-        source_origin="https://packages.example.invalid/simple",
+        source_ids=("release",),
+        source_origins=("https://packages.example.invalid/simple",),
         lock_digest=identity_digest("test.toolbox.lock.v1", payload),
         artifacts=(artifact,),
         package_mutations=mutations,
@@ -437,7 +437,9 @@ def test_plan_offer_models_reject_source_secrets_and_more_than_three_alternative
     alternative = _alternative("one", mutations=(mutation,))
     assert ToolboxResolutionAlternativeSpec.from_dict(alternative.to_dict()) == alternative
     leaked = alternative.to_dict()
-    leaked["source_origin"] = "https://user:secret@packages.example.invalid/simple?token=x"
+    leaked["source_origins"] = [
+        "https://user:secret@packages.example.invalid/simple?token=x"
+    ]
     with pytest.raises(ValueError, match="toolbox_plan_source_origin_invalid"):
         ToolboxResolutionAlternativeSpec.from_dict(leaked)
     with pytest.raises(ValueError, match="toolbox_plan_alternatives_invalid"):
@@ -482,8 +484,8 @@ def test_environment_offer_builder_orders_truncates_and_computes_exact_additions
             environment_id=profile.profile_id,
             base_template_id=profile.template_id,
             base_template_revision="sha256:" + "a" * 64,
-            source_id=f"source-{index}",
-            source_origin=f"https://packages{index}.example.invalid/simple",
+            source_ids=(f"source-{index}",),
+            source_origins=(f"https://packages{index}.example.invalid/simple",),
             source_priority=priority,
             lock_digest=profile.template_lock_digest,
             artifacts=tuple(
@@ -507,10 +509,10 @@ def test_environment_offer_builder_orders_truncates_and_computes_exact_additions
     offer = offers[0]
     assert offer.alternatives_truncated is True
     assert len(offer.alternatives) == 3
-    assert [item.source_id for item in offer.alternatives] == [
-        "source-1",
-        "source-3",
-        "source-2",
+    assert [item.source_ids for item in offer.alternatives] == [
+        ("source-1",),
+        ("source-3",),
+        ("source-2",),
     ]
     assert [item.distribution for item in offer.alternatives[0].package_mutations] == [
         "demo-pkg",
@@ -546,8 +548,8 @@ def test_environment_offer_builder_emits_explicit_removal_without_candidates() -
         tool_keys=("pkg.remove:Remove",),
         base_template_id="core",
         base_template_revision="sha256:" + "9" * 64,
-        source_id="release",
-        source_origin="airgap://release",
+        source_ids=("release",),
+        source_origins=("airgap://release",),
         lock_digest="sha256:" + "a" * 64,
         artifacts=(artifact,),
     )
