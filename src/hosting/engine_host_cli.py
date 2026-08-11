@@ -886,6 +886,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "hosting-receipt-ledger-cutover",
         "toolbox-state-archive-v1",
         "toolbox-gc",
+        "toolbox-environment-remove",
         "toolbox-get-definition",
         "toolbox-plan-definition",
         "toolbox-confirm-definition-plan",
@@ -1954,6 +1955,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "toolbox-gc":
             _print_ok(svc.toolbox_gc())
+            return 0
+        if cmd == "toolbox-environment-remove":
+            _print_ok(
+                svc.toolbox_environment_remove(
+                    environment_digest=str(payload.get("environment_digest") or ""),
+                    request_id=str(payload.get("request_id") or ""),
+                )
+            )
             return 0
         if cmd == "toolbox-get-definition":
             _print_ok(

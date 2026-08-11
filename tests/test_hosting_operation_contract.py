@@ -244,6 +244,44 @@ def test_toolbox_artifact_import_has_upload_selector_and_noncancellable_phases()
         HostedOperationStatus.from_dict(payload)
 
 
+def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases() -> None:
+    digest = "sha256:" + "a" * 64
+    ref = HostedOperationRef(
+        operation_id="op_environment_remove",
+        request_id="remove-one",
+        execution_kind=HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE,
+        selector=HostedOperationSelector(kind="environment_digest", id=digest),
+        fingerprint=hosted_execution_fingerprint({"environment_digest": digest}),
+        receipt_namespace=f"toolbox_environment_remove:{digest}",
+    )
+    status = HostedOperationStatus(
+        operation=ref,
+        lifecycle=HostedOperationLifecycle.RUNNING,
+        request_id=ref.request_id,
+        created_at_ms=1000,
+        updated_at_ms=1100,
+        progress=HostedOperationProgress(
+            phase="reference_check",
+            code="environment_remove_references_checked",
+            completed_units=1,
+            total_units=1,
+            updated_at_ms=1100,
+            summary="References checked.",
+            cancellable=True,
+        ),
+    )
+    assert HostedOperationStatus.from_dict(status.to_dict()) == status
+    payload = status.to_dict()
+    payload["progress"]["phase"] = "arbitrary"
+    with pytest.raises(ValueError, match="toolbox_environment_remove_progress_phase_invalid"):
+        HostedOperationStatus.from_dict(payload)
+    payload = status.to_dict()
+    payload["progress"]["phase"] = "removal"
+    payload["progress"]["cancellable"] = True
+    with pytest.raises(ValueError, match="toolbox_environment_remove_committed_progress_cancellable"):
+        HostedOperationStatus.from_dict(payload)
+
+
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [

@@ -3505,6 +3505,18 @@ class EngineHostControlChannel:
         res = self._invoke("toolbox-gc", {})
         return dict(res or {})
 
+    def toolbox_environment_remove(
+        self, *, environment_digest: str, request_id: str
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-environment-remove",
+            {
+                "environment_digest": str(environment_digest or "").strip(),
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+        return dict(res or {})
+
     def toolbox_get_definition(
         self, *, toolbox_id: str, operator_details: bool = False
     ) -> Dict[str, Any]:

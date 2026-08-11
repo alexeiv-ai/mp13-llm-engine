@@ -2,11 +2,240 @@
 from __future__ import annotations
 
 import shutil
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
+
+from ..operation_contract import (
+    HostedExecutionKind,
+    HostedOperationLifecycle,
+    HostedOperationProgress,
+    HostedOperationSelector,
+    hosted_execution_fingerprint,
+)
+from ..toolbox.identity import require_digest
 
 
 class ToolboxMaintenanceMixin:
+    @staticmethod
+    def _contains_environment_digest(value: Any, environment_digest: str) -> bool:
+        if isinstance(value, str):
+            return value == environment_digest
+        if isinstance(value, Mapping):
+            return any(
+                ToolboxMaintenanceMixin._contains_environment_digest(item, environment_digest)
+                for item in value.values()
+            )
+        if isinstance(value, (list, tuple)):
+            return any(
+                ToolboxMaintenanceMixin._contains_environment_digest(item, environment_digest)
+                for item in value
+            )
+        return False
+
+    def _environment_removal_blockers(
+        self, *, environment_digest: str, operation_id: str = ""
+    ) -> list[str]:
+        key = require_digest(environment_digest, label="environment_digest")
+        blockers: set[str] = set()
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        if configuration is not None and key in set(configuration.retention.protected_digests):
+            blockers.add("protected")
+
+        for snapshot in self._toolbox_v2_snapshots().values():
+            for raw in dict(snapshot.get("profiles") or {}).values():
+                if str(dict(dict(raw or {}).get("profile") or {}).get("environment_key") or "") == key:
+                    blockers.add("active")
+        for registration in self._toolbox_v2_registrations().values():
+            if (
+                str(registration.get("routing_state") or "") == "candidate"
+                and self._toolbox_registration_environment_key(registration) == key
+            ):
+                blockers.add("candidate")
+
+        now_ms = int(time.time() * 1000)
+        for plan in self._toolbox_definition_plans.list(now_ms=now_ms):
+            if self._contains_environment_digest(plan.to_dict(), key):
+                blockers.add("plan")
+        confirmation_state = self._toolbox_confirmations._read()  # noqa: SLF001 - same service boundary
+        for raw in dict(confirmation_state.get("receipts") or {}).values():
+            if int(dict(raw or {}).get("expires_at_ms") or 0) > now_ms and self._contains_environment_digest(raw, key):
+                blockers.add("confirmation")
+        for record in self._hosted_operations.active_records():
+            current_id = str(dict(dict(record or {}).get("operation") or {}).get("operation_id") or "")
+            if current_id != str(operation_id or "") and self._contains_environment_digest(
+                dict(record.get("metadata") or {}), key
+            ):
+                blockers.add("operation")
+
+        builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+        if builder is not None:
+            references = dict(builder._read_references_unlocked().get("environments") or {})  # noqa: SLF001
+            for reference_id in dict(references.get(key) or {}):
+                if str(reference_id).startswith("template:"):
+                    blockers.add("built_in")
+                else:
+                    blockers.add("reference")
+        return [item for item in (
+            "active", "candidate", "plan", "confirmation", "operation",
+            "built_in", "protected", "reference",
+        ) if item in blockers]
+
+    def toolbox_environment_remove(
+        self,
+        *,
+        environment_digest: str,
+        request_id: str,
+        owner_actor_id: str = "service:local",
+    ) -> dict[str, Any]:
+        key = require_digest(environment_digest, label="environment_digest")
+        rid = str(request_id or "").strip()
+        if not rid:
+            raise ValueError("toolbox_environment_remove_request_id_required")
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        if configuration is None:
+            raise ValueError("toolbox_host_project_configuration_required")
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE.value,
+                "environment_digest": key,
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+            }
+        )
+        owner = self._operation_owner(owner_actor_id)
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=owner,
+            execution_kind=HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE,
+            selector=HostedOperationSelector(kind="environment_digest", id=key),
+            namespace=f"toolbox_environment_remove:{key}",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "environment_digest": key,
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+            },
+        )
+        status = prepared.get("status")
+        if status is None:
+            raise RuntimeError("hosted_operation_capacity")
+        if prepared["action"] != "dispatch":
+            return dict(status)
+        operation_id = str(status["operation"]["operation_id"])
+        thread = threading.Thread(
+            target=self._run_toolbox_environment_remove,
+            kwargs={"operation_id": operation_id, "environment_digest": key},
+            name=f"toolbox-environment-remove-{operation_id[-8:]}",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.environment_remove_result.v1",
+                    "status": "error",
+                    "code": "environment_remove_dispatch_failed",
+                },
+                reason="environment_remove_dispatch_failed",
+            )
+            raise
+        return dict(status)
+
+    def _run_toolbox_environment_remove(
+        self, *, operation_id: str, environment_digest: str
+    ) -> None:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+
+        def progress(
+            phase: str,
+            code: str,
+            summary: str,
+            *,
+            completed_units: int | None = None,
+            total_units: int | None = None,
+            cancellable: bool,
+        ) -> None:
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase=phase,
+                    code=code,
+                    completed_units=completed_units,
+                    total_units=total_units,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary=summary,
+                    cancellable=cancellable,
+                ),
+            )
+
+        try:
+            progress(
+                "validation", "environment_remove_validated",
+                "The exact environment digest and retention revision were validated.",
+                completed_units=1, total_units=1, cancellable=True,
+            )
+            progress(
+                "reference_check", "environment_remove_references_checked",
+                "Active, candidate, plan, receipt, operation, and built-in references were checked.",
+                completed_units=1, total_units=1, cancellable=True,
+            )
+            blockers = self._environment_removal_blockers(
+                environment_digest=environment_digest, operation_id=operation_id
+            )
+            if blockers:
+                return self._hosted_operations.finish(
+                    operation_id=operation_id,
+                    lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                    envelope={
+                        "contract": "hosting.toolbox.environment_remove_result.v1",
+                        "status": "blocked",
+                        "code": "environment_removal_blocked",
+                        "environment_digest": environment_digest,
+                        "blocking_reference_kinds": blockers,
+                    },
+                )
+            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+            if builder is None:
+                raise ValueError("toolbox_environment_builder_unconfigured")
+            progress(
+                "removal", "environment_remove_started",
+                "The exact unreferenced environment is being removed.",
+                completed_units=0, total_units=1, cancellable=False,
+            )
+            result = builder.remove_environment(environment_key=environment_digest)
+            progress(
+                "cleanup", "environment_remove_complete",
+                "The exact environment removal completed.",
+                completed_units=1, total_units=1, cancellable=False,
+            )
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "contract": "hosting.toolbox.environment_remove_result.v1",
+                    "status": result,
+                    "code": f"environment_{result}",
+                    "environment_digest": environment_digest,
+                },
+            )
+        except Exception as exc:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.environment_remove_result.v1",
+                    "status": "error",
+                    "code": "environment_remove_failed",
+                    "environment_digest": environment_digest,
+                    "diagnostics": [{"code": "environment_remove_failed", "summary": str(exc)}],
+                },
+                reason="environment_remove_failed",
+            )
     def _toolbox_v2_snapshots(self) -> Dict[str, Dict[str, Any]]:
         return {
             str(toolbox_id): dict(snapshot or {})
@@ -336,7 +565,9 @@ class ToolboxMaintenanceMixin:
                 removed_bundles.append(str(path))
         removed_environments: List[str] = []
         builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+        configuration = getattr(self, "_toolbox_host_project_config", None)
         if builder is not None:
+            retention = configuration.retention if configuration is not None else None
             active_references = {
                 str(item or "")
                 for snapshot in self._toolbox_v2_snapshots().values()
@@ -350,7 +581,13 @@ class ToolboxMaintenanceMixin:
                             environment_key=environment_key,
                             reference_id=reference_id,
                         )
-            removed_environments = list(builder.garbage_collect())
+            removed_environments = list(
+                builder.garbage_collect(
+                    protected_environment_keys=(retention.protected_digests if retention else ()),
+                    maximum_cache_bytes=(retention.maximum_cache_bytes if retention else None),
+                    maximum_cache_artifacts=(retention.maximum_cache_artifacts if retention else None),
+                )
+            )
         return {
             "status": "ok",
             "contract": "hosting.toolbox.gc.v2",
@@ -363,6 +600,15 @@ class ToolboxMaintenanceMixin:
                 "removed_bundle_count": len(removed_bundles),
                 "removed_environment_count": len(removed_environments),
             },
+            "retention": (
+                {
+                    "config_revision": configuration.config_revision,
+                    "source_set_revision": configuration.source_set_revision,
+                    **configuration.retention.to_dict(),
+                }
+                if configuration is not None
+                else None
+            ),
         }
 
     def toolbox_reconcile(

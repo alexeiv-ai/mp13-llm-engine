@@ -695,7 +695,7 @@ boundary—not a double—passes.
 - [x] **R5-01** Recompute complete closure after tool/package removal, reuse
   unaffected immutable environments, release references after publication, and
   prove custom-to-built-in contraction.
-- [ ] **R5-02** Implement revisioned retention/GC config and the exact-digest
+- [x] **R5-02** Implement revisioned retention/GC config and the exact-digest
   non-built-in environment removal hosted operation with active/candidate/plan/
   receipt/operation reference checks and progress.
 - [ ] **R5-03** Add administrator construction of a named template from an exact

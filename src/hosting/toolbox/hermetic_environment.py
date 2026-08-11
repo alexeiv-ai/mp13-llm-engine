@@ -701,8 +701,49 @@ class HermeticToolboxEnvironmentBuilder:
                 state["environments"].pop(key, None)
             self._atomic_json(self.references_path, state)
 
-    def garbage_collect(self, *, now_ms: int | None = None) -> tuple[str, ...]:
+    def remove_environment(self, *, environment_key: str) -> str:
+        """Remove one exact unreferenced environment, never a logical/glob path."""
+
+        key = require_digest(environment_key, label="environment_key")
+        root = (self.environments_root / key.removeprefix("sha256:")).resolve()
+        if root.parent != self.environments_root:
+            raise HermeticToolboxEnvironmentBuildError(
+                "environment_path_invalid", "The exact environment digest escaped the cache root."
+            )
+        with _environment_process_lock(self.references_lock):
+            state = self._read_references_unlocked()
+            if dict(state["environments"].get(key) or {}):
+                raise HermeticToolboxEnvironmentBuildError(
+                    "environment_references_present",
+                    "The environment still has one or more active references.",
+                )
+            if not root.exists():
+                return "already_absent"
+            if not root.is_dir():
+                raise HermeticToolboxEnvironmentBuildError(
+                    "environment_path_invalid", "The exact environment target is not a directory."
+                )
+            with _environment_process_lock(self.locks_root / f"{key.removeprefix('sha256:')}.lock"):
+                shutil.rmtree(root)
+            return "removed"
+
+    def garbage_collect(
+        self,
+        *,
+        now_ms: int | None = None,
+        protected_environment_keys: Sequence[str] = (),
+        maximum_cache_bytes: int | None = None,
+        maximum_cache_artifacts: int | None = None,
+    ) -> tuple[str, ...]:
         current = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        protected = {
+            require_digest(item, label="protected_environment_key")
+            for item in protected_environment_keys
+        }
+        if maximum_cache_bytes is not None and int(maximum_cache_bytes) < 1:
+            raise ValueError("maximum_cache_bytes_invalid")
+        if maximum_cache_artifacts is not None and int(maximum_cache_artifacts) < 1:
+            raise ValueError("maximum_cache_artifacts_invalid")
         removed: list[str] = []
         with _environment_process_lock(self.references_lock):
             state = self._read_references_unlocked()
@@ -711,7 +752,7 @@ class HermeticToolboxEnvironmentBuilder:
                 if not root.is_dir() or not re.fullmatch(r"[0-9a-f]{64}", root.name):
                     continue
                 key = f"sha256:{root.name}"
-                if key in referenced:
+                if key in referenced or key in protected:
                     continue
                 receipt = self._read_json(root / "verification-receipt.json")
                 verified_at = int(receipt.get("verified_at_ms", current))

@@ -84,7 +84,7 @@ transcript was intentionally removed because it obscured current truth.
 | R2 Revisioned hosting configuration and built-ins | Complete | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-01b atomically persists revision history; changes invalidate unconsumed plans and non-active receipts while active catalog/environment-reference state remains unchanged. Focused config/plan/receipt/docs: 34 passed in 3.22s. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. R2-05b1 adds canonical raw-Ed25519 bundle verification, adversarial ZIP/wheel/closure validation, and atomic content-addressed indexing. Focused signed-bundle/resolver/config/docs matrix: 29 passed in 13.40s; Poetry lock/check and `git diff --check` passed (existing Poetry deprecation warnings only). |
 | R3 Multi-tool planning and consumer confirmation | Pending | No implementation started. |
 | R4 Privileged approval and immutable apply | Pending | No implementation started. |
-| R5 Removal, retention, and administrator environments | Pending | No implementation started. |
+| R5 Removal, retention, and administrator environments | Active | R5-01 and R5-02 are complete; pause before R5-03. |
 | R6 Restart-safe consumer healing | Pending | No implementation started. |
 | R7 Breaking-change handoff and acceptance | Pending | No implementation started. |
 
@@ -160,7 +160,7 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R5-01 (`high`) is complete; pause before R5-02 (`average`).
+Active slice: none. R5-02 (`average`) is complete; pause before R5-03 (`high`).
 Remaining profiles are resolved from only their post-removal requirements, so a
 custom requests/urllib3 closure contracts to the exact built-in closure when
 those requirements disappear. Exact profiles reuse their engine, environment,
@@ -176,6 +176,21 @@ passed 92 tests in 40.08s; final model/atomic/state/docs validation passed 32
 tests in 7.34s. Compile and `git diff --check` passed. No public API was removed
 or replaced, so the existing breaking-change handoff already covers this
 explicit-removal behavior and required no new migration entry.
+
+Completed slice evidence: R5-02 (`average`) adds the revision-bound,
+administrator-only `toolbox_environment_remove` durable operation with an exact
+`environment_digest` selector. It checks active profiles, candidate
+registrations, unexpired plans and confirmations, active operations, built-in
+references, protected retention digests, and builder references before any
+physical deletion. The builder performs one exact locked removal and reports
+`removed`/`already_absent`; GC now carries the revisioned retention policy and
+protected digests. Operation progress is strict and durable through validation,
+reference check, removal, and cleanup. The R5-02 maintenance/operation/auth/
+transport/contract suite passed 96 tests in 10.76s; exact physical builder
+removal passed 1 test in 13.70s; the earlier R5-01 boundary and surrounding
+regression remain recorded above. Compile and `git diff --check` passed. No
+public API was removed or replaced, so no breaking-change handoff update was
+required.
 
 Completed slice evidence: R3 and R4 are complete. R4-03/R4-04/R4-05
 (`high`) carry the selected exact verified CAS closure from confirmation through

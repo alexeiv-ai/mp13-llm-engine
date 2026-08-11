@@ -87,6 +87,10 @@ _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS = {
     "toolbox-approve-confirmed-definition-plan",
 }
 
+_TOOLBOX_ENVIRONMENT_ADMIN_COMMANDS = {
+    "toolbox-environment-remove",
+}
+
 _WORKFLOW_JS_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-ensure",
@@ -422,7 +426,7 @@ class AuthMixin:
             *_HOST_CAPABILITY_SESSION_COMMANDS,
         }
         if r == ROLE_ADMIN:
-            return all_non_bootstrap | _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS
+            return all_non_bootstrap | _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS | _TOOLBOX_ENVIRONMENT_ADMIN_COMMANDS
         if r == ROLE_DEPENDENCY_APPROVER:
             return {
                 *_TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS,

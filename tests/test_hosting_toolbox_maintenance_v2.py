@@ -119,6 +119,196 @@ def _service(tmp_path: Path) -> EngineHostService:
     )
 
 
+def _configuration(*, protected: tuple[str, ...] = ()) -> dict:
+    return {
+        "builtins": [{
+            "template_id": "core",
+            "imports": ["packaging"],
+            "package_requirements": [],
+            "sandbox_policy": "compute-only",
+            "required": True,
+            "prewarm": False,
+            "provenance": "maintenance-test",
+        }],
+        "sources": [{
+            "source_id": "release",
+            "kind": "airgap_store",
+            "origin": "airgap://release",
+            "credential_ref": None,
+            "allowed_package_namespaces": ["*"],
+            "priority": 1,
+            "trust_key_ids": ["release-key"],
+            "maximum_download_bytes": 1024 * 1024,
+        }],
+        "resolution": {
+            "mode": "air_gapped",
+            "timeout_seconds": 60,
+            "maximum_bytes": 1024 * 1024,
+            "maximum_artifacts": 16,
+            "allowed_redirect_origins": [],
+            "wheel_only": True,
+        },
+        "retention": {
+            "artifact_cache_grace_seconds": 60,
+            "maximum_cache_bytes": 1024 * 1024,
+            "maximum_cache_artifacts": 16,
+            "protected_digests": list(protected),
+            "remove_unreferenced_custom_revisions_on_apply": False,
+        },
+    }
+
+
+class _RemovalBuilder:
+    def __init__(self, *, references: dict[str, dict[str, int]] | None = None, result: str = "removed"):
+        self.references = {str(key): dict(value) for key, value in dict(references or {}).items()}
+        self.result = result
+        self.removed: list[str] = []
+
+    def _read_references_unlocked(self):
+        return {"environments": self.references}
+
+    def remove_environment(self, *, environment_key: str) -> str:
+        if self.references.get(environment_key):
+            raise RuntimeError("environment_references_present")
+        self.removed.append(environment_key)
+        return self.result
+
+
+def _configured_service(tmp_path: Path, *, protected: tuple[str, ...] = ()) -> EngineHostService:
+    service = EngineHostService(
+        engines_state_file=tmp_path / "managed.json",
+        control_state_file=tmp_path / "control.json",
+        toolbox_host_project_configuration=_configuration(protected=protected),
+    )
+    return service
+
+
+def _wait_remove(service: EngineHostService, started: dict) -> dict:
+    return service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=5
+    )
+
+
+def test_environment_remove_is_durable_idempotent_and_reports_progress(tmp_path: Path) -> None:
+    service = _configured_service(tmp_path)
+    builder = _RemovalBuilder()
+    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    digest = _digest("d")
+
+    first = service.toolbox_environment_remove(
+        environment_digest=digest, request_id="remove-one", owner_actor_id="admin:a"
+    )
+    second = service.toolbox_environment_remove(
+        environment_digest=digest, request_id="remove-one", owner_actor_id="admin:a"
+    )
+    terminal = _wait_remove(service, first)
+
+    assert first["operation"] == second["operation"]
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["status"] == "removed"
+    assert terminal["result"]["environment_digest"] == digest
+    assert terminal["progress"]["phase"] == "cleanup"
+    assert builder.removed == [digest]
+
+
+def test_environment_remove_blocks_active_candidate_and_builder_references(tmp_path: Path) -> None:
+    service = _configured_service(tmp_path)
+    digest = _digest("a")
+    builder = _RemovalBuilder(references={digest: {"candidate:one": 1}})
+    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    service.register_spawned(
+        engine_id="candidate-one",
+        pid=1234,
+        command=["python", "worker.py"],
+        executor_kind="toolbox_executor",
+        routing_state="candidate",
+        bundle={"toolbox_id": "demo"},
+        environment={"environment_key": digest},
+        tool_access={"allowed_tool_names": []},
+    )
+
+    started = service.toolbox_environment_remove(
+        environment_digest=digest, request_id="remove-blocked", owner_actor_id="admin:a"
+    )
+    terminal = _wait_remove(service, started)
+
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["status"] == "blocked"
+    assert terminal["result"]["blocking_reference_kinds"] == ["candidate", "reference"]
+    assert builder.removed == []
+
+
+def test_environment_remove_blocks_protected_digest_and_reports_already_absent(tmp_path: Path) -> None:
+    protected = _digest("b")
+    service = _configured_service(tmp_path, protected=(protected,))
+    service._hermetic_toolbox_environment_builder = _RemovalBuilder(result="already_absent")  # type: ignore[attr-defined]
+
+    blocked = _wait_remove(
+        service,
+        service.toolbox_environment_remove(
+            environment_digest=protected, request_id="remove-protected", owner_actor_id="admin:a"
+        ),
+    )
+    absent_digest = _digest("c")
+    absent = _wait_remove(
+        service,
+        service.toolbox_environment_remove(
+            environment_digest=absent_digest, request_id="remove-absent", owner_actor_id="admin:a"
+        ),
+    )
+
+    assert blocked["result"]["status"] == "blocked"
+    assert blocked["result"]["blocking_reference_kinds"] == ["protected"]
+    assert absent["result"]["status"] == "already_absent"
+
+
+def test_environment_remove_is_admin_only() -> None:
+    command = "toolbox-environment-remove"
+    assert command in EngineHostService._commands_allowed_for_role("admin")  # noqa: SLF001
+    for role in ("config_editor", "worker_user", "diagnostic_user", "dependency_approver"):
+        assert command not in EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
+
+
+def test_environment_remove_checks_unexpired_plan_confirmation_and_operation_references(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _configured_service(tmp_path)
+    digest = _digest("d")
+    service._hermetic_toolbox_environment_builder = _RemovalBuilder()  # type: ignore[attr-defined]
+
+    class _Plan:
+        def to_dict(self):
+            return {"environment_key": digest}
+
+    monkeypatch.setattr(
+        service._toolbox_definition_plans,
+        "list",
+        lambda *, now_ms: (_Plan(),),
+    )
+    monkeypatch.setattr(
+        service._toolbox_confirmations,
+        "_read",
+        lambda: {"receipts": {"receipt": {"expires_at_ms": 9_999_999_999_999, "environment_key": digest}}},
+    )
+    monkeypatch.setattr(
+        service._hosted_operations,
+        "active_records",
+        lambda **kwargs: [{
+            "operation": {"operation_id": "other-operation"},
+            "metadata": {"environment_digest": digest},
+        }],
+    )
+
+    terminal = _wait_remove(
+        service,
+        service.toolbox_environment_remove(
+            environment_digest=digest, request_id="remove-persisted-blockers", owner_actor_id="admin:a"
+        ),
+    )
+
+    assert terminal["result"]["blocking_reference_kinds"] == ["plan", "confirmation", "operation"]
+
+
 def test_route_based_references_consistency_and_review(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _install_active(service)

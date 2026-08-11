@@ -304,6 +304,23 @@ def test_references_defer_deletion_to_grace_period_gc(tmp_path: Path) -> None:
     assert not Path(spec.environment_root).exists()
 
 
+def test_exact_environment_removal_requires_released_reference_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "approved"
+    source.mkdir()
+    alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
+    resolved = _resolved((alpha,))
+    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    spec = builder.materialize_environment(resolved, reference_id="toolbox:remove")
+
+    with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_references_present"):
+        builder.remove_environment(environment_key=spec.environment_key)
+    builder.release_reference(environment_key=spec.environment_key, reference_id="toolbox:remove")
+    assert builder.remove_environment(environment_key=spec.environment_key) == "removed"
+    assert builder.remove_environment(environment_key=spec.environment_key) == "already_absent"
+
+
 def test_required_environment_readiness_is_receipt_gated(tmp_path: Path) -> None:
     source = tmp_path / "approved"
     source.mkdir()

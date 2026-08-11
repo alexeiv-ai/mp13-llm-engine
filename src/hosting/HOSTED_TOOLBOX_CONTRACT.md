@@ -510,6 +510,18 @@ entries whose grace period elapsed. Revoked content remains while referenced
 and becomes GC-eligible only after the last active/history retention reference
 and grace period expire.
 
+Environment removal is an administrator-only durable operation,
+`toolbox_environment_remove`, selected by one canonical `environment_digest`.
+The digest is the exact immutable environment key; paths, globs, logical
+template IDs, and force flags are invalid. The operation validates the current
+configuration revision, reports progress through `validation`,
+`reference_check`, `removal`, and `cleanup`, and returns `removed`,
+`already_absent`, or a stable ordered list of blocking reference kinds. Active
+profiles, candidates, unexpired plans and confirmations, active operations,
+built-in references, protected digests, and any builder reference prevent
+removal. GC uses the revisioned retention policy and never bypasses those
+checks.
+
 ## Initial environment catalog
 
 The release-owned configuration declares exactly two stable logical built-in

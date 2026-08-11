@@ -106,6 +106,9 @@ TOOLBOX_SETUP_PHASES = frozenset(
 TOOLBOX_ARTIFACT_IMPORT_PHASES = frozenset(
     {"validation", "artifact_verification", "publication", "cleanup"}
 )
+TOOLBOX_ENVIRONMENT_REMOVE_PHASES = frozenset(
+    {"validation", "reference_check", "removal", "cleanup"}
+)
 
 
 class HostedExecutionKind(StrEnum):
@@ -116,6 +119,7 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_TEMPLATE_PREWARM = "toolbox_template_prewarm"
     TOOLBOX_SETUP = "toolbox_setup"
     TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
+    TOOLBOX_ENVIRONMENT_REMOVE = "toolbox_environment_remove"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -194,12 +198,15 @@ class HostedOperationSelector:
 
     def __post_init__(self) -> None:
         if self.kind not in {
-            "toolbox_id", "engine_id", "template_id", "host_scope", "upload_id"
+            "toolbox_id", "engine_id", "template_id", "host_scope", "upload_id",
+            "environment_digest",
         }:
             raise ValueError("operation_selector_kind_invalid")
         _bounded_text(self.id, label="operation_selector_id", max_bytes=MAX_SELECTOR_ID_BYTES)
         if self.kind == "host_scope" and self.id != "toolbox-host":
             raise ValueError("operation_host_scope_invalid")
+        if self.kind == "environment_digest":
+            canonical_sha256_digest(self.id, label="operation_environment_digest")
 
     def to_dict(self) -> Dict[str, str]:
         return {"kind": self.kind, "id": self.id}
@@ -520,6 +527,11 @@ class HostedOperationStatus:
                     raise ValueError("toolbox_artifact_import_progress_phase_invalid")
                 if self.progress.cancellable:
                     raise ValueError("toolbox_artifact_import_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE:
+                if self.progress.phase not in TOOLBOX_ENVIRONMENT_REMOVE_PHASES:
+                    raise ValueError("toolbox_environment_remove_progress_phase_invalid")
+                if self.progress.phase in {"removal", "cleanup"} and self.progress.cancellable:
+                    raise ValueError("toolbox_environment_remove_committed_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -604,6 +616,7 @@ __all__ = [
     "TOOLBOX_TEMPLATE_PREWARM_PHASES",
     "TOOLBOX_SETUP_PHASES",
     "TOOLBOX_ARTIFACT_IMPORT_PHASES",
+    "TOOLBOX_ENVIRONMENT_REMOVE_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
     "HostedOperationProgress",

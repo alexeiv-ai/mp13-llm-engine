@@ -2383,6 +2383,7 @@ class EngineHostDaemon:
                     "toolbox-plan-definition",
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
+                    "toolbox-environment-remove",
                 }:
                     result = await asyncio.to_thread(
                         self._call_service, target_cmd, target_payload
@@ -3284,6 +3285,12 @@ class EngineHostDaemon:
             )
         if cmd == "toolbox-gc":
             return svc.toolbox_gc()
+        if cmd == "toolbox-environment-remove":
+            return svc.toolbox_environment_remove(
+                environment_digest=str(payload.get("environment_digest") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "toolbox-get-definition":
             actor = str(payload.get("_claim_actor_id") or "service:local")
             return svc.toolbox_get_definition(
