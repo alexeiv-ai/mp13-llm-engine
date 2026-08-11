@@ -330,6 +330,65 @@ def _policy() -> dict:
     return {"revision": identity_digest("test.bundle.policy.v1", body), **body}
 
 
+def test_admin_constructs_inactive_template_from_exact_verified_base(
+    tmp_path: Path,
+) -> None:
+    configuration = _runtime_configuration()
+    private, public = _keys()
+    source = tmp_path / "airgap"
+    source.mkdir()
+    _runtime_bundle(source / "runtime.zip", configuration, private)
+    service = _manual_resolved_service(
+        tmp_path, configuration=configuration, source=source, public=public
+    )
+    prepared = service.prepare_configured_toolbox_templates()
+    published = service.publish_prepared_configured_toolbox_templates(prepared)
+    base_digest = published["templates"][0]["template_digest"]
+
+    started = service.toolbox_template_construct(
+        template_id="team-core",
+        base_template_digest=base_digest,
+        imports=["hosting"],
+        package_requirements=[],
+        request_id="construct-team-core-1",
+        owner_actor_id="admin:test",
+    )
+    duplicate = service.toolbox_template_construct(
+        template_id="team-core",
+        base_template_digest=base_digest,
+        imports=["hosting"],
+        package_requirements=[],
+        request_id="construct-team-core-1",
+        owner_actor_id="admin:test",
+    )
+    assert duplicate["operation"]["operation_id"] == started["operation"]["operation_id"]
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=60
+    )
+    recovered = service.hosted_operation_resolve_request(
+        execution_kind="toolbox_template_construct",
+        selector={"kind": "template_id", "id": "team-core"},
+        request_id="construct-team-core-1",
+        owner_actor_id="admin:test",
+    )
+
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["code"] == "template_constructed_inactive"
+    assert terminal["result"]["base_template_digest"] == base_digest
+    assert recovered["operation"]["operation_id"] == started["operation"]["operation_id"]
+    custom_digest = terminal["result"]["template_digest"]
+    catalog = service._toolbox_template_catalog.read()  # noqa: SLF001
+    custom = next(item for item in catalog["entries"] if item["template_digest"] == custom_digest)
+    assert custom["lifecycle"] == "inactive"
+    assert "team-core" not in catalog["active"]
+
+    activated = service.toolbox_template_activate(
+        template_id="team-core", template_digest=custom_digest, actor_id="admin:test"
+    )
+    assert activated["active_revision"] is True
+    assert service._toolbox_template_catalog.read()["active"]["team-core"] == custom_digest  # noqa: SLF001
+
+
 def test_signed_bundle_import_is_atomic_idempotent_and_restart_readable(tmp_path: Path) -> None:
     configuration = _configuration()
     private, public = _keys()

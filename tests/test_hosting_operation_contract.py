@@ -283,6 +283,66 @@ def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases(
 
 
 @pytest.mark.parametrize(
+    ("kind", "selector", "namespace", "phase", "invalid_phase", "committed_phase"),
+    [
+        (
+            HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT,
+            HostedOperationSelector(kind="template_id", id="team-core"),
+            "toolbox_template_construct:team-core",
+            "resolution",
+            "repair",
+            "publication",
+        ),
+        (
+            HostedExecutionKind.TOOLBOX_MAINTENANCE,
+            HostedOperationSelector(kind="host_scope", id="toolbox-host"),
+            "toolbox_maintenance:toolbox-host",
+            "recovery",
+            "publication",
+            "gc",
+        ),
+    ],
+)
+def test_remaining_r5_operations_have_strict_progress_contracts(
+    kind, selector, namespace, phase, invalid_phase, committed_phase
+) -> None:
+    ref = HostedOperationRef(
+        operation_id=f"op_{kind.value}",
+        request_id=f"request-{kind.value}",
+        execution_kind=kind,
+        selector=selector,
+        fingerprint=hosted_execution_fingerprint({"kind": kind.value}),
+        receipt_namespace=namespace,
+    )
+    status = HostedOperationStatus(
+        operation=ref,
+        lifecycle=HostedOperationLifecycle.RUNNING,
+        request_id=ref.request_id,
+        created_at_ms=1000,
+        updated_at_ms=1100,
+        progress=HostedOperationProgress(
+            phase=phase,
+            code="r5_progress",
+            completed_units=0,
+            total_units=1,
+            updated_at_ms=1100,
+            summary="R5 work is in progress.",
+            cancellable=True,
+        ),
+    )
+    assert HostedOperationStatus.from_dict(status.to_dict()) == status
+    payload = status.to_dict()
+    payload["progress"]["phase"] = invalid_phase
+    with pytest.raises(ValueError, match="progress_phase_invalid"):
+        HostedOperationStatus.from_dict(payload)
+    payload = status.to_dict()
+    payload["progress"]["phase"] = committed_phase
+    payload["progress"]["cancellable"] = True
+    with pytest.raises(ValueError, match="committed_progress_cancellable"):
+        HostedOperationStatus.from_dict(payload)
+
+
+@pytest.mark.parametrize(
     ("changes", "reason"),
     [
         ({"phase": "UPPER"}, "operation_progress_phase_invalid"),

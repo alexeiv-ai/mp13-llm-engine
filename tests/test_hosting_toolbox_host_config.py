@@ -15,8 +15,9 @@ from hosting.toolbox.host_project_config import (
     ToolboxHostProjectConfiguration,
 )
 from hosting.toolbox.identity import identity_digest
+from hosting.toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from hosting.toolbox.target import detect_current_toolbox_target
-from hosting_toolbox_test_catalog import realized_test_catalog
+from hosting_toolbox_test_catalog import publish_realized_test_catalog, realized_test_catalog
 from test_hosting_toolbox_definition_resolution import (
     _configuration as _definition_resolution_configuration,
     _service_with_verified_closure,
@@ -236,6 +237,7 @@ def test_realized_shipped_catalog_and_lock_resources_are_absent() -> None:
 
 def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -> None:
     service = _service(tmp_path)
+    publish_realized_test_catalog(service)
     shipped = realized_test_catalog()
     release = shipped.release("core")
     replacement = release.template.to_dict()
@@ -246,14 +248,21 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
             "hosting.toolbox.test.replacement.v1", {"template_id": "core", "version": 2}
         ),
     }
-    published = service.toolbox_template_publish(
-        template=replacement,
-        artifact_references=[release.artifact_reference()],
+    from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference
+    published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+        template=ToolboxEnvironmentTemplateSpec.from_dict(replacement),
+        artifacts=(ToolboxTemplateArtifactReference.from_dict(release.artifact_reference()),),
         manifest_signature=release.manifest_signature,
-        activate=True,
         actor_id="admin:replacement-test",
     )
-    assert published["outcome"] == "published_and_activated"
+    expected = service._toolbox_template_catalog.read()["active"]["core"]  # noqa: SLF001
+    replaced = service.toolbox_template_replace(
+        template_id="core",
+        expected_active_digest=expected,
+        replacement_digest=published["template_digest"],
+        actor_id="admin:replacement-test",
+    )
+    assert replaced["outcome"] == "replaced"
     operation = service.toolbox_template_prewarm(
         template_id="core",
         template_digest=published["template_digest"],
@@ -274,8 +283,9 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     restarted = _service(tmp_path)
     state = restarted._toolbox_template_catalog.read()  # noqa: SLF001
     core_entries = [item for item in state["entries"] if item["template_id"] == "core"]
-    assert len(core_entries) == 1
+    assert len(core_entries) == 2
     assert state["active"]["core"] == published["template_digest"]
+    assert {item["lifecycle"] for item in core_entries} == {"active", "deprecated"}
     status = restarted.hosting_setup_summary()["toolbox_readiness"]
     assert status["status"] == "degraded"
     assert status["templates"][0]["template_digest"] == published["template_digest"]

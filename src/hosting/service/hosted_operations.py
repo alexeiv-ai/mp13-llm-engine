@@ -72,6 +72,14 @@ class HostedOperationsMixin:
             if target.kind != "environment_digest":
                 raise ValueError("toolbox_environment_remove_selector_must_be_environment_digest")
             namespace = f"toolbox_environment_remove:{target.id}"
+        elif kind == HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT:
+            if target.kind != "template_id":
+                raise ValueError("toolbox_template_construct_selector_must_be_template_id")
+            namespace = f"toolbox_template_construct:{target.id}"
+        elif kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
+            if target.kind != "host_scope" or target.id != "toolbox-host":
+                raise ValueError("toolbox_maintenance_selector_must_be_host_scope")
+            namespace = "toolbox_maintenance:toolbox-host"
         else:
             if target.kind != "engine_id":
                 raise ValueError("workflow_operation_selector_must_be_engine_id")
@@ -158,6 +166,7 @@ class HostedOperationsMixin:
             HostedExecutionKind.TOOLBOX_SETUP,
             HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT,
             HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE,
+            HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT,
         }:
             return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
         return self._cancel_workflow_operation(record=record, reason=str(reason or "client_requested"))

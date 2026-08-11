@@ -374,16 +374,38 @@ assert them.
 | --- | --- |
 | `toolbox_consumer` | List/describe visible templates and submit definition read/plan/apply requests. |
 | `toolbox_dependency_approver` | Mint an exact actor/plan/delta-bound approval reference when package policy marks the delta reviewable. |
-| `hosting_template_admin` | Publish immutable template revisions, move lifecycle state, and start prewarm/materialization. |
+| `hosting_template_admin` | Construct immutable template revisions from an exact base, move lifecycle state, and start prewarm/materialization. |
 | `hosting_auditor` | Read bounded operator projections and audit events; no mutation authority is implied. |
 
 The consumer control methods are `toolbox-template-list` and
 `toolbox-template-describe`. The administrative methods are
-`toolbox-template-publish`, `toolbox-template-deprecate`,
+`toolbox-template-construct`, `toolbox-template-activate`,
+`toolbox-template-replace`, `toolbox-template-deprecate`,
 `toolbox-template-revoke`, and `toolbox-template-prewarm`. They use the same
-authenticated daemon control transport as other host administration. Prewarm
-returns a durable hosted-operation ref. Role checks are distinct even when one
-actor holds multiple roles.
+authenticated daemon control transport as other host administration.
+Construction and prewarm return durable hosted-operation status. Role checks
+are distinct even when one actor holds multiple roles.
+
+`toolbox-template-construct` accepts exactly a stable `request_id`, a new
+logical `template_id`, an exact non-revoked `base_template_digest`, bounded
+imports, and bounded package requirements. The daemon retains every exact base
+distribution pin, resolves the requested closure only through the active
+revisioned host sources, verifies its signed artifacts, builds and probes the
+complete environment, commits the exact receipt, and publishes one immutable
+`inactive` revision. The `toolbox_template_construct` operation uses the
+`template_id` selector and fixed phases `validation`, `resolution`,
+`artifact_verification`, `environment_build`, `import_probe`, `receipt_commit`,
+`publication`, and `cleanup`. It never accepts a lock, artifact reference,
+signature, URL, path, interpreter, source choice, activation flag, or force
+bypass.
+
+`toolbox-template-activate` activates an exact inactive revision only when the
+logical template has no different active revision. `toolbox-template-replace`
+atomically compares `expected_active_digest`, deprecates that revision, and
+activates the exact `replacement_digest`. A stale expected digest fails without
+changing the catalog. Deprecation removes an active pointer; revocation is
+terminal. Constructing a revision never changes active selection, and the raw
+publication surface does not exist.
 
 `toolbox-template-prewarm` accepts exactly the logical `template_id`, optional
 exact `template_digest`, target `python_abi`, target `platform`, and a stable

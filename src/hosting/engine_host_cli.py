@@ -132,8 +132,14 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-template-describe": [
         "'{\"template_id\":\"core\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-template-describe",
     ],
-    "toolbox-template-publish": [
-        "Get-Content template-publish.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-publish",
+    "toolbox-template-construct": [
+        "Get-Content template-construct.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-construct",
+    ],
+    "toolbox-template-activate": [
+        "Get-Content template-activate.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-activate",
+    ],
+    "toolbox-template-replace": [
+        "Get-Content template-replace.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-replace",
     ],
     "toolbox-template-deprecate": [
         "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-deprecate",
@@ -894,7 +900,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-apply-definition",
         "toolbox-template-list",
         "toolbox-template-describe",
-        "toolbox-template-publish",
+        "toolbox-template-construct",
+        "toolbox-template-activate",
+        "toolbox-template-replace",
         "toolbox-template-deprecate",
         "toolbox-template-revoke",
         "toolbox-template-prewarm",
@@ -1133,6 +1141,12 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     payload = _load_payload(args)
     cmd_name = str(args.command or "").strip()
     effective_payload = _payload_with_cli_selectors(args, payload)
+    durable_toolbox_commands = {
+        "toolbox-plan-definition",
+        "toolbox-confirm-definition-plan",
+        "toolbox-apply-definition",
+        "toolbox-template-construct",
+    }
 
     # Local-only recovery helpers. Intentionally bypass daemon RPC/auth surfaces.
     if cmd_name in {"reset-hosting-access", "force-stop-daemon", "force-restart-daemon"}:
@@ -1161,7 +1175,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
 
         ch = EngineHostControlChannel(_channel_settings_from_args(args, auto_bootstrap=False))
         try:
-            _print_ok(ch.invoke_control_command(cmd_name, effective_payload))
+            if cmd_name in durable_toolbox_commands:
+                _print_ok(
+                    ch.invoke_control_command(
+                        "op-start", {"command": cmd_name, "payload": effective_payload}
+                    )
+                )
+            else:
+                _print_ok(ch.invoke_control_command(cmd_name, effective_payload))
             return 0
         except Exception as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
@@ -1169,16 +1190,22 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
 
     # Try sending the command to the running daemon first
     pid_file_arg = getattr(args, "pid_file", None)
-    if cmd_name and cmd_name != "toolbox-state-archive-v1" and _try_daemon_invoke(cmd_name, effective_payload, pid_file=pid_file_arg):
+    daemon_cmd = "op-start" if cmd_name in durable_toolbox_commands else cmd_name
+    daemon_payload = (
+        {"command": cmd_name, "payload": effective_payload}
+        if cmd_name in durable_toolbox_commands
+        else effective_payload
+    )
+    if cmd_name and cmd_name != "toolbox-state-archive-v1" and _try_daemon_invoke(daemon_cmd, daemon_payload, pid_file=pid_file_arg):
         return 0
 
-    if cmd_name == "toolbox-template-prewarm":
+    if cmd_name in {"toolbox-template-prewarm", "toolbox-template-construct"}:
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "error": "template_prewarm_requires_daemon",
-                    "error_code": "template_prewarm_requires_daemon",
+                    "error": "template_operation_requires_daemon",
+                    "error_code": "template_operation_requires_daemon",
                 },
                 ensure_ascii=False,
             )
@@ -2021,13 +2048,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "toolbox-template-publish":
+        if cmd == "toolbox-template-activate":
             _print_ok(
-                svc.toolbox_template_publish(
-                    template=dict(payload.get("template") or {}),
-                    artifact_references=[dict(item or {}) for item in list(payload.get("artifact_references") or [])],
-                    manifest_signature=str(payload.get("manifest_signature") or ""),
-                    activate=payload.get("activate", False),
+                svc.toolbox_template_activate(
+                    template_id=str(payload.get("template_id") or ""),
+                    template_digest=str(payload.get("template_digest") or ""),
+                )
+            )
+            return 0
+        if cmd == "toolbox-template-replace":
+            _print_ok(
+                svc.toolbox_template_replace(
+                    template_id=str(payload.get("template_id") or ""),
+                    expected_active_digest=str(payload.get("expected_active_digest") or ""),
+                    replacement_digest=str(payload.get("replacement_digest") or ""),
                 )
             )
             return 0

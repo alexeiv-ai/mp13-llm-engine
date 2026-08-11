@@ -14,11 +14,13 @@ from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.operation_contract import HostedExecutionKind, HostedOperationLifecycle
 from hosting.service.host_service import EngineHostService
+from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference
 from hosting.service.toolbox_materialization import (
     ToolboxTemplateMaterializationError,
     ToolboxTemplateMaterializationReceipt,
     derived_environment_digest,
 )
+from hosting.toolbox.catalog import ToolboxEnvironmentTemplateSpec
 
 
 SIGNATURE = "A" * 86
@@ -103,12 +105,14 @@ def _service(tmp_path: Path, materializer) -> EngineHostService:
         control_state_file=tmp_path / "access_control.json",
         toolbox_template_materializer=materializer,
     )
-    service.toolbox_template_publish(
-        template=_template(),
-        artifact_references=[_artifact()],
+    published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+        template=ToolboxEnvironmentTemplateSpec.from_dict(_template()),
+        artifacts=(ToolboxTemplateArtifactReference.from_dict(_artifact()),),
         manifest_signature=SIGNATURE,
-        activate=True,
         actor_id="admin:test",
+    )
+    service.toolbox_template_activate(
+        template_id="core", template_digest=published["template_digest"], actor_id="admin:test"
     )
     return service
 
@@ -239,11 +243,14 @@ def test_daemon_dispatch_runs_target_host_service_method(tmp_path: Path) -> None
         control_state_file=tmp_path / "access_control.json",
     )
     daemon.svc._toolbox_template_materializer = VerifiedMaterializer()  # noqa: SLF001
-    daemon.svc.toolbox_template_publish(
-        template=_template(),
-        artifact_references=[_artifact()],
+    published = daemon.svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+        template=ToolboxEnvironmentTemplateSpec.from_dict(_template()),
+        artifacts=(ToolboxTemplateArtifactReference.from_dict(_artifact()),),
         manifest_signature=SIGNATURE,
-        activate=True,
+        actor_id="admin:test",
+    )
+    daemon.svc.toolbox_template_activate(
+        template_id="core", template_digest=published["template_digest"]
     )
     response = asyncio.run(
         daemon._dispatch(  # noqa: SLF001

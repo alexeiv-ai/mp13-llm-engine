@@ -2384,6 +2384,7 @@ class EngineHostDaemon:
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
                     "toolbox-environment-remove",
+                    "toolbox-template-construct",
                 }:
                     result = await asyncio.to_thread(
                         self._call_service, target_cmd, target_payload
@@ -2571,6 +2572,7 @@ class EngineHostDaemon:
                 "toolbox-plan-definition",
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
+                "toolbox-template-construct",
             }:
                 return {
                     "seq": seq,
@@ -3373,15 +3375,30 @@ class EngineHostDaemon:
                 template_id=str(payload.get("template_id") or ""),
                 template_digest=str(payload.get("template_digest") or "").strip() or None,
             )
-        if cmd == "toolbox-template-publish":
-            return svc.toolbox_template_publish(
-                template=dict(payload.get("template") or {}),
-                artifact_references=[
-                    dict(item or {})
-                    for item in list(payload.get("artifact_references") or [])
+        if cmd == "toolbox-template-construct":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_template_construct(
+                template_id=str(payload.get("template_id") or ""),
+                base_template_digest=str(payload.get("base_template_digest") or ""),
+                imports=[str(item or "") for item in list(payload.get("imports") or [])],
+                package_requirements=[
+                    str(item or "")
+                    for item in list(payload.get("package_requirements") or [])
                 ],
-                manifest_signature=str(payload.get("manifest_signature") or ""),
-                activate=payload.get("activate", False),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=actor,
+            )
+        if cmd == "toolbox-template-activate":
+            return svc.toolbox_template_activate(
+                template_id=str(payload.get("template_id") or ""),
+                template_digest=str(payload.get("template_digest") or ""),
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "toolbox-template-replace":
+            return svc.toolbox_template_replace(
+                template_id=str(payload.get("template_id") or ""),
+                expected_active_digest=str(payload.get("expected_active_digest") or ""),
+                replacement_digest=str(payload.get("replacement_digest") or ""),
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "toolbox-template-deprecate":

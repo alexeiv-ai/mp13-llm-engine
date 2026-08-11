@@ -114,6 +114,10 @@ def test_old_service_channel_and_command_routes_are_absent() -> None:
     assert all(command not in cli_source for command in OLD_COMMANDS)
     for role in ("admin", "config_editor", "worker_user", "diagnostic_user"):
         assert not OLD_COMMANDS & EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
+    assert not hasattr(EngineHostService, "toolbox_template_publish")
+    assert not hasattr(EngineHostControlChannel, "toolbox_template_publish")
+    assert "toolbox-template-publish" not in engine_host_cli.EXAMPLES_BY_COMMAND
+    assert "toolbox-template-publish" not in inspect.getsource(EngineHostDaemon)
 
 
 def test_definition_request_rejects_legacy_runtime_fields() -> None:

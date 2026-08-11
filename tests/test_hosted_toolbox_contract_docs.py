@@ -186,7 +186,9 @@ def test_contract_freezes_deployment_administration_policy() -> None:
     for method in [
         "toolbox-template-list",
         "toolbox-template-describe",
-        "toolbox-template-publish",
+        "toolbox-template-construct",
+        "toolbox-template-activate",
+        "toolbox-template-replace",
         "toolbox-template-deprecate",
         "toolbox-template-revoke",
         "toolbox-template-prewarm",

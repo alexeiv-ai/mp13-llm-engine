@@ -11,6 +11,7 @@ from hosting.toolbox.catalog import (
 )
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.target import SUPPORTED_TARGET_PLATFORMS
+from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference
 
 
 CORE_DISTRIBUTIONS = (
@@ -122,11 +123,15 @@ def realized_test_catalog() -> TestTemplateCatalog:
 def publish_realized_test_catalog(service: Any) -> None:
     """Publish explicit test-only releases into a service catalog."""
     for release in realized_test_catalog().releases:
-        service.toolbox_template_publish(
-            template=release.template.to_dict(),
-            artifact_references=[release.artifact_reference()],
+        published = service._toolbox_template_catalog.publish_inactive(
+            template=release.template,
+            artifacts=(ToolboxTemplateArtifactReference.from_dict(release.artifact_reference()),),
             manifest_signature=release.manifest_signature,
-            activate=True,
+            actor_id="test:realized-template-fixture",
+        )
+        service.toolbox_template_activate(
+            template_id=release.template.template_id,
+            template_digest=published["template_digest"],
             actor_id="test:realized-template-fixture",
         )
 

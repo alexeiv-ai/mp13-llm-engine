@@ -109,6 +109,21 @@ TOOLBOX_ARTIFACT_IMPORT_PHASES = frozenset(
 TOOLBOX_ENVIRONMENT_REMOVE_PHASES = frozenset(
     {"validation", "reference_check", "removal", "cleanup"}
 )
+TOOLBOX_TEMPLATE_CONSTRUCT_PHASES = frozenset(
+    {
+        "validation",
+        "resolution",
+        "artifact_verification",
+        "environment_build",
+        "import_probe",
+        "receipt_commit",
+        "publication",
+        "cleanup",
+    }
+)
+TOOLBOX_MAINTENANCE_PHASES = frozenset(
+    {"validation", "recovery", "repair", "gc", "cleanup"}
+)
 
 
 class HostedExecutionKind(StrEnum):
@@ -120,6 +135,8 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_SETUP = "toolbox_setup"
     TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
     TOOLBOX_ENVIRONMENT_REMOVE = "toolbox_environment_remove"
+    TOOLBOX_TEMPLATE_CONSTRUCT = "toolbox_template_construct"
+    TOOLBOX_MAINTENANCE = "toolbox_maintenance"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -532,6 +549,16 @@ class HostedOperationStatus:
                     raise ValueError("toolbox_environment_remove_progress_phase_invalid")
                 if self.progress.phase in {"removal", "cleanup"} and self.progress.cancellable:
                     raise ValueError("toolbox_environment_remove_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT:
+                if self.progress.phase not in TOOLBOX_TEMPLATE_CONSTRUCT_PHASES:
+                    raise ValueError("toolbox_template_construct_progress_phase_invalid")
+                if self.progress.phase in {"receipt_commit", "publication", "cleanup"} and self.progress.cancellable:
+                    raise ValueError("toolbox_template_construct_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
+                if self.progress.phase not in TOOLBOX_MAINTENANCE_PHASES:
+                    raise ValueError("toolbox_maintenance_progress_phase_invalid")
+                if self.progress.phase in {"repair", "gc", "cleanup"} and self.progress.cancellable:
+                    raise ValueError("toolbox_maintenance_committed_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -617,6 +644,8 @@ __all__ = [
     "TOOLBOX_SETUP_PHASES",
     "TOOLBOX_ARTIFACT_IMPORT_PHASES",
     "TOOLBOX_ENVIRONMENT_REMOVE_PHASES",
+    "TOOLBOX_TEMPLATE_CONSTRUCT_PHASES",
+    "TOOLBOX_MAINTENANCE_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
     "HostedOperationProgress",

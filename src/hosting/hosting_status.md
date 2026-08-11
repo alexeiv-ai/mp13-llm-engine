@@ -160,12 +160,23 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: R5 lifecycle handoff (`medium`) before R5-03/R5-04/R5-05
-(`high`). Production boundary: document removal of raw template publication and
-synchronous mutating maintenance, with exact construction, lifecycle, hosted
-operation, retry, cancellation, and recovery replacements. Validation:
-`tests/test_hosted_toolbox_contract_docs.py` and `git diff --check`. No
-production code changes belong to this handoff commit.
+Active slice: none. R5-03/R5-04 (`high`) are complete; switch cleanly to R5-05
+(`high`) after the lifecycle slice commit.
+
+Completed slice evidence: R5-03/R5-04 (`high`) remove the raw caller-supplied
+template/artifact/signature publication surface. Administrator construction is
+one canonical `toolbox_template_construct` operation selected by the new
+logical template ID and pinned to an exact non-revoked base digest, config/source
+revisions, and current target. It retains the exact base distribution pins,
+resolves only configured sources, verifies signed artifacts, uses the real
+hermetic builder and complete import probes, commits the exact receipt, and
+publishes an immutable inactive revision. Separate exact activate and
+compare-and-swap replace operations prevent implicit active replacement;
+deprecate, revoke, and prewarm remain final exact-revision APIs. The focused
+catalog, prewarm, shared resolver, definition resolution/config/transport,
+removed-surface, operation/auth, contract, and real signed-artifact/materializer
+matrix passed 148 tests in 60.84s. Compile and `git diff --check` passed. The
+breaking-change handoff was committed first in `2bd22ce`.
 Remaining profiles are resolved from only their post-removal requirements, so a
 custom requests/urllib3 closure contracts to the exact built-in closure when
 those requirements disappear. Exact profiles reuse their engine, environment,

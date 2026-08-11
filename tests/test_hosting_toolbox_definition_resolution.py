@@ -233,18 +233,23 @@ def _service_with_verified_closure(tmp_path: Path, *, policy=None):
             signing_key_id="release-key",
         ),
     )
-    service.toolbox_template_publish(
-        template=template.to_dict(),
-        artifact_references=[
-            {
+    from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference
+    published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+        template=template,
+        artifacts=(
+            ToolboxTemplateArtifactReference.from_dict({
                 "source_id": "release",
                 "filename": packaging_row["filename"],
                 "sha256": packaging_row["sha256"],
                 "size_bytes": packaging_row["size_bytes"],
-            }
-        ],
+            }),
+        ),
         manifest_signature="s" * 64,
-        activate=True,
+        actor_id="test:definition-resolution",
+    )
+    service.toolbox_template_activate(
+        template_id="core",
+        template_digest=published["template_digest"],
         actor_id="test:definition-resolution",
     )
     return service, template

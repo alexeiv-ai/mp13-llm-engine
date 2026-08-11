@@ -14,6 +14,9 @@ from typing import Any, Callable, Mapping, Sequence
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from ..toolbox.identity import identity_digest, require_digest
 from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
+from ..toolbox.host_project_config import ToolboxBuiltinIntent
+from ..toolbox.builtin_resolver import AirgapBuiltinWheelResolver
+from ..toolbox.builtin_templates import resolved_builtin_template_candidate
 from ..toolbox.template_resolver import (
     VerifiedTemplateCandidate,
     resolve_verified_template_environment,
@@ -200,7 +203,7 @@ class AtomicJsonToolboxTemplateCatalog:
         if identity_key != expected_identity:
             raise ValueError("template_identity_key_mismatch")
         lifecycle = str(row["lifecycle"] or "")
-        if lifecycle not in {"active", "deprecated", "revoked"}:
+        if lifecycle not in {"inactive", "active", "deprecated", "revoked"}:
             raise ValueError("template_lifecycle_invalid")
         published_at_ms = row["published_at_ms"]
         if isinstance(published_at_ms, bool) or not isinstance(published_at_ms, int) or published_at_ms < 0:
@@ -255,7 +258,9 @@ class AtomicJsonToolboxTemplateCatalog:
             ):
                 raise ValueError("template_catalog_audit_event_invalid")
             _bounded_id(event["actor_id"], label="template_audit_actor_id")
-            if event["action"] not in {"publish", "deprecated", "revoked"}:
+            if event["action"] not in {
+                "construct", "activate", "replace", "publish", "deprecated", "revoked"
+            }:
                 raise ValueError("template_catalog_audit_event_invalid")
             _bounded_id(event["template_id"], label="template_audit_template_id")
             require_digest(event["template_digest"], label="template_audit_digest")
@@ -333,13 +338,12 @@ class AtomicJsonToolboxTemplateCatalog:
         )
         state["audit"] = events[-MAX_CATALOG_AUDIT_EVENTS:]
 
-    def publish(
+    def publish_inactive(
         self,
         *,
         template: ToolboxEnvironmentTemplateSpec,
         artifacts: Sequence[ToolboxTemplateArtifactReference],
         manifest_signature: str,
-        activate: bool,
         actor_id: str,
     ) -> dict[str, Any]:
         artifact_tuple = tuple(artifacts)
@@ -355,8 +359,6 @@ class AtomicJsonToolboxTemplateCatalog:
             raise ValueError("template_artifact_duplicate")
         if not isinstance(manifest_signature, str) or not _SIGNATURE_RE.fullmatch(manifest_signature):
             raise ValueError("template_manifest_signature_invalid")
-        if not isinstance(activate, bool):
-            raise ValueError("template_activate_must_be_boolean")
         digest = _template_digest(template, artifact_tuple, manifest_signature)
         identity_key = f"{template.template_id}|{template.provenance.manifest_digest}|{template.lock_digest}"
         with _exclusive_process_file_lock(self.lock_path):
@@ -382,22 +384,17 @@ class AtomicJsonToolboxTemplateCatalog:
                     "template": template.to_dict(),
                     "artifacts": [item.to_dict() for item in sorted(artifact_tuple)],
                     "manifest_signature": manifest_signature,
-                    "lifecycle": "active",
+                    "lifecycle": "inactive",
                     "published_at_ms": int(self.clock() * 1000),
                     "published_by": _bounded_id(actor_id, label="template_actor_id"),
                 }
                 state["entries"].append(entry)
-                outcome = "published"
-            if activate:
-                if entry["lifecycle"] != "active":
-                    raise ValueError("template_activate_lifecycle_invalid")
-                state["active"][template.template_id] = digest
-                outcome = "activated" if outcome == "idempotent" else "published_and_activated"
+                outcome = "constructed"
             state["catalog_revision"] = self._catalog_revision(state["entries"], state["active"])
             self._audit(
                 state,
                 actor_id=actor_id,
-                action="publish",
+                action="construct",
                 template_id=template.template_id,
                 template_digest=digest,
                 outcome=outcome,
@@ -410,6 +407,99 @@ class AtomicJsonToolboxTemplateCatalog:
                 "catalog_revision": state["catalog_revision"],
                 "outcome": outcome,
                 "active_revision": state["active"].get(template.template_id) == digest,
+            }
+
+    def activate(
+        self,
+        *,
+        template_id: str,
+        template_digest: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        target_id = _bounded_id(template_id, label="template_id")
+        target_digest = require_digest(template_digest, label="template_digest")
+        actor = _bounded_id(actor_id, label="template_actor_id")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            entry = next(
+                (item for item in state["entries"] if item["template_digest"] == target_digest),
+                None,
+            )
+            if entry is None or entry["template_id"] != target_id:
+                raise ValueError("template_revision_not_found")
+            current = state["active"].get(target_id)
+            if current is not None and current != target_digest:
+                raise ValueError("template_active_revision_exists")
+            if entry["lifecycle"] in {"deprecated", "revoked"}:
+                raise ValueError("template_activate_lifecycle_invalid")
+            outcome = "idempotent" if current == target_digest else "activated"
+            entry["lifecycle"] = "active"
+            state["active"][target_id] = target_digest
+            state["catalog_revision"] = self._catalog_revision(state["entries"], state["active"])
+            self._audit(
+                state,
+                actor_id=actor,
+                action="activate",
+                template_id=target_id,
+                template_digest=target_digest,
+                outcome=outcome,
+            )
+            self._write_unlocked(state)
+            return {"entry": dict(entry), "catalog_revision": state["catalog_revision"], "outcome": outcome}
+
+    def replace(
+        self,
+        *,
+        template_id: str,
+        expected_active_digest: str,
+        replacement_digest: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        target_id = _bounded_id(template_id, label="template_id")
+        expected = require_digest(expected_active_digest, label="expected_active_digest")
+        replacement = require_digest(replacement_digest, label="replacement_digest")
+        actor = _bounded_id(actor_id, label="template_actor_id")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read_unlocked()
+            if state["active"].get(target_id) != expected:
+                raise ValueError("template_active_revision_conflict")
+            old_entry = next(
+                (item for item in state["entries"] if item["template_digest"] == expected),
+                None,
+            )
+            new_entry = next(
+                (item for item in state["entries"] if item["template_digest"] == replacement),
+                None,
+            )
+            if (
+                old_entry is None
+                or new_entry is None
+                or old_entry["template_id"] != target_id
+                or new_entry["template_id"] != target_id
+            ):
+                raise ValueError("template_revision_not_found")
+            if new_entry["lifecycle"] in {"deprecated", "revoked"}:
+                raise ValueError("template_replace_lifecycle_invalid")
+            outcome = "idempotent" if replacement == expected else "replaced"
+            if replacement != expected:
+                old_entry["lifecycle"] = "deprecated"
+                new_entry["lifecycle"] = "active"
+                state["active"][target_id] = replacement
+            state["catalog_revision"] = self._catalog_revision(state["entries"], state["active"])
+            self._audit(
+                state,
+                actor_id=actor,
+                action="replace",
+                template_id=target_id,
+                template_digest=replacement,
+                outcome=outcome,
+            )
+            self._write_unlocked(state)
+            return {
+                "entry": dict(new_entry),
+                "replaced_template_digest": expected,
+                "catalog_revision": state["catalog_revision"],
+                "outcome": outcome,
             }
 
     def publish_batch(
@@ -493,10 +583,11 @@ class AtomicJsonToolboxTemplateCatalog:
                     }
                     state["entries"].append(entry)
                     outcome = "published_and_activated"
-                elif entry["lifecycle"] != "active":
+                elif entry["lifecycle"] in {"deprecated", "revoked"}:
                     raise ValueError("template_activate_lifecycle_invalid")
                 elif state["active"].get(template.template_id) != digest:
                     outcome = "activated"
+                entry["lifecycle"] = "active"
                 state["active"][template.template_id] = digest
                 self._audit(
                     state,
@@ -1647,32 +1738,349 @@ class ToolboxTemplateCatalogMixin:
                 reason="template_materialization_failed",
             )
 
-    def toolbox_template_publish(
+    def toolbox_template_construct(
         self,
         *,
-        template: Mapping[str, Any],
-        artifact_references: Sequence[Mapping[str, Any]],
-        manifest_signature: str,
-        activate: bool = False,
+        template_id: str,
+        base_template_digest: str,
+        imports: Sequence[str],
+        package_requirements: Sequence[str],
+        request_id: str,
+        owner_actor_id: str = "service:local",
+    ) -> dict[str, Any]:
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        if not isinstance(configuration, ToolboxHostProjectConfiguration):
+            raise ValueError("toolbox_host_project_configuration_required")
+        target_id = _bounded_id(template_id, label="template_id")
+        base_digest = require_digest(base_template_digest, label="base_template_digest")
+        intent = ToolboxBuiltinIntent(
+            template_id=target_id,
+            imports=tuple(imports),
+            package_requirements=tuple(package_requirements),
+            sandbox_policy="compute-only",
+            required=False,
+            prewarm=False,
+            provenance=f"constructed-from:{base_digest}",
+        )
+        state = self._toolbox_template_catalog.read()
+        base_entry = next(
+            (item for item in state["entries"] if item["template_digest"] == base_digest),
+            None,
+        )
+        if base_entry is None:
+            raise ValueError("base_template_revision_not_found")
+        if base_entry["lifecycle"] == "revoked":
+            raise ValueError("base_template_revision_revoked")
+        rid = str(request_id or "").strip()
+        if not rid:
+            raise ValueError("template_construct_request_id_required")
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT.value,
+                "template_id": target_id,
+                "base_template_digest": base_digest,
+                "imports": list(intent.imports),
+                "package_requirements": list(intent.package_requirements),
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+                "target": configuration.target.name,
+            }
+        )
+        owner = self._operation_owner(owner_actor_id)
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=owner,
+            execution_kind=HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT,
+            selector=HostedOperationSelector(kind="template_id", id=target_id),
+            namespace=f"toolbox_template_construct:{target_id}",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "base_template_digest": base_digest,
+                "config_revision": configuration.config_revision,
+                "source_set_revision": configuration.source_set_revision,
+                "target": configuration.target.name,
+            },
+        )
+        if prepared["action"] != "dispatch":
+            status = prepared.get("status")
+            if status is None:
+                raise RuntimeError("hosted_operation_capacity")
+            return dict(status)
+        operation_id = str(prepared["status"]["operation"]["operation_id"])
+        thread = threading.Thread(
+            target=self._run_toolbox_template_construct,
+            kwargs={
+                "operation_id": operation_id,
+                "intent": intent,
+                "base_entry": dict(base_entry),
+                "owner_actor_id": owner,
+            },
+            name=f"toolbox-template-construct-{operation_id[-8:]}",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": "template_construct_dispatch_failed",
+                    "summary": "The template construction worker could not be started.",
+                },
+                reason="template_construct_dispatch_failed",
+            )
+            raise
+        return dict(prepared["status"])
+
+    def _resolve_constructed_template_candidate(
+        self,
+        *,
+        intent: ToolboxBuiltinIntent,
+        base_entry: Mapping[str, Any],
+        progress: Callable[[str, str, int | None, int | None, str, bool], None],
+    ) -> tuple[ToolboxEnvironmentTemplateSpec, tuple[ToolboxTemplateArtifactReference, ...], str]:
+        configuration = self._toolbox_host_project_config
+        base = ToolboxEnvironmentTemplateSpec.from_dict(base_entry["template"])
+        requirements = tuple(
+            sorted(
+                {
+                    *(f"{item.name}=={item.version}" for item in base.locked_distributions),
+                    *intent.package_requirements,
+                }
+            )
+        )
+        combined_intent = ToolboxBuiltinIntent(
+            template_id=intent.template_id,
+            imports=tuple(sorted(set(base.exposed_import_roots) | set(intent.imports))),
+            package_requirements=requirements,
+            sandbox_policy="compute-only",
+            required=False,
+            prewarm=False,
+            provenance=intent.provenance,
+        )
+        progress("resolution", "template_requirements_resolving", 0, 1, "The exact base and requested package closure are being resolved.", True)
+        resolver = AirgapBuiltinWheelResolver(
+            configuration,
+            artifact_sources=(
+                {} if self._toolbox_trust_public_keys is not None else self._toolbox_artifact_sources
+            ),
+            verified_artifacts=self._toolbox_verified_artifacts,
+        )
+        try:
+            closure = resolver.resolve_requirements(
+                template_id=intent.template_id,
+                package_requirements=requirements,
+            )
+        except RuntimeError:
+            if configuration.resolution.mode not in {"online", "prefer_airgap"}:
+                raise
+            acquisition = ToolboxHttpsArtifactAcquirer(
+                configuration,
+                artifact_store=self._toolbox_artifact_store,
+                trust_public_keys=self._toolbox_trust_public_keys,
+                source_credentials=self._toolbox_source_credentials,
+            ).discover_and_acquire(requirements, progress=progress)
+            self._toolbox_verified_artifacts.update(acquisition["verified_artifacts"])
+            self._configure_verified_toolbox_artifact_paths()
+            closure = AirgapBuiltinWheelResolver(
+                configuration,
+                artifact_sources={},
+                verified_artifacts=self._toolbox_verified_artifacts,
+            ).resolve_requirements(
+                template_id=intent.template_id,
+                package_requirements=requirements,
+            )
+        progress("resolution", "template_requirements_resolved", 1, 1, "The exact current-host package closure was resolved.", True)
+        progress("artifact_verification", "template_artifacts_verifying", 0, len(closure.locked_artifacts), "The complete resolved artifact closure is being verified.", True)
+        evidence = self._toolbox_artifact_store.verified_evidence_for_artifacts(
+            {item.sha256 for item in closure.locked_artifacts},
+            source_ids={item.source_id for item in closure.locked_artifacts},
+        )
+        candidate = resolved_builtin_template_candidate(
+            intent=combined_intent,
+            closure=closure,
+            target=configuration.target,
+            evidence=evidence,
+        )
+        template_row = candidate.template.to_dict()
+        template_row["provenance"] = {
+            **template_row["provenance"],
+            "source": f"constructed:{base_entry['template_digest']}",
+            "revision": identity_digest(
+                "hosting.toolbox.constructed_template_revision.v1",
+                {
+                    "base_template_digest": base_entry["template_digest"],
+                    "lock_digest": candidate.template.lock_digest,
+                    "imports": list(combined_intent.imports),
+                },
+            ),
+        }
+        template = ToolboxEnvironmentTemplateSpec.from_dict(template_row)
+        artifacts = tuple(
+            ToolboxTemplateArtifactReference.from_dict(item)
+            for item in candidate.artifact_references
+        )
+        progress("artifact_verification", "template_artifacts_verified", len(artifacts), len(artifacts), "The complete resolved artifact closure was verified.", True)
+        return template, artifacts, candidate.manifest_signature
+
+    def _run_toolbox_template_construct(
+        self,
+        *,
+        operation_id: str,
+        intent: ToolboxBuiltinIntent,
+        base_entry: Mapping[str, Any],
+        owner_actor_id: str,
+    ) -> None:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+
+        def checkpoint(phase, code, completed_units, total_units, summary, cancellable=True):
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase=phase,
+                    code=code,
+                    completed_units=completed_units,
+                    total_units=total_units,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary=summary,
+                    cancellable=cancellable,
+                ),
+            )
+
+        reference: tuple[str, str] | None = None
+        receipt: ToolboxTemplateMaterializationReceipt | None = None
+        try:
+            checkpoint("validation", "template_construct_validated", 1, 1, "The exact base revision and construction request were validated.", True)
+            template, artifacts, signature = self._resolve_constructed_template_candidate(
+                intent=intent, base_entry=base_entry, progress=checkpoint
+            )
+            template_digest = _template_digest(template, artifacts, signature)
+            entry = {
+                "template_id": template.template_id,
+                "template_digest": template_digest,
+                "template": template.to_dict(),
+                "artifacts": [item.to_dict() for item in artifacts],
+                "manifest_signature": signature,
+            }
+            resolved = HermeticToolboxTemplateMaterializer._resolved_input(
+                entry,
+                python_abi=self._toolbox_host_project_config.target.python_abi,
+                platform=self._toolbox_host_project_config.target.platform,
+            )
+            reference = (
+                resolved.environment_key,
+                f"template:{template_digest.removeprefix('sha256:')}",
+            )
+            receipt = self._toolbox_template_materializer.materialize(
+                catalog_entry=entry,
+                python_abi=self._toolbox_host_project_config.target.python_abi,
+                platform=self._toolbox_host_project_config.target.platform,
+                progress=checkpoint,
+            )
+            if (
+                not isinstance(receipt, ToolboxTemplateMaterializationReceipt)
+                or receipt.template_digest != template_digest
+                or tuple(sorted(receipt.artifact_digests))
+                != tuple(sorted(item.sha256 for item in artifacts))
+                or tuple(sorted(receipt.verified_import_roots))
+                != tuple(sorted(template.exposed_import_roots))
+            ):
+                raise ToolboxTemplateMaterializationError(
+                    "template_materialization_receipt_mismatch",
+                    "The constructed template receipt did not cover its complete exact candidate.",
+                )
+            checkpoint("receipt_commit", "template_receipt_committing", 0, 1, "The verified construction receipt is being committed.", False)
+            self._toolbox_materialization_receipts.put(receipt)
+            checkpoint("receipt_commit", "template_receipt_committed", 1, 1, "The verified construction receipt was committed.", False)
+            checkpoint("publication", "inactive_template_publishing", 0, 1, "The immutable inactive template revision is being published.", False)
+            published = self._toolbox_template_catalog.publish_inactive(
+                template=template,
+                artifacts=artifacts,
+                manifest_signature=signature,
+                actor_id=owner_actor_id,
+            )
+            checkpoint("publication", "inactive_template_published", 1, 1, "The immutable template revision was published inactive.", False)
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "contract": "hosting.toolbox.template_construct_result.v1",
+                    "status": "ok",
+                    "code": "template_constructed_inactive",
+                    "template_id": template.template_id,
+                    "template_digest": template_digest,
+                    "base_template_digest": base_entry["template_digest"],
+                    "environment_digest": receipt.environment_digest,
+                    "lifecycle": published["entry"]["lifecycle"],
+                    "active_revision": False,
+                    "catalog_revision": published["catalog_revision"],
+                },
+            )
+        except Exception as exc:
+            if receipt is not None:
+                self._toolbox_materialization_receipts.remove_exact((receipt,))
+            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
+            if reference is not None and builder is not None:
+                builder.release_reference(environment_key=reference[0], reference_id=reference[1])
+            code = str(getattr(exc, "code", "") or str(exc)).strip()
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
+                code = "template_construct_failed"
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": code,
+                    "summary": "Template construction failed before inactive publication.",
+                },
+                reason=code,
+            )
+
+    def toolbox_template_activate(
+        self,
+        *,
+        template_id: str,
+        template_digest: str,
         actor_id: str = "service:local",
     ) -> dict[str, Any]:
-        result = self._toolbox_template_catalog.publish(
-            template=ToolboxEnvironmentTemplateSpec.from_dict(template),
-            artifacts=tuple(
-                ToolboxTemplateArtifactReference.from_dict(item)
-                for item in artifact_references
-            ),
-            manifest_signature=manifest_signature,
-            activate=activate,
+        result = self._toolbox_template_catalog.activate(
+            template_id=template_id,
+            template_digest=template_digest,
             actor_id=actor_id,
         )
-        entry = result.pop("entry")
         return {
-            **result,
-            "template_id": entry["template_id"],
-            "template_digest": entry["template_digest"],
-            "lifecycle": entry["lifecycle"],
-            "active_revision": result["active_revision"],
+            "template_id": template_id,
+            "template_digest": template_digest,
+            "lifecycle": result["entry"]["lifecycle"],
+            "active_revision": True,
+            "catalog_revision": result["catalog_revision"],
+            "outcome": result["outcome"],
+        }
+
+    def toolbox_template_replace(
+        self,
+        *,
+        template_id: str,
+        expected_active_digest: str,
+        replacement_digest: str,
+        actor_id: str = "service:local",
+    ) -> dict[str, Any]:
+        result = self._toolbox_template_catalog.replace(
+            template_id=template_id,
+            expected_active_digest=expected_active_digest,
+            replacement_digest=replacement_digest,
+            actor_id=actor_id,
+        )
+        return {
+            "template_id": template_id,
+            "template_digest": replacement_digest,
+            "replaced_template_digest": result["replaced_template_digest"],
+            "lifecycle": result["entry"]["lifecycle"],
+            "active_revision": True,
+            "catalog_revision": result["catalog_revision"],
+            "outcome": result["outcome"],
         }
 
     def toolbox_template_deprecate(

@@ -3611,23 +3611,53 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_template_publish(
+    def toolbox_template_construct(
         self,
         *,
-        template: Dict[str, Any],
-        artifact_references: list[Dict[str, Any]],
-        manifest_signature: str,
-        activate: bool = False,
+        template_id: str,
+        base_template_digest: str,
+        imports: list[str],
+        package_requirements: list[str],
+        request_id: str,
     ) -> Dict[str, Any]:
-        if not isinstance(activate, bool):
-            raise ValueError("template_activate_must_be_boolean")
+        return self.start_host_operation(
+            command="toolbox-template-construct",
+            payload={
+                "template_id": str(template_id or "").strip(),
+                "base_template_digest": str(base_template_digest or "").strip(),
+                "imports": [str(item or "").strip() for item in imports],
+                "package_requirements": [
+                    str(item or "").strip() for item in package_requirements
+                ],
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+
+    def toolbox_template_activate(
+        self, *, template_id: str, template_digest: str
+    ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-publish",
+            "toolbox-template-activate",
             {
-                "template": dict(template or {}),
-                "artifact_references": [dict(item or {}) for item in artifact_references],
-                "manifest_signature": str(manifest_signature or "").strip(),
-                "activate": activate,
+                "template_id": str(template_id or "").strip(),
+                "template_digest": str(template_digest or "").strip(),
+            },
+        )
+        return dict(res or {})
+
+    def toolbox_template_replace(
+        self,
+        *,
+        template_id: str,
+        expected_active_digest: str,
+        replacement_digest: str,
+    ) -> Dict[str, Any]:
+        res = self._invoke(
+            "toolbox-template-replace",
+            {
+                "template_id": str(template_id or "").strip(),
+                "expected_active_digest": str(expected_active_digest or "").strip(),
+                "replacement_digest": str(replacement_digest or "").strip(),
             },
         )
         return dict(res or {})

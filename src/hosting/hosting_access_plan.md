@@ -698,10 +698,10 @@ boundary—not a double—passes.
 - [x] **R5-02** Implement revisioned retention/GC config and the exact-digest
   non-built-in environment removal hosted operation with active/candidate/plan/
   receipt/operation reference checks and progress.
-- [ ] **R5-03** Add administrator construction of a named template from an exact
+- [x] **R5-03** Add administrator construction of a named template from an exact
   base revision plus imports/package requirements using the same resolver,
   sources, builder, probes, and immutable publication path.
-- [ ] **R5-04** Keep publication inactive until explicit activation; support
+- [x] **R5-04** Keep publication inactive until explicit activation; support
   prewarm, replace, deprecate, and revoke as final APIs. Remove superseded raw
   publication payloads and commands rather than preserve both designs.
 - [ ] **R5-05** Convert mutating GC, repair, and reconcile to hosted operations.

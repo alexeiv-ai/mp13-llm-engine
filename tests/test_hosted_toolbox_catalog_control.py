@@ -74,13 +74,30 @@ def _publish(
     artifact: ToolboxTemplateArtifactReference | None = None,
     activate: bool = True,
 ) -> dict[str, Any]:
-    return repo.publish(
+    published = repo.publish_inactive(
         template=ToolboxEnvironmentTemplateSpec.from_dict(payload or _template_payload()),
         artifacts=(artifact or _artifact(),),
         manifest_signature=SIGNATURE,
-        activate=activate,
         actor_id="admin:test",
     )
+    if activate:
+        current = repo.read()["active"].get(published["template_id"])
+        activated = (
+            repo.replace(
+                template_id=published["template_id"],
+                expected_active_digest=current,
+                replacement_digest=published["template_digest"],
+                actor_id="admin:test",
+            )
+            if current is not None and current != published["template_digest"]
+            else repo.activate(
+                template_id=published["template_id"],
+                template_digest=published["template_digest"],
+                actor_id="admin:test",
+            )
+        )
+        return {**published, **activated, "template_digest": published["template_digest"]}
+    return published
 
 
 def test_artifact_reference_and_signature_are_strict() -> None:
@@ -103,7 +120,7 @@ def test_publish_is_idempotent_immutable_and_restart_safe(tmp_path: Path) -> Non
     first = _publish(repo)
     second = _publish(repo)
     assert first["template_digest"] == second["template_digest"]
-    assert second["outcome"] == "activated"
+    assert second["outcome"] == "idempotent"
     restarted = _repo(tmp_path).read()
     assert len(restarted["entries"]) == 1
     assert restarted["active"] == {"core": first["template_digest"]}
@@ -164,12 +181,14 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
         engines_state_file=tmp_path / "engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    published = svc.toolbox_template_publish(
-        template=_template_payload(),
-        artifact_references=[_artifact().to_dict()],
+    published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+        template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
+        artifacts=(_artifact(),),
         manifest_signature=SIGNATURE,
-        activate=True,
         actor_id="admin:test",
+    )
+    svc.toolbox_template_activate(
+        template_id="core", template_digest=published["template_digest"], actor_id="admin:test"
     )
     listed = svc.toolbox_template_list()
     descriptor = listed["templates"][0]
@@ -189,10 +208,10 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
     assert state["audit"][-1] == {
         "at_ms": state["audit"][-1]["at_ms"],
         "actor_id": "admin:test",
-        "action": "publish",
+        "action": "activate",
         "template_id": "core",
         "template_digest": published["template_digest"],
-        "outcome": "published_and_activated",
+        "outcome": "activated",
     }
     assert SIGNATURE not in json.dumps(state["audit"])
 
@@ -202,11 +221,11 @@ def test_service_describe_requires_active_or_exact_revision(tmp_path: Path) -> N
         engines_state_file=tmp_path / "engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
-    published = svc.toolbox_template_publish(
-        template=_template_payload(),
-        artifact_references=[_artifact().to_dict()],
+    published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+        template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
+        artifacts=(_artifact(),),
         manifest_signature=SIGNATURE,
-        activate=False,
+        actor_id="admin:test",
     )
     with pytest.raises(ValueError, match="active_revision_not_found"):
         svc.toolbox_template_describe(template_id="core")
@@ -234,7 +253,9 @@ template = ToolboxEnvironmentTemplateSpec.from_dict({
  'parent_worker_artifact_digest': digest('b'), 'isolation_policy_version': '1.0',
  'provenance': {'source': 'test', 'revision': char, 'manifest_digest': digest(char), 'signing_key_id': 'key-1'}})
 artifact = ToolboxTemplateArtifactReference(source_id='source', filename=name + '.whl', sha256=digest(char), size_bytes=10)
-AtomicJsonToolboxTemplateCatalog(Path(state_path)).publish(template=template, artifacts=(artifact,), manifest_signature='A'*86, activate=True, actor_id='admin:test')
+repo = AtomicJsonToolboxTemplateCatalog(Path(state_path))
+published = repo.publish_inactive(template=template, artifacts=(artifact,), manifest_signature='A'*86, actor_id='admin:test')
+repo.activate(template_id=name, template_digest=published['template_digest'], actor_id='admin:test')
 """
     processes = [
         subprocess.Popen(
@@ -275,30 +296,41 @@ def test_channel_forwards_exact_catalog_payloads() -> None:
     channel.set_session_token("token-1")
     channel.toolbox_template_list()
     channel.toolbox_template_describe(template_id="core", template_digest=_digest("a"))
-    channel.toolbox_template_publish(
-        template=_template_payload(),
-        artifact_references=[_artifact().to_dict()],
-        manifest_signature=SIGNATURE,
-        activate=True,
+    channel.toolbox_template_construct(
+        template_id="custom",
+        base_template_digest=_digest("b"),
+        imports=["pandas"],
+        package_requirements=["pandas==2.3.1"],
+        request_id="construct-1",
+    )
+    channel.toolbox_template_activate(template_id="core", template_digest=_digest("a"))
+    channel.toolbox_template_replace(
+        template_id="core",
+        expected_active_digest=_digest("a"),
+        replacement_digest=_digest("b"),
     )
     channel.toolbox_template_deprecate(template_id="core", template_digest=_digest("a"))
     channel.toolbox_template_revoke(template_id="core", template_digest=_digest("a"))
     assert [item[0] for item in connection.calls] == [
         "toolbox-template-list",
         "toolbox-template-describe",
-        "toolbox-template-publish",
+        "op-start",
+        "toolbox-template-activate",
+        "toolbox-template-replace",
         "toolbox-template-deprecate",
         "toolbox-template-revoke",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
-    assert connection.calls[2][1]["activate"] is True
+    assert connection.calls[2][1]["command"] == "toolbox-template-construct"
 
 
 def test_role_separation_allows_consumer_reads_and_admin_mutation() -> None:
     for role in ["worker_user", "config_editor", "diagnostic_user"]:
         allowed = EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
         assert {"toolbox-template-list", "toolbox-template-describe"} <= allowed
-        assert "toolbox-template-publish" not in allowed
+        assert "toolbox-template-construct" not in allowed
+        assert "toolbox-template-activate" not in allowed
+        assert "toolbox-template-replace" not in allowed
         assert "toolbox-template-deprecate" not in allowed
         assert "toolbox-template-revoke" not in allowed
         assert "toolbox-template-prewarm" not in allowed
@@ -306,7 +338,9 @@ def test_role_separation_allows_consumer_reads_and_admin_mutation() -> None:
     assert {
         "toolbox-template-list",
         "toolbox-template-describe",
-        "toolbox-template-publish",
+        "toolbox-template-construct",
+        "toolbox-template-activate",
+        "toolbox-template-replace",
         "toolbox-template-deprecate",
         "toolbox-template-revoke",
         "toolbox-template-prewarm",
@@ -340,8 +374,10 @@ def test_authenticated_command_policy_enforces_catalog_role_separation(tmp_path:
     svc.authorize_command("toolbox-template-list", {"session_token": worker})
     svc.authorize_command("toolbox-template-describe", {"session_token": worker})
     with pytest.raises(PermissionError, match="insufficient_role"):
-        svc.authorize_command("toolbox-template-publish", {"session_token": worker})
-    svc.authorize_command("toolbox-template-publish", {"session_token": admin})
+        svc.authorize_command("toolbox-template-construct", {"session_token": worker})
+    svc.authorize_command("toolbox-template-construct", {"session_token": admin})
+    svc.authorize_command("toolbox-template-activate", {"session_token": admin})
+    svc.authorize_command("toolbox-template-replace", {"session_token": admin})
     svc.authorize_command("toolbox-template-deprecate", {"session_token": admin})
     svc.authorize_command("toolbox-template-revoke", {"session_token": admin})
 
@@ -389,3 +425,79 @@ def test_daemon_dispatch_and_remote_cli_route_catalog_commands(
     assert rc == 0
     assert calls == [("toolbox-template-list", {})]
     assert '"ok": true' in capsys.readouterr().out
+
+
+def test_daemon_op_start_routes_template_construction_to_canonical_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        control_state_file=tmp_path / "access_control.json",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def construct(**kwargs):
+        calls.append(dict(kwargs))
+        return {"contract": "hosting.operation_status", "lifecycle": "queued"}
+
+    monkeypatch.setattr(daemon.svc, "toolbox_template_construct", construct)
+    response = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            json.dumps(
+                {
+                    "seq": 1,
+                    "cmd": "op-start",
+                    "payload": {
+                        "command": "toolbox-template-construct",
+                        "payload": {
+                            "template_id": "team-core",
+                            "base_template_digest": _digest("a"),
+                            "imports": ["hosting"],
+                            "package_requirements": [],
+                            "request_id": "construct-1",
+                        },
+                    },
+                }
+            ),
+            peer_host="127.0.0.1",
+            transport="local_ipc",
+        )
+    )
+    assert response["ok"] is True
+    assert calls[0]["template_id"] == "team-core"
+    assert calls[0]["base_template_digest"] == _digest("a")
+
+
+def test_activate_and_replace_are_exact_compare_and_swap_transitions(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    first = _publish(repo, activate=False)
+    activated = repo.activate(
+        template_id="core",
+        template_digest=first["template_digest"],
+        actor_id="admin:test",
+    )
+    assert activated["entry"]["lifecycle"] == "active"
+    second = _publish(
+        repo,
+        _template_payload(revision="2", lock_char="c"),
+        artifact=_artifact("f"),
+        activate=False,
+    )
+    with pytest.raises(ValueError, match="active_revision_conflict"):
+        repo.replace(
+            template_id="core",
+            expected_active_digest=_digest("9"),
+            replacement_digest=second["template_digest"],
+            actor_id="admin:test",
+        )
+    replaced = repo.replace(
+        template_id="core",
+        expected_active_digest=first["template_digest"],
+        replacement_digest=second["template_digest"],
+        actor_id="admin:test",
+    )
+    state = repo.read()
+    assert replaced["outcome"] == "replaced"
+    assert state["active"] == {"core": second["template_digest"]}
+    assert next(item for item in state["entries"] if item["template_digest"] == first["template_digest"])["lifecycle"] == "deprecated"

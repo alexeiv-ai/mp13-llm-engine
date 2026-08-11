@@ -70,7 +70,9 @@ _TOOLBOX_TEMPLATE_CONSUMER_COMMANDS = {
 }
 
 _TOOLBOX_TEMPLATE_ADMIN_COMMANDS = {
-    "toolbox-template-publish",
+    "toolbox-template-construct",
+    "toolbox-template-activate",
+    "toolbox-template-replace",
     "toolbox-template-deprecate",
     "toolbox-template-revoke",
     "toolbox-template-prewarm",

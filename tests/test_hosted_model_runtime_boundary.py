@@ -139,7 +139,7 @@ def test_healthy_installed_model_cannot_be_selected_by_planner_or_custom_builder
         )
     with pytest.raises(PermissionError, match="model_runtime_selection_denied"):
         service.authorize_command(
-            "toolbox-template-publish",
+            "toolbox-template-construct",
             {"template": {"runtime_kind": "model"}},
         )
 

@@ -218,6 +218,20 @@ def test_remote_cli_routes_definition_commands(
             ["--ssh-target", "user@example.test", "--payload-stdin", command]
         ) == 0
 
-    assert [command for command, _ in calls] == list(payloads)
-    assert all(payload == payloads[command] for command, payload in calls)
+    assert [command for command, _ in calls] == [
+        "toolbox-get-definition",
+        "op-start",
+        "toolbox-approve-confirmed-definition-plan",
+        "op-start",
+    ]
+    assert calls[1][1] == {
+        "command": "toolbox-plan-definition",
+        "payload": payloads["toolbox-plan-definition"],
+    }
+    assert calls[3][1] == {
+        "command": "toolbox-apply-definition",
+        "payload": payloads["toolbox-apply-definition"],
+    }
+    assert calls[0][1] == payloads["toolbox-get-definition"]
+    assert calls[2][1] == payloads["toolbox-approve-confirmed-definition-plan"]
     assert capsys.readouterr().out.count('"ok": true') == 4

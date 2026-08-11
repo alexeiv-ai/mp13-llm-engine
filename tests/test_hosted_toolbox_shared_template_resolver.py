@@ -11,6 +11,7 @@ from typing import Any, Mapping
 import pytest
 
 from hosting.service.host_service import EngineHostService
+from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference
 from hosting.service.toolbox_materialization import (
     ToolboxTemplateMaterializationReceipt,
     derived_environment_digest,
@@ -54,11 +55,15 @@ def _ready_service(tmp_path: Path) -> EngineHostService:
     )
     operations = []
     for release in realized_test_catalog().releases:
-        published = service.toolbox_template_publish(
-            template=release.template.to_dict(),
-            artifact_references=[release.artifact_reference()],
+        published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
+            template=release.template,
+            artifacts=(ToolboxTemplateArtifactReference.from_dict(release.artifact_reference()),),
             manifest_signature=release.manifest_signature,
-            activate=True,
+            actor_id="test:resolver-setup",
+        )
+        service.toolbox_template_activate(
+            template_id=release.template.template_id,
+            template_digest=published["template_digest"],
             actor_id="test:resolver-setup",
         )
         operations.append(
