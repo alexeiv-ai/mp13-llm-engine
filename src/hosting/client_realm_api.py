@@ -430,9 +430,10 @@ def authenticate_client_with_key(
     adopt: bool = True,
     namespace: str = "engine-host-auth",
     sign_timeout_seconds: float = 30.0,
-) -> str:
+) -> Dict[str, Any]:
     """
-    Orchestrate daemon public-key authentication and return the session token.
+    Orchestrate daemon public-key authentication and return the complete session
+    result, including token, identity, role, authentication method, and scope.
 
     GUI clients should usually pass a signer callback. The callback receives the
     challenge dictionary from begin_client_key_authentication() and returns an
@@ -441,23 +442,34 @@ def authenticate_client_with_key(
     """
     ensure_session = getattr(client, "ensure_public_key_session", None)
     if callable(ensure_session):
-        return str(
-            ensure_session(
-                key_id=key_id,
-                scope=scope,
-                signer=signer,
-                private_key_text=private_key_text,
-                signature_ssh=signature_ssh,
-                ttl_seconds=ttl_seconds,
-                config_paths=config_paths,
-                engine_ids=engine_ids,
-                bind_to_ssh=bind_to_ssh,
-                adopt=adopt,
-                namespace=namespace,
-                sign_timeout_seconds=sign_timeout_seconds,
-            )
-            or ""
+        ensured = ensure_session(
+            key_id=key_id,
+            scope=scope,
+            signer=signer,
+            private_key_text=private_key_text,
+            signature_ssh=signature_ssh,
+            ttl_seconds=ttl_seconds,
+            config_paths=config_paths,
+            engine_ids=engine_ids,
+            bind_to_ssh=bind_to_ssh,
+            adopt=adopt,
+            namespace=namespace,
+            sign_timeout_seconds=sign_timeout_seconds,
         )
+        if isinstance(ensured, dict):
+            result = dict(ensured)
+        else:
+            # Compatibility with custom/older channel implementations.
+            result = {
+                "status": "ok",
+                "token": str(ensured or "").strip(),
+                "key_id": str(key_id or "").strip(),
+                "auth_method": "public_key",
+                "scope": str(scope or "control").strip().lower() or "control",
+            }
+        if not str(result.get("token") or "").strip():
+            raise RuntimeError("authentication failed: no token returned")
+        return result
     challenge = begin_client_key_authentication(
         client,
         key_id=key_id,
@@ -492,7 +504,7 @@ def authenticate_client_with_key(
     token = str(result.get("token") or "").strip()
     if not token:
         raise RuntimeError("authentication failed: no token returned")
-    return token
+    return dict(result)
 
 
 __all__ = [

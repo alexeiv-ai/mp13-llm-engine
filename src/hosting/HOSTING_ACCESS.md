@@ -746,6 +746,7 @@ This section is the authoritative integration contract for hosting consumers.
    - local signature generation
    - `auth-complete-challenge`
    - a successful completion returns the granted `key_id`, `auth_method`, `role`, and `scope` with the session token; consumers do not need an admin-only probe to determine the granted role
+   - `EngineHostControlChannel.ensure_public_key_session()` and `authenticate_client_with_key()` return that complete result; validated adopted/cached sessions return the same identity fields with `reused=true` and do not repeat the handshake
 3. Remote-capable consumers must include `_ssh_session_binding` metadata so issued sessions remain tied to the expected SSH route.
 4. Consumers must treat missing or rejected SSH binding as a hard security failure, not as a retry-without-binding hint.
 5. Consumers that cache or receive a session token should validate it with `auth-validate-session` using the requested scope, optional expected key id, and current SSH binding before adopting it or skipping public-key challenge auth.

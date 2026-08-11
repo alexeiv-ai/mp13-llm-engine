@@ -495,6 +495,12 @@ from exception text.
 
 ## Dependent code, configuration, tests, and documentation
 
+Authentication helper return contract: `EngineHostControlChannel.ensure_public_key_session()`
+and `authenticate_client_with_key()` now return a result mapping rather than a bare token
+string. Consumers must read `result["token"]`; `key_id`, `auth_method`, `role`, and
+`scope` are present for both new and validated cached sessions, and `reused` identifies
+whether the public-key handshake was skipped.
+
 Remove:
 
 - target-selection configuration and x64/Linux fallback logic;

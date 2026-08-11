@@ -4347,10 +4347,10 @@ class EngineHostControlChannel:
         adopt: bool = True,
         namespace: str = "engine-host-auth",
         sign_timeout_seconds: float = 30.0,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
-        Return a usable public-key session token, reusing an adopted/cached token
-        before falling back to challenge signing.
+        Return public-key session metadata, reusing an adopted/cached token before
+        falling back to challenge signing.
 
         GUI/browser clients should prefer this over unconditionally running
         auth-begin-challenge/auth-complete-challenge for every operation.
@@ -4359,6 +4359,19 @@ class EngineHostControlChannel:
         if not kid:
             raise ValueError("key_id is required")
         scope_norm = str(scope or "control").strip().lower() or "control"
+
+        def _reused_result(token: str, validation: Dict[str, Any]) -> Dict[str, Any]:
+            validated = dict(validation or {})
+            return {
+                **validated,
+                "status": "ok",
+                "token": str(token or "").strip(),
+                "key_id": str(validated.get("key_id") or kid).strip(),
+                "auth_method": str(validated.get("auth_method") or "public_key").strip(),
+                "role": str(validated.get("role") or "").strip().lower(),
+                "scope": str(validated.get("scope") or scope_norm).strip().lower(),
+                "reused": True,
+            }
 
         current = self.get_session_token()
         if current:
@@ -4378,11 +4391,11 @@ class EngineHostControlChannel:
                     engine_ids=engine_ids,
                     bind_to_ssh=bind_to_ssh,
                 ):
-                return current
+                return _reused_result(current, validation)
             if scope_norm == "control":
                 try:
                     if bool(validation.get("valid", False)) and str(validation.get("key_id") or "").strip() == kid:
-                        return current
+                        return _reused_result(current, validation)
                 except Exception:
                     self.set_session_token(None)
             if not bool(validation.get("valid", False)):
@@ -4412,11 +4425,11 @@ class EngineHostControlChannel:
                     engine_ids=engine_ids,
                     bind_to_ssh=bind_to_ssh,
                 ):
-                return cached
+                return _reused_result(cached, validation)
             if scope_norm == "control":
                 try:
                     if bool(validation.get("valid", False)) and str(validation.get("key_id") or "").strip() == kid:
-                        return cached
+                        return _reused_result(cached, validation)
                 except Exception:
                     self.set_session_token(None)
             if not bool(validation.get("valid", False)):
@@ -4489,7 +4502,7 @@ class EngineHostControlChannel:
                 engine_ids=engine_ids,
                 bind_to_ssh=bind_to_ssh,
             )
-        return token
+        return {**dict(result), "reused": False}
 
     def auth_revoke_session(self, token: str) -> Dict[str, Any]:
         res = self._invoke("auth-revoke-session", {"token": str(token or "")})

@@ -131,8 +131,15 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
     first = ch.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer)
     second = ch.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer)
 
-    assert first == "pk-token"
-    assert second == "pk-token"
+    assert first["token"] == "pk-token"
+    assert first["role"] == "model_user"
+    assert first["reused"] is False
+    assert second["token"] == "pk-token"
+    assert second["key_id"] == "admin-pub"
+    assert second["auth_method"] == "public_key"
+    assert second["role"] == "model_user"
+    assert second["scope"] == "traffic"
+    assert second["reused"] is True
     assert ch._session_token_meta["role"] == "model_user"  # noqa: SLF001
     assert [cmd for cmd, _payload in fake.calls] == [
         "auth-begin-challenge",
@@ -194,8 +201,17 @@ def test_public_key_session_cache_reuses_non_control_token_across_channels() -> 
         signer_calls.append(dict(challenge))
         return "SIG"
 
-    assert ch1.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer) == "pk-token"
-    assert ch2.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer) == "pk-token"
+    first_result = ch1.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer)
+    cached_result = ch2.ensure_public_key_session(key_id="admin-pub", scope="traffic", signer=signer)
+
+    assert first_result["token"] == "pk-token"
+    assert first_result["reused"] is False
+    assert cached_result["token"] == "pk-token"
+    assert cached_result["key_id"] == "admin-pub"
+    assert cached_result["auth_method"] == "public_key"
+    assert cached_result["role"] == "admin"
+    assert cached_result["scope"] == "traffic"
+    assert cached_result["reused"] is True
 
     assert [cmd for cmd, _payload in first.calls] == ["auth-begin-challenge", "auth-complete-challenge"]
     assert [cmd for cmd, _payload in second.calls] == ["auth-validate-session"]

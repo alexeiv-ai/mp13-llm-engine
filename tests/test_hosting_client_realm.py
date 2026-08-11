@@ -182,7 +182,7 @@ def test_client_realm_auth_helpers_support_gui_signer_flow() -> None:
         seen.update(challenge)
         return "-----BEGIN SSH SIGNATURE-----\nSIG\n-----END SSH SIGNATURE-----"
 
-    token = authenticate_client_with_key(
+    result = authenticate_client_with_key(
         client,
         "admin-main",
         signer=signer,
@@ -190,7 +190,7 @@ def test_client_realm_auth_helpers_support_gui_signer_flow() -> None:
         engine_ids=["worker1"],
     )
 
-    assert token == "session-token"
+    assert result["token"] == "session-token"
     assert client.begin_payload["key_id"] == "admin-main"
     assert client.begin_payload["ttl_seconds"] == 300
     assert client.begin_payload["engine_ids"] == ["worker1"]
@@ -217,9 +217,28 @@ def test_client_realm_auth_helpers_accept_structured_signer_result() -> None:
             "client_realm": "default",
         }
 
-    token = authenticate_client_with_key(FakeClient(), "admin-main", signer=signer)
+    result = authenticate_client_with_key(FakeClient(), "admin-main", signer=signer)
 
-    assert token == "session-token"
+    assert result["token"] == "session-token"
+    assert result["echo"]["adopt"] is True
+
+
+def test_client_realm_auth_helper_preserves_channel_session_result() -> None:
+    expected = {
+        "status": "ok",
+        "token": "cached-token",
+        "key_id": "admin-main",
+        "auth_method": "public_key",
+        "role": "admin",
+        "scope": "control",
+        "reused": True,
+    }
+
+    class FakeClient:
+        def ensure_public_key_session(self, **_kwargs):
+            return dict(expected)
+
+    assert authenticate_client_with_key(FakeClient(), "admin-main") == expected
 
 
 def test_client_realm_auth_helpers_reject_mismatched_signer_challenge_id() -> None:
