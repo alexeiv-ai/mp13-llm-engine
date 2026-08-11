@@ -142,12 +142,14 @@ class HostedToolboxAdmin:
     def startup_reconcile(
         self,
         *,
+        request_id: str,
         toolbox_ids: Optional[List[str]] = None,
         only_inconsistent: bool = True,
         details: bool = False,
     ) -> Dict[str, Any]:
         return dict(
             self.host.toolbox_reconcile(
+                request_id=str(request_id or "").strip(),
                 toolbox_ids=self._normalize_toolbox_ids(toolbox_ids),
                 only_inconsistent=bool(only_inconsistent),
                 details=bool(details),
@@ -188,6 +190,7 @@ class HostedToolboxAdmin:
     def auto_repair_if_needed(
         self,
         *,
+        request_id: str,
         toolbox_ids: Optional[List[str]] = None,
         gc_on_noop: bool = False,
         details: bool = False,
@@ -198,7 +201,9 @@ class HostedToolboxAdmin:
         if issue_count <= 0:
             gc_out: Dict[str, Any] = {}
             if gc_on_noop:
-                gc_out = dict(self.host.toolbox_gc() or {})
+                gc_out = dict(
+                    self.host.toolbox_gc(request_id=str(request_id or "").strip()) or {}
+                )
             return {
                 "status": "ok",
                 "action": "noop",
@@ -209,6 +214,7 @@ class HostedToolboxAdmin:
             }
         reconcile = dict(
             self.host.toolbox_reconcile(
+                request_id=str(request_id or "").strip(),
                 toolbox_ids=scoped_ids,
                 only_inconsistent=True,
                 details=bool(details),

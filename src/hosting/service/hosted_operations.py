@@ -162,6 +162,18 @@ class HostedOperationsMixin:
                 reason=str(reason or "client_requested"),
                 envelope_factory=cancellation_envelope,
             )
+        if operation.execution_kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
+            return self._hosted_operations.cancel_before_progress_commit(
+                operation_id=operation.operation_id,
+                committed_phases=("recovery", "repair", "gc", "cleanup"),
+                reason=str(reason or "client_requested"),
+                envelope_factory=lambda: {
+                    "contract": "hosting.toolbox.maintenance_result.v1",
+                    "status": "canceled",
+                    "code": "toolbox_maintenance_canceled_before_mutation",
+                },
+                committed_reason="toolbox_maintenance_mutation_started",
+            )
         if operation.execution_kind in {
             HostedExecutionKind.TOOLBOX_SETUP,
             HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT,

@@ -2225,7 +2225,7 @@ class ToolboxRuntimeMixin:
             with self._locked_toolbox(target_toolbox_id):
                 if respawn:
                     repair_piece = dict(
-                        self.toolbox_repair(
+                        self._toolbox_repair_now(
                             toolbox_ids=[target_toolbox_id],
                             only_inconsistent=False,
                             details=False,

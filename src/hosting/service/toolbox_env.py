@@ -467,7 +467,7 @@ class ToolboxMaintenanceMixin:
             },
         }
 
-    def toolbox_repair(
+    def _toolbox_repair_now(
         self,
         *,
         toolbox_ids: Optional[List[str]] = None,
@@ -535,7 +535,7 @@ class ToolboxMaintenanceMixin:
             result["after"] = after
         return result
 
-    def toolbox_gc(self) -> Dict[str, Any]:
+    def _toolbox_gc_now(self) -> Dict[str, Any]:
         recovery = self.recover_toolbox_definition_rollouts()
         references = self._toolbox_reference_report()
         registrations = self._toolbox_v2_registrations()
@@ -611,7 +611,7 @@ class ToolboxMaintenanceMixin:
             ),
         }
 
-    def toolbox_reconcile(
+    def _toolbox_reconcile_now(
         self,
         *,
         toolbox_ids: Optional[List[str]] = None,
@@ -619,12 +619,12 @@ class ToolboxMaintenanceMixin:
         details: bool = False,
     ) -> Dict[str, Any]:
         before = self.toolbox_consistency()
-        repair = self.toolbox_repair(
+        repair = self._toolbox_repair_now(
             toolbox_ids=toolbox_ids,
             only_inconsistent=only_inconsistent,
             details=details,
         )
-        gc = self.toolbox_gc()
+        gc = self._toolbox_gc_now()
         after = self.toolbox_consistency()
         result: Dict[str, Any] = {
             "status": "ok",
@@ -640,3 +640,255 @@ class ToolboxMaintenanceMixin:
             result["before"] = before
             result["after"] = after
         return result
+
+    def _toolbox_maintenance_start(
+        self,
+        *,
+        action: str,
+        request_id: str,
+        toolbox_ids: Optional[List[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        maintenance_action = str(action or "").strip()
+        if maintenance_action not in {"gc", "repair", "reconcile"}:
+            raise ValueError("toolbox_maintenance_action_invalid")
+        rid = str(request_id or "").strip()
+        if not rid:
+            raise ValueError("toolbox_maintenance_request_id_required")
+        selected = sorted(
+            {
+                str(item or "").strip()
+                for item in list(toolbox_ids or [])
+                if str(item or "").strip()
+            }
+        )
+        configuration = getattr(self, "_toolbox_host_project_config", None)
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "execution_kind": HostedExecutionKind.TOOLBOX_MAINTENANCE.value,
+                "action": maintenance_action,
+                "toolbox_ids": selected,
+                "only_inconsistent": bool(only_inconsistent),
+                "details": bool(details),
+                "config_revision": (
+                    configuration.config_revision if configuration is not None else None
+                ),
+                "source_set_revision": (
+                    configuration.source_set_revision if configuration is not None else None
+                ),
+            }
+        )
+        owner = self._operation_owner(owner_actor_id)
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=owner,
+            execution_kind=HostedExecutionKind.TOOLBOX_MAINTENANCE,
+            selector=HostedOperationSelector(kind="host_scope", id="toolbox-host"),
+            namespace="toolbox_maintenance:toolbox-host",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "action": maintenance_action,
+                "toolbox_ids": selected,
+                "only_inconsistent": bool(only_inconsistent),
+                "details": bool(details),
+            },
+        )
+        status = prepared.get("status")
+        if status is None:
+            raise RuntimeError("hosted_operation_capacity")
+        dispatch = prepared["action"] == "dispatch"
+        if (
+            not dispatch
+            and status.get("lifecycle")
+            == HostedOperationLifecycle.INTERRUPTED_AFTER_DISPATCH_UNKNOWN.value
+        ):
+            operation_id = str(status["operation"]["operation_id"])
+            resumed = self._hosted_operations.requeue_interrupted_after_dispatch(
+                operation_id=operation_id
+            )
+            if resumed is not None:
+                status = resumed
+                dispatch = True
+        if not dispatch:
+            return dict(status)
+        operation_id = str(status["operation"]["operation_id"])
+        thread = threading.Thread(
+            target=self._run_toolbox_maintenance,
+            kwargs={
+                "operation_id": operation_id,
+                "action": maintenance_action,
+                "toolbox_ids": selected,
+                "only_inconsistent": bool(only_inconsistent),
+                "details": bool(details),
+            },
+            name=f"toolbox-maintenance-{maintenance_action}-{operation_id[-8:]}",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": "toolbox_maintenance_dispatch_failed",
+                    "summary": "The toolbox maintenance worker could not be started.",
+                },
+                reason="toolbox_maintenance_dispatch_failed",
+            )
+            raise
+        return dict(status)
+
+    def toolbox_repair(
+        self,
+        *,
+        request_id: str,
+        toolbox_ids: Optional[List[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        return self._toolbox_maintenance_start(
+            action="repair",
+            request_id=request_id,
+            toolbox_ids=toolbox_ids,
+            only_inconsistent=only_inconsistent,
+            details=details,
+            owner_actor_id=owner_actor_id,
+        )
+
+    def toolbox_gc(
+        self, *, request_id: str, owner_actor_id: str = "service:local"
+    ) -> Dict[str, Any]:
+        return self._toolbox_maintenance_start(
+            action="gc", request_id=request_id, owner_actor_id=owner_actor_id
+        )
+
+    def toolbox_reconcile(
+        self,
+        *,
+        request_id: str,
+        toolbox_ids: Optional[List[str]] = None,
+        only_inconsistent: bool = True,
+        details: bool = False,
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        return self._toolbox_maintenance_start(
+            action="reconcile",
+            request_id=request_id,
+            toolbox_ids=toolbox_ids,
+            only_inconsistent=only_inconsistent,
+            details=details,
+            owner_actor_id=owner_actor_id,
+        )
+
+    def _run_toolbox_maintenance(
+        self,
+        *,
+        operation_id: str,
+        action: str,
+        toolbox_ids: List[str],
+        only_inconsistent: bool,
+        details: bool,
+    ) -> None:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+
+        def checkpoint(
+            phase: str,
+            code: str,
+            completed_units: int | None,
+            total_units: int | None,
+            summary: str,
+            cancellable: bool,
+        ) -> None:
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase=phase,
+                    code=code,
+                    completed_units=completed_units,
+                    total_units=total_units,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary=summary,
+                    cancellable=cancellable,
+                ),
+            )
+
+        try:
+            checkpoint(
+                "validation", "toolbox_maintenance_validated", 1, 1,
+                "The maintenance action and bounded selection were validated.", True,
+            )
+            checkpoint(
+                "recovery", "toolbox_maintenance_recovering", 0, 1,
+                "Interrupted toolbox rollout state is being reconciled before maintenance.", False,
+            )
+            self.recover_toolbox_definition_rollouts()
+            checkpoint(
+                "recovery", "toolbox_maintenance_recovered", 1, 1,
+                "Interrupted toolbox rollout state was reconciled.", False,
+            )
+            if action == "repair":
+                checkpoint("repair", "toolbox_repair_started", 0, 1, "Selected toolbox state is being repaired.", False)
+                result = self._toolbox_repair_now(
+                    toolbox_ids=toolbox_ids,
+                    only_inconsistent=only_inconsistent,
+                    details=details,
+                )
+                checkpoint("repair", "toolbox_repair_completed", 1, 1, "Selected toolbox state was repaired.", False)
+            elif action == "gc":
+                checkpoint("gc", "toolbox_gc_started", 0, 1, "Unreferenced toolbox resources are being reclaimed.", False)
+                result = self._toolbox_gc_now()
+                checkpoint("gc", "toolbox_gc_completed", 1, 1, "Unreferenced toolbox resources were reclaimed.", False)
+            else:
+                before = self.toolbox_consistency()
+                checkpoint("repair", "toolbox_reconcile_repair_started", 0, 1, "Selected toolbox state is being repaired.", False)
+                repair = self._toolbox_repair_now(
+                    toolbox_ids=toolbox_ids,
+                    only_inconsistent=only_inconsistent,
+                    details=details,
+                )
+                checkpoint("repair", "toolbox_reconcile_repair_completed", 1, 1, "Selected toolbox state was repaired.", False)
+                checkpoint("gc", "toolbox_reconcile_gc_started", 0, 1, "Unreferenced toolbox resources are being reclaimed.", False)
+                gc = self._toolbox_gc_now()
+                checkpoint("gc", "toolbox_reconcile_gc_completed", 1, 1, "Unreferenced toolbox resources were reclaimed.", False)
+                after = self.toolbox_consistency()
+                result = {
+                    "status": "ok",
+                    "contract": "hosting.toolbox.reconcile.v2",
+                    "repair": repair,
+                    "gc": gc,
+                    "summary": {
+                        "before_issue_count": int(before.get("issue_count") or 0),
+                        "after_issue_count": int(after.get("issue_count") or 0),
+                    },
+                }
+                if details:
+                    result["before"] = before
+                    result["after"] = after
+            checkpoint("cleanup", "toolbox_maintenance_cleanup_completed", 1, 1, "Maintenance cleanup is complete.", False)
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "contract": "hosting.toolbox.maintenance_result.v1",
+                    "status": "ok",
+                    "code": "toolbox_maintenance_completed",
+                    "action": action,
+                    "maintenance_result": result,
+                },
+            )
+        except Exception:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "status": "error",
+                    "code": "toolbox_maintenance_failed",
+                    "summary": "Toolbox maintenance failed before a complete terminal result.",
+                },
+                reason="toolbox_maintenance_failed",
+            )

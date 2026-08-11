@@ -704,7 +704,7 @@ boundary—not a double—passes.
 - [x] **R5-04** Keep publication inactive until explicit activation; support
   prewarm, replace, deprecate, and revoke as final APIs. Remove superseded raw
   publication payloads and commands rather than preserve both designs.
-- [ ] **R5-05** Convert mutating GC, repair, and reconcile to hosted operations.
+- [x] **R5-05** Convert mutating GC, repair, and reconcile to hosted operations.
   Keep reference/consistency/review APIs as bounded reads and prove duplicate
   requests and cancellation never block the caller.
 

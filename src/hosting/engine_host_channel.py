@@ -3501,9 +3501,11 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_gc(self) -> Dict[str, Any]:
-        res = self._invoke("toolbox-gc", {})
-        return dict(res or {})
+    def toolbox_gc(self, *, request_id: str) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-gc",
+            payload={"request_id": str(request_id or "").strip()},
+        )
 
     def toolbox_environment_remove(
         self, *, environment_digest: str, request_id: str
@@ -3731,36 +3733,38 @@ class EngineHostControlChannel:
     def toolbox_repair(
         self,
         *,
+        request_id: str,
         toolbox_ids: Optional[list[str]] = None,
         only_inconsistent: bool = True,
         details: bool = False,
     ) -> Dict[str, Any]:
-        res = self._invoke(
-            "toolbox-repair",
-            {
+        return self.start_host_operation(
+            command="toolbox-repair",
+            payload={
+                "request_id": str(request_id or "").strip(),
                 "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()],
                 "only_inconsistent": bool(only_inconsistent),
                 "details": bool(details),
             },
         )
-        return dict(res or {})
 
     def toolbox_reconcile(
         self,
         *,
+        request_id: str,
         toolbox_ids: Optional[list[str]] = None,
         only_inconsistent: bool = True,
         details: bool = False,
     ) -> Dict[str, Any]:
-        res = self._invoke(
-            "toolbox-reconcile",
-            {
+        return self.start_host_operation(
+            command="toolbox-reconcile",
+            payload={
+                "request_id": str(request_id or "").strip(),
                 "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()],
                 "only_inconsistent": bool(only_inconsistent),
                 "details": bool(details),
             },
         )
-        return dict(res or {})
 
     def proxy_request(
         self,
@@ -4124,7 +4128,6 @@ class EngineHostControlChannel:
                 "offset": int(offset),
             },
         )
-        return dict(res or {})
 
     def auth_validate_session(
         self,
@@ -4214,7 +4217,6 @@ class EngineHostControlChannel:
 
     def auth_revoke_key(self, key_id: str) -> Dict[str, Any]:
         res = self._invoke("auth-revoke-key", {"key_id": str(key_id or "")})
-        return dict(res or {})
 
     def auth_issue_session(
         self,

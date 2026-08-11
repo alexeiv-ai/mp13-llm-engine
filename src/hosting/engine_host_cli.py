@@ -109,7 +109,7 @@ EXAMPLES_BY_COMMAND = {
         "Get-Content toolbox-state-archive-v1.json | python -m hosting.engine_host_cli --payload-stdin toolbox-state-archive-v1",
     ],
     "toolbox-gc": [
-        "python -m hosting.engine_host_cli toolbox-gc",
+        "'{\"request_id\":\"gc-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-gc",
     ],
     "toolbox-get-definition": [
         "'{\"toolbox_id\":\"toolbox-demo\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-get-definition",
@@ -161,12 +161,12 @@ EXAMPLES_BY_COMMAND = {
         "'{\"toolbox_ids\":[\"toolbox-demo\"]}' | python -m hosting.engine_host_cli --payload-stdin toolbox-review-snapshot",
     ],
     "toolbox-repair": [
-        "python -m hosting.engine_host_cli toolbox-repair",
-        "'{\"toolbox_ids\":[\"toolbox-demo\"],\"only_inconsistent\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-repair",
+        "'{\"request_id\":\"repair-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-repair",
+        "'{\"request_id\":\"repair-2\",\"toolbox_ids\":[\"toolbox-demo\"],\"only_inconsistent\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-repair",
     ],
     "toolbox-reconcile": [
-        "python -m hosting.engine_host_cli toolbox-reconcile",
-        "'{\"toolbox_ids\":[\"toolbox-demo\"],\"only_inconsistent\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-reconcile",
+        "'{\"request_id\":\"reconcile-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-reconcile",
+        "'{\"request_id\":\"reconcile-2\",\"toolbox_ids\":[\"toolbox-demo\"],\"only_inconsistent\":false}' | python -m hosting.engine_host_cli --payload-stdin toolbox-reconcile",
     ],
     "auth-upsert-key": [
         "@'{\"key_id\":\"admin-key\",\"key_secret\":\"change_me\",\"role\":\"admin\"}'@ | python -m hosting.engine_host_cli --payload-stdin auth-upsert-key",
@@ -1146,6 +1146,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
         "toolbox-template-construct",
+        "toolbox-gc",
+        "toolbox-repair",
+        "toolbox-reconcile",
     }
 
     # Local-only recovery helpers. Intentionally bypass daemon RPC/auth surfaces.
@@ -1199,13 +1202,19 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     if cmd_name and cmd_name != "toolbox-state-archive-v1" and _try_daemon_invoke(daemon_cmd, daemon_payload, pid_file=pid_file_arg):
         return 0
 
-    if cmd_name in {"toolbox-template-prewarm", "toolbox-template-construct"}:
+    if cmd_name in {
+        "toolbox-template-prewarm",
+        "toolbox-template-construct",
+        "toolbox-gc",
+        "toolbox-repair",
+        "toolbox-reconcile",
+    }:
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "error": "template_operation_requires_daemon",
-                    "error_code": "template_operation_requires_daemon",
+                    "error": "hosted_operation_requires_daemon",
+                    "error_code": "hosted_operation_requires_daemon",
                 },
                 ensure_ascii=False,
             )
@@ -1981,7 +1990,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             )
             return 0
         if cmd == "toolbox-gc":
-            _print_ok(svc.toolbox_gc())
+            _print_ok(svc.toolbox_gc(request_id=str(payload.get("request_id") or "")))
             return 0
         if cmd == "toolbox-environment-remove":
             _print_ok(
@@ -2108,6 +2117,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "toolbox-repair":
             _print_ok(
                 svc.toolbox_repair(
+                    request_id=str(payload.get("request_id") or ""),
                     toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
                     only_inconsistent=bool(payload.get("only_inconsistent", True)),
                     details=bool(payload.get("details", False)),
@@ -2117,6 +2127,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "toolbox-reconcile":
             _print_ok(
                 svc.toolbox_reconcile(
+                    request_id=str(payload.get("request_id") or ""),
                     toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
                     only_inconsistent=bool(payload.get("only_inconsistent", True)),
                     details=bool(payload.get("details", False)),

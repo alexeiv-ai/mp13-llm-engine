@@ -90,7 +90,10 @@ class HostedOperationRepository(Protocol):
         committed_phases: Sequence[str],
         reason: str,
         envelope_factory: Callable[[], Mapping[str, Any]],
+        committed_reason: str = "apply_publication_committed",
     ) -> Dict[str, Any]: ...
+
+    def requeue_interrupted_after_dispatch(self, *, operation_id: str) -> Optional[Dict[str, Any]]: ...
 
     def status(self, *, ref: HostedOperationRef | Mapping[str, Any], owner_actor_id: str) -> Dict[str, Any]: ...
 
@@ -729,6 +732,31 @@ class AtomicJsonHostedOperationRepository:
             reason=str(reason or "canceled_before_dispatch"),
         )
 
+    def requeue_interrupted_after_dispatch(
+        self, *, operation_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Claim one idempotent restart retry for an interrupted durable worker."""
+
+        oid = _bounded_identity(operation_id, label="operation_id")
+        now_ms = self._now_ms()
+        with self._state_lock():
+            location = self._operation_index.get(oid)
+            if location is None or location[1]:
+                return None
+            row = self._data[location[0]][oid]
+            if HostedOperationLifecycle(str(row["lifecycle"])) != (
+                HostedOperationLifecycle.INTERRUPTED_AFTER_DISPATCH_UNKNOWN
+            ):
+                return None
+            row["lifecycle"] = HostedOperationLifecycle.QUEUED.value
+            row["dispatch_claimed_at_ms"] = None
+            row["progress"] = None
+            row["updated_at_ms"] = now_ms
+            row["resume_count"] = min(1, int(row.get("resume_count") or 0) + 1)
+            self._persist_locked()
+            self._condition.notify_all()
+            return self._status_from_row(row)
+
     def cancel_before_progress_commit(
         self,
         *,
@@ -736,6 +764,7 @@ class AtomicJsonHostedOperationRepository:
         committed_phases: Sequence[str],
         reason: str,
         envelope_factory: Callable[[], Mapping[str, Any]],
+        committed_reason: str = "apply_publication_committed",
     ) -> Dict[str, Any]:
         """Atomically cancel an operation only while its persisted progress is pre-commit.
 
@@ -765,7 +794,7 @@ class AtomicJsonHostedOperationRepository:
                 return self._status_from_row(
                     row,
                     api_status="error",
-                    reason="apply_publication_committed",
+                    reason=str(committed_reason or "operation_commit_started"),
                 )
             envelope = dict(envelope_factory() or {})
             row["lifecycle"] = HostedOperationLifecycle.TERMINAL_CANCELLATION.value

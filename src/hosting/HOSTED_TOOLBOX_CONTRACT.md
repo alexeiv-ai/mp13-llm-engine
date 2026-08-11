@@ -515,7 +515,7 @@ mutate old revision content. The administrator separately makes the new
 revision active. Plans pin the catalog revision and template/lock digests they
 resolved.
 
-Audit records cover publish, active-pointer change, deprecate, revoke, prewarm,
+Audit records cover construct, activate/replace, deprecate, revoke, prewarm,
 artifact verification, build, quarantine, approval mint/validation, and GC.
 They contain event time, authenticated actor/authority, logical template and
 revision digests, catalog/policy revisions, target, outcome/stable code, and
@@ -543,6 +543,19 @@ profiles, candidates, unexpired plans and confirmations, active operations,
 built-in references, protected digests, and any builder reference prevent
 removal. GC uses the revisioned retention policy and never bypasses those
 checks.
+
+Mutating `toolbox-gc`, `toolbox-repair`, and `toolbox-reconcile` are
+administrator-only `toolbox_maintenance` hosted operations. Each is submitted
+through `op-start` with a stable `request_id`, uses the `host_scope` selector
+`toolbox-host`, and returns canonical operation status immediately. Repair and
+reconcile may also carry bounded `toolbox_ids`, `only_inconsistent`, and
+`details`; no command accepts a path or force bypass. Fixed progress phases are
+`validation`, `recovery`, `repair`, `gc`, and `cleanup`. Cancellation may commit
+only before recovery/mutation starts and always returns immediately; once a
+non-cancellable recovery or mutation checkpoint is durable, the caller keeps
+watching the same operation. An identical retry after a lost response or daemon
+restart attaches to and safely resumes the same idempotent operation. Read-only
+reference, consistency, and review commands remain bounded synchronous calls.
 
 ## Initial environment catalog
 

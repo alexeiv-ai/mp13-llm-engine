@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
 from pathlib import Path
 
+import pytest
+
+from hosting import engine_host_cli
+from hosting.daemon import EngineHostDaemon
+from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.service.host_service import EngineHostService
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
@@ -116,6 +124,12 @@ def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "managed.json",
         control_state_file=tmp_path / "control.json",
+    )
+
+
+def _wait_maintenance(service: EngineHostService, started: dict) -> dict:
+    return service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
     )
 
 
@@ -329,7 +343,7 @@ def test_missing_active_registration_requires_definition_reapply(tmp_path: Path)
     _install_active(service, include_registration=False)
 
     consistency = service.toolbox_consistency()
-    repair = service.toolbox_repair(toolbox_ids=["demo"])
+    repair = service._toolbox_repair_now(toolbox_ids=["demo"])  # noqa: SLF001
 
     assert consistency["issues"][0]["issue"] == "missing_active_registration"
     assert repair["reapply_required"][0]["issue"] == "definition_reapply_required"
@@ -342,7 +356,7 @@ def test_repair_restores_route_state_from_active_snapshot(tmp_path: Path, monkey
     service.set_toolbox_registration_routing_states({engine_id: "retired"})
     monkeypatch.setattr(service, "recover_toolbox_definition_rollouts", lambda: {"status": "ok"})
 
-    repair = service.toolbox_repair(toolbox_ids=["demo"])
+    repair = service._toolbox_repair_now(toolbox_ids=["demo"])  # noqa: SLF001
 
     assert repair["reactivated_engine_ids"] == [engine_id]
     assert service.get_registration(engine_id)["routing_state"] == "active"
@@ -369,7 +383,7 @@ def test_gc_removes_only_unreferenced_candidate_and_retired_workers(
     monkeypatch.setattr(service, "recover_toolbox_definition_rollouts", lambda: {"status": "ok"})
     monkeypatch.setattr(service, "_retire_toolbox_registration", removed.append)
 
-    result = service.toolbox_gc()
+    result = service._toolbox_gc_now()  # noqa: SLF001
 
     assert result["removed_engine_ids"] == ["candidate-orphan", "retired-old"]
     assert removed == ["candidate-orphan", "retired-old"]
@@ -395,8 +409,169 @@ def test_gc_removes_orphaned_bundle_but_preserves_active_bundle(
     )
     monkeypatch.setattr(service, "recover_toolbox_definition_rollouts", lambda: {"status": "ok"})
 
-    result = service.toolbox_gc()
+    result = service._toolbox_gc_now()  # noqa: SLF001
 
     assert result["removed_bundle_roots"] == [str(orphan_root.resolve())]
     assert active_root.is_dir()
     assert not orphan_root.exists()
+
+
+def test_hosted_maintenance_is_durable_idempotent_and_recoverable(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    started = service.toolbox_gc(request_id="gc-1", owner_actor_id="admin:test")
+    duplicate = service.toolbox_gc(request_id="gc-1", owner_actor_id="admin:test")
+    assert duplicate["operation"]["operation_id"] == started["operation"]["operation_id"]
+    terminal = _wait_maintenance(service, started)
+    recovered = service.hosted_operation_resolve_request(
+        execution_kind="toolbox_maintenance",
+        selector={"kind": "host_scope", "id": "toolbox-host"},
+        request_id="gc-1",
+        owner_actor_id="admin:test",
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["operation"]["execution_kind"] == "toolbox_maintenance"
+    assert terminal["operation"]["selector"] == {"kind": "host_scope", "id": "toolbox-host"}
+    assert terminal["result"]["action"] == "gc"
+    assert terminal["result"]["maintenance_result"]["contract"] == "hosting.toolbox.gc.v2"
+    assert terminal["progress"]["phase"] == "cleanup"
+    assert recovered["operation"]["operation_id"] == started["operation"]["operation_id"]
+
+
+def test_hosted_maintenance_request_conflict_and_pre_dispatch_cancel_are_immediate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(threading.Thread, "start", lambda _self: None)
+    started = service.toolbox_repair(
+        request_id="maintenance-1",
+        toolbox_ids=["demo"],
+        owner_actor_id="admin:test",
+    )
+    conflict = service.toolbox_repair(
+        request_id="maintenance-1",
+        toolbox_ids=["other"],
+        owner_actor_id="admin:test",
+    )
+    canceled = service.hosted_operation_cancel(
+        ref=started["operation"],
+        owner_actor_id="admin:test",
+        reason="test_cancel",
+    )
+    assert conflict["lifecycle"] == "idempotency_conflict"
+    assert canceled["lifecycle"] == "terminal_cancellation"
+    assert canceled["result"]["code"] == "toolbox_maintenance_canceled_before_mutation"
+
+
+def test_interrupted_maintenance_reuses_the_same_operation_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path)
+    real_start = threading.Thread.start
+    monkeypatch.setattr(threading.Thread, "start", lambda _self: None)
+    started = service.toolbox_gc(request_id="gc-restart", owner_actor_id="admin:test")
+    operation_id = started["operation"]["operation_id"]
+    service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)  # noqa: SLF001
+    repository_path = str((service.hosting_root / "state" / "hosted_operations.json").resolve())
+    service.close()
+    EngineHostService._operation_repositories.pop(repository_path, None)  # noqa: SLF001
+    restarted = _service(tmp_path)
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+
+    resumed = restarted.toolbox_gc(
+        request_id="gc-restart", owner_actor_id="admin:test"
+    )
+    terminal = _wait_maintenance(restarted, resumed)
+    assert resumed["operation"]["operation_id"] == operation_id
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"]["action"] == "gc"
+
+
+class _MaintenanceConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def invoke(self, command: str, payload=None):
+        self.calls.append((command, dict(payload or {})))
+        return {}
+
+    def is_alive(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        return None
+
+
+def test_channel_and_daemon_require_op_start_for_mutating_maintenance(tmp_path: Path) -> None:
+    connection = _MaintenanceConnection()
+    channel = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    channel._get_connection = lambda: connection  # type: ignore[method-assign]
+    channel.toolbox_gc(request_id="gc-channel")
+    channel.toolbox_repair(request_id="repair-channel", toolbox_ids=["demo"])
+    channel.toolbox_reconcile(request_id="reconcile-channel", details=True)
+    assert [item[0] for item in connection.calls] == ["op-start", "op-start", "op-start"]
+    assert [item[1]["command"] for item in connection.calls] == [
+        "toolbox-gc", "toolbox-repair", "toolbox-reconcile"
+    ]
+
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "daemon-engines.json",
+        control_state_file=tmp_path / "daemon-control.json",
+    )
+    raw = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            json.dumps({"seq": 1, "cmd": "toolbox-gc", "payload": {"request_id": "raw"}}),
+            peer_host="127.0.0.1",
+            transport="local_ipc",
+        )
+    )
+    assert raw["ok"] is False
+    assert raw["error_code"] == "operation_wrapper_required"
+    wrapped = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            json.dumps(
+                {
+                    "seq": 2,
+                    "cmd": "op-start",
+                    "payload": {
+                        "command": "toolbox-gc",
+                        "payload": {"request_id": "wrapped-gc"},
+                    },
+                }
+            ),
+            peer_host="127.0.0.1",
+            transport="local_ipc",
+        )
+    )
+    assert wrapped["ok"] is True
+    assert wrapped["result"]["operation"]["execution_kind"] == "toolbox_maintenance"
+    assert _wait_maintenance(daemon.svc, wrapped["result"])["lifecycle"] == "terminal_success"
+
+
+def test_remote_cli_wraps_mutating_maintenance_in_op_start(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeRemoteChannel:
+        def __init__(self, _settings=None):
+            pass
+
+        def invoke_control_command(self, command: str, payload=None):
+            calls.append((command, dict(payload or {})))
+            return {"status": "ok"}
+
+    monkeypatch.setattr(
+        "hosting.engine_host_channel.EngineHostControlChannel", FakeRemoteChannel
+    )
+    monkeypatch.setattr("sys.stdin.read", lambda: json.dumps({"request_id": "gc-cli"}))
+    assert engine_host_cli.main(
+        ["--ssh-target", "admin@example.test", "--payload-stdin", "toolbox-gc"]
+    ) == 0
+    assert calls == [
+        (
+            "op-start",
+            {"command": "toolbox-gc", "payload": {"request_id": "gc-cli"}},
+        )
+    ]
+    assert '"ok": true' in capsys.readouterr().out

@@ -2385,6 +2385,9 @@ class EngineHostDaemon:
                     "toolbox-apply-definition",
                     "toolbox-environment-remove",
                     "toolbox-template-construct",
+                    "toolbox-gc",
+                    "toolbox-repair",
+                    "toolbox-reconcile",
                 }:
                     result = await asyncio.to_thread(
                         self._call_service, target_cmd, target_payload
@@ -2573,6 +2576,9 @@ class EngineHostDaemon:
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
                 "toolbox-template-construct",
+                "toolbox-gc",
+                "toolbox-repair",
+                "toolbox-reconcile",
             }:
                 return {
                     "seq": seq,
@@ -3286,7 +3292,10 @@ class EngineHostDaemon:
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "toolbox-gc":
-            return svc.toolbox_gc()
+            return svc.toolbox_gc(
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "toolbox-environment-remove":
             return svc.toolbox_environment_remove(
                 environment_digest=str(payload.get("environment_digest") or ""),
@@ -3432,15 +3441,19 @@ class EngineHostDaemon:
             )
         if cmd == "toolbox-repair":
             return svc.toolbox_repair(
+                request_id=str(payload.get("request_id") or ""),
                 toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
                 only_inconsistent=bool(payload.get("only_inconsistent", True)),
                 details=bool(payload.get("details", False)),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "toolbox-reconcile":
             return svc.toolbox_reconcile(
+                request_id=str(payload.get("request_id") or ""),
                 toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
                 only_inconsistent=bool(payload.get("only_inconsistent", True)),
                 details=bool(payload.get("details", False)),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "proxy-request":
             return svc.proxy_request(

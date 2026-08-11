@@ -297,7 +297,7 @@ def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases(
             HostedExecutionKind.TOOLBOX_MAINTENANCE,
             HostedOperationSelector(kind="host_scope", id="toolbox-host"),
             "toolbox_maintenance:toolbox-host",
-            "recovery",
+            "validation",
             "publication",
             "gc",
         ),

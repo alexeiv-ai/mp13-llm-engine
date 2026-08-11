@@ -557,7 +557,7 @@ class HostedOperationStatus:
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
                 if self.progress.phase not in TOOLBOX_MAINTENANCE_PHASES:
                     raise ValueError("toolbox_maintenance_progress_phase_invalid")
-                if self.progress.phase in {"repair", "gc", "cleanup"} and self.progress.cancellable:
+                if self.progress.phase in {"recovery", "repair", "gc", "cleanup"} and self.progress.cancellable:
                     raise ValueError("toolbox_maintenance_committed_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
