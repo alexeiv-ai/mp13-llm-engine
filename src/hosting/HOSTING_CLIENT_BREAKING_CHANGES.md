@@ -22,7 +22,7 @@ maintainers and must not be edited from this repository.
 - Last adopted parent baseline: `83b35e20604c8f0c2fbe27467980b6a49385d918`
 - Last adopted `mp13-docs` commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
 - Corrective parent implementation pin: `d689bda`.
-- Production-launcher completion pin: pending this corrective commit.
+- Production-launcher completion pin: `48ff1f1`.
 - Dependent adoption receipt: not yet supplied. It must identify the dependent
   commit, exact Windows target, and its Windows migration-test command/results.
   Consumer Linux and macOS testing is not currently required; adoption is

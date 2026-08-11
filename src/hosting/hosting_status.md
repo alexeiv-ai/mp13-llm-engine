@@ -80,6 +80,8 @@ relay, channel-bootstrap, contract, and final-doc suite passed 105 tests in
 A real Poetry detached-launch probe transported all five inputs, reached the
 configured toolbox setup path, returned the expected missing-wheel degraded
 code rather than missing/incomplete configuration, and shut down cleanly.
+Implementation commit: `48ff1f1` (`hosting: expose toolbox inputs through
+launchers`).
 
 R2 evidence continuation: R2-05b2 binds the exact daemon public-key set,
 discovers direct signed bundles, and resolves only rehashed CAS objects with
