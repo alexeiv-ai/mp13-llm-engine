@@ -96,6 +96,7 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
                     "token": "pk-token",
                     "key_id": "admin-pub",
                     "auth_method": "public_key",
+                    "role": "model_user",
                     "scope": "traffic",
                     "expires_at": 9999999999.0,
                 }
@@ -106,7 +107,7 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
                         "reason": "ok",
                         "key_id": "admin-pub",
                         "auth_method": "public_key",
-                        "role": "admin",
+                        "role": "model_user",
                         "scope": "traffic",
                         "expires_at": 9999999999.0,
                         "ssh_bound": False,
@@ -132,6 +133,7 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
 
     assert first == "pk-token"
     assert second == "pk-token"
+    assert ch._session_token_meta["role"] == "model_user"  # noqa: SLF001
     assert [cmd for cmd, _payload in fake.calls] == [
         "auth-begin-challenge",
         "auth-complete-challenge",

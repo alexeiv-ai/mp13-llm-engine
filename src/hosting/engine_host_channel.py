@@ -4176,6 +4176,7 @@ class EngineHostControlChannel:
                     **previous,
                     "auth_method": str(out.get("auth_method") or previous.get("auth_method") or "").strip(),
                     "key_id": str(out.get("key_id") or previous.get("key_id") or "").strip(),
+                    "role": str(out.get("role") or previous.get("role") or "").strip().lower(),
                     "scope": str(out.get("scope") or "").strip().lower(),
                     "expires_at": float(out.get("expires_at") or 0.0),
                     "ssh_binding": dict(out.get("ssh_binding") or {}),
@@ -4207,6 +4208,7 @@ class EngineHostControlChannel:
                     **previous,
                     "auth_method": str(out.get("auth_method") or previous.get("auth_method") or "").strip(),
                     "key_id": str(out.get("key_id") or previous.get("key_id") or "").strip(),
+                    "role": str(out.get("role") or previous.get("role") or "").strip().lower(),
                     "scope": str(out.get("scope") or "").strip().lower(),
                     "expires_at": float(out.get("expires_at") or 0.0),
                     "ssh_binding": dict(out.get("ssh_binding") or {}),
@@ -4269,6 +4271,7 @@ class EngineHostControlChannel:
                 {
                     "auth_method": "shared_secret",
                     "key_id": str(key_id or "").strip(),
+                    "role": str(out.get("role") or "").strip().lower(),
                     "scope": str(out.get("scope") or scope or "control").strip().lower() or "control",
                     "expires_at": float(out.get("expires_at") or 0.0),
                 }
@@ -4321,6 +4324,7 @@ class EngineHostControlChannel:
                 {
                     "auth_method": "public_key",
                     "key_id": str(out.get("key_id") or "").strip(),
+                    "role": str(out.get("role") or "").strip().lower(),
                     "scope": str(out.get("scope") or "").strip().lower(),
                     "expires_at": float(out.get("expires_at") or 0.0),
                     "ssh_binding": dict(out.get("ssh_binding") or {}),
@@ -4468,6 +4472,7 @@ class EngineHostControlChannel:
                 {
                     "auth_method": "public_key",
                     "key_id": kid,
+                    "role": str(result.get("role") or "").strip().lower(),
                     "scope": scope_norm,
                     "expires_at": float(result.get("expires_at") or 0.0),
                     "config_paths": sorted([str(item or "").strip() for item in list(config_paths or []) if str(item or "").strip()]),

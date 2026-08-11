@@ -1460,6 +1460,7 @@ class AuthMixin:
         return {
             "status": "ok",
             "token": token,
+            "key_id": str(key_id or ""),
             "scope": scope_norm,
             "role": role,
             "auth_method": auth_method,

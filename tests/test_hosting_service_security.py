@@ -1114,6 +1114,9 @@ def test_public_key_challenge_flow_issues_session(tmp_path: Path, monkeypatch) -
     )
     assert out["status"] == "ok"
     assert str(out.get("token") or "")
+    assert out["key_id"] == "admin-pub"
+    assert out["auth_method"] == "public_key"
+    assert out["role"] == "admin"
 
 
 def test_public_key_challenge_invalid_signature_denied(tmp_path: Path, monkeypatch) -> None:
