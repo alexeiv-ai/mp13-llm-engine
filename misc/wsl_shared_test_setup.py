@@ -86,8 +86,9 @@ def cmd_check(root: Path) -> int:
             "python",
             "-c",
             (
+                "import sys; sys.path.insert(0, 'src'); "
                 "import pydantic, pytest; "
-                "import hosting.engine_host_service; "
+                "from hosting.service.host_service import EngineHostService; "
                 "print('imports-ok')"
             ),
         ],
@@ -114,6 +115,25 @@ def cmd_check(root: Path) -> int:
 
 def cmd_commands(root: Path) -> int:
     print(f"cd {root}")
+    print("# Use a WSL/Linux Poetry environment; do not reuse the Windows .venv or daemon state.")
+    print("export POETRY_VIRTUALENVS_IN_PROJECT=true")
+    print("# Keep pytest sockets and daemon state short and private to this WSL lane.")
+    print("export PYTEST_DEBUG_TEMPROOT=/home/alx/r8p")
+    print("export TMPDIR=/home/alx/r8t")
+    print("mkdir -p \"$PYTEST_DEBUG_TEMPROOT\" \"$TMPDIR\"")
+    print("poetry install --no-interaction")
+    print(
+        "poetry run python misc/hosting_test_lanes.py "
+        "--lane fast --repeat 3 --durations 25 --json-output .tmp/wsl-fast-baseline.json"
+    )
+    print(
+        "poetry run python misc/hosting_test_lanes.py "
+        "--lane process --repeat 3 --durations 20 --json-output .tmp/wsl-process-baseline.json"
+    )
+    print(
+        "poetry run python misc/hosting_test_lanes.py "
+        "--lane native --collect-only --json-output .tmp/wsl-native-collection.json"
+    )
     print("PYTHONPATH=src poetry run pytest tests/test_hosting_daemon_pidfile.py -q")
     print(
         "PYTHONPATH=src poetry run pytest "

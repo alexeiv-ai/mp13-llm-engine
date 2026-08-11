@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+if os.name != "nt":
+    pytest.skip("Windows-only sandbox integration tests", allow_module_level=True)
+
 from hosting.sandbox import WorkerSandboxPolicy
 from hosting.sandbox.launcher import WorkerLaunchRequest, launch_worker_process
 from hosting.sandbox.windows import terminate_process, wait_for_process_exit

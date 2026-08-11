@@ -143,6 +143,7 @@ def test_interrupted_atomic_replace_preserves_last_valid_checkpoint(
     ) is None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific replace retry behavior")
 def test_windows_replace_retries_are_bounded_and_eventually_succeed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

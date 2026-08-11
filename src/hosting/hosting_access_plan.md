@@ -780,10 +780,12 @@ construction and orchestration without replacing any required real-daemon,
 real-worker, native-extension, restart, containment, or cleanup boundary with a
 double.
 
-- [ ] **R8-01** Use `misc/hosting_test_lanes.py` to record a repeatable Windows
-  reference baseline with
-  `--durations`, define fast/process/native markers and lane budgets, and report
-  median duration over three runs rather than a single favorable result.
+- [ ] **R8-01** Use `misc/hosting_test_lanes.py` from the Windows x64 checkout
+  and the WSL2 Linux x64 shadow path to record repeatable reference baselines
+  with `--durations`. Publish separate fast/process/native counts, durations,
+  medians, and budgets over three runs; WSL runs must use a Linux Poetry
+  environment and isolated Linux daemon state. A WSL result is the in-scope
+  Linux x64 lane and does not imply a native Linux-host or ARM receipt.
 - [x] **R8-02** Remove remaining fixed durable request IDs, shared mutable state,
   teardown leaks, fixed sleeps, and timeout-only readiness from process tests.
   Replace machine-specific elapsed-time assertions (including the current
