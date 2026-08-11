@@ -160,7 +160,12 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: none. R5-02 (`average`) is complete; pause before R5-03 (`high`).
+Active slice: R5 lifecycle handoff (`medium`) before R5-03/R5-04/R5-05
+(`high`). Production boundary: document removal of raw template publication and
+synchronous mutating maintenance, with exact construction, lifecycle, hosted
+operation, retry, cancellation, and recovery replacements. Validation:
+`tests/test_hosted_toolbox_contract_docs.py` and `git diff --check`. No
+production code changes belong to this handoff commit.
 Remaining profiles are resolved from only their post-removal requirements, so a
 custom requests/urllib3 closure contracts to the exact built-in closure when
 those requirements disappear. Exact profiles reuse their engine, environment,

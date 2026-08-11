@@ -387,6 +387,52 @@ Omit `dependency_approval_ref` only when the confirmation receipt states that
 approval is not required. Apply publishes exactly the confirmed effective
 definition and never reinterprets the original request.
 
+## Removed template publication and synchronous maintenance surfaces
+
+The raw `toolbox-template-publish` command and its caller-supplied `template`,
+`artifact_references`, `manifest_signature`, and `activate` fields are removed.
+Administrators no longer publish pre-resolved or pre-signed catalog entries.
+The replacement construction command is `toolbox-template-construct`, submitted
+through `op-start` with this payload:
+
+```json
+{
+  "command": "toolbox-template-construct",
+  "payload": {
+    "request_id": "template-construct-2026-08-10-001",
+    "template_id": "team-analysis",
+    "base_template_digest": "sha256:<exact-base-revision>",
+    "imports": ["pandas"],
+    "package_requirements": ["pandas==2.3.1"]
+  }
+}
+```
+
+The daemon resolves only through configured sources for the current host,
+retains the exact base closure, verifies the complete artifact closure, builds
+and probes it, and publishes the resulting immutable revision as `inactive`.
+The durable execution kind is `toolbox_template_construct`; retrying the same
+request attaches to the canonical operation. A changed payload using the same
+request ID conflicts.
+
+Activation is a separate bounded administrator decision. Use
+`toolbox-template-activate` with `template_id` and exact `template_digest` when
+there is no active revision. Use `toolbox-template-replace` with `template_id`,
+`expected_active_digest`, and `replacement_digest` for compare-and-swap
+replacement. `toolbox-template-deprecate`, `toolbox-template-revoke`, and
+`toolbox-template-prewarm` remain final exact-revision APIs. Clients must not
+retain the old combined publish-and-activate flow.
+
+The synchronous mutation results from `toolbox-gc`, `toolbox-repair`, and
+`toolbox-reconcile` are also removed. Submit each command through `op-start`
+with a stable `request_id`; repair and reconcile additionally accept
+`toolbox_ids`, `only_inconsistent`, and `details`. Their immediate response is
+canonical `toolbox_maintenance` operation status with the `host_scope` selector
+`toolbox-host`. Poll/watch the terminal result for the former GC, repair, or
+reconcile result body. Duplicate requests return the same operation, and
+cancellation acknowledges without waiting for filesystem traversal, worker
+retirement, or cleanup to finish.
+
 ## Retry, watch, confirmation, and recovery logic
 
 Dependents must make these control-flow changes:
@@ -439,6 +485,8 @@ Remove:
 - target-selection configuration and x64/Linux fallback logic;
 - shipped catalog/lock-resource fixtures and lock-JSON-as-wheel normalization;
 - direct synchronous plan/apply invocations and terminal return assumptions;
+- raw template publication payloads and publish-time activation;
+- synchronous GC/repair/reconcile invocation and terminal return assumptions;
 - calls to `toolbox-approve-definition-plan` as a consumer;
 - apply payload construction containing `definition`;
 - in-memory wait/callback logic spanning human confirmation or approval;
@@ -452,6 +500,8 @@ Add or change:
 - online and air-gap missing-wheel/not-ready handling;
 - durable plan/confirm/apply submission, retry, status/watch, restart recovery,
   and immediate cancellation acknowledgement;
+- durable template construction and maintenance submission/recovery, plus
+  explicit exact-revision template activation/replacement;
 - a distinct dependency-approver credential/role path;
 - confirmation UI/logic for alternatives, exact direct/transitive mutations,
   accept/decline choices, skips, preserved active updates, and removals;
