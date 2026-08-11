@@ -3242,7 +3242,7 @@ def test_wait_for_toolbox_executor_ready_requires_inventory_match(monkeypatch) -
         )
         monkeypatch.setattr(
             svc,
-            "toolbox_describe",
+            "_toolbox_describe_live",
             lambda engine_id="", toolbox_id="", timeout_seconds=10.0: {"status": "ok", "all_registered_tool_names": ["wrong_tool"]},
         )
         with pytest.raises(ToolboxRolloutError) as exc_info:
@@ -3378,7 +3378,7 @@ def test_toolbox_executor_ipc_end_to_end() -> None:
         desc = None
         while time.time() < deadline:
             try:
-                desc = svc.toolbox_describe(engine_id="toolbox-live", timeout_seconds=2.0)
+                desc = svc._toolbox_describe_live(engine_id="toolbox-live", timeout_seconds=2.0)
                 break
             except Exception as exc:  # pragma: no cover - startup polling
                 last_error = exc
@@ -3463,7 +3463,7 @@ def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
         last_error: Exception | None = None
         while time.time() < deadline:
             try:
-                _ = svc.toolbox_describe(engine_id="toolbox-live-callback", timeout_seconds=2.0)
+                _ = svc._toolbox_describe_live(engine_id="toolbox-live-callback", timeout_seconds=2.0)
                 break
             except Exception as exc:  # pragma: no cover - startup polling
                 last_error = exc
@@ -3632,7 +3632,7 @@ def test_toolbox_executor_ipc_end_to_end_with_intrinsic_tools_only() -> None:
         desc = None
         while time.time() < deadline:
             try:
-                desc = svc.toolbox_describe(engine_id="toolbox-live-intrinsic", timeout_seconds=2.0)
+                desc = svc._toolbox_describe_live(engine_id="toolbox-live-intrinsic", timeout_seconds=2.0)
                 break
             except Exception as exc:  # pragma: no cover - startup polling
                 last_error = exc
@@ -3708,7 +3708,7 @@ def test_toolbox_executor_ipc_end_to_end_with_auto_callable_discovery() -> None:
         desc = None
         while time.time() < deadline:
             try:
-                desc = svc.toolbox_describe(engine_id="toolbox-live-auto", timeout_seconds=2.0)
+                desc = svc._toolbox_describe_live(engine_id="toolbox-live-auto", timeout_seconds=2.0)
                 break
             except Exception as exc:  # pragma: no cover - startup polling
                 last_error = exc

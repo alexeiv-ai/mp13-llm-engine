@@ -492,17 +492,41 @@ class ToolboxMaintenanceMixin:
         registrations = self._toolbox_v2_registrations()
         desired: Dict[str, str] = {}
         unresolved: List[Dict[str, Any]] = []
+        from .toolbox_runtime_identity import runtime_binding_digest
         for toolbox_id in sorted(selected):
             for profile_id, raw_profile in dict(dict(snapshots.get(toolbox_id) or {}).get("profiles") or {}).items():
-                engine_id = str(dict(raw_profile or {}).get("engine_id") or "").strip()
-                if engine_id in registrations:
+                profile_row = dict(raw_profile or {})
+                engine_id = str(profile_row.get("engine_id") or "").strip()
+                registration = dict(registrations.get(engine_id) or {})
+                expected_digest = str(profile_row.get("runtime_binding_digest") or "").strip()
+                actual_digest = str(registration.get("runtime_binding_digest") or "").strip()
+                if registration and not actual_digest:
+                    bundle = dict(registration.get("bundle") or {})
+                    environment = dict(registration.get("environment") or {})
+                    actual_digest = runtime_binding_digest(
+                        toolbox_id=toolbox_id,
+                        profile_id=profile_id,
+                        manifest_hash=str(bundle.get("manifest_hash") or profile_row.get("manifest_hash") or ""),
+                        environment_reference=str(
+                            environment.get("environment_reference")
+                            or profile_row.get("environment_reference")
+                            or ""
+                        ),
+                        engine_id=engine_id,
+                        definition_revision=str(dict(snapshots.get(toolbox_id) or {}).get("active_revision") or ""),
+                    )
+                if engine_id in registrations and (not expected_digest or actual_digest == expected_digest):
                     if str(registrations[engine_id].get("routing_state") or "") != "active":
                         desired[engine_id] = "active"
                 else:
                     unresolved.append({
                         "toolbox_id": toolbox_id,
                         "profile_id": profile_id,
-                        "issue": "definition_reapply_required",
+                        "issue": (
+                            "runtime_binding_mismatch"
+                            if registration
+                            else "definition_reapply_required"
+                        ),
                     })
         if desired:
             self.set_toolbox_registration_routing_states(desired)

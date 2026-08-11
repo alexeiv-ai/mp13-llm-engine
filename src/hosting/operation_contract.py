@@ -124,6 +124,7 @@ TOOLBOX_TEMPLATE_CONSTRUCT_PHASES = frozenset(
 TOOLBOX_MAINTENANCE_PHASES = frozenset(
     {"validation", "recovery", "repair", "gc", "cleanup"}
 )
+TOOLBOX_DESCRIBE_REFRESH_PHASES = frozenset({"validation", "refresh", "cleanup"})
 
 
 class HostedExecutionKind(StrEnum):
@@ -137,6 +138,7 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_ENVIRONMENT_REMOVE = "toolbox_environment_remove"
     TOOLBOX_TEMPLATE_CONSTRUCT = "toolbox_template_construct"
     TOOLBOX_MAINTENANCE = "toolbox_maintenance"
+    TOOLBOX_DESCRIBE_REFRESH = "toolbox_describe_refresh"
     WORKFLOW_PYTHON = "workflow_python"
     WORKFLOW_JS = "workflow_js"
 
@@ -559,6 +561,11 @@ class HostedOperationStatus:
                     raise ValueError("toolbox_maintenance_progress_phase_invalid")
                 if self.progress.phase in {"recovery", "repair", "gc", "cleanup"} and self.progress.cancellable:
                     raise ValueError("toolbox_maintenance_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DESCRIBE_REFRESH:
+                if self.progress.phase not in TOOLBOX_DESCRIBE_REFRESH_PHASES:
+                    raise ValueError("toolbox_describe_refresh_progress_phase_invalid")
+                if self.progress.phase in {"refresh", "cleanup"} and self.progress.cancellable:
+                    raise ValueError("toolbox_describe_refresh_committed_progress_cancellable")
         terminal_values = sum(value is not None for value in (self.result, self.result_ref, self.result_omission))
         if terminal_values > 1:
             raise ValueError("operation_terminal_payload_conflict")
@@ -646,6 +653,7 @@ __all__ = [
     "TOOLBOX_ENVIRONMENT_REMOVE_PHASES",
     "TOOLBOX_TEMPLATE_CONSTRUCT_PHASES",
     "TOOLBOX_MAINTENANCE_PHASES",
+    "TOOLBOX_DESCRIBE_REFRESH_PHASES",
     "HostedExecutionKind",
     "HostedOperationLifecycle",
     "HostedOperationProgress",

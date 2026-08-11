@@ -3455,6 +3455,24 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def toolbox_describe_refresh(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        request_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-describe-refresh",
+            payload={
+                "engine_id": str(engine_id or "").strip(),
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "request_id": str(request_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 10.0),
+            },
+        )
+
     def hosted_operation_status(self, *, ref: Dict[str, Any]) -> Dict[str, Any]:
         res = self._invoke(
             "hosted-operation-status",

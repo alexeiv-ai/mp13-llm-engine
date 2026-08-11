@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from ..toolbox.bundle_models import ResolvedToolboxProfileSpec, ToolboxDefinitionSpec
 from ..toolbox.identity import identity_digest, require_digest
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
+from .toolbox_runtime_identity import runtime_binding_digest
 
 
 TOOLBOX_STATE_V2_CONTRACT = "hosting.toolbox.state.v2"
@@ -62,10 +63,14 @@ class AtomicJsonToolboxStateV2Repository:
         profiles: dict[str, dict[str, Any]] = {}
         for profile_id, value in row["profiles"].items():
             profile_row = dict(value or {})
-            if set(profile_row) != {
+            allowed_profile_fields = {
+                "profile", "manifest_hash", "engine_id", "tool_names", "environment_reference",
+                "resolved_environment", "runtime_binding_digest",
+            }
+            if set(profile_row) - allowed_profile_fields or not {
                 "profile", "manifest_hash", "engine_id", "tool_names", "environment_reference",
                 "resolved_environment",
-            }:
+            }.issubset(profile_row):
                 raise ValueError("toolbox_state_v2_profile_fields_invalid")
             profile = ResolvedToolboxProfileSpec.from_dict(profile_row["profile"])
             if profile_id != profile.profile_id:
@@ -80,6 +85,17 @@ class AtomicJsonToolboxStateV2Repository:
             environment_reference = str(profile_row["environment_reference"] or "").strip()
             if not environment_reference:
                 raise ValueError("toolbox_state_v2_environment_reference_required")
+            binding_digest = str(profile_row.get("runtime_binding_digest") or "").strip()
+            if not binding_digest:
+                binding_digest = runtime_binding_digest(
+                    toolbox_id=toolbox_id,
+                    profile_id=profile.profile_id,
+                    manifest_hash=manifest_hash,
+                    environment_reference=environment_reference,
+                    engine_id=engine_id,
+                    definition_revision=revision,
+                )
+            binding_digest = require_digest(binding_digest, label="toolbox_state_v2_runtime_binding_digest")
             resolved_environment = dict(profile_row["resolved_environment"] or {})
             if profile.custom_resolved_lock_digest is not None:
                 from ..toolbox.hermetic_environment import ResolvedToolboxEnvironmentInput
@@ -94,6 +110,7 @@ class AtomicJsonToolboxStateV2Repository:
                 "tool_names": tool_names,
                 "environment_reference": environment_reference,
                 "resolved_environment": resolved_environment,
+                "runtime_binding_digest": binding_digest,
             }
         routes: dict[str, dict[str, Any]] = {}
         for tool_name, value in row["tool_routes"].items():

@@ -21,6 +21,7 @@ from .callable_surface import (
     host_capability_approval_request,
     toolbox_brokered_io_call_surface,
 )
+from ._process_utils import configure_parent_death_signal
 from .sandbox.host_capabilities import HostCapabilityBroker, HostCapabilityProviderCall
 from .sandbox.service_broker_registry import (
     invoke_service_broker_method,
@@ -776,6 +777,7 @@ def main() -> int:
     if not auth_token:
         print("Missing MP13_ENGINE_HOST_TOKEN", flush=True)
         return 2
+    configure_parent_death_signal()
     try:
         _ensure_toolbox()
     except Exception:

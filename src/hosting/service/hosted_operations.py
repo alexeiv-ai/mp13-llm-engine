@@ -1,6 +1,8 @@
 """Generic hosted-operation status, cancellation, and ledger cutover service API."""
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -9,6 +11,7 @@ from ..operation_contract import (
     HostedExecutionKind,
     HostedOperationRef,
     HostedOperationSelector,
+    HostedOperationProgress,
 )
 from .operation_repository import AtomicJsonHostedOperationRepository
 
@@ -80,6 +83,10 @@ class HostedOperationsMixin:
             if target.kind != "host_scope" or target.id != "toolbox-host":
                 raise ValueError("toolbox_maintenance_selector_must_be_host_scope")
             namespace = "toolbox_maintenance:toolbox-host"
+        elif kind == HostedExecutionKind.TOOLBOX_DESCRIBE_REFRESH:
+            if target.kind not in {"toolbox_id", "engine_id"}:
+                raise ValueError("toolbox_describe_refresh_selector_invalid")
+            namespace = f"toolbox_describe_refresh:{target.kind}:{target.id}"
         else:
             if target.kind != "engine_id":
                 raise ValueError("workflow_operation_selector_must_be_engine_id")
@@ -121,6 +128,61 @@ class HostedOperationsMixin:
         if record is None:
             return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
         if operation.execution_kind == HostedExecutionKind.TOOLBOX:
+            lifecycle = str(record.get("lifecycle") or "")
+            if lifecycle not in {
+                "queued",
+                "interrupted_before_dispatch",
+                "terminal_success",
+                "terminal_failure",
+                "terminal_cancellation",
+                "forgotten",
+            }:
+                lock = getattr(self, "_toolbox_cancel_lock", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._toolbox_cancel_lock = lock
+                active = getattr(self, "_toolbox_cancel_operations", None)
+                if active is None:
+                    active = set()
+                    self._toolbox_cancel_operations = active
+                with lock:
+                    if operation.operation_id in active:
+                        return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
+                    active.add(operation.operation_id)
+                try:
+                    self._hosted_operations.update_progress(
+                        operation_id=operation.operation_id,
+                        progress=HostedOperationProgress(
+                            phase="cancellation",
+                            code="toolbox_cancellation_requested",
+                            completed_units=0,
+                            total_units=1,
+                            updated_at_ms=int(time.time() * 1000),
+                            summary="Cancellation was acknowledged; worker teardown is continuing.",
+                            cancellable=False,
+                        ),
+                    )
+                except Exception:
+                    pass
+
+                def _cancel_in_background() -> None:
+                    try:
+                        self._cancel_toolbox_operation(
+                            record=record,
+                            reason=str(reason or "client_requested"),
+                            timeout_seconds=float(timeout_seconds or 8.0),
+                            respawn=bool(respawn),
+                        )
+                    finally:
+                        with lock:
+                            active.discard(operation.operation_id)
+
+                threading.Thread(
+                    target=_cancel_in_background,
+                    name=f"toolbox-cancel-{operation.operation_id[:12]}",
+                    daemon=True,
+                ).start()
+                return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
             return self._cancel_toolbox_operation(
                 record=record,
                 reason=str(reason or "client_requested"),
@@ -173,6 +235,18 @@ class HostedOperationsMixin:
                     "code": "toolbox_maintenance_canceled_before_mutation",
                 },
                 committed_reason="toolbox_maintenance_mutation_started",
+            )
+        if operation.execution_kind == HostedExecutionKind.TOOLBOX_DESCRIBE_REFRESH:
+            return self._hosted_operations.cancel_before_progress_commit(
+                operation_id=operation.operation_id,
+                committed_phases=("refresh", "cleanup"),
+                reason=str(reason or "client_requested"),
+                envelope_factory=lambda: {
+                    "contract": "hosting.toolbox.describe_refresh_result.v1",
+                    "status": "canceled",
+                    "code": "toolbox_describe_refresh_canceled",
+                },
+                committed_reason="toolbox_describe_refresh_started",
             )
         if operation.execution_kind in {
             HostedExecutionKind.TOOLBOX_SETUP,

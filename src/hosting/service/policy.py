@@ -170,6 +170,7 @@ class PolicyMixin:
             "get-endpoint-mode-effective",
             "get-lifecycle-policy-effective",
             "toolbox-describe",
+            "toolbox-describe-refresh",
             "toolbox-gate",
             "toolbox-execute",
             "hosted-operation-status",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
 from .bundle_models import (
@@ -19,6 +20,7 @@ from .environment import ToolboxEnvironmentManager
 from .staging import ToolboxBundleStager
 from .target import detect_current_toolbox_target
 from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
+from ..service.toolbox_runtime_identity import runtime_binding_digest
 
 
 class ToolboxSandboxOrchestrator:
@@ -119,7 +121,11 @@ class ToolboxSandboxOrchestrator:
             item.staged_bundle = self.stager.stage_bundle(item.bundle_spec)
             staged = item.staged_bundle
             bundle_revision = str(staged.manifest.get("bundle_revision") or "")
-            engine_id = f"{tid}-{profile.profile_id.removeprefix('sha256:')[:20]}-{bundle_revision[:8]}"
+            logical_engine_id = f"{tid}-{profile.profile_id.removeprefix('sha256:')[:20]}-{bundle_revision[:8]}"
+            # A semantic reapply must never reuse a prior runtime registration.
+            # Keep the logical prefix for diagnostics, but make each concrete
+            # candidate identity unique and non-replacing.
+            engine_id = f"{logical_engine_id}-{uuid.uuid4().hex[:12]}"
             item.materialization_reference_id = (
                 f"toolbox:{tid}:{profile.profile_id.removeprefix('sha256:')[:24]}:"
                 f"{revision.removeprefix('sha256:')[:24]}"
@@ -168,6 +174,7 @@ class ToolboxSandboxOrchestrator:
             registration_environment.update(
                 {
                     "environment_key": profile.environment_key,
+                    "environment_reference": item.materialization_reference_id,
                     "verification_receipt_contract": "hosting.toolbox.hermetic_environment_receipt.v1",
                     "verification_state": "verified",
                 }
@@ -178,6 +185,8 @@ class ToolboxSandboxOrchestrator:
                     "sandbox_profile_id": profile.profile_id,
                     "resolved_profile_id": profile.profile_id,
                     "definition_revision": revision,
+                    "logical_engine_id": logical_engine_id,
+                    "scratch_root": str((self.stager.hosting_root / "toolbox_scratch" / engine_id).resolve()),
                 }
             )
             legacy_profile = SandboxProfileSpec(
@@ -205,6 +214,15 @@ class ToolboxSandboxOrchestrator:
                 tool_access=staged.registration_tool_access(),
                 capabilities=self._capabilities_for_profile(legacy_profile),
                 routing_state="candidate",
+                runtime_id=engine_id,
+                runtime_binding_digest=runtime_binding_digest(
+                    toolbox_id=tid,
+                    profile_id=profile.profile_id,
+                    manifest_hash=str(registration_bundle.get("manifest_hash") or ""),
+                    environment_reference=item.materialization_reference_id,
+                    engine_id=engine_id,
+                    definition_revision=revision,
+                ),
             )
         return out
 

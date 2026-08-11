@@ -88,6 +88,11 @@ class StateMixin:
     def _normalize_engine_registration(self, row: Dict[str, Any]) -> Dict[str, Any]:
         record = dict(row or {})
         engine_id = str(record.get("engine_id") or "").strip()
+        if engine_id:
+            record["engine_id"] = engine_id
+        runtime_id = str(record.get("runtime_id") or "").strip() or engine_id
+        if runtime_id:
+            record["runtime_id"] = runtime_id
         worker_id = str(record.get("worker_id") or "").strip() or engine_id
         if worker_id:
             record["worker_id"] = worker_id
@@ -152,6 +157,13 @@ class StateMixin:
             record.setdefault("config_path", config_path)
         if canonical_config_path:
             record.setdefault("canonical_config_path", canonical_config_path)
+        bundle = dict(record.get("bundle") or {}) if isinstance(record.get("bundle"), dict) else {}
+        manifest_hash = str(bundle.get("manifest_hash") or "").strip().lower()
+        if manifest_hash and not manifest_hash.startswith("sha256:") and len(manifest_hash) == 64:
+            if all(character in "0123456789abcdef" for character in manifest_hash):
+                bundle["manifest_hash"] = f"sha256:{manifest_hash}"
+        if bundle:
+            record["bundle"] = bundle
         return record
 
     @staticmethod

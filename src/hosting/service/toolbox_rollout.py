@@ -14,6 +14,7 @@ from ..toolbox.definition_planner import ToolboxDefinitionPlanDraft
 from ..toolbox.orchestration import ToolboxSandboxOrchestrator
 from ..toolbox.staging import ToolboxBundleStager
 from .operation_repository import _replace_with_bounded_retries
+from .toolbox_runtime_identity import runtime_binding_digest
 
 
 class ToolboxDefinitionRolloutCoordinator:
@@ -126,6 +127,14 @@ class ToolboxDefinitionRolloutCoordinator:
                 "profile": profile.to_dict(),
                 "manifest_hash": manifest_hash,
                 "engine_id": engine_id,
+                "runtime_binding_digest": runtime_binding_digest(
+                    toolbox_id=draft.definition.toolbox_id,
+                    profile_id=profile.profile_id,
+                    manifest_hash=manifest_hash,
+                    environment_reference=reference,
+                    engine_id=engine_id,
+                    definition_revision=draft.definition.revision,
+                ),
                 "tool_names": tool_names,
                 "environment_reference": reference,
                 "resolved_environment": (
@@ -180,10 +189,22 @@ class ToolboxDefinitionRolloutCoordinator:
         retiring = sorted(old_engine_ids - active_engine_ids)
         retired: list[str] = []
         pending: list[str] = []
-        if retiring:
-            self.service.set_toolbox_registration_routing_states({item: "retired" for item in retiring})
+        registered = {
+            str(row.get("engine_id") or "").strip()
+            for row in self.service._read_engines()
+            if str(row.get("executor_kind") or "") == "toolbox_executor"
+        }
+        present = [item for item in retiring if item in registered]
+        if present:
+            self.service.set_toolbox_registration_routing_states({item: "retired" for item in present})
         for engine_id in retiring:
             reg = dict(self.service._find_registration(engine_id) or {})
+            if not reg:
+                # A restarted daemon intentionally has no restored worker
+                # registrations. The old runtime is already absent, so draining
+                # it is complete rather than a post-publication cleanup error.
+                retired.append(engine_id)
+                continue
             environment_key = self.service._toolbox_registration_environment_key(reg) if reg else ""
             resources = self.service._toolbox_runtime_base().resources(environment_key) if environment_key else {}
             if int(dict(resources.get("metrics") or {}).get("active_calls") or 0) > 0:
@@ -417,6 +438,25 @@ class ToolboxDefinitionRolloutCoordinator:
             for snapshot in snapshots.values()
             for route in dict(dict(snapshot or {}).get("tool_routes") or {}).values()
         } - {""}
+        expected_bindings: dict[str, dict[str, Any]] = {}
+        runtime_repair_required: list[dict[str, Any]] = []
+        for toolbox_id, snapshot in snapshots.items():
+            for profile_id, raw_profile in dict(dict(snapshot or {}).get("profiles") or {}).items():
+                profile = dict(raw_profile or {})
+                engine_id = str(profile.get("engine_id") or "").strip()
+                if not engine_id:
+                    runtime_repair_required.append(
+                        {"toolbox_id": str(toolbox_id), "profile_id": str(profile_id), "reason": "missing_engine_id"}
+                    )
+                    continue
+                expected_bindings[engine_id] = {
+                    "toolbox_id": str(toolbox_id),
+                    "profile_id": str(profile_id),
+                    "runtime_binding_digest": str(profile.get("runtime_binding_digest") or "").strip(),
+                    "manifest_hash": str(profile.get("manifest_hash") or "").strip(),
+                    "environment_reference": str(profile.get("environment_reference") or "").strip(),
+                    "definition_revision": str(snapshot.get("active_revision") or "").strip(),
+                }
         activated: list[str] = []
         retired: list[str] = []
         candidates_removed: list[str] = []
@@ -426,6 +466,35 @@ class ToolboxDefinitionRolloutCoordinator:
             engine_id = str(reg.get("engine_id") or "").strip()
             routing_state = str(reg.get("routing_state") or "active")
             if engine_id in active_engine_ids:
+                expected = dict(expected_bindings.get(engine_id) or {})
+                actual = str(reg.get("runtime_binding_digest") or "").strip()
+                if not actual:
+                    bundle = dict(reg.get("bundle") or {})
+                    environment = dict(reg.get("environment") or {})
+                    actual = runtime_binding_digest(
+                        toolbox_id=str(expected.get("toolbox_id") or ""),
+                        profile_id=str(expected.get("profile_id") or bundle.get("resolved_profile_id") or ""),
+                        manifest_hash=str(bundle.get("manifest_hash") or expected.get("manifest_hash") or ""),
+                        environment_reference=str(
+                            environment.get("environment_reference")
+                            or expected.get("environment_reference")
+                            or ""
+                        ),
+                        engine_id=engine_id,
+                        definition_revision=str(expected.get("definition_revision") or ""),
+                    )
+                if expected and actual != str(expected.get("runtime_binding_digest") or ""):
+                    runtime_repair_required.append(
+                        {
+                            "toolbox_id": expected.get("toolbox_id"),
+                            "profile_id": expected.get("profile_id"),
+                            "engine_id": engine_id,
+                            "reason": "runtime_binding_digest_mismatch",
+                        }
+                    )
+                    if routing_state != "retired":
+                        self.service.set_toolbox_registration_routing_states({engine_id: "retired"})
+                    continue
                 if routing_state != "active":
                     self.service.set_toolbox_registration_routing_states({engine_id: "active"})
                     activated.append(engine_id)
@@ -442,6 +511,22 @@ class ToolboxDefinitionRolloutCoordinator:
                 resources = self.service._toolbox_runtime_base().resources(environment_key) if environment_key else {}
                 if int(dict(resources.get("metrics") or {}).get("active_calls") or 0) == 0:
                     self.service._retire_toolbox_registration(engine_id)
+
+        registered_toolbox_engines = {
+            str(reg.get("engine_id") or "").strip()
+            for reg in self.service._read_engines()
+            if str(reg.get("executor_kind") or "") == "toolbox_executor"
+        }
+        for engine_id, expected in expected_bindings.items():
+            if engine_id not in registered_toolbox_engines:
+                runtime_repair_required.append(
+                    {
+                        "toolbox_id": expected.get("toolbox_id"),
+                        "profile_id": expected.get("profile_id"),
+                        "engine_id": engine_id,
+                        "reason": "runtime_registration_missing",
+                    }
+                )
 
         recovered_operations: list[str] = []
         failed_operations: list[str] = []
@@ -505,6 +590,14 @@ class ToolboxDefinitionRolloutCoordinator:
             "removed_candidate_engine_ids": sorted(candidates_removed),
             "recovered_operation_ids": sorted(recovered_operations),
             "failed_operation_ids": sorted(failed_operations),
+            "runtime_repair_required": sorted(
+                runtime_repair_required,
+                key=lambda item: (
+                    str(item.get("toolbox_id") or ""),
+                    str(item.get("profile_id") or ""),
+                    str(item.get("engine_id") or ""),
+                ),
+            ),
         }
 
 

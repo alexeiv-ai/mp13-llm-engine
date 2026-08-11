@@ -28,6 +28,8 @@ from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ._process_utils import configure_parent_death_signal
+
 PROTOCOL_VERSION = 1
 _loaded_models_lock = threading.Lock()
 _loaded_models: Dict[str, Dict[str, Any]] = {}
@@ -774,6 +776,7 @@ def main() -> int:
     if not auth_token:
         print("Missing MP13_ENGINE_HOST_TOKEN", flush=True)
         return 2
+    configure_parent_death_signal()
 
     try:
         init = asyncio.run(_init_engine())

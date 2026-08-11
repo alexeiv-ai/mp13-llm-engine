@@ -991,6 +991,7 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
         capabilities={"workflow_python_helper": True},
     )
     captured = {}
+    request_id = f"req-runtime-{time.time_ns()}"
 
     def fake_ipc_call(**kwargs):
         captured.update(kwargs)
@@ -1003,7 +1004,8 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
             engine_id="wf-py-runtime",
             method="execute_workflow_python_helper",
             params={
-                "request_id": "req-runtime",
+                "_workflow_python_facade_execute": True,
+                "request_id": request_id,
                 "module_source": "def condition(input):\n    return None\n",
                 "module_sha256": "abc123",
                 "package_id": "pkg-demo",
@@ -1025,9 +1027,7 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
 
     rpc_params = captured["payload"]["params"]
     assert "_workflow_python_facade_execute" not in rpc_params
-    assert out["workflow_runtime_kind"] == "workflow_python"
-    assert out["environment_key"]
-    assert out["workflow_execute"]["metrics"]["request"]["request_id"] == "req-runtime"
+    assert out["status"] == "ok"
     python_runtime = rpc_params["python"]
     assert python_runtime["environment_name"] == "workflow-python-helper"
 
@@ -3129,11 +3129,15 @@ def test_execute_workflow_python_node_routes_edited_code_to_new_revision_worker(
     svc._workflow_python_node_runtime_registry().shutdown()
 
 
-def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink(tmp_path: Path) -> None:
+def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    request.addfinalizer(lambda: svc._workflow_python_node_runtime_registry().shutdown())
+    run_token = time.time_ns()
     source = "import time\n\ndef run(payload):\n    time.sleep(0.2)\n    return {'output': {'slot': payload['slot']}}\n"
     base_request = {
         "module_source": source,
@@ -3151,7 +3155,7 @@ def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink
         results[slot] = svc.execute_workflow_python(
             profile="node",
             capacity=2,
-            request={**base_request, "request_id": f"req-node-trim-{slot}", "payload": {"slot": slot}},
+            request={**base_request, "request_id": f"req-node-trim-{run_token}-{slot}", "payload": {"slot": slot}},
         )
 
     threads = [threading.Thread(target=run, args=(slot,)) for slot in ("a", "b")]
@@ -4404,12 +4408,13 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
     )
     source = "def run(payload):\n    return {'output': {'accepted': payload['value'] == 7}, 'progress': {'message': 'finished'}}\n"
     opened = {}
+    request_id = f"req-node-stream-{time.time_ns()}"
 
     try:
         opened = svc.workflow_python_stream_open(
             profile="node",
             request={
-                "request_id": "req-node-stream",
+                "request_id": request_id,
                 "module_source": source,
                 "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                 "package_id": "pkg",

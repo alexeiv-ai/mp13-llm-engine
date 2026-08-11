@@ -884,6 +884,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "sandbox-fs-stat",
         "sandbox-http-fetch",
         "toolbox-describe",
+        "toolbox-describe-refresh",
         "toolbox-gate",
         "toolbox-execute",
         "hosted-operation-status",
@@ -1149,6 +1150,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-gc",
         "toolbox-repair",
         "toolbox-reconcile",
+        "toolbox-describe-refresh",
     }
 
     # Local-only recovery helpers. Intentionally bypass daemon RPC/auth surfaces.
@@ -1921,6 +1923,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 svc.toolbox_describe(
                     engine_id=str(payload.get("engine_id") or args.engine_id),
                     toolbox_id=str(payload.get("toolbox_id") or ""),
+                    timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
+                )
+            )
+            return 0
+        if cmd == "toolbox-describe-refresh":
+            _print_ok(
+                svc.toolbox_describe_refresh(
+                    engine_id=str(payload.get("engine_id") or args.engine_id),
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    request_id=str(payload.get("request_id") or ""),
                     timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
                 )
             )

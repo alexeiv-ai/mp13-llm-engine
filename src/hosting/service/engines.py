@@ -1559,18 +1559,26 @@ class EnginesMixin:
         tool_access: Optional[Dict[str, Any]] = None,
         capabilities: Optional[Dict[str, Any]] = None,
         routing_state: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        runtime_binding_digest: Optional[str] = None,
         source: str = "engine_host_spawned",
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
+        rid = str(runtime_id or eid).strip()
+        if not rid:
+            raise ValueError("runtime_id is required")
         route_state = str(routing_state or "").strip() or (
             "active" if str(executor_kind or "").strip() == "toolbox_executor" else None
         )
         if route_state not in {None, "candidate", "active", "retired"}:
             raise ValueError("routing_state_invalid")
+        if any(str(r.get("engine_id") or "").strip() == eid for r in self._read_engines()):
+            raise RuntimeError("runtime_registration_conflict")
         record = {
             "engine_id": eid,
+            "runtime_id": rid,
             "pid": int(pid or 0),
             "command": [str(x) for x in (command or [])],
             "cwd": str(cwd) if cwd else None,
@@ -1593,9 +1601,10 @@ class EnginesMixin:
             "tool_access": dict(tool_access or {}) if isinstance(tool_access, dict) else None,
             "capabilities": dict(capabilities or {}) if isinstance(capabilities, dict) else None,
             "routing_state": route_state,
+            "runtime_binding_digest": str(runtime_binding_digest or "").strip() or None,
             "log_path": str(self._engine_log_path(eid)),
         }
-        rows = [r for r in self._read_engines() if str(r.get("engine_id") or "") != eid]
+        rows = self._read_engines()
         rows.append(record)
         self._write_engines(rows)
         return record
@@ -1641,12 +1650,16 @@ class EnginesMixin:
         tool_access: Optional[Dict[str, Any]] = None,
         capabilities: Optional[Dict[str, Any]] = None,
         routing_state: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        runtime_binding_digest: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not list(command or []):
             raise ValueError("command is required")
         eid = str(engine_id or "").strip()
         if not eid:
             raise ValueError("engine_id is required")
+        if any(str(r.get("engine_id") or "").strip() == eid for r in self._read_engines()):
+            raise RuntimeError("runtime_registration_conflict")
         allocated_family, allocated_address = self._allocate_ipc_address(eid)
         ipc_family = str(worker_ipc_family or "").strip() or allocated_family
         ipc_address = str(worker_ipc_address or "").strip() or allocated_address
@@ -1734,6 +1747,8 @@ class EnginesMixin:
             tool_access=tool_access,
             capabilities=capabilities,
             routing_state=routing_state,
+            runtime_id=runtime_id,
+            runtime_binding_digest=runtime_binding_digest,
         )
 
     def remove_registration(self, engine_id: str) -> Dict[str, Any]:

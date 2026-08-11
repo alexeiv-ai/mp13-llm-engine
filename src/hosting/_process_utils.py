@@ -41,6 +41,33 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
+def configure_parent_death_signal() -> Dict[str, Any]:
+    """Ask native workers to terminate when their daemon parent disappears.
+
+    Linux exposes this through ``prctl``; other POSIX platforms simply report
+    that the native hook is unavailable and rely on daemon orphan scans.
+    """
+
+    if os.name == "nt":
+        return {"status": "job_object", "configured": False}
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL(None, use_errno=True)
+            prctl = libc.prctl
+            prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+            prctl.restype = ctypes.c_int
+            # PR_SET_PDEATHSIG = 1.
+            result = int(prctl(1, int(signal.SIGTERM), 0, 0, 0))
+            if result == 0:
+                return {"status": "prctl", "configured": True, "signal": int(signal.SIGTERM)}
+            return {"status": "prctl", "configured": False, "errno": int(ctypes.get_errno() or 0)}
+        except Exception as exc:
+            return {"status": "prctl", "configured": False, "error": str(exc)}
+    return {"status": "unsupported", "configured": False}
+
+
 def _pid_alive_windows(pid: int) -> bool:
     import ctypes
     from ctypes import wintypes

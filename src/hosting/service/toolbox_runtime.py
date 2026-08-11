@@ -16,6 +16,7 @@ from ..callable_surface import HOST_CAPABILITY_APPROVAL_CALLBACK_NAME, HOST_CAPA
 from ..operation_contract import (
     HostedExecutionKind,
     HostedOperationLifecycle,
+    HostedOperationProgress,
     HostedOperationSelector,
     hosted_execution_fingerprint,
 )
@@ -1219,12 +1220,36 @@ class ToolboxRuntimeMixin:
     def _retire_toolbox_registration(self, engine_id: str) -> None:
         reg = self._find_registration(engine_id)
         if reg:
+            env = dict(reg.get("env") or {})
+            spec_path = str(env.get("MP13_TOOLBOX_WORKER_SPEC_PATH") or "").strip()
+            scratch_root = str(
+                dict(reg.get("bundle") or {}).get("scratch_root")
+                or env.get("MP13_TOOLBOX_SCRATCH_ROOT")
+                or ""
+            ).strip()
             try:
                 self.shutdown(engine_id, timeout_seconds=2.0)
             except Exception:
                 pass
             self.remove_registration(engine_id)
             self._cleanup_toolbox_bundle_root(reg)
+            for raw_path, allowed_parent in (
+                (spec_path, (self.hosting_root / "state" / "toolbox_worker_specs").resolve()),
+                (scratch_root, (self.hosting_root / "toolbox_scratch").resolve()),
+            ):
+                if not raw_path:
+                    continue
+                try:
+                    path = Path(raw_path).expanduser().resolve()
+                    parent = Path(allowed_parent).resolve()
+                    if path != parent and parent not in path.parents:
+                        continue
+                    if path.is_dir():
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
 
     @staticmethod
@@ -1431,6 +1456,47 @@ class ToolboxRuntimeMixin:
         *,
         engine_id: str = "",
         toolbox_id: str = "",
+        operator_details: bool = False,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        """Return a bounded persisted/registration view without contacting workers."""
+
+        eid = str(engine_id or "").strip()
+        tid = str(toolbox_id or "").strip()
+        if tid:
+            return self._toolbox_describe_live(
+                engine_id=eid,
+                toolbox_id=tid,
+                timeout_seconds=float(timeout_seconds or 10.0),
+            )
+        if not eid:
+            raise ValueError("engine_id or toolbox_id is required")
+        reg = self._require_toolbox_executor_registration(eid, command_label="toolbox-describe")
+        allowed = sorted(self._registration_allowed_tool_names(reg) or set())
+        advertised = sorted(self._registration_advertised_tool_names(reg) or set())
+        return {
+            "status": "ok",
+            "engine_id": eid,
+            "executor_kind": "toolbox_executor",
+            "mode": "sandbox",
+            "cache": "registration",
+            "bundle": dict(reg.get("bundle") or {}),
+            "all_registered_tool_names": allowed,
+            "allowed_tool_names": allowed,
+            "advertised_tool_names": advertised,
+            "hidden_allowed_tool_names": sorted(self._registration_hidden_allowed_tool_names(reg) or set()),
+            "user_projection": {
+                "state": "ready" if allowed or advertised else "starting",
+                "code": "toolbox_runtime_cached",
+                "summary": "The persisted toolbox runtime view is available.",
+            },
+        }
+
+    def _toolbox_describe_live(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
         timeout_seconds: float = 10.0,
     ) -> Dict[str, Any]:
         eid = str(engine_id or "").strip()
@@ -1591,6 +1657,128 @@ class ToolboxRuntimeMixin:
         result["parallel_execution"] = parallel
         result.pop("tool_names", None)
         return result
+
+    def toolbox_describe_refresh(
+        self,
+        *,
+        engine_id: str = "",
+        toolbox_id: str = "",
+        request_id: str,
+        owner_actor_id: str = "service:local",
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        """Schedule an explicit live worker describe through hosted operations."""
+
+        eid = str(engine_id or "").strip()
+        tid = str(toolbox_id or "").strip()
+        if bool(eid) == bool(tid):
+            raise ValueError("engine_id_or_toolbox_id_required")
+        selector = HostedOperationSelector(kind="engine_id" if eid else "toolbox_id", id=eid or tid)
+        owner = str(owner_actor_id or "service:local").strip() or "service:local"
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=owner,
+            execution_kind=HostedExecutionKind.TOOLBOX_DESCRIBE_REFRESH,
+            selector=selector,
+            namespace=f"toolbox_describe_refresh:{selector.kind}:{selector.id}",
+            request_id=str(request_id or "").strip(),
+            fingerprint=hosted_execution_fingerprint(
+                {
+                    "execution_kind": HostedExecutionKind.TOOLBOX_DESCRIBE_REFRESH.value,
+                    "selector": selector.to_dict(),
+                }
+            ),
+            metadata={"engine_id": eid, "toolbox_id": tid, "retain_terminal_result": True},
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        threading.Thread(
+            target=self._run_toolbox_describe_refresh,
+            kwargs={
+                "operation_id": operation_id,
+                "engine_id": eid,
+                "toolbox_id": tid,
+                "timeout_seconds": float(timeout_seconds or 10.0),
+            },
+            name=f"toolbox-describe-refresh-{operation_id[:12]}",
+            daemon=True,
+        ).start()
+        return status
+
+    def _run_toolbox_describe_refresh(
+        self,
+        *,
+        operation_id: str,
+        engine_id: str,
+        toolbox_id: str,
+        timeout_seconds: float,
+    ) -> None:
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        try:
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase="validation",
+                    code="toolbox_describe_refresh_validated",
+                    completed_units=0,
+                    total_units=1,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary="The live toolbox refresh request is valid.",
+                    cancellable=True,
+                ),
+            )
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase="refresh",
+                    code="toolbox_describe_refresh_started",
+                    completed_units=0,
+                    total_units=1,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary="The worker is being queried for a live toolbox description.",
+                    cancellable=False,
+                ),
+            )
+            result = self._toolbox_describe_live(
+                engine_id=engine_id,
+                toolbox_id=toolbox_id,
+                timeout_seconds=timeout_seconds,
+            )
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress=HostedOperationProgress(
+                    phase="cleanup",
+                    code="toolbox_describe_refresh_completed",
+                    completed_units=1,
+                    total_units=1,
+                    updated_at_ms=int(time.time() * 1000),
+                    summary="The live toolbox description is ready.",
+                    cancellable=False,
+                ),
+            )
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "contract": "hosting.toolbox.describe_refresh_result.v1",
+                    "status": "ok",
+                    "code": "toolbox_describe_refresh_completed",
+                    "description": result,
+                },
+            )
+        except Exception as exc:
+            self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.describe_refresh_result.v1",
+                    "status": "error",
+                    "code": "toolbox_describe_refresh_failed",
+                    "diagnostics": [{"code": "toolbox_describe_refresh_failed", "summary": str(exc)}],
+                },
+                reason="toolbox_describe_refresh_failed",
+            )
 
     def toolbox_gate(
         self,
@@ -1821,10 +2009,10 @@ class ToolboxRuntimeMixin:
             raise RuntimeError("hosted_operation_capacity_exceeded")
         operation_id = str(dict(prepared_status.get("operation") or {}).get("operation_id") or "")
         if operation_action == "attach":
-            return self._hosted_operations.wait_for_terminal(
-                operation_id=operation_id,
-                timeout_seconds=float(timeout_seconds or 30.0),
-            )
+            # Duplicate submission is an observation, never a synchronous
+            # attachment to the original worker. The caller can watch the
+            # returned durable snapshot and retrieve its terminal result.
+            return prepared_status
         base = self._toolbox_runtime_base()
 
         def _persist_terminal(envelope: Dict[str, Any], lifecycle: str) -> Dict[str, Any]:
@@ -1860,6 +2048,30 @@ class ToolboxRuntimeMixin:
                 envelope=envelope,
                 reason=str(envelope.get("reason") or "").strip(),
             )
+
+        # A bounded cached describe no longer serves as a readiness probe. For
+        # a freshly routed toolbox call, wait for the concrete IPC endpoint
+        # before dispatching the first call; duplicate submissions above never
+        # enter this path. Direct engine-id callers retain the legacy behavior
+        # because they explicitly selected and manage that executor.
+        if tid and str(reg.get("worker_ipc_address") or "").strip():
+            try:
+                self._wait_for_toolbox_executor_ready(
+                    eid,
+                    timeout_seconds=min(float(timeout_seconds or 30.0), 8.0),
+                )
+            except Exception as exc:
+                return _persist_terminal({
+                    "status": "error",
+                    "outcome": "error",
+                    "reason": "toolbox_executor_not_ready",
+                    "error": str(exc),
+                    "engine_id": eid,
+                    "toolbox_id": tid or self._registration_toolbox_id(reg),
+                    "tool_name": tool_name,
+                    "tool_call_id": model_tool_call_id,
+                    "request_id": request_id,
+                }, "terminal_failure")
 
         scheduled = base.submit_request(
             environment_key=environment_key,
@@ -2320,7 +2532,7 @@ class ToolboxRuntimeMixin:
         last_error: Optional[Exception] = None
         while time.time() < deadline:
             try:
-                desc = self.toolbox_describe(engine_id=eid, timeout_seconds=min(2.0, max(0.2, float(timeout_seconds or 8.0))))
+                desc = self._toolbox_describe_live(engine_id=eid, timeout_seconds=min(2.0, max(0.2, float(timeout_seconds or 8.0))))
                 allowed = self._registration_allowed_tool_names(reg)
                 reported = {
                     str(item or "").strip()

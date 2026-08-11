@@ -2388,6 +2388,7 @@ class EngineHostDaemon:
                     "toolbox-gc",
                     "toolbox-repair",
                     "toolbox-reconcile",
+                    "toolbox-describe-refresh",
                 }:
                     result = await asyncio.to_thread(
                         self._call_service, target_cmd, target_payload
@@ -3243,6 +3244,14 @@ class EngineHostDaemon:
                 engine_id=str(payload.get("engine_id") or ""),
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 operator_details=bool(payload.get("operator_details", False)),
+                timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
+            )
+        if cmd == "toolbox-describe-refresh":
+            return svc.toolbox_describe_refresh(
+                engine_id=str(payload.get("engine_id") or ""),
+                toolbox_id=str(payload.get("toolbox_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
                 timeout_seconds=float(payload.get("timeout_seconds") or 10.0),
             )
         if cmd == "workflow-python-stream-status":

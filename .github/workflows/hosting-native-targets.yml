@@ -37,7 +37,7 @@ jobs:
           - runner: macos-15
             target: cp312-macosx_11_0_arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -45,11 +45,19 @@ jobs:
           python-version: "3.12"
           architecture: ${{ (contains(matrix.target, 'arm64') || contains(matrix.target, 'aarch64')) && 'arm64' || 'x64' }}
           cache: pip
-      - name: Install target probe dependencies and native wheel
-        run: python -m pip install --disable-pip-version-check packaging==26.0 pydantic-core==2.41.5
+      - name: Install native hosting acceptance dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          packaging==26.0 pydantic==2.12.5 pydantic-core==2.41.5
+          cryptography==49.0.0 requests==2.32.5
+          pytest==9.0.2 pytest-asyncio==1.3.0
       - name: Assert detected target and import native wheel
         run: python tests/native_hosting_target_probe.py --expected-target ${{ matrix.target }}
-
-  # R1-03b adds the native sandbox/worker/restart/cleanup boundary here after
-  # R6-04 lands POSIX parent-death containment. No target is advertised before
-  # that second gate passes on all five runners.
+      - name: Exercise native sandbox worker restart healing and cleanup
+        env:
+          PYTHONPATH: src
+        run: >-
+          python -m pytest -q -x
+          tests/test_hosting_r6_restart_healing.py
+          tests/test_hosting_r7_acceptance.py
+          tests/test_hosting_toolbox_target.py
