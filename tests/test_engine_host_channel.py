@@ -1543,6 +1543,55 @@ def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     }
 
 
+def test_bootstrap_daemon_forwards_all_toolbox_launcher_inputs(monkeypatch, tmp_path: Path) -> None:
+    captured: Dict[str, Any] = {}
+    configuration = {"revision": "config-r1"}
+    artifact_sources = {"release": tmp_path / "artifacts"}
+    trust_keys = {"release-key": "public-value"}
+    credentials = {"credential:index": "Bearer secret-value"}
+    policy = {"revision": "policy-r1"}
+
+    class _FakePidFile:
+        path = tmp_path / "daemon.pid"
+
+        def __init__(self, _path: Optional[str] = None):
+            return
+
+        def is_alive(self) -> bool:
+            return False
+
+    def _fake_start_daemon_background(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return {"pid": 12345, "port": 19876}
+
+    monkeypatch.setattr("hosting.daemon.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.start_daemon_background", _fake_start_daemon_background)
+    monkeypatch.setattr(
+        EngineHostControlChannel,
+        "_prepare_local_unconfigured_bootstrap",
+        lambda self: {"require_auth": False, "endpoint_mode_default": "exclusive", "keys_count": 0},
+    )
+
+    channel = EngineHostControlChannel(
+        {
+            "toolbox_host_project_configuration": configuration,
+            "toolbox_artifact_sources": artifact_sources,
+            "toolbox_trust_public_keys": trust_keys,
+            "toolbox_source_credentials": credentials,
+            "toolbox_dependency_policy": policy,
+        }
+    )
+    channel.get_daemon_status = lambda: {"alive": True, "port": 19876}  # type: ignore[method-assign]
+
+    channel.bootstrap_daemon(wait_ready_seconds=1.0)
+
+    assert captured["toolbox_host_project_configuration"] == configuration
+    assert captured["toolbox_artifact_sources"] == artifact_sources
+    assert captured["toolbox_trust_public_keys"] == trust_keys
+    assert captured["toolbox_source_credentials"] == credentials
+    assert captured["toolbox_dependency_policy"] == policy
+
+
 def test_get_connection_auto_bootstrap_forwards_custom_pid_file(monkeypatch) -> None:
     custom_pid_file = Path("X:/tmp/custom_host.pid")
     captured: Dict[str, Any] = {}

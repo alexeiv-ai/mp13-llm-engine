@@ -725,6 +725,12 @@ boundary—not a double—passes.
 
 ### R7 - Breaking-change handoff and acceptance
 
+- [x] **R7-00 production-launcher delivery correction** Expose all five strict
+  `EngineHostDaemon` toolbox inputs through foreground, detached, CLI, relay,
+  and local channel-bootstrap production paths. Keep credentials out of process
+  arguments by using a short-lived secured file for detached direct inputs,
+  delete that file after readiness/failure, and document the consumer launch
+  contract before renewing the dependent adoption request.
 - [ ] **R7-01** For every removed/replaced API, populate the breaking-change
   handoff before its implementation commit and obtain dependent-provided
   Windows adoption evidence; never modify the dependent project. Consumers are

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 from hosting.daemon import (
     _secure_path,
@@ -105,6 +106,86 @@ def test_start_daemon_background_uses_protocol_ping_for_readiness(monkeypatch) -
     assert captured["closed"] is True
     # Windows path uses os.kill(pid, 0) branch; non-Windows uses proc.poll().
     assert captured.get("poll_checked") in {None, True}
+    assert result == {"pid": 55555, "port": 19876}
+
+
+def test_start_daemon_background_transports_toolbox_inputs_without_argv_secrets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeProc:
+        pid = 43210
+
+        def poll(self):
+            return None
+
+    class _FakePidFile:
+        path = tmp_path / "daemon.pid"
+
+        def __init__(self, _path=None):
+            return
+
+        def is_alive(self) -> bool:
+            return True
+
+        def get_port(self) -> int:
+            return 19876
+
+        def read(self):
+            return {"pid": 55555, "port": 19876}
+
+    class _FakeConn:
+        def __init__(self, **_kwargs: Any):
+            return
+
+        def invoke(self, cmd: str, payload=None):
+            assert cmd == "__ping__"
+            return "pong"
+
+        def close(self) -> None:
+            return
+
+    def _write(path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def _popen(argv, **_kwargs):
+        captured["argv"] = list(argv)
+        config_index = argv.index("--toolbox-config-file") + 1
+        config_path = Path(argv[config_index])
+        captured["config_path"] = config_path
+        captured["config"] = json.loads(config_path.read_text(encoding="utf-8"))
+        return _FakeProc()
+
+    monkeypatch.setattr("hosting.daemon.toolbox_launch_config._default_state_dir", lambda: tmp_path)
+    monkeypatch.setattr("hosting.daemon.toolbox_launch_config._atomic_write_secure_json", _write)
+    monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _popen)
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
+    monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
+
+    result = start_daemon_background(
+        port=19876,
+        wait_ready_seconds=1.0,
+        toolbox_host_project_configuration={"revision": "config-r1"},
+        toolbox_artifact_sources={"release": tmp_path / "artifacts"},
+        toolbox_trust_public_keys={"release-key": "public-value"},
+        toolbox_source_credentials={"credential:index": "Bearer secret-value"},
+        toolbox_dependency_policy={"revision": "policy-r1"},
+    )
+
+    argv_text = " ".join(str(value) for value in captured["argv"])
+    assert "secret-value" not in argv_text
+    assert captured["config"] == {
+        "toolbox_host_project_configuration": {"revision": "config-r1"},
+        "toolbox_artifact_sources": {"release": str(tmp_path / "artifacts")},
+        "toolbox_trust_public_keys": {"release-key": "public-value"},
+        "toolbox_source_credentials": {"credential:index": "Bearer secret-value"},
+        "toolbox_dependency_policy": {"revision": "policy-r1"},
+    }
+    assert not Path(captured["config_path"]).exists()
     assert result == {"pid": 55555, "port": 19876}
 
 

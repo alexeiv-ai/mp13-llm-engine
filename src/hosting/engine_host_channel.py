@@ -140,6 +140,28 @@ class EngineHostControlChannel:
         self._stream_approval_lock = threading.Lock()
         self._refresh_base_cmd()
 
+    def _daemon_toolbox_launch_kwargs(self) -> Dict[str, Any]:
+        """Project production-launcher toolbox settings into daemon kwargs."""
+        direct: Dict[str, Any] = {}
+        for key in (
+            "toolbox_host_project_configuration",
+            "toolbox_artifact_sources",
+            "toolbox_trust_public_keys",
+            "toolbox_source_credentials",
+            "toolbox_dependency_policy",
+        ):
+            value = self.control_settings.get(key)
+            if value is not None:
+                direct[key] = dict(value) if isinstance(value, dict) else value
+        config_file = str(
+            self.control_settings.get("engine_host_toolbox_config_file") or ""
+        ).strip()
+        if config_file and direct:
+            raise ValueError("toolbox_launch_configuration_inputs_conflict")
+        if config_file:
+            return {"toolbox_config_file": Path(config_file)}
+        return direct
+
     def approval_callback_lease(
         self,
         callback: Callable[..., Any],
@@ -656,6 +678,7 @@ class EngineHostControlChannel:
                             engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
                             control_state_file=Path(self._control_state_file) if self._control_state_file else None,
                             wait_ready_seconds=wait,
+                            **self._daemon_toolbox_launch_kwargs(),
                         )
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
                         conn = LocalSocketConnection(
@@ -1268,6 +1291,7 @@ class EngineHostControlChannel:
             engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
             control_state_file=Path(self._control_state_file) if self._control_state_file else None,
             wait_ready_seconds=wait_ready_seconds,
+            **self._daemon_toolbox_launch_kwargs(),
         )
         with self._connection_lock:
             self._connection = None  # Force reconnect on next invoke

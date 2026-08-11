@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any
 
-from hosting.daemon import EngineHostDaemon
+from hosting.daemon import EngineHostDaemon, run_daemon_foreground
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.target import detect_current_toolbox_target
 
@@ -235,6 +236,84 @@ def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
     assert summary["toolbox_readiness"]["status"] == "degraded"
     assert summary["toolbox_host_project"]["target"]["platform"] == target.platform
     assert "credential_ref" not in str(summary["toolbox_host_project"])
+
+
+def test_foreground_production_launcher_forwards_all_toolbox_inputs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeDaemon:
+        def __init__(self, **kwargs: Any):
+            captured.update(kwargs)
+
+        async def run(self) -> None:
+            captured["ran"] = True
+
+    monkeypatch.setattr("hosting.daemon.foreground.EngineHostDaemon", _FakeDaemon)
+    monkeypatch.setattr(
+        "hosting.daemon.foreground._apply_foreground_terminal_disconnect_policy",
+        lambda _daemon: None,
+    )
+
+    run_daemon_foreground(
+        port=0,
+        toolbox_host_project_configuration={"revision": "config-r1"},
+        toolbox_artifact_sources={"release": tmp_path / "artifacts"},
+        toolbox_trust_public_keys={"release-key": "public-value"},
+        toolbox_source_credentials={"credential:index": "Bearer secret-value"},
+        toolbox_dependency_policy={"revision": "policy-r1"},
+    )
+
+    assert captured["toolbox_host_project_configuration"] == {"revision": "config-r1"}
+    assert captured["toolbox_artifact_sources"] == {"release": tmp_path / "artifacts"}
+    assert captured["toolbox_trust_public_keys"] == {"release-key": "public-value"}
+    assert captured["toolbox_source_credentials"] == {
+        "credential:index": "Bearer secret-value"
+    }
+    assert captured["toolbox_dependency_policy"] == {"revision": "policy-r1"}
+    assert captured["ran"] is True
+
+
+def test_foreground_production_launcher_loads_secure_toolbox_configuration_file(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+    config_file = tmp_path / "toolbox-launch.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "toolbox_host_project_configuration": {"revision": "config-r1"},
+                "toolbox_artifact_sources": {"release": str(tmp_path / "artifacts")},
+                "toolbox_trust_public_keys": {"release-key": "public-value"},
+                "toolbox_source_credentials": {"credential:index": "Bearer secret-value"},
+                "toolbox_dependency_policy": {"revision": "policy-r1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeDaemon:
+        def __init__(self, **kwargs: Any):
+            captured.update(kwargs)
+
+        async def run(self) -> None:
+            return
+
+    monkeypatch.setattr("hosting.daemon.foreground.EngineHostDaemon", _FakeDaemon)
+    monkeypatch.setattr(
+        "hosting.daemon.foreground._apply_foreground_terminal_disconnect_policy",
+        lambda _daemon: None,
+    )
+
+    run_daemon_foreground(toolbox_config_file=config_file)
+
+    assert captured["toolbox_artifact_sources"] == {"release": tmp_path / "artifacts"}
+    assert captured["toolbox_source_credentials"] == {
+        "credential:index": "Bearer secret-value"
+    }
 
 
 def test_missing_partial_and_invalid_toolbox_setup_are_bounded_and_publish_nothing(

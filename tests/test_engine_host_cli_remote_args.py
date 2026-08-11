@@ -3,11 +3,70 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pytest
 
 from hosting import engine_host_cli
+
+
+def test_daemon_cli_forwards_toolbox_configuration_file_to_production_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "toolbox-launch.json"
+    config_file.write_text("{}", encoding="utf-8")
+    captured: Dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        "hosting.daemon.run_daemon_foreground",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(engine_host_cli, "_setup_file_logging", lambda _path: None)
+    monkeypatch.setattr(
+        "hosting.daemon.diagnostics.daemon_report_path_for_control_state",
+        lambda _path: tmp_path / "crash.json",
+    )
+    monkeypatch.setattr(
+        "hosting.daemon.diagnostics.install_daemon_crash_report",
+        lambda path: path,
+    )
+
+    rc = engine_host_cli.main(["--daemon", "--toolbox-config-file", str(config_file)])
+
+    assert rc == 0
+    assert captured["toolbox_config_file"] == config_file
+
+
+def test_relay_autostart_forwards_toolbox_configuration_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "remote-toolbox-launch.json"
+    captured: Dict[str, Any] = {}
+
+    monkeypatch.setattr(engine_host_cli, "_relay_port", lambda _pid, port: port)
+    monkeypatch.setattr(engine_host_cli, "_relay_daemon_reachable", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        engine_host_cli,
+        "_validate_relay_autostart_policy",
+        lambda _path: {"lifecycle_profile": "detached_user_process"},
+    )
+    monkeypatch.setattr(
+        "hosting.daemon.start_daemon_background",
+        lambda **kwargs: captured.update(kwargs) or {"pid": 12345, "port": 19876},
+    )
+
+    result = engine_host_cli._ensure_relay_daemon_ready(  # noqa: SLF001
+        pid_file=tmp_path / "daemon.pid",
+        port=19876,
+        control_state_file=tmp_path / "control.json",
+        toolbox_config_file=config_file,
+    )
+
+    assert captured["toolbox_config_file"] == config_file
+    assert result["status"] == "started"
 
 
 def test_cli_file_logging_configures_utc_formatter_without_crashing(tmp_path) -> None:

@@ -597,6 +597,7 @@ def _ensure_relay_daemon_ready(
     engines_state_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
     log_file: Optional[Path] = None,
+    toolbox_config_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
     from .daemon import start_daemon_background
 
@@ -613,6 +614,7 @@ def _ensure_relay_daemon_ready(
                 engines_state_file=engines_state_file,
                 control_state_file=control_state_file,
                 wait_ready_seconds=float(wait_ready_seconds or 8.0),
+                toolbox_config_file=toolbox_config_file,
             )
             or {}
         )
@@ -635,6 +637,7 @@ def _run_relay_wrapper(
     engines_state_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
     log_file: Optional[Path] = None,
+    toolbox_config_file: Optional[Path] = None,
 ) -> None:
     try:
         ready = _ensure_relay_daemon_ready(
@@ -644,6 +647,7 @@ def _run_relay_wrapper(
             engines_state_file=engines_state_file,
             wait_ready_seconds=wait_ready_seconds,
             log_file=log_file,
+            toolbox_config_file=toolbox_config_file,
         )
     except Exception as exc:
         _run_relay_error_loop(exc)
@@ -697,6 +701,7 @@ def _channel_settings_from_args(args: argparse.Namespace, *, auto_bootstrap: boo
         "engine_host_daemon_pid_file": str(getattr(args, "pid_file", "") or "") or None,
         "engine_host_state_file": str(getattr(args, "engines_state_file", "") or "") or None,
         "engine_host_control_state_file": str(getattr(args, "control_state_file", "") or "") or None,
+        "engine_host_toolbox_config_file": str(getattr(args, "toolbox_config_file", "") or "") or None,
     }
     for attr in (
         "engine_host_ssh_target",
@@ -749,6 +754,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Engine host control CLI")
     p.add_argument("--engines-state-file", type=Path, default=None)
     p.add_argument("--control-state-file", type=Path, default=None)
+    p.add_argument(
+        "--toolbox-config-file",
+        type=Path,
+        default=None,
+        help="Secure JSON file containing EngineHostDaemon toolbox configuration inputs",
+    )
     p.add_argument("--pid-file", type=Path, default=None, help="Daemon PID file path (for daemon client mode)")
     p.add_argument(
         "--ssh-target",
@@ -982,6 +993,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         control_state = _extract_path_arg(argv, "--control-state-file", None)
+        toolbox_config_file = _extract_path_arg(argv, "--toolbox-config-file", None)
         background = "--background" in argv
         log_file_str = _extract_str_arg(argv, "--log-file", None)
         from .daemon.diagnostics import daemon_report_path_for_control_state, install_daemon_crash_report
@@ -1000,6 +1012,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     log_file=Path(log_file_str) if log_file_str else None,
                     engines_state_file=engines_state,
                     control_state_file=control_state,
+                    toolbox_config_file=toolbox_config_file,
                 )
                 _print_ok(result)
                 return 0
@@ -1013,6 +1026,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 engines_state_file=engines_state,
                 control_state_file=control_state,
                 runtime_profile=str(runtime_profile or "foreground_terminal_bound"),
+                toolbox_config_file=toolbox_config_file,
             )
             return 0
 
@@ -1071,6 +1085,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         pid_file = _extract_path_arg(argv, "--pid-file", None)
         engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         control_state = _extract_path_arg(argv, "--control-state-file", None)
+        toolbox_config_file = _extract_path_arg(argv, "--toolbox-config-file", None)
         log_file = _extract_path_arg(argv, "--log-file", None)
         wait_raw = _extract_str_arg(argv, "--wait-ready-seconds", "8.0")
         try:
@@ -1085,6 +1100,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 control_state_file=control_state,
                 wait_ready_seconds=wait_ready_seconds,
                 log_file=log_file,
+                toolbox_config_file=toolbox_config_file,
             )
             return 0
         except Exception as exc:

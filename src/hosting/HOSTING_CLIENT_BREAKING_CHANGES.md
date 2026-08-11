@@ -22,6 +22,7 @@ maintainers and must not be edited from this repository.
 - Last adopted parent baseline: `83b35e20604c8f0c2fbe27467980b6a49385d918`
 - Last adopted `mp13-docs` commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
 - Corrective parent implementation pin: `d689bda`.
+- Production-launcher completion pin: pending this corrective commit.
 - Dependent adoption receipt: not yet supplied. It must identify the dependent
   commit, exact Windows target, and its Windows migration-test command/results.
   Consumer Linux and macOS testing is not currently required; adoption is
@@ -172,10 +173,17 @@ Administrator setup logic must change as follows:
 
 - replace `EngineHostService(toolbox_environment_catalog=...,
   toolbox_sandbox_policies=...)` construction with normal
-  `EngineHostDaemon(toolbox_host_project_configuration=...,
+  `start_daemon_background(toolbox_host_project_configuration=...,
   toolbox_artifact_sources=..., toolbox_trust_public_keys=...,
   toolbox_source_credentials=..., toolbox_dependency_policy=...)`
-  construction;
+  production startup (or the equivalent `run_daemon_foreground` call);
+- when launching through the CLI/SSH relay, place those same five mapping fields
+  in a host-local, access-restricted JSON file and pass
+  `--toolbox-config-file <path>`; never place credential values in command-line
+  arguments;
+- when local bootstrap is owned by `EngineHostControlChannel`, provide the five
+  mappings in its control settings or provide
+  `engine_host_toolbox_config_file`; do not combine both forms;
 - stop generating `required_target`; verify the daemon-reported detected target;
 - define built-in intent and ordered sources instead of realized locks;
 - treat configuration application as revision creation, not in-place mutation;

@@ -777,6 +777,23 @@ canonical detected target. Supplying only part of the strict setup or omitting
 a required air-gap binding is invalid; the normal daemon does not construct an
 unconfigured parallel materializer.
 
+The production `run_daemon_foreground` and `start_daemon_background` launchers
+expose those same five keyword inputs. `EngineHostControlChannel` local
+bootstrap forwards the same names from its control settings. A launcher caller
+may instead supply `toolbox_config_file` (or
+`engine_host_toolbox_config_file` in channel settings), whose strict JSON object
+contains only those five named mapping fields. Direct inputs and a configuration
+file are mutually exclusive. CLI daemon and relay-wrapper startup expose the
+file as `--toolbox-config-file`; the path refers to a daemon-host-local file and
+the caller is responsible for securing a persistent file.
+
+Detached startup never places a trust key, credential, configuration payload,
+policy payload, or artifact-source map in process arguments. Direct Python
+inputs are serialized to a unique ACL-hardened launcher file, passed to the
+child by path, and removed after the child answers the production protocol
+readiness ping or startup fails. Launcher diagnostics, results, and logs do not
+project the file contents or credential values.
+
 Normal daemon construction starts or attaches to the canonical system setup
 operation without waiting for source I/O, resolution, installation, or probes.
 That worker scans only direct `*.zip` children of each bound read-only air-gap
