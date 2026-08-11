@@ -648,6 +648,65 @@ def test_daemon_runtime_endpoint_override_applies_to_claims() -> None:
         assert str(claim_out.get("mode") or "") == "exclusive"
 
 
+def test_authenticated_daemon_auth_responses_project_replacement_public_key() -> None:
+    with _workspace_tmpdir() as td:
+        root = Path(td)
+        daemon = EngineHostDaemon(
+            port=0,
+            engines_state_file=root / "engines.json",
+            control_state_file=root / "control.json",
+        )
+        daemon.svc.auth_upsert_key(
+            key_id="bootstrap-admin",
+            key_secret="admin-secret",
+            role="admin",
+            auth_method="shared_secret",
+        )
+        daemon.svc.set_control_config(
+            require_auth=True,
+            access_profile={"connectivity_mode": "local_only"},
+        )
+        session = daemon.svc.auth_issue_session(
+            key_id="bootstrap-admin",
+            key_secret="admin-secret",
+            scope="control",
+        )
+        token = str(session.get("token") or "")
+        replacement_public_key = "ssh-ed25519 AAAAReplacement setup@example"
+
+        upsert_request = json.dumps(
+            {
+                "seq": 1,
+                "cmd": "auth-upsert-key",
+                "payload": {
+                    "session_token": token,
+                    "key_id": "setup-admin",
+                    "role": "admin",
+                    "auth_method": "public_key",
+                    "public_key": replacement_public_key,
+                },
+            }
+        )
+        upsert_response = asyncio.run(daemon._dispatch(upsert_request, peer_host="127.0.0.1"))  # noqa: SLF001
+
+        assert upsert_response["ok"] is True
+        assert upsert_response["result"]["public_key"] == replacement_public_key
+
+        list_request = json.dumps(
+            {
+                "seq": 2,
+                "cmd": "auth-list-keys",
+                "payload": {"session_token": token},
+            }
+        )
+        list_response = asyncio.run(daemon._dispatch(list_request, peer_host="127.0.0.1"))  # noqa: SLF001
+        listed = {row["key_id"]: row for row in list_response["result"]}
+
+        assert list_response["ok"] is True
+        assert listed["setup-admin"]["public_key"] == replacement_public_key
+        assert "secret_hash" not in listed["bootstrap-admin"]
+
+
 def test_model_user_cannot_override_model_in_connect_from_config() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)

@@ -434,15 +434,18 @@ destination always constructs and probes its own environment. Native CI must
 prove resolution, compatible wheel selection, native-extension import, sandbox
 containment, restart, and cleanup on every advertised target.
 
-Only Windows x64 execution hardware is currently available to this project.
-For Windows ARM64, Linux glibc x64/ARM64, and macOS ARM64, the current corrective
-plan therefore requires a recorded code-path review of target normalization,
-ordered `sys_tags()`, incompatible-wheel rejection, filesystem/IPC selection,
-parent-death/worker containment, cleanup, workflow runner mapping, and native
-test collection. That review is implementation evidence, not a native pass.
-Real execution on those targets is retained in the deferred native-validation
-register and must occur before claiming that target as natively validated, but
-unavailable hardware does not block closure of the current corrective work.
+Windows x64 and WSL2 Linux x64 execution are available to this project. All
+in-scope Linux implementation and test work runs in WSL2 with a Linux Poetry
+environment; timing-sensitive work should use the WSL ext4 filesystem rather
+than DrvFS where practical. WSL2 exercises the real Linux x64 target, wheel,
+AF_UNIX/path, process, parent-death, cleanup, and restart paths, but its result
+must be labeled WSL2 rather than a separate native-host receipt. For Windows
+ARM64, Linux ARM64, and macOS ARM64, record code-path review of target
+normalization, ordered `sys_tags()`, incompatible-wheel rejection,
+filesystem/IPC selection, containment, cleanup, workflow mapping, and test
+collection. Native Linux-host and ARM real-test receipts are external release
+evidence and explicitly out of scope for this corrective plan; their absence
+does not block plan closure and no reviewed-only target is reported as passed.
 
 Source builds are intentionally outside this plan. If an allowed package has no
 compatible verified wheel for the daemon target, the resolution fails. Adding
@@ -560,10 +563,11 @@ boundary—not a double—passes.
     macOS ARM64 jobs that assert the canonical detected machine and import a
     native CPython 3.12 wheel.
   - [x] **R1-03b** Run the sandbox, worker-ownership, restart, and cleanup
-    boundary on available Windows x64. For unavailable Windows ARM64, Linux
-    x64/ARM64, and macOS ARM64, review detector/tag, wheel, IPC/path,
-    containment, cleanup, workflow, and test-collection code and record the
-    absence of real native execution without converting review into a pass.
+    boundary on Windows x64 and use WSL2 for all in-scope Linux x64 execution.
+    For Windows ARM64, Linux ARM64, and macOS ARM64, review detector/tag, wheel,
+    IPC/path, containment, cleanup, workflow, and test-collection code without
+    converting review into a pass. Native Linux-host and ARM receipts are out
+    of scope.
 
 ### R2 - Revisioned hosting configuration and built-ins
 
@@ -757,10 +761,11 @@ boundary—not a double—passes.
   - [ ] **R7-03a** Produce one clean post-fix parent regression with unique
     durable request/state identities, unconditional worker cleanup, and no
     timeout-only synchronization failure.
-  - [x] **R7-03b** Record the available Windows x64 result and complete a
-    parent-owned code/workflow review for unavailable Windows ARM64, Linux
-    x64/ARM64, and macOS ARM64 paths. WSL2 Linux x64 is supplemental evidence;
-    do not label any reviewed-only target as natively passed.
+  - [x] **R7-03b** Record the Windows x64 result, use WSL2 for the in-scope Linux
+    x64 boundary, and complete parent-owned code/workflow review for Windows
+    ARM64, Linux ARM64, and macOS ARM64 paths. Native Linux-host and ARM
+    real-test receipts are out of scope; do not label reviewed-only targets as
+    passed.
   - [ ] **R7-03c** Accept the dependent maintainer's Windows-only migration
     command/result and exact Windows target in the R7-01 adoption receipt. Do
     not require a consumer to supply Linux or macOS evidence.
@@ -788,16 +793,18 @@ double.
 - [ ] **R8-03** Cache immutable signed-wheel, bundle, and hermetic seed fixtures
   at session scope while giving every test independent mutable CAS, operation,
   catalog, environment-reference, worker, IPC, and result state.
-- [ ] **R8-04** Split default fast, serial process, and five-target native CI
-  lanes. Retain at least one serial real-process lifecycle test for every
-  production boundary and publish per-lane counts and durations.
+- [ ] **R8-04** Split default fast, serial process, Windows native, and WSL2
+  Linux x64 lanes while retaining the five declared target workflow
+  definitions. Retain at least one serial real-process lifecycle test for every
+  in-scope production boundary and publish per-lane counts and durations.
 - [ ] **R8-05** Enable parallel execution independently per validated platform.
   Prove worker-safe state roots, ports, named pipes, process registries, and
-  teardown before enabling it on Windows. Keep unavailable Linux lanes serial;
-  review their AF_UNIX/path/process code now and require later native execution
-  before enabling Linux parallelism. A 30% median reduction from the recorded
-  Windows full-suite reference is the optimization target, not permission to
-  weaken assertions or skip boundaries.
+  teardown before enabling it on Windows. Prove Linux isolation separately in
+  WSL2 using its Linux Poetry environment before enabling the WSL lane's
+  parallelism. Native Linux-host and ARM receipts are not prerequisites because
+  they are out of scope. A 30% median reduction from the recorded Windows
+  full-suite reference is the optimization target, not permission to weaken
+  assertions or skip boundaries.
 
 ## Acceptance criteria
 
@@ -818,9 +825,9 @@ double.
 - [x] Removal releases references only after publication; non-built-in deletion
   cannot remove referenced or built-in environments.
 - [x] Windows x64 passes native setup, wheel, sandbox, worker, restart, and
-  cleanup tests; unavailable Windows ARM64, Linux x64/ARM64, and macOS ARM64
-  implementations and workflow commands have recorded code review without a
-  false native-pass claim.
+  cleanup tests; WSL2 is the execution environment for all in-scope Linux x64
+  work; Windows ARM64, Linux ARM64, and macOS ARM64 implementations and workflow
+  commands have recorded review without a false pass claim.
 - [x] Identical reapply after restart heals missing runtime state without a new
   semantic revision, state corruption, leaked workers, or healer conflict.
 - [x] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
@@ -833,13 +840,13 @@ double.
   dependent action is recorded in the breaking-change handoff with independent
   Windows adoption evidence.
 
-## Deferred native-validation register
+## Out-of-scope native receipt register
 
-These executions are required before the corresponding target is described as
-natively validated, but are deferred because their hosts/runners are currently
-unavailable and do not block completion of the current corrective plan:
+The project does not manufacture or wait for these external receipts. They are
+out of scope for corrective-plan completion and must not be represented as
+passes:
 
-- [ ] Windows ARM64 native target, native-wheel, sandbox, restart, and cleanup.
-- [ ] Linux glibc x64 native target, native-wheel, sandbox, restart, and cleanup.
-- [ ] Linux glibc ARM64 native target, native-wheel, sandbox, restart, and cleanup.
-- [ ] macOS ARM64 native target, native-wheel, sandbox, restart, and cleanup.
+- Native Linux-host x64/ARM64 target, wheel, sandbox, restart, and cleanup
+  receipts. WSL2 Linux x64 is the in-scope Linux execution lane.
+- Windows ARM64 native target, wheel, sandbox, restart, and cleanup receipt.
+- macOS ARM64 native target, wheel, sandbox, restart, and cleanup receipt.

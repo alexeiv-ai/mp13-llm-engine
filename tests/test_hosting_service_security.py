@@ -17,6 +17,42 @@ def _make_service(tmp_path: Path) -> EngineHostService:
     )
 
 
+def test_auth_key_upsert_and_list_project_public_key_without_secret_material(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path)
+    first_public_key = "ssh-ed25519 AAAAFirst admin@example"
+    replacement_public_key = "ssh-ed25519 AAAAReplacement admin@example"
+
+    created = svc.auth_upsert_key(
+        key_id="admin-public",
+        role="admin",
+        auth_method="public_key",
+        public_key=first_public_key,
+    )
+    replaced = svc.auth_upsert_key(
+        key_id="admin-public",
+        role="admin",
+        auth_method="public_key",
+        public_key=replacement_public_key,
+    )
+    listed = svc.auth_list_keys()
+
+    assert created["public_key"] == first_public_key
+    assert replaced["public_key"] == replacement_public_key
+    assert listed == [
+        {
+            "key_id": "admin-public",
+            "role": "admin",
+            "disabled": False,
+            "auth_method": "public_key",
+            "public_key": replacement_public_key,
+            "allowed_configs": [],
+            "allowed_engines": [],
+        }
+    ]
+    assert "secret_hash" not in replaced
+    assert "secret_hash" not in listed[0]
+
+
 def test_resolve_model_path_from_config_value_uses_models_root(tmp_path: Path) -> None:
     svc = _make_service(tmp_path)
     cfg_path = tmp_path / "backend" / "configs" / "granite-2b.json"

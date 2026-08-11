@@ -733,6 +733,7 @@ class AuthMixin:
                 "role": str(m.get("role") or ""),
                 "disabled": bool(m.get("disabled", False)),
                 "auth_method": str(m.get("auth_method") or "shared_secret"),
+                "public_key": str(m.get("public_key") or ""),
                 "allowed_configs": list(m.get("allowed_configs") or []),
                 "allowed_engines": list(m.get("allowed_engines") or []),
             }
@@ -1250,6 +1251,7 @@ class AuthMixin:
             "key_id": kid,
             "role": role_norm,
             "auth_method": method,
+            "public_key": pubkey if method == "public_key" else "",
             "disabled": bool(disabled),
             "allowed_configs": normalized_allowed,
             "allowed_engines": normalized_engines,

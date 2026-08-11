@@ -751,6 +751,11 @@ This section is the authoritative integration contract for hosting consumers.
 4. Consumers must treat missing or rejected SSH binding as a hard security failure, not as a retry-without-binding hint.
 5. Consumers that cache or receive a session token should validate it with `auth-validate-session` using the requested scope, optional expected key id, and current SSH binding before adopting it or skipping public-key challenge auth.
 6. Consumers must not expect the daemon to return the latest valid bearer token from `auth-list-sessions`; that surface is intentionally redacted.
+7. Authenticated `auth-upsert-key` and `auth-list-keys` responses project the
+   exact registered `public_key` so setup can verify key replacement. Shared-
+   secret rows project an empty string; neither response projects secrets or
+   secret hashes. These endpoints remain authenticated after local first-key
+   bootstrap.
 
 ### 11.4 Transport bootstrap and profile handling
 

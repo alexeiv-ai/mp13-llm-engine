@@ -509,6 +509,15 @@ string. Consumers must read `result["token"]`; `key_id`, `auth_method`, `role`, 
 `scope` are present for both new and validated cached sessions, and `reused` identifies
 whether the public-key handshake was skipped.
 
+Daemon RBAC key projection contract: authenticated `auth-upsert-key` responses
+and every `auth-list-keys` row include `public_key`. For `public_key` identities
+this is the exact currently registered SSH public key, including after
+replacement; for shared-secret identities it is an empty string. Secret values
+and `secret_hash` are never projected. Setup clients may verify a replacement
+by comparing the upsert result and subsequent list row with the requested public
+key; they must continue authenticating these endpoints after first-key
+bootstrap.
+
 Remove:
 
 - target-selection configuration and x64/Linux fallback logic;
