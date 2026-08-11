@@ -45,10 +45,16 @@ work. Two release gates cannot be manufactured from this checkout:
 1. The five native GitHub Actions jobs must report successful target detection,
    native-extension import, sandbox worker execution, restart healing, and
    cleanup. The workflow contains those commands, but only Windows x64 has been
-   run locally.
-2. Each dependent maintainer must supply an adoption receipt pinned to the
-   committed parent implementation and containing its own migration command and
-   result. No dependent repository is modified or treated as adopted here.
+   run completely locally. An isolated WSL2 Ubuntu x64 probe detected
+   `cp312-manylinux_2_28_x86_64` and imported the native `pydantic-core` shared
+   object; the subsequent boundary suite stopped because its cancellation
+   acknowledgement took about 222ms against a machine-specific 200ms test
+   threshold. WSL evidence is therefore supplemental and not yet a Linux pass.
+2. Each dependent maintainer must supply a Windows adoption receipt pinned to
+   the committed parent implementation and containing its exact Windows target,
+   migration command, and result. Consumer Linux/macOS testing is not currently
+   required; the parent owns the five-target native matrix. No dependent
+   repository is modified or treated as adopted here.
 
 ## Progress ledger
 
@@ -57,14 +63,15 @@ transcript was intentionally removed because it obscured current truth.
 
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
-| R0 Corrective contract baseline | Active | R0-01 is complete. R0-03 populated the corrective consumer/administrator handoff before implementation: removed target/configuration and mutation surfaces, replacement payload sequence, durable retry/watch/recovery behavior, dependent removals/additions, rollout order, and explicit pending implementation/adoption gates are recorded. Focused docs: 10 passed in 0.12s; `git diff --check` passed. R0-02 remains a cross-slice obligation. No runtime behavior changed. |
-| R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03a implements a five-runner GitHub Actions matrix; the local Windows x64 target/native-wheel probe passed and target/workflow tests are 9 passed in 0.73s. R1-03a remains unchecked until all native jobs execute successfully. R1-03b remains gated on R6-04, and no new target family is advertised. |
+| R0 Corrective contract baseline | Complete | R0-01/R0-03 established the corrective plan and handoff. R0-02 was closed by the separately committed R7 contract/worker/documentation audit and its passing contract/removal checks. |
+| R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03a/R1-03b are wired into a five-runner matrix; the local Windows x64 target/native-wheel probe passed. Both remain unchecked until the native jobs execute successfully, and no new target family is advertised. |
 | R2 Revisioned hosting configuration and built-ins | Complete | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-01b atomically persists revision history; changes invalidate unconsumed plans and non-active receipts while active catalog/environment-reference state remains unchanged. Focused config/plan/receipt/docs: 34 passed in 3.22s. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. R2-05b1 adds canonical raw-Ed25519 bundle verification, adversarial ZIP/wheel/closure validation, and atomic content-addressed indexing. Focused signed-bundle/resolver/config/docs matrix: 29 passed in 13.40s; Poetry lock/check and `git diff --check` passed (existing Poetry deprecation warnings only). |
 | R3 Multi-tool planning and consumer confirmation | Complete | Durable planning and confirmation expose bounded exact alternatives, direct/transitive mutations, decline/skip/preserve/remove semantics, request recovery, and changed-snapshot watching. |
 | R4 Privileged approval and immutable apply | Complete | Dependency approval is a distinct authority bound to the confirmation and exact artifacts; apply consumes only immutable plan/confirmation/approval receipts and atomically publishes the confirmed effective definition. |
 | R5 Removal, retention, and administrator environments | Complete | R5-01 through R5-05 are complete. Explicit tool removal contracts shared profiles after atomic publication; exact environment deletion is reference-safe; administrator construction publishes inactive verified revisions with explicit lifecycle transitions; mutating maintenance is canonical, durable, idempotent, cancellable before mutation, and restart-recoverable. |
 | R6 Restart-safe consumer healing | Complete | R6-01 through R6-06 are implemented. Manifest digests are normalized at plan/state/registration boundaries; concrete toolbox candidates use unique runtime IDs and immutable binding digests; duplicate registrations are rejected instead of replaced; recovery reports missing/mismatched runtime bindings for explicit reapply; Linux workers request native parent-death termination, Windows retains job containment, and retirement removes bounded worker spec/scratch artifacts. Duplicate toolbox execution attaches return the current durable snapshot immediately, cancellation acknowledges before asynchronous teardown, and `toolbox-describe-refresh` is a separate durable operation while `toolbox-describe` is bounded to persisted registration state. Poetry-based focused rollout/atomic/sandbox/operation and state archive tests passed. |
 | R7 Breaking-change handoff and acceptance | Parent complete; external gates pending | The parent handoff inventory and receipt schema are populated. The real-daemon no-double suite covers signed configured setup, decline/skip, distinct approval, custom add/execute/remove, environment-removal safety, restart healing, GC, and request recovery. Native workflow commands now include sandbox/restart/cleanup coverage. Full dependent adoption and five-runner evidence remain external release gates. |
+| R8 Test determinism and performance | Planned | Measure three-run medians, eliminate shared durable identities and teardown leaks, cache only immutable fixture inputs, split fast/process/native lanes, and enable parallelism only after Windows/Linux isolation is proven. R8 may proceed while external R7 evidence is pending and must retain all real production boundaries. |
 
 R2 evidence continuation: R2-05b2 binds the exact daemon public-key set,
 discovers direct signed bundles, and resolves only rehashed CAS objects with
@@ -138,9 +145,10 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: R7 acceptance audit. Parent implementation and local acceptance
-are complete; five-runner native evidence and dependent adoption receipts remain
-external release gates.
+Active slice: R7 external acceptance plus planned R8 test determinism and
+performance. Parent implementation and local acceptance are complete;
+five-runner native evidence and a dependent Windows adoption receipt remain
+external release gates. No consumer Linux or macOS result is required.
 
 R7 parent evidence: `tests/test_hosting_r7_acceptance.py` constructs a normal
 configured daemon over a signed current-target source and the real hermetic

@@ -21,11 +21,11 @@ maintainers and must not be edited from this repository.
 
 - Last adopted parent baseline: `83b35e20604c8f0c2fbe27467980b6a49385d918`
 - Last adopted `mp13-docs` commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
-- Corrective parent implementation pin: not yet available; adoption is
-  prohibited until the implementing slice is committed and this field is
-  replaced with that exact commit or release pin.
+- Corrective parent implementation pin: `d689bda`.
 - Dependent adoption receipt: not yet supplied. It must identify the dependent
-  commit and its migration-test command/results.
+  commit, exact Windows target, and its Windows migration-test command/results.
+  Consumer Linux and macOS testing is not currently required; adoption is
+  prohibited until this independent Windows receipt is supplied.
 
 Rollout order is fixed:
 
@@ -523,7 +523,7 @@ Add or change:
 - apply construction from `plan_id` plus receipts only; and
 - migration tests pinned to the exact parent implementation commit.
 
-Required dependent evidence must cover at least: detected native target, strict
+Required Windows dependent evidence must cover at least: detected native target, strict
 configuration rejection, lost-response retry, daemon restart, no request held
 during a human decision, partial decline/skip, separate approver authority,
 apply without a definition copy, and stale-pin recovery.
@@ -546,6 +546,7 @@ fields before R7-01 can close:
   "dependent": "repository-or-product-id",
   "dependent_commit": "40-lowercase-hex",
   "parent_pin": "40-lowercase-hex-or-release-pin",
+  "consumer_test_platform": "windows-target-reported-by-dependent",
   "migration_test_command": "maintainer-run command",
   "migration_test_result": "passed count/duration",
   "covered_behaviors": [
@@ -564,5 +565,6 @@ fields before R7-01 can close:
 
 Current dependent receipt status: **not supplied**. The parent implementation
 pin is `d689bda` (`hosting: add restart-safe toolbox acceptance`); the dependent
-commit and migration result must still come from the dependent maintainer and
-may not be replaced with a parent-authored assumption.
+commit, exact Windows target, and Windows migration result must still come from
+the dependent maintainer and may not be replaced with a parent-authored
+assumption. Non-Windows consumer evidence is not required at this time.

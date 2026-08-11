@@ -454,6 +454,7 @@ not make new protocol, concurrency, destructive-operation, or security choices.
 | P1: lifecycle implementation | high | R5-01, R5-03, R5-04, R5-05, R6-05 | Dependency contraction, immutable template lifecycle, maintenance operations, and native failure testing are substantial but governed by the P0 design. |
 | P2: production acceptance | high | R7-02 | The no-double suite must diagnose cross-boundary failures rather than merely assemble fixtures. |
 | P0/P2: precise handoff and audit | medium | R0-03, R7-01, R7-03, R7-04 | Once replacement contracts are frozen, drafting exact migration payloads, running prescribed suites, recording evidence, and removing enumerated obsolete docs/tests are bounded tasks. A high-or-higher reviewer verifies the handoff before release. |
+| P3: test determinism and performance | medium/high | R8-01..R8-05 | Measurement and lane definition are bounded medium work. Shared immutable fixture design, worker-event synchronization, and safe parallel execution require high skill because test isolation must not weaken process, restart, artifact, or security boundaries. |
 
 Execution order is P0 contract decisions, P0 platform/package implementation,
 P1 lifecycle/safety, then P2 acceptance. R0-03 is prepared immediately before
@@ -525,7 +526,7 @@ boundary—not a double—passes.
 
 - [x] **R0-01** Replace the obsolete ledger with this code-referenced plan and
   compact current-state ledger; record that no runtime behavior changed.
-- [ ] **R0-02** Update `HOSTED_TOOLBOX_CONTRACT.md` and
+- [x] **R0-02** Update `HOSTED_TOOLBOX_CONTRACT.md` and
   `sandbox/TOOLBOX_WORKER.md` as each replacement slice becomes real. Remove
   superseded normative text rather than retain compatibility notes.
 - [x] **R0-03** Before the first client-visible implementation break, replace
@@ -726,15 +727,53 @@ boundary—not a double—passes.
 
 - [ ] **R7-01** For every removed/replaced API, populate the breaking-change
   handoff before its implementation commit and obtain dependent-provided
-  adoption evidence; never modify the dependent project.
+  Windows adoption evidence; never modify the dependent project. Consumers are
+  currently required to test only on their available Windows host and record
+  its exact target; the parent owns every non-Windows/native-matrix result.
 - [x] **R7-02** Add one no-double end-to-end suite covering configured daemon
   startup, built-ins, source alternatives, confirmation decline/skip, approval,
   custom add/remove, restart healing, environment removal, and GC.
 - [ ] **R7-03** Run focused parent tests, native target suites, and complete
   parent regression. Dependents run their own migration tests and report pins.
+  - [ ] **R7-03a** Produce one clean post-fix parent regression with unique
+    durable request/state identities, unconditional worker cleanup, and no
+    timeout-only synchronization failure.
+  - [ ] **R7-03b** Obtain parent-owned results for the five native CI targets.
+    WSL2 Linux glibc x64 may provide supplemental local evidence, but does not
+    replace Linux ARM64, macOS ARM64, Windows ARM64, or hosted-runner evidence.
+  - [ ] **R7-03c** Accept the dependent maintainer's Windows-only migration
+    command/result and exact Windows target in the R7-01 adoption receipt. Do
+    not require a consumer to supply Linux or macOS evidence.
 - [x] **R7-04** Reconcile plan, status, contracts, setup docs, worker
   architecture, and breaking-change handoff with actual code; remove obsolete
   tests/docs/code and commit the audit separately.
+
+### R8 - Test determinism and performance
+
+R8 may proceed while R7 waits on external evidence. It must optimize test
+construction and orchestration without replacing any required real-daemon,
+real-worker, native-extension, restart, containment, or cleanup boundary with a
+double.
+
+- [ ] **R8-01** Record a repeatable Windows reference baseline with
+  `--durations`, define fast/process/native markers and lane budgets, and report
+  median duration over three runs rather than a single favorable result.
+- [ ] **R8-02** Remove remaining fixed durable request IDs, shared mutable state,
+  teardown leaks, fixed sleeps, and timeout-only readiness from process tests.
+  Replace machine-specific elapsed-time assertions (including the current
+  200ms cancellation threshold exposed by WSL2/DrvFS) with ordering/events plus
+  a generous deadlock bound. Require three consecutive clean process-lane runs
+  before completion.
+- [ ] **R8-03** Cache immutable signed-wheel, bundle, and hermetic seed fixtures
+  at session scope while giving every test independent mutable CAS, operation,
+  catalog, environment-reference, worker, IPC, and result state.
+- [ ] **R8-04** Split default fast, serial process, and five-target native CI
+  lanes. Retain at least one serial real-process lifecycle test for every
+  production boundary and publish per-lane counts and durations.
+- [ ] **R8-05** Enable parallel execution only after proving worker-safe state
+  roots, ports, named pipes, process registries, and teardown on Windows and
+  Linux. A 30% median reduction from the recorded full-suite reference is the
+  optimization target, not permission to weaken assertions or skip boundaries.
 
 ## Acceptance criteria
 
@@ -766,4 +805,4 @@ boundary—not a double—passes.
   human input, duplicate attach, or cancellation teardown.
 - [ ] Superseded compatibility code and documentation are removed, and every
   dependent action is recorded in the breaking-change handoff with independent
-  adoption evidence.
+  Windows adoption evidence.
