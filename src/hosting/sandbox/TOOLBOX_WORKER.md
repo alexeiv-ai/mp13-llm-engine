@@ -24,7 +24,7 @@ The durable version-2 toolbox state is authoritative for:
 - the canonical active definition and revision;
 - resolved profile and bundle identities;
 - the complete `tool_routes` map;
-- active, candidate, and retired executor records; and
+- active runtime bindings and the expected candidate/route identities; and
 - bounded rollout and resource-reference data.
 
 Live process discovery is diagnostic input only. Describe, gate, execute, and
@@ -136,6 +136,11 @@ entries, intrinsic selections, visibility, guide, callback, concurrency, and
 `non_restartable` metadata. The executor reads only the staged manifest and
 bundle contents; it does not discover tools from ambient parent process state.
 
+Every concrete candidate receives a unique runtime ID and an immutable binding
+digest covering toolbox/profile, normalized manifest, environment reference,
+engine ID, and semantic definition revision. Registration never replaces an
+existing runtime implicitly.
+
 The host writes a `ToolboxWorkerStartupSpec` and passes its path through
 `MP13_TOOLBOX_WORKER_SPEC_PATH`. The spec binds worker and sandbox identity,
 toolbox revision, manifest and scratch paths, optional engine/control state
@@ -196,12 +201,19 @@ side effects are considered complete. On daemon restart, recovery revalidates
 the pinned inputs and resumes the phase idempotently.
 
 The version-2 snapshot is the routing source during reconciliation.
-Unpublished candidates are removed. Executors named by published routes are
-made active; non-routed executors are retired and stopped after they become
-idle. An interrupted apply is recovered as success only when publication was
-persisted and its pinned definition revision is authoritative. Otherwise it
-terminates before publication after candidate cleanup, preserving the prior
-revision.
+Unpublished candidates are removed. Startup validates expected runtime bindings
+but deliberately does not recreate workers. Missing or mismatched registrations
+are reported as runtime repair; an identical consumer reapply reconstructs them
+without creating another semantic revision. Non-routed executors are retired
+and stopped after they become idle. An interrupted apply is recovered as success
+only when publication was persisted and its pinned definition revision is
+authoritative. Otherwise it terminates before publication after candidate
+cleanup, preserving the prior revision.
+
+On Linux the worker requests `PR_SET_PDEATHSIG`; on Windows the launcher retains
+the worker in a job object. Daemon orphan scans remain the fallback ownership
+check. Retirement removes only bounded worker IPC/spec, candidate bundle, and
+scratch artifacts rooted under the hosting state directories.
 
 State parsing, digest validation, and compare-and-swap are fail-closed. A
 malformed, truncated, unknown-field, wrong-version, or digest-mismatched state
@@ -225,7 +237,10 @@ toolbox, tool, call, signature, and callable-surface correlation data. Callback
 processing is concurrent so one blocked callback does not serialize unrelated
 callback responses.
 
-Tool execution cancellation targets the routed executor and normalizes worker
+Duplicate execution submission returns the current durable operation status and
+does not wait for the first call. Tool execution cancellation acknowledges by
+persisting non-cancellable teardown progress, then targets the routed executor
+asynchronously and normalizes worker
 loss into a canceled call result. Resubmission policy considers persisted
 `non_restartable` metadata. Definition-apply cancellation is separate: it is
 allowed only before the persisted publication boundary. From publication
@@ -244,6 +259,10 @@ diagnostics. Engine IDs, resolved profile IDs, environment keys, pools, host or
 package paths, raw locks, installer output, request internals, and physical
 placement stay in separately authorized bounded operator projections. Direct
 engine-ID diagnostics are an internal/operator surface.
+
+`toolbox-describe` reads persisted/registration state and never waits on worker
+IPC. An explicitly live inventory is `toolbox-describe-refresh`, submitted
+through `op-start` and observed through the canonical hosted-operation APIs.
 
 ## Maintenance and garbage collection
 

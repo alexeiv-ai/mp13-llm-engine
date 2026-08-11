@@ -563,5 +563,6 @@ fields before R7-01 can close:
 ```
 
 Current dependent receipt status: **not supplied**. The parent implementation
-pin remains unavailable until the R6/R7 implementation commits exist. Neither
-field may be replaced with a working-tree hash or parent-authored assumption.
+pin is `d689bda` (`hosting: add restart-safe toolbox acceptance`); the dependent
+commit and migration result must still come from the dependent maintainer and
+may not be replaced with a parent-authored assumption.

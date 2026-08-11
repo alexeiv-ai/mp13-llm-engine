@@ -160,6 +160,26 @@ but it does not decrypt or return file contents. Current daemon-owned encrypted
 state reads are intentionally disabled until daemon startup key propagation is
 wired.
 
+## Durable Toolbox Commands
+
+Long toolbox work is submitted through `op-start` with a stable `request_id`.
+This includes plan, confirmation, apply, setup, template construction/prewarm,
+artifact commit, exact environment removal, GC, repair, reconcile, and live
+describe refresh. Poll `op-status`, use the channel watch helper, and retrieve
+the canonical terminal result; a lost response is recovered with the same
+request ID rather than a replacement operation.
+
+```powershell
+@'{"command":"toolbox-describe-refresh","payload":{"toolbox_id":"demo","request_id":"describe-demo-1"}}'@ | py hosting_cli.py --payload-stdin op-start
+@'{"command":"toolbox-gc","payload":{"request_id":"gc-1"}}'@ | py hosting_cli.py --payload-stdin op-start
+```
+
+`toolbox-describe` itself is a bounded persisted/registration read. Duplicate
+`toolbox-execute` submissions and hosted cancellation return current durable
+status immediately; callers continue watching while execution or teardown
+finishes. Raw `toolbox-template-publish`, consumer approval, and synchronous
+maintenance mutation paths do not exist.
+
 ## Workflow Runtime Commands
 
 Workflow Python helper-profile workers are managed through workflow runtime facades:

@@ -393,38 +393,30 @@ items, and cleanup uses removed candidates. Status exposes the latest committed
 snapshot; terminal result contains the detailed package/tool receipt. Suggested
 polling is immediate, then 500 ms, backing off to 2 seconds while unchanged.
 
-### Current async audit
+### Final async audit
 
-| API group | Current client behavior | Required disposition |
+| API group | Final client behavior | Disposition |
 | --- | --- | --- |
 | `toolbox_get_definition`, template list/describe, references, consistency, review snapshot, hosted-operation status/result/resolve | Synchronous and client-blocking, but local/bounded | Keep synchronous and bounded. |
-| `toolbox_describe` live worker inventory | Synchronous worker IPC with a ten-second default timeout | Return persisted/cached inventory synchronously; submit an explicitly requested live refresh through `op-start`. |
-| `toolbox_plan_definition` | Synchronous; currently local, but the planned resolver/network metadata work would block | Submit through `op-start`; terminal canonical hosted result contains the immutable plan. |
-| `toolbox_approve_definition_plan` | Synchronous bounded check/mint on the wrong authority path | Replace with synchronous bounded `toolbox_approve_confirmed_definition_plan`. |
-| `toolbox_confirm_definition_plan` | Not implemented | Submit through `op-start`; acquire/verify selected wheels and return confirmation receipt. |
-| `toolbox_apply_definition` | Already returns durable hosted-operation status and runs rollout on a worker thread | Retain, remove synchronous re-resolution, and add package/build progress. |
-| `toolbox_template_prewarm` | Already returns durable hosted-operation status and materializes on a worker thread | Retain and add artifact-byte progress. |
-| Template publish/deprecate/revoke | Synchronous catalog mutations; raw publish is superseded | Keep final bounded lifecycle mutations synchronous; remove raw publish. |
-| `toolbox_gc`, `toolbox_repair`, `toolbox_reconcile` | Synchronous and client-blocking; may recover state, stop workers, traverse/delete files, or rebuild indexes | Submit mutating forms through `op-start`; keep separate read-only diagnostics bounded. |
-| `toolbox_execute` | New submissions are scheduled durably, but an idempotent `attach` waits up to the request timeout | Return current status on attach; never wait in the submission API. |
-| `hosted_operation_cancel` | May synchronously wait for executor teardown/respawn | Persist cancel request and return immediately; teardown reports progress asynchronously. |
-| Host config apply/built-in setup, template construction, artifact-bundle commit, environment removal | Not implemented | Submit long work through `op-start`. Config validation/get and upload begin/chunk/cancel remain bounded synchronous calls. |
-| Daemon startup built-in realization | Not implemented; making startup resolve inline would block control readiness | Start/recover a system-owned hosted setup operation, keep control API available, and report `toolbox_ready=false` until success. |
+| `toolbox_describe` and live refresh | Persisted/registration inventory is synchronous and bounded. | Live worker inventory is the durable `toolbox_describe_refresh` operation submitted through `op-start`. |
+| Plan, confirm, apply | Each long command returns canonical durable status immediately. | Human review occurs only between terminal plan/confirmation operations. |
+| Dependency approval | `toolbox_approve_confirmed_definition_plan` is a bounded exact-receipt mint. | Only the distinct dependency-approver authority may invoke it. |
+| Template lifecycle | Construct/prewarm are durable; activate/replace/deprecate/revoke are bounded exact-revision mutations. | Raw publish and combined publish/activate are removed. |
+| GC, repair, reconcile, and exact environment removal | Mutating work is submitted through `op-start`. | Reference/consistency/review reads remain bounded. |
+| `toolbox_execute` duplicate attach | Returns the current durable status immediately. | It never waits for the original worker call. |
+| Hosted cancellation | Persists cancellation progress and acknowledges immediately. | Worker teardown/repair continues asynchronously. |
+| Daemon built-in realization and artifact import | System setup and upload commit are canonical durable operations. | Control readiness remains available while toolbox readiness is pending/degraded. |
 
-Therefore, the hosting/toolbox API is not uniformly asynchronous today. The
-event loop is protected by threads, but plan, GC/repair/reconcile, duplicate
-tool execution attach, and cancellation still block their callers. These are
-corrective work, not accepted final behavior.
-
-Extend `operation_contract.py::HostedExecutionKind` with
+The implemented `operation_contract.py::HostedExecutionKind` includes
 `toolbox_definition_plan`, `toolbox_definition_confirm`, `toolbox_setup`,
 `toolbox_template_construct`, `toolbox_artifact_import`,
-`toolbox_environment_remove`, and `toolbox_maintenance`; retain the existing
-apply/prewarm/tool-execution kinds. Extend `HostedOperationSelector` with
+`toolbox_environment_remove`, `toolbox_maintenance`, and
+`toolbox_describe_refresh` in addition to apply/prewarm/tool execution.
+`HostedOperationSelector` includes
 `environment_digest`, `artifact_bundle_id`, and `host_scope` (whose only initial
-ID is `toolbox-host`) in addition to existing toolbox/template selectors.
-`service/hosted_operations.py::hosted_operation_resolve_request` must define one
-canonical namespace per new kind and cancellation policy must define the last
+ID is `toolbox-host`) in addition to toolbox/template/engine selectors.
+`service/hosted_operations.py::hosted_operation_resolve_request` defines one
+canonical namespace per kind and cancellation policy defines the last
 cancellable phase. Add strict phase sets in `operation_contract.py`; do not
 accept arbitrary progress phase strings.
 
@@ -710,21 +702,21 @@ boundary—not a double—passes.
 
 ### R6 - Restart-safe consumer healing
 
-- [ ] **R6-01** Normalize manifest identities across plan and persisted state;
+- [x] **R6-01** Normalize manifest identities across plan and persisted state;
   classify missing/mismatched registrations as runtime repair even when the
   semantic definition is unchanged.
-- [ ] **R6-02** Give candidates unique runtime IDs, forbid implicit registration
+- [x] **R6-02** Give candidates unique runtime IDs, forbid implicit registration
   replacement, and compare the prior runtime-binding digest atomically. Two
   healers must yield one repair and one already-healthy/conflict result.
-- [ ] **R6-03** Keep repair out of semantic rollout history while preserving
+- [x] **R6-03** Keep repair out of semantic rollout history while preserving
   durable operation status. Startup validates state but does not restore workers;
   consumer reapply safely reconstructs them.
-- [ ] **R6-04** Add OS-native parent-death/process containment, correct orphan
+- [x] **R6-04** Add OS-native parent-death/process containment, correct orphan
   scans, and cleanup of worker IPC/spec/candidate artifacts.
-- [ ] **R6-05** Test graceful restart, abrupt death, identical reapply,
+- [x] **R6-05** Test graceful restart, abrupt death, identical reapply,
   concurrent healers, and failures immediately before and after route
   publication on every advertised host.
-- [ ] **R6-06** Remove `wait_for_terminal` from duplicate toolbox execution
+- [x] **R6-06** Remove `wait_for_terminal` from duplicate toolbox execution
   attach, make hosted cancellation acknowledge immediately while teardown is
   reflected through durable progress, and split `toolbox_describe` into a
   bounded persisted/cached read plus an explicit live-refresh operation through
@@ -735,40 +727,40 @@ boundary—not a double—passes.
 - [ ] **R7-01** For every removed/replaced API, populate the breaking-change
   handoff before its implementation commit and obtain dependent-provided
   adoption evidence; never modify the dependent project.
-- [ ] **R7-02** Add one no-double end-to-end suite covering configured daemon
+- [x] **R7-02** Add one no-double end-to-end suite covering configured daemon
   startup, built-ins, source alternatives, confirmation decline/skip, approval,
   custom add/remove, restart healing, environment removal, and GC.
 - [ ] **R7-03** Run focused parent tests, native target suites, and complete
   parent regression. Dependents run their own migration tests and report pins.
-- [ ] **R7-04** Reconcile plan, status, contracts, setup docs, worker
+- [x] **R7-04** Reconcile plan, status, contracts, setup docs, worker
   architecture, and breaking-change handoff with actual code; remove obsolete
   tests/docs/code and commit the audit separately.
 
 ## Acceptance criteria
 
-- [ ] Normal daemon setup constructs and probes required built-ins for only its
+- [x] Normal daemon setup constructs and probes required built-ins for only its
   current target from the configured source mode.
-- [ ] Missing exact wheels stop air-gapped setup with stable bounded diagnostics.
-- [ ] Online HTTPS acquisition and signed air-gap ZIP import verify into the same
+- [x] Missing exact wheels stop air-gapped setup with stable bounded diagnostics.
+- [x] Online HTTPS acquisition and signed air-gap ZIP import verify into the same
   content-addressed wheel store; environments install only pinned cached wheels.
-- [ ] One definition can add, update, and remove multiple tools; its plan offers
+- [x] One definition can add, update, and remove multiple tools; its plan offers
   bounded exact package/source alternatives and complete package notifications.
-- [ ] Consumer confirmation can decline packages; the receipt identifies every
+- [x] Consumer confirmation can decline packages; the receipt identifies every
   skipped affected tool, preserves skipped active updates, and applies explicit
   removals without ambiguity.
-- [ ] Privileged approval is distinct from consumer confirmation and binds only
+- [x] Privileged approval is distinct from consumer confirmation and binds only
   accepted exact locks and artifacts.
-- [ ] Package/source/config changes invalidate stale receipts but never mutate an
+- [x] Package/source/config changes invalidate stale receipts but never mutate an
   active environment.
-- [ ] Removal releases references only after publication; non-built-in deletion
+- [x] Removal releases references only after publication; non-built-in deletion
   cannot remove referenced or built-in environments.
 - [ ] Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64 pass native setup,
   wheel, sandbox, worker, restart, and cleanup tests.
-- [ ] Identical reapply after restart heals missing runtime state without a new
+- [x] Identical reapply after restart heals missing runtime state without a new
   semantic revision, state corruption, leaked workers, or healer conflict.
-- [ ] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
+- [x] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
   upload artifacts, supply filesystem/interpreter paths, or install packages.
-- [ ] Every potentially long plan/setup/confirm/apply/admin/maintenance call
+- [x] Every potentially long plan/setup/confirm/apply/admin/maintenance call
   submitted through `op-start` returns canonical durable status promptly,
   exposes `op-status`/watch progress, recovers by request ID, and never waits on
   human input, duplicate attach, or cancellation teardown.

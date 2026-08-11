@@ -883,9 +883,14 @@ Family-specific fingerprints bind all dispatch-relevant inputs:
 - workflow JavaScript: resolved engine selector, profile/environment identity,
   normalized request and pinned instance, Node/JavaScript configuration,
   sandbox policy, and dispatch-relevant capacity;
-- toolbox definition apply: toolbox selector, definition hash, expected active
-  revision, plan ID, exact custom delta, approval identity, catalog revision,
-  and package-policy revision; and
+- toolbox definition plan/confirmation/apply: toolbox selector, immutable plan
+  and confirmation identities, expected active revision, exact selected
+  artifacts/locks, approval identity when required, host/source/catalog/policy
+  revisions, and target;
+- toolbox setup/import/template/environment/maintenance operations: their exact
+  host-owned selector, configuration/source/target pins, immutable artifact or
+  environment identity, and mutation-specific options;
+- toolbox live describe refresh: the exact toolbox or engine selector; and
 - template prewarm: template selector, exact template digest, target ABI and
   platform, and catalog revision.
 
@@ -913,6 +918,12 @@ checkpoint. In-memory indexes are rebuilt and validated on load. Malformed or
 unknown schemas, duplicate keys, invalid rows, and unreadable checkpoints fail
 closed. Loading, status, attach, replay, and request recovery do not discover
 or start a worker or sandbox.
+
+Toolbox startup recovery validates persisted route/runtime bindings but does
+not restore workers. Missing runtime registrations are reconstructed only by an
+identical consumer reapply. Duplicate toolbox execution attach and active
+cancellation acknowledgement return immediately; teardown and live describe
+refresh are observed through durable progress.
 
 Retention defaults and daemon environment overrides are:
 

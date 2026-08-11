@@ -1337,6 +1337,12 @@ list_environment_templates() -> dict
 describe_environment_template(*, template_id: str) -> dict
 ```
 
+`toolbox_describe` is a bounded persisted/registration read and never contacts
+a worker. A client that needs a live worker inventory submits
+`toolbox-describe-refresh` through `op-start` with a stable `request_id`, then
+observes the durable `toolbox_describe_refresh` operation and reads its
+terminal description result.
+
 `operator_details=True` requests but does not grant the separate operator
 projection; authorization still decides whether that object is present.
 Planning, confirmation, and apply observation, result retrieval, cancellation,
