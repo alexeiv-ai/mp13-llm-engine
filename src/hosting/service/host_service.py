@@ -319,14 +319,19 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             return repository
 
     def close(self) -> None:
-        node_registry = getattr(self, "_workflow_python_node_runtime_registry_instance", None)
-        if node_registry is not None:
+        for attribute in (
+            "_workflow_python_node_runtime_registry_instance",
+            "_workflow_js_node_runtime_registry_instance",
+        ):
+            node_registry = getattr(self, attribute, None)
+            if node_registry is None:
+                continue
             try:
                 node_registry.shutdown()
             except Exception:
                 pass
             try:
-                setattr(self, "_workflow_python_node_runtime_registry_instance", None)
+                setattr(self, attribute, None)
             except Exception:
                 pass
 

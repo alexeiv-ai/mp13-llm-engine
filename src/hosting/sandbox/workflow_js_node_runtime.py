@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .._process_utils import hidden_subprocess_kwargs, terminate_process_tree
-from .child_runtime import ChildRuntimeEventCallback, HostedActiveChildRuntimeRegistry
+from .child_runtime import (
+    ChildRuntimeEventCallback,
+    HostedActiveChildRuntimeRegistry,
+    wait_for_child_ipc_connection,
+)
 
 
 NodeEventCallback = ChildRuntimeEventCallback
@@ -79,9 +83,9 @@ def _allocate_js_ipc_address(request_id: str) -> tuple[str, str]:
 
 def _node_startup_timeout_seconds() -> float:
     try:
-        return max(1.0, min(float(os.environ.get("MP13_WORKFLOW_JS_QUICKJS_STARTUP_TIMEOUT_SECONDS") or 30.0), 120.0))
+        return max(1.0, min(float(os.environ.get("MP13_WORKFLOW_JS_QUICKJS_STARTUP_TIMEOUT_SECONDS") or 60.0), 120.0))
     except Exception:
-        return 30.0
+        return 60.0
 
 
 @dataclass
@@ -117,8 +121,7 @@ class WorkflowJsNodeRuntime:
                 family,
                 "--ipc-address",
                 address,
-                "--auth-token",
-                auth_token,
+                f"--auth-token={auth_token}",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -146,7 +149,13 @@ class WorkflowJsNodeRuntime:
         accept_thread = threading.Thread(target=_accept, daemon=True, name=f"workflow-js-node-accept-{int(proc.pid or 0)}")
         accept_thread.start()
         try:
-            accepted = accept_queue.get(timeout=_node_startup_timeout_seconds())
+            accepted = wait_for_child_ipc_connection(
+                accept_queue=accept_queue,
+                process=proc,
+                timeout_seconds=_node_startup_timeout_seconds(),
+                timeout_error="workflow_js_node_worker_ipc_connect_timeout",
+                exited_error="workflow_js_node_worker_exited_before_ipc_connect",
+            )
         except Exception:
             try:
                 listener.close()
@@ -154,7 +163,7 @@ class WorkflowJsNodeRuntime:
                 pass
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
-            raise RuntimeError("workflow_js_node_worker_ipc_connect_timeout")
+            raise
         if isinstance(accepted, BaseException):
             try:
                 listener.close()

@@ -38,6 +38,32 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker("fast")
 
 
+@pytest.fixture(autouse=True)
+def _close_process_test_host_services(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Give every real-process test unconditional service/runtime cleanup."""
+    if request.node.get_closest_marker("process") is None:
+        yield
+        return
+    from hosting.service.host_service import EngineHostService
+
+    original_init = EngineHostService.__init__
+    services: list[EngineHostService] = []
+
+    def _tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        services.append(self)
+
+    monkeypatch.setattr(EngineHostService, "__init__", _tracked_init)
+    try:
+        yield
+    finally:
+        for service in reversed(services):
+            try:
+                service.close()
+            except Exception:
+                pass
+
+
 def _ensure_src_on_path() -> None:
     root = Path(__file__).resolve().parents[1]
     src = root / "src"

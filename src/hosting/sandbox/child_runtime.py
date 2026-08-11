@@ -6,11 +6,37 @@ the same execute/cancel/resources shape.
 """
 from __future__ import annotations
 
+import queue
 import threading
+import time
 from typing import Any, Callable, Dict, Optional, Protocol
 
 
 ChildRuntimeEventCallback = Callable[[str, Dict[str, Any]], None]
+
+
+def wait_for_child_ipc_connection(
+    *,
+    accept_queue: "queue.Queue[Any]",
+    process: Any,
+    timeout_seconds: float,
+    timeout_error: str,
+    exited_error: str,
+    poll_interval_seconds: float = 0.1,
+) -> Any:
+    """Wait for listener acceptance while also observing child-process exit."""
+    deadline = time.monotonic() + max(0.01, float(timeout_seconds))
+    interval = max(0.01, min(float(poll_interval_seconds), 0.5))
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(timeout_error)
+        try:
+            return accept_queue.get(timeout=min(interval, remaining))
+        except queue.Empty:
+            return_code = process.poll()
+            if return_code is not None:
+                raise RuntimeError(f"{exited_error}:{int(return_code)}")
 
 
 class HostedChildRuntime(Protocol):
@@ -104,4 +130,9 @@ class HostedActiveChildRuntimeRegistry:
         }
 
 
-__all__ = ["ChildRuntimeEventCallback", "HostedActiveChildRuntimeRegistry", "HostedChildRuntime"]
+__all__ = [
+    "ChildRuntimeEventCallback",
+    "HostedActiveChildRuntimeRegistry",
+    "HostedChildRuntime",
+    "wait_for_child_ipc_connection",
+]

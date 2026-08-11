@@ -37,24 +37,21 @@ Release/adoption pins retained for traceability:
 - breaking-change handoff reset commit: `99b79e0`;
 - stale Python-node fallback removal commit: `3752118`.
 
-## Remaining external acceptance gates
+## Remaining external and deferred evidence
 
 The corrective implementation gaps above are closed by R1 through R7 parent
-work. Two release gates cannot be manufactured from this checkout:
+work. One external adoption gate remains, while unavailable native hosts are a
+deferred validation register rather than a blocker for current corrective work:
 
-1. The five native GitHub Actions jobs must report successful target detection,
-   native-extension import, sandbox worker execution, restart healing, and
-   cleanup. The workflow contains those commands, but only Windows x64 has been
-   run completely locally. An isolated WSL2 Ubuntu x64 probe detected
-   `cp312-manylinux_2_28_x86_64` and imported the native `pydantic-core` shared
-   object; the subsequent boundary suite stopped because its cancellation
-   acknowledgement took about 222ms against a machine-specific 200ms test
-   threshold. WSL evidence is therefore supplemental and not yet a Linux pass.
-2. Each dependent maintainer must supply a Windows adoption receipt pinned to
+1. Each dependent maintainer must supply a Windows adoption receipt pinned to
    the committed parent implementation and containing its exact Windows target,
    migration command, and result. Consumer Linux/macOS testing is not currently
-   required; the parent owns the five-target native matrix. No dependent
-   repository is modified or treated as adopted here.
+   required. No dependent repository is modified or treated as adopted here.
+2. Windows ARM64, Linux glibc x64/ARM64, and macOS ARM64 execution is currently
+   unavailable. Their target/tag, wheel, IPC/path, containment, cleanup,
+   workflow, and collection paths are reviewed now. Real native commands remain
+   deferred and no reviewed-only target is reported as natively passed. The
+   existing WSL2 Linux x64 evidence remains supplemental.
 
 ## Progress ledger
 
@@ -64,14 +61,14 @@ transcript was intentionally removed because it obscured current truth.
 | Work group | Status | Outcome/evidence |
 | --- | --- | --- |
 | R0 Corrective contract baseline | Complete | R0-01/R0-03 established the corrective plan and handoff. R0-02 was closed by the separately committed R7 contract/worker/documentation audit and its passing contract/removal checks. |
-| R1 Canonical current-host target | Active | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. Focused target/config/catalog/policy/builder/rollout/hash suite: 62 passed in 108.45s; docs: 10 passed in 0.05s; broader definition/model boundary suite: 54 passed in 3.59s; `git diff --check` passed. One earlier focused run exposed the existing nondeterministic concurrent-publication path check (61 passed, 1 failed); its isolated rerun passed in 12.74s and the complete rerun passed. R1-03a/R1-03b are wired into a five-runner matrix; the local Windows x64 target/native-wheel probe passed. Both remain unchecked until the native jobs execute successfully, and no new target family is advertised. |
+| R1 Canonical current-host target | Complete; native executions deferred | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. R1-03 wires the five-runner workflow, passes the available Windows x64 native boundary, and records code/workflow review for unavailable Windows ARM64, Linux x64/ARM64, and macOS ARM64 without claiming native passes. Real unavailable-host execution remains in the deferred validation register. |
 | R2 Revisioned hosting configuration and built-ins | Complete | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-01b atomically persists revision history; changes invalidate unconsumed plans and non-active receipts while active catalog/environment-reference state remains unchanged. Focused config/plan/receipt/docs: 34 passed in 3.22s. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. R2-05b1 adds canonical raw-Ed25519 bundle verification, adversarial ZIP/wheel/closure validation, and atomic content-addressed indexing. Focused signed-bundle/resolver/config/docs matrix: 29 passed in 13.40s; Poetry lock/check and `git diff --check` passed (existing Poetry deprecation warnings only). |
 | R3 Multi-tool planning and consumer confirmation | Complete | Durable planning and confirmation expose bounded exact alternatives, direct/transitive mutations, decline/skip/preserve/remove semantics, request recovery, and changed-snapshot watching. |
 | R4 Privileged approval and immutable apply | Complete | Dependency approval is a distinct authority bound to the confirmation and exact artifacts; apply consumes only immutable plan/confirmation/approval receipts and atomically publishes the confirmed effective definition. |
 | R5 Removal, retention, and administrator environments | Complete | R5-01 through R5-05 are complete. Explicit tool removal contracts shared profiles after atomic publication; exact environment deletion is reference-safe; administrator construction publishes inactive verified revisions with explicit lifecycle transitions; mutating maintenance is canonical, durable, idempotent, cancellable before mutation, and restart-recoverable. |
 | R6 Restart-safe consumer healing | Complete | R6-01 through R6-06 are implemented. Manifest digests are normalized at plan/state/registration boundaries; concrete toolbox candidates use unique runtime IDs and immutable binding digests; duplicate registrations are rejected instead of replaced; recovery reports missing/mismatched runtime bindings for explicit reapply; Linux workers request native parent-death termination, Windows retains job containment, and retirement removes bounded worker spec/scratch artifacts. Duplicate toolbox execution attaches return the current durable snapshot immediately, cancellation acknowledges before asynchronous teardown, and `toolbox-describe-refresh` is a separate durable operation while `toolbox-describe` is bounded to persisted registration state. Poetry-based focused rollout/atomic/sandbox/operation and state archive tests passed. |
-| R7 Breaking-change handoff and acceptance | Parent implementation complete; external gates pending | The parent handoff inventory and receipt schema are populated. The production-launcher delivery correction exposes and transports all five strict toolbox inputs through foreground, detached, CLI, relay, and local channel bootstrap without placing credentials in process arguments. The real-daemon no-double suite covers signed configured setup, decline/skip, distinct approval, custom add/execute/remove, environment-removal safety, restart healing, GC, and request recovery. Native workflow commands now include sandbox/restart/cleanup coverage. Full dependent adoption and five-runner evidence remain external release gates. |
-| R8 Test determinism and performance | Planned | Measure three-run medians, eliminate shared durable identities and teardown leaks, cache only immutable fixture inputs, split fast/process/native lanes, and enable parallelism only after Windows/Linux isolation is proven. R8 may proceed while external R7 evidence is pending and must retain all real production boundaries. |
+| R7 Breaking-change handoff and acceptance | Parent implementation complete; consumer receipt pending | The parent handoff inventory and receipt schema are populated. The production-launcher delivery correction exposes and transports all five strict toolbox inputs through foreground, detached, CLI, relay, and local channel bootstrap without placing credentials in process arguments. The real-daemon no-double suite covers signed configured setup, decline/skip, distinct approval, custom add/execute/remove, environment-removal safety, restart healing, GC, and request recovery. Available Windows x64 evidence and unavailable-platform code review satisfy the current parent scope; deferred native runs are not labeled passes. |
+| R8 Test determinism and performance | Active | R8-02 is complete: process startup observes both IPC readiness and early worker exit, teardown closes Python and JavaScript registries, and leading-hyphen IPC authentication tokens are argv-safe. The reusable Poetry-environment lane runner recorded three consecutive clean serial process runs: 259/259 in 232.44s, 231.84s, and 230.94s (231.84s median), all within the 360s budget. R8-01 baseline completion, R8-03 immutable fixture caching, finalized R8-04 lane evidence, and validated Windows parallelism remain. Linux stays serial until later native validation. |
 
 R7 production-launcher correction evidence: the foreground, detached, CLI,
 relay, channel-bootstrap, contract, and final-doc suite passed 105 tests in
@@ -155,21 +152,34 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: R7 external acceptance plus planned R8 test determinism and
-performance. Parent implementation and local acceptance are complete;
-five-runner native evidence and a dependent Windows adoption receipt remain
-external release gates. No consumer Linux or macOS result is required.
+Active slice: R7 consumer receipt plus active R8 test determinism and
+performance. Parent implementation and local acceptance are complete.
+Unavailable native-host executions are deferred with explicit no-pass labeling;
+no consumer Linux or macOS result is required.
 
-R8-01/R8-02 partial evidence: lane markers now classify 953 fast, 257 process,
-and 12 native tests. The process lane passed 257/257 once in 256.67s and again
-after the cancellation-order fix in 252.63s. A subsequent repetition reached
-256/257 because a workflow-node startup timeout occurred while the dependent
-`O:\\repos\\mp13-docs` project had active Poetry/Python worker processes; the
-next repetition passed 257/257 in 227.16s. This is recorded as external
-process contention, not a parent contract failure. WSL2 Ubuntu x64 now passes
-the target probe plus the R6 restart/target lane (13/13 in 8.10s) using an
-isolated Linux virtualenv. R8-02 remains open until three clean repetitions
-run while the shared local-path consumer is idle.
+R8-02 evidence: the Poetry lane runner selected 259 process tests from 1,233
+collected tests and completed three consecutive serial runs in 232.44s,
+231.84s, and 230.94s (231.84s median), with all 259 tests passing in every run
+and each run inside the 360s budget. The intermittent worker startup failure
+was traced to URL-safe authentication tokens beginning with `-`: a separate
+argv value was parsed as an option, so both node launchers now use
+`--auth-token=<value>`. A real-process regression forces that token shape for
+both Python and JavaScript workers. IPC startup now distinguishes readiness,
+early exit, and timeout; process-test teardown closes both node registries.
+The ordered workflow-helper module passed 116/116 in 131.59s, and the focused
+runtime/startup suite passed 43/43 in 26.63s.
+
+Unavailable-platform review evidence: target aliases normalize AMD64/x86_64
+to x64 and ARM64/aarch64 to arm64; current-host tags come from ordered
+`packaging.tags.sys_tags()`; incompatible pinned wheels fail before build; the
+workflow maps all five declared runner/architecture families; Windows selects
+AF_PIPE and `Scripts`, POSIX selects AF_UNIX and `bin`; Linux requests
+`PR_SET_PDEATHSIG`; macOS relies on bounded orphan reconciliation where that
+Linux primitive is unavailable. Target/workflow focused checks passed and the
+native lane collects 12 tests from the repository. These are code-path and
+collection results only: Windows ARM64, Linux x64/ARM64, and macOS ARM64 remain
+in the deferred native-validation register and are not reported as native
+passes. The existing WSL2 Ubuntu x64 13/13 result remains supplemental.
 
 R7 parent evidence: `tests/test_hosting_r7_acceptance.py` constructs a normal
 configured daemon over a signed current-target source and the real hermetic
@@ -189,9 +199,9 @@ reached 1,219 passed and one skipped with one workflow-JS subprocess startup
 timeout that passed alone in 2.12s. The timed run reached 1,218 passed and one
 skipped with two workflow-Python timing/isolation failures; fixed durable
 request IDs and unconditional registry cleanup reduced their combined rerun to
-two passes in 4.57s. The five-runner native result and dependent migration
-receipt remain unavailable, so R7-01/R7-03 and the corresponding acceptance
-criteria stay unchecked.
+two passes in 4.57s. The unavailable native executions remain deferred without
+a pass claim; the dependent Windows adoption receipt remains the external R7
+acceptance item.
 
 R7 commits: client handoff `eb3c631`; restart-safe runtime, native-workflow
 wiring, and real-daemon acceptance `d689bda`; the reconciled documentation and

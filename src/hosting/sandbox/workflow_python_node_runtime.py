@@ -10,6 +10,7 @@ import atexit
 import asyncio
 import hashlib
 import inspect
+import logging
 import os
 import posixpath
 import queue
@@ -26,10 +27,15 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .._process_utils import hidden_subprocess_kwargs, terminate_process_tree
-from .child_runtime import ChildRuntimeEventCallback, HostedActiveChildRuntimeRegistry
+from .child_runtime import (
+    ChildRuntimeEventCallback,
+    HostedActiveChildRuntimeRegistry,
+    wait_for_child_ipc_connection,
+)
 
 
 NodeEventCallback = ChildRuntimeEventCallback
+_LOGGER = logging.getLogger(__name__)
 _ACTIVE_NODE_PROCS: set[subprocess.Popen[Any]] = set()
 _ACTIVE_NODE_PROCS_LOCK = threading.Lock()
 
@@ -83,9 +89,28 @@ def _allocate_node_ipc_address(request_id: str) -> tuple[str, str]:
 
 def _node_startup_timeout_seconds() -> float:
     try:
-        return max(1.0, min(float(os.environ.get("MP13_WORKFLOW_PYTHON_NODE_STARTUP_TIMEOUT_SECONDS") or 30.0), 120.0))
+        return max(1.0, min(float(os.environ.get("MP13_WORKFLOW_PYTHON_NODE_STARTUP_TIMEOUT_SECONDS") or 60.0), 120.0))
     except Exception:
-        return 30.0
+        return 60.0
+
+
+def _redacted_startup_stderr(
+    proc: subprocess.Popen[Any],
+    *,
+    secrets_to_redact: tuple[str, ...],
+    limit: int = 2048,
+) -> str:
+    """Return bounded stderr for an already-exited worker without exposing IPC secrets."""
+    if proc.poll() is None or proc.stderr is None:
+        return ""
+    try:
+        value = str(proc.stderr.read() or "")
+    except Exception:
+        return ""
+    for secret in secrets_to_redact:
+        if secret:
+            value = value.replace(secret, "<redacted>")
+    return value[-max(1, int(limit)) :].strip()
 
 
 def _import_allowlist(request: Dict[str, Any]) -> list[str]:
@@ -133,8 +158,7 @@ class WorkflowPythonNodeRuntime:
                 family,
                 "--ipc-address",
                 address,
-                "--auth-token",
-                auth_token,
+                f"--auth-token={auth_token}",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -162,12 +186,37 @@ class WorkflowPythonNodeRuntime:
         accept_thread = threading.Thread(target=_accept, daemon=True, name=f"workflow-python-node-accept-{int(proc.pid or 0)}")
         accept_thread.start()
         try:
-            accepted = accept_queue.get(timeout=_node_startup_timeout_seconds())
+            accepted = wait_for_child_ipc_connection(
+                accept_queue=accept_queue,
+                process=proc,
+                timeout_seconds=_node_startup_timeout_seconds(),
+                timeout_error="workflow_python_node_worker_ipc_connect_timeout",
+                exited_error="workflow_python_node_worker_exited_before_ipc_connect",
+            )
         except Exception:
+            diagnostic = _redacted_startup_stderr(
+                proc,
+                secrets_to_redact=(auth_token, address),
+            )
+            if diagnostic:
+                _LOGGER.warning(
+                    "workflow Python node worker exited during startup: pid=%s exit_code=%s stderr=%s",
+                    int(proc.pid or 0),
+                    proc.poll(),
+                    diagnostic,
+                )
+            try:
+                listener.close()
+            except Exception:
+                pass
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
-            raise RuntimeError("workflow_python_node_worker_ipc_connect_timeout")
+            raise
         if isinstance(accepted, BaseException):
+            try:
+                listener.close()
+            except Exception:
+                pass
             _forget_proc(proc)
             terminate_process_tree(int(proc.pid or 0), timeout_seconds=2.0)
             raise RuntimeError(f"workflow_python_node_worker_ipc_connect_failed:{accepted}") from accepted

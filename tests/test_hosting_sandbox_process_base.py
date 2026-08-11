@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import queue
+import sys
+
+import pytest
+
 from hosting.sandbox.process_base import HostedProcessSandboxBase
-from hosting.sandbox.child_runtime import HostedActiveChildRuntimeRegistry
+from hosting.sandbox.child_runtime import (
+    HostedActiveChildRuntimeRegistry,
+    wait_for_child_ipc_connection,
+)
 from hosting.sandbox.runtime_base import HostedPoolKey, HostedStreamEvent, HostedWorkerSlot
+from hosting.sandbox.workflow_js_node_runtime import WorkflowJsNodeRuntime
+from hosting.sandbox.workflow_python_node_runtime import WorkflowPythonNodeRuntime
 
 
 class WorkflowPythonProcessBase(HostedProcessSandboxBase):
@@ -448,3 +458,67 @@ def test_active_child_runtime_registry_tracks_resources_and_cancel() -> None:
     assert canceled["canceled"] is True
     assert runtime._cancel_requested is True
     assert registry.resources()["active_count"] == 0
+
+
+def test_child_ipc_startup_observes_acceptance_and_early_process_exit() -> None:
+    class RunningProcess:
+        def poll(self):
+            return None
+
+    class ExitedProcess:
+        def poll(self):
+            return 17
+
+    accepted: "queue.Queue[object]" = queue.Queue()
+    accepted.put("connection")
+
+    assert wait_for_child_ipc_connection(
+        accept_queue=accepted,
+        process=RunningProcess(),
+        timeout_seconds=1.0,
+        timeout_error="connect_timeout",
+        exited_error="exited_before_connect",
+    ) == "connection"
+
+    with pytest.raises(RuntimeError, match="exited_before_connect:17"):
+        wait_for_child_ipc_connection(
+            accept_queue=queue.Queue(),
+            process=ExitedProcess(),
+            timeout_seconds=1.0,
+            timeout_error="connect_timeout",
+            exited_error="exited_before_connect",
+            poll_interval_seconds=0.01,
+        )
+
+    with pytest.raises(RuntimeError, match="connect_timeout"):
+        wait_for_child_ipc_connection(
+            accept_queue=queue.Queue(),
+            process=RunningProcess(),
+            timeout_seconds=0.02,
+            timeout_error="connect_timeout",
+            exited_error="exited_before_connect",
+            poll_interval_seconds=0.01,
+        )
+
+
+@pytest.mark.process
+@pytest.mark.parametrize(
+    ("module_name", "runtime_type"),
+    [
+        ("hosting.sandbox.workflow_python_node_runtime", WorkflowPythonNodeRuntime),
+        ("hosting.sandbox.workflow_js_node_runtime", WorkflowJsNodeRuntime),
+    ],
+)
+def test_node_worker_startup_accepts_leading_hyphen_auth_token(
+    monkeypatch: pytest.MonkeyPatch,
+    module_name: str,
+    runtime_type: type[WorkflowPythonNodeRuntime] | type[WorkflowJsNodeRuntime],
+) -> None:
+    module = sys.modules[module_name]
+    monkeypatch.setattr(module.secrets, "token_urlsafe", lambda _size: "-leading-hyphen-token")
+
+    runtime = runtime_type.start(runtime_key="auth-token-regression", python_executable=sys.executable)
+    try:
+        assert runtime.alive()
+    finally:
+        runtime.shutdown()

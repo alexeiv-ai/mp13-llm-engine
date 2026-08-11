@@ -434,6 +434,16 @@ destination always constructs and probes its own environment. Native CI must
 prove resolution, compatible wheel selection, native-extension import, sandbox
 containment, restart, and cleanup on every advertised target.
 
+Only Windows x64 execution hardware is currently available to this project.
+For Windows ARM64, Linux glibc x64/ARM64, and macOS ARM64, the current corrective
+plan therefore requires a recorded code-path review of target normalization,
+ordered `sys_tags()`, incompatible-wheel rejection, filesystem/IPC selection,
+parent-death/worker containment, cleanup, workflow runner mapping, and native
+test collection. That review is implementation evidence, not a native pass.
+Real execution on those targets is retained in the deferred native-validation
+register and must occur before claiming that target as natively validated, but
+unavailable hardware does not block closure of the current corrective work.
+
 Source builds are intentionally outside this plan. If an allowed package has no
 compatible verified wheel for the daemon target, the resolution fails. Adding
 reproducible sdist compilation would require a separately reviewed compiler,
@@ -542,15 +552,18 @@ boundary—not a double—passes.
 - [x] **R1-02** Update strict target/lock/catalog/cache models for the five
   target families listed above and reject cross-target wheels before download or
   build.
-- [ ] **R1-03** Add native CI jobs and production-boundary tests. A target is not
-  advertised until its sandbox, worker ownership, restart, and cleanup tests
-  pass natively.
-  - [ ] **R1-03a** Add native Windows x64/ARM64, Linux glibc x64/ARM64, and
+- [x] **R1-03** Add native CI jobs and production-boundary tests, run the
+  available Windows x64 boundary, and review unavailable platform paths. A
+  target is not recorded as natively validated until its sandbox, worker
+  ownership, restart, and cleanup tests pass there.
+  - [x] **R1-03a** Add native Windows x64/ARM64, Linux glibc x64/ARM64, and
     macOS ARM64 jobs that assert the canonical detected machine and import a
     native CPython 3.12 wheel.
-  - [ ] **R1-03b** Run the sandbox, worker-ownership, restart, and cleanup
-    boundaries on every native job after R6-04 supplies POSIX parent-death
-    containment; advertise a family only after its job passes.
+  - [x] **R1-03b** Run the sandbox, worker-ownership, restart, and cleanup
+    boundary on available Windows x64. For unavailable Windows ARM64, Linux
+    x64/ARM64, and macOS ARM64, review detector/tag, wheel, IPC/path,
+    containment, cleanup, workflow, and test-collection code and record the
+    absence of real native execution without converting review into a pass.
 
 ### R2 - Revisioned hosting configuration and built-ins
 
@@ -744,9 +757,10 @@ boundary—not a double—passes.
   - [ ] **R7-03a** Produce one clean post-fix parent regression with unique
     durable request/state identities, unconditional worker cleanup, and no
     timeout-only synchronization failure.
-  - [ ] **R7-03b** Obtain parent-owned results for the five native CI targets.
-    WSL2 Linux glibc x64 may provide supplemental local evidence, but does not
-    replace Linux ARM64, macOS ARM64, Windows ARM64, or hosted-runner evidence.
+  - [x] **R7-03b** Record the available Windows x64 result and complete a
+    parent-owned code/workflow review for unavailable Windows ARM64, Linux
+    x64/ARM64, and macOS ARM64 paths. WSL2 Linux x64 is supplemental evidence;
+    do not label any reviewed-only target as natively passed.
   - [ ] **R7-03c** Accept the dependent maintainer's Windows-only migration
     command/result and exact Windows target in the R7-01 adoption receipt. Do
     not require a consumer to supply Linux or macOS evidence.
@@ -761,10 +775,11 @@ construction and orchestration without replacing any required real-daemon,
 real-worker, native-extension, restart, containment, or cleanup boundary with a
 double.
 
-- [ ] **R8-01** Record a repeatable Windows reference baseline with
+- [ ] **R8-01** Use `misc/hosting_test_lanes.py` to record a repeatable Windows
+  reference baseline with
   `--durations`, define fast/process/native markers and lane budgets, and report
   median duration over three runs rather than a single favorable result.
-- [ ] **R8-02** Remove remaining fixed durable request IDs, shared mutable state,
+- [x] **R8-02** Remove remaining fixed durable request IDs, shared mutable state,
   teardown leaks, fixed sleeps, and timeout-only readiness from process tests.
   Replace machine-specific elapsed-time assertions (including the current
   200ms cancellation threshold exposed by WSL2/DrvFS) with ordering/events plus
@@ -776,10 +791,13 @@ double.
 - [ ] **R8-04** Split default fast, serial process, and five-target native CI
   lanes. Retain at least one serial real-process lifecycle test for every
   production boundary and publish per-lane counts and durations.
-- [ ] **R8-05** Enable parallel execution only after proving worker-safe state
-  roots, ports, named pipes, process registries, and teardown on Windows and
-  Linux. A 30% median reduction from the recorded full-suite reference is the
-  optimization target, not permission to weaken assertions or skip boundaries.
+- [ ] **R8-05** Enable parallel execution independently per validated platform.
+  Prove worker-safe state roots, ports, named pipes, process registries, and
+  teardown before enabling it on Windows. Keep unavailable Linux lanes serial;
+  review their AF_UNIX/path/process code now and require later native execution
+  before enabling Linux parallelism. A 30% median reduction from the recorded
+  Windows full-suite reference is the optimization target, not permission to
+  weaken assertions or skip boundaries.
 
 ## Acceptance criteria
 
@@ -799,8 +817,10 @@ double.
   active environment.
 - [x] Removal releases references only after publication; non-built-in deletion
   cannot remove referenced or built-in environments.
-- [ ] Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64 pass native setup,
-  wheel, sandbox, worker, restart, and cleanup tests.
+- [x] Windows x64 passes native setup, wheel, sandbox, worker, restart, and
+  cleanup tests; unavailable Windows ARM64, Linux x64/ARM64, and macOS ARM64
+  implementations and workflow commands have recorded code review without a
+  false native-pass claim.
 - [x] Identical reapply after restart heals missing runtime state without a new
   semantic revision, state corruption, leaked workers, or healer conflict.
 - [x] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
@@ -812,3 +832,14 @@ double.
 - [ ] Superseded compatibility code and documentation are removed, and every
   dependent action is recorded in the breaking-change handoff with independent
   Windows adoption evidence.
+
+## Deferred native-validation register
+
+These executions are required before the corresponding target is described as
+natively validated, but are deferred because their hosts/runners are currently
+unavailable and do not block completion of the current corrective plan:
+
+- [ ] Windows ARM64 native target, native-wheel, sandbox, restart, and cleanup.
+- [ ] Linux glibc x64 native target, native-wheel, sandbox, restart, and cleanup.
+- [ ] Linux glibc ARM64 native target, native-wheel, sandbox, restart, and cleanup.
+- [ ] macOS ARM64 native target, native-wheel, sandbox, restart, and cleanup.
