@@ -114,6 +114,11 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = ["-v", "--tb=short"]
+markers = [
+  "fast: deterministic unit, contract, and repository tests without worker processes",
+  "process: tests that start or coordinate real worker processes and IPC",
+  "native: target- or platform-bound tests intended for native CI lanes",
+]
 filterwarnings = [
   "ignore:Importing (from )?torchao\\.dtypes.* is deprecated.*:DeprecationWarning",
   "ignore:Importing BlockSparseLayout from torchao\\.dtypes is deprecated.*:DeprecationWarning",

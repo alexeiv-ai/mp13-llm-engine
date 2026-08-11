@@ -4847,11 +4847,15 @@ def test_workflow_python_stream_cancel_routes_to_worker_cancel(tmp_path: Path, m
     ]
 
 
-def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path) -> None:
+def test_cancel_workflow_python_node_interrupts_active_execution(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
         control_state_file=tmp_path / "access_control.json",
     )
+    request.addfinalizer(lambda: svc._workflow_python_node_runtime_registry().shutdown())
+    request_id = f"req-node-active-cancel-{time.time_ns()}"
     source = "def run(payload):\n    while True:\n        pass\n"
     env = svc.workflow_python_environment_spec(profile="node", environment_name="workflow-python-node", python={})
     environment_key = str(env["environment_key"])
@@ -4863,7 +4867,7 @@ def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path)
                 profile="node",
                 environment_name="workflow-python-node",
                 request={
-                    "request_id": "req-node-active-cancel",
+                    "request_id": request_id,
                     "module_source": source,
                     "module_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                     "package_id": "pkg",
@@ -4883,7 +4887,7 @@ def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path)
     while time.time() < deadline:
         status = svc._test_workflow_python_status(
             environment_key=environment_key,
-            request_id="req-node-active-cancel",
+            request_id=request_id,
         )
         if dict(status.get("request") or {}).get("status") == "running":
             saw_running = True
@@ -4893,9 +4897,11 @@ def test_cancel_workflow_python_node_interrupts_active_execution(tmp_path: Path)
     canceled = svc._cancel_workflow_python_runtime(
         profile="node",
         environment_key=environment_key,
-        request_id="req-node-active-cancel",
+        request_id=request_id,
     )
-    thread.join(timeout=5.0)
+    deadline = time.monotonic() + 10.0
+    while thread.is_alive() and time.monotonic() < deadline:
+        thread.join(timeout=0.1)
 
     assert saw_running is True
     assert canceled["canceled"] is True

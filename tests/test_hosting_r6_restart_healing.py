@@ -42,6 +42,7 @@ def test_registration_normalizes_manifest_and_rejects_implicit_replacement(tmp_p
 
 def test_duplicate_toolbox_execution_returns_status_without_waiting(tmp_path: Path) -> None:
     service = _service(tmp_path)
+    request_id = f"duplicate-r6-{time.time_ns()}"
     service.register_spawned(
         engine_id="executor-one",
         pid=1234,
@@ -72,7 +73,7 @@ def test_duplicate_toolbox_execution_returns_status_without_waiting(tmp_path: Pa
         target=lambda: result.append(
             service.toolbox_execute(
                 engine_id="executor-one",
-                execution_request_id="duplicate-r6",
+                execution_request_id=request_id,
                 tool_call={"id": "call-1", "name": "write", "arguments": {}},
             )
         ),
@@ -83,7 +84,7 @@ def test_duplicate_toolbox_execution_returns_status_without_waiting(tmp_path: Pa
     started = time.monotonic()
     duplicate = service.toolbox_execute(
         engine_id="executor-one",
-        execution_request_id="duplicate-r6",
+        execution_request_id=request_id,
         tool_call={"id": "call-1", "name": "write", "arguments": {}},
     )
     assert time.monotonic() - started < 1.0
@@ -95,12 +96,13 @@ def test_duplicate_toolbox_execution_returns_status_without_waiting(tmp_path: Pa
 
 def test_toolbox_cancellation_acknowledges_before_teardown(tmp_path: Path) -> None:
     service = _service(tmp_path)
+    request_id = f"cancel-r6-{time.time_ns()}"
     prepared = service._hosted_operations.prepare(
         owner_actor_id="service:local",
         execution_kind=HostedExecutionKind.TOOLBOX,
         selector=HostedOperationSelector(kind="engine_id", id="executor-one"),
         namespace="engine:executor-one",
-        request_id="cancel-r6",
+        request_id=request_id,
         fingerprint=hosted_execution_fingerprint({"r6": "cancel"}),
         metadata={"engine_id": "executor-one", "tool_name": "write"},
     )
@@ -120,8 +122,10 @@ def test_toolbox_cancellation_acknowledges_before_teardown(tmp_path: Path) -> No
     service._cancel_toolbox_operation = slow_cancel  # type: ignore[method-assign]
     started = time.monotonic()
     acknowledged = service.hosted_operation_cancel(ref=operation)
-    assert time.monotonic() - started < 0.2
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.0
     assert acknowledged["progress"]["phase"] == "cancellation"
+    assert not finished.is_set()
     assert finished.wait(2)
 
 

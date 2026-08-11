@@ -5,6 +5,38 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
+
+_PROCESS_TEST_MODULES = {
+    "test_hosting_r6_restart_healing.py",
+    "test_hosting_r7_acceptance.py",
+    "test_hosting_toolbox_sandbox.py",
+    "test_hosting_worker_sandbox.py",
+    "test_hosting_worker_sandbox_windows_live.py",
+    "test_workflow_helper_service.py",
+    "test_workflow_js_node_runtime.py",
+    "test_workflow_python_helper_ipc.py",
+    "test_workflow_python_node_worker_ipc.py",
+}
+_NATIVE_TEST_MODULES = {
+    "test_hosting_toolbox_target.py",
+    "test_hosting_toolbox_target_workflow.py",
+    "test_hosting_worker_sandbox_windows_live.py",
+}
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Assign stable lane markers from the test's module boundary."""
+    for item in items:
+        module_name = Path(str(item.fspath)).name
+        if module_name in _NATIVE_TEST_MODULES:
+            item.add_marker("native")
+        elif module_name in _PROCESS_TEST_MODULES:
+            item.add_marker("process")
+        else:
+            item.add_marker("fast")
+
 
 def _ensure_src_on_path() -> None:
     root = Path(__file__).resolve().parents[1]

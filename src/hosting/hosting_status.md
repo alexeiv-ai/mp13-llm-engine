@@ -1,6 +1,6 @@
 # Hosting toolbox corrective status
 
-Last updated: 2026-08-10
+Last updated: 2026-08-11
 
 ## Overall status
 
@@ -149,6 +149,17 @@ Active slice: R7 external acceptance plus planned R8 test determinism and
 performance. Parent implementation and local acceptance are complete;
 five-runner native evidence and a dependent Windows adoption receipt remain
 external release gates. No consumer Linux or macOS result is required.
+
+R8-01/R8-02 partial evidence: lane markers now classify 953 fast, 257 process,
+and 12 native tests. The process lane passed 257/257 once in 256.67s and again
+after the cancellation-order fix in 252.63s. A subsequent repetition reached
+256/257 because a workflow-node startup timeout occurred while the dependent
+`O:\\repos\\mp13-docs` project had active Poetry/Python worker processes; the
+next repetition passed 257/257 in 227.16s. This is recorded as external
+process contention, not a parent contract failure. WSL2 Ubuntu x64 now passes
+the target probe plus the R6 restart/target lane (13/13 in 8.10s) using an
+isolated Linux virtualenv. R8-02 remains open until three clean repetitions
+run while the shared local-path consumer is idle.
 
 R7 parent evidence: `tests/test_hosting_r7_acceptance.py` constructs a normal
 configured daemon over a signed current-target source and the real hermetic
