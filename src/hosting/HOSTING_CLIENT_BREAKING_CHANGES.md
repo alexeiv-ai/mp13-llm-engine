@@ -433,6 +433,21 @@ reconcile result body. Duplicate requests return the same operation, and
 cancellation acknowledges without waiting for filesystem traversal, worker
 retirement, or cleanup to finish.
 
+## Restart-safe toolbox execution changes
+
+R6 removes the remaining synchronous duplicate/teardown assumptions. A duplicate
+`toolbox-execute` request with the same stable `execution_request_id` returns the
+current durable operation snapshot immediately; it does not wait for the first
+worker call to finish. `hosted-operation-cancel` acknowledges a live toolbox
+cancellation immediately and clients must continue watching durable cancellation
+progress while worker teardown and optional repair complete.
+
+`toolbox-describe` is now a bounded persisted/registration read. It does not
+contact a worker or refresh a stale live inventory. Clients that need a live
+worker description submit `toolbox-describe-refresh` through `op-start` with a
+stable `request_id`, then poll/watch the returned
+`toolbox_describe_refresh` operation and read its terminal description result.
+
 ## Retry, watch, confirmation, and recovery logic
 
 Dependents must make these control-flow changes:
@@ -512,3 +527,41 @@ Required dependent evidence must cover at least: detected native target, strict
 configuration rejection, lost-response retry, daemon restart, no request held
 during a human decision, partial decline/skip, separate approver authority,
 apply without a definition copy, and stale-pin recovery.
+
+## R7 adoption evidence record
+
+Parent-side replacement inventory and migration payloads are complete in this
+document. The parent acceptance suite is
+`tests/test_hosting_r7_acceptance.py`; it uses normal daemon construction,
+signed current-target source ingestion, the real resolver/materializer, durable
+consumer and approver dispatch, real worker execution, removal, restart healing,
+environment-removal safety, maintenance, and request-ID terminal recovery.
+
+Dependent adoption is an external release gate and is not inferred from parent
+tests. Each dependent maintainer must provide a receipt with all of these exact
+fields before R7-01 can close:
+
+```json
+{
+  "dependent": "repository-or-product-id",
+  "dependent_commit": "40-lowercase-hex",
+  "parent_pin": "40-lowercase-hex-or-release-pin",
+  "migration_test_command": "maintainer-run command",
+  "migration_test_result": "passed count/duration",
+  "covered_behaviors": [
+    "detected_target",
+    "strict_configuration_rejection",
+    "lost_response_retry",
+    "daemon_restart",
+    "human_decision_without_open_request",
+    "partial_decline_skip",
+    "distinct_dependency_approver",
+    "apply_without_definition_copy",
+    "stale_pin_recovery"
+  ]
+}
+```
+
+Current dependent receipt status: **not supplied**. The parent implementation
+pin remains unavailable until the R6/R7 implementation commits exist. Neither
+field may be replaced with a working-tree hash or parent-authored assumption.
