@@ -627,7 +627,7 @@ class EngineHostControlChannel:
         pid_info = DaemonPidFile(pid_file_path)
         pid_path = _resolved_pid_path(pid_info, pid_file_path)
         return LocalSocketConnection(
-            port=self._daemon_port_override or pid_info.get_port(),
+            port=self._daemon_port_override or pid_info.get_port() or 0,
             pid_file=pid_path,
             timeout=self._timeout,
         )

@@ -230,6 +230,7 @@ class EngineHostHttpIngressDaemon:
                 parsed = urllib.parse.urlsplit(self.path)
                 if parsed.path == "/health":
                     auth = daemon.svc.auth_status()
+                    pid_data = daemon.pid_file.read() or {}
                     self._send_json(
                         200,
                         {
@@ -237,7 +238,7 @@ class EngineHostHttpIngressDaemon:
                             "mode": "http-ingress",
                             "pid": os.getpid(),
                             "port": daemon.port,
-                            "started_at": daemon.pid_file.read().get("started_at") if daemon.pid_file.read() else None,
+                            "started_at": pid_data.get("started_at"),
                             "daemon_version": str(auth.get("daemon_version") or ""),
                             "capabilities": dict(auth.get("capabilities") or {}),
                         },

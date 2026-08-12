@@ -157,13 +157,13 @@ def start_daemon_background(
         try:
             if not pid_info.is_alive():
                 continue
-            actual_port = pid_info.get_port()
-            if not actual_port:
+            ready_port = pid_info.get_port()
+            if not ready_port:
                 continue
             from ..engine_host_connection import LocalSocketConnection
 
             ready_conn_kwargs: Dict[str, Any] = {
-                "port": actual_port,
+                "port": ready_port,
                 "timeout": 1.0,
                 "max_reconnect_attempts": 1,
             }
@@ -176,7 +176,7 @@ def start_daemon_background(
             if str(pong) != "pong":
                 continue
             info = pid_info.read() or {}
-            ready_out: Dict[str, Any] = {"pid": int(info.get("pid") or spawned_pid), "port": actual_port}
+            ready_out: Dict[str, Any] = {"pid": int(info.get("pid") or spawned_pid), "port": ready_port}
             if log_file:
                 ready_out["log_file"] = str(log_file)
             return ready_out

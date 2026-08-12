@@ -27,7 +27,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 if __package__ in {None, ""}:
     _SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -2157,7 +2157,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 confirmation_ref=str(payload.get("confirmation_ref") or ""),
                 request_id=str(payload.get("request_id") or ""),
                 dependency_approval_ref=payload.get("dependency_approval_ref"),
-                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+                requested_lifetime_ms=cast(int, payload.get("requested_lifetime_ms")),
             ))
             return 0
         if cmd == "toolbox-get-definition-candidate":

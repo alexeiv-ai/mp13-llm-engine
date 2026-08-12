@@ -101,7 +101,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._hermetic_toolbox_environment_builder = PythonEnvironmentBuilder(
             self.hosting_root,
             artifact_sources=configured_sources,
-            environment_root=hosting_configuration.resolved_paths["environment_root"],
+            environment_root=Path(hosting_configuration.resolved_paths["environment_root"]),
         )
         if toolbox_template_materializer is not None:
             self._toolbox_template_materializer = toolbox_template_materializer
@@ -209,7 +209,11 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
                 repository = AtomicJsonHostedOperationRepository(
                     path,
                     result_artifact_store=artifact_store,
-                    **self._hosted_operation_options,
+                    receipt_retention_seconds=float(self._hosted_operation_options["receipt_retention_seconds"]),
+                    tombstone_retention_seconds=float(self._hosted_operation_options["tombstone_retention_seconds"]),
+                    max_receipts=int(self._hosted_operation_options["max_receipts"]),
+                    max_tombstones=int(self._hosted_operation_options["max_tombstones"]),
+                    max_inline_result_bytes=int(self._hosted_operation_options["max_inline_result_bytes"]),
                 )
                 self._operation_repositories[key] = repository
             return repository
