@@ -118,16 +118,30 @@ class ToolboxTemplateArtifactReference:
 def _template_digest(
     template: ToolboxEnvironmentTemplateSpec,
     artifacts: Sequence[ToolboxTemplateArtifactReference],
-    manifest_signature: str,
+    verification_evidence: str | None,
 ) -> str:
     return identity_digest(
         TEMPLATE_REVISION_DOMAIN,
         {
             "template": template.to_dict(),
             "artifacts": [item.to_dict() for item in sorted(artifacts)],
-            "manifest_signature": manifest_signature,
+            "verification_evidence": verification_evidence,
         },
     )
+
+
+def _normalize_verification_evidence(
+    template: ToolboxEnvironmentTemplateSpec, value: Any
+) -> str | None:
+    verifier_id = template.provenance.verifier_id
+    if verifier_id is None:
+        if value not in {None, ""}:
+            raise ValueError("template_verification_evidence_without_verifier")
+        return None
+    evidence = str(value or "")
+    if not _SIGNATURE_RE.fullmatch(evidence):
+        raise ValueError("template_verification_evidence_invalid")
+    return evidence
 
 
 class AtomicJsonToolboxTemplateCatalog:
@@ -172,7 +186,7 @@ class AtomicJsonToolboxTemplateCatalog:
             "identity_key",
             "template",
             "artifacts",
-            "manifest_signature",
+            "verification_evidence",
             "lifecycle",
             "published_at_ms",
             "published_by",
@@ -188,9 +202,9 @@ class AtomicJsonToolboxTemplateCatalog:
             or len({(item.source_id, item.filename) for item in artifacts}) != len(artifacts)
         ):
             raise ValueError("template_artifact_duplicate")
-        signature = str(row["manifest_signature"] or "")
-        if not _SIGNATURE_RE.fullmatch(signature):
-            raise ValueError("template_manifest_signature_invalid")
+        signature = _normalize_verification_evidence(
+            template, row["verification_evidence"]
+        )
         digest = require_digest(row["template_digest"], label="template_digest")
         if digest != _template_digest(template, artifacts, signature):
             raise ValueError("template_digest_mismatch")
@@ -213,7 +227,7 @@ class AtomicJsonToolboxTemplateCatalog:
             **row,
             "template": template.to_dict(),
             "artifacts": [item.to_dict() for item in sorted(artifacts)],
-            "manifest_signature": signature,
+            "verification_evidence": signature,
             "published_by": published_by,
         }
 
@@ -343,7 +357,7 @@ class AtomicJsonToolboxTemplateCatalog:
         *,
         template: ToolboxEnvironmentTemplateSpec,
         artifacts: Sequence[ToolboxTemplateArtifactReference],
-        manifest_signature: str,
+        verification_evidence: str | None = None,
         actor_id: str,
     ) -> dict[str, Any]:
         artifact_tuple = tuple(artifacts)
@@ -357,9 +371,10 @@ class AtomicJsonToolboxTemplateCatalog:
             != len(artifact_tuple)
         ):
             raise ValueError("template_artifact_duplicate")
-        if not isinstance(manifest_signature, str) or not _SIGNATURE_RE.fullmatch(manifest_signature):
-            raise ValueError("template_manifest_signature_invalid")
-        digest = _template_digest(template, artifact_tuple, manifest_signature)
+        verification_evidence = _normalize_verification_evidence(
+            template, verification_evidence
+        )
+        digest = _template_digest(template, artifact_tuple, verification_evidence)
         identity_key = f"{template.template_id}|{template.provenance.evidence_digest}|{template.lock_digest}"
         with _exclusive_process_file_lock(self.lock_path):
             state = self._read_unlocked()
@@ -383,7 +398,7 @@ class AtomicJsonToolboxTemplateCatalog:
                     "identity_key": identity_key,
                     "template": template.to_dict(),
                     "artifacts": [item.to_dict() for item in sorted(artifact_tuple)],
-                    "manifest_signature": manifest_signature,
+                    "verification_evidence": verification_evidence,
                     "lifecycle": "inactive",
                     "published_at_ms": int(self.clock() * 1000),
                     "published_by": _bounded_id(actor_id, label="template_actor_id"),
@@ -512,14 +527,14 @@ class AtomicJsonToolboxTemplateCatalog:
             tuple[
                 ToolboxEnvironmentTemplateSpec,
                 tuple[ToolboxTemplateArtifactReference, ...],
-                str,
+                str | None,
                 str,
             ]
         ] = []
         for raw in releases:
             row = dict(raw or {})
             if set(row) != {
-                "template", "template_digest", "artifact_references", "manifest_signature"
+                "template", "template_digest", "artifact_references", "verification_evidence"
             }:
                 raise ValueError("template_publish_batch_fields_invalid")
             template = ToolboxEnvironmentTemplateSpec.from_dict(row["template"])
@@ -527,13 +542,14 @@ class AtomicJsonToolboxTemplateCatalog:
                 ToolboxTemplateArtifactReference.from_dict(item)
                 for item in row["artifact_references"]
             )
-            signature = str(row["manifest_signature"] or "")
+            signature = _normalize_verification_evidence(
+                template, row["verification_evidence"]
+            )
             if (
                 not artifacts
                 or len({item.sha256 for item in artifacts}) != len(artifacts)
                 or len({(item.source_id, item.filename) for item in artifacts})
                 != len(artifacts)
-                or not _SIGNATURE_RE.fullmatch(signature)
             ):
                 raise ValueError("template_publish_batch_invalid")
             digest = _template_digest(template, artifacts, signature)
@@ -576,7 +592,7 @@ class AtomicJsonToolboxTemplateCatalog:
                         "identity_key": identity_key,
                         "template": template.to_dict(),
                         "artifacts": [item.to_dict() for item in sorted(artifacts)],
-                        "manifest_signature": signature,
+                        "verification_evidence": signature,
                         "lifecycle": "active",
                         "published_at_ms": now_ms,
                         "published_by": actor,
@@ -1134,14 +1150,14 @@ class ToolboxTemplateCatalogMixin:
                     for item in candidate.artifact_references
                 )
                 template_digest = _template_digest(
-                    candidate.template, artifacts, candidate.manifest_signature
+                    candidate.template, artifacts, candidate.verification_evidence
                 )
                 entry = {
                     "template_id": candidate.template.template_id,
                     "template_digest": template_digest,
                     "template": candidate.template.to_dict(),
                     "artifacts": [item.to_dict() for item in artifacts],
-                    "manifest_signature": candidate.manifest_signature,
+                    "verification_evidence": candidate.verification_evidence,
                 }
                 receipt = self._toolbox_template_materializer.materialize(
                     catalog_entry=entry,
@@ -1176,7 +1192,7 @@ class ToolboxTemplateCatalogMixin:
                         "template": candidate.template.to_dict(),
                         "template_digest": template_digest,
                         "artifact_references": [item.to_dict() for item in artifacts],
-                        "manifest_signature": candidate.manifest_signature,
+                        "verification_evidence": candidate.verification_evidence,
                         "source_bundle_id": candidate.source_bundle_id,
                         "receipt": receipt.to_dict(),
                     }
@@ -1239,7 +1255,7 @@ class ToolboxTemplateCatalogMixin:
                         "template": item["template"],
                         "template_digest": item["template_digest"],
                         "artifact_references": item["artifact_references"],
-                        "manifest_signature": item["manifest_signature"],
+                        "verification_evidence": item["verification_evidence"],
                     }
                     for item in candidates
                 ],
@@ -1881,7 +1897,7 @@ class ToolboxTemplateCatalogMixin:
             for item in candidate.artifact_references
         )
         progress("artifact_verification", "template_artifacts_verified", len(artifacts), len(artifacts), "The complete resolved artifact closure was verified.", True)
-        return template, artifacts, candidate.manifest_signature
+        return template, artifacts, candidate.verification_evidence
 
     def _run_toolbox_template_construct(
         self,
@@ -1919,7 +1935,7 @@ class ToolboxTemplateCatalogMixin:
                 "template_digest": template_digest,
                 "template": template.to_dict(),
                 "artifacts": [item.to_dict() for item in artifacts],
-                "manifest_signature": signature,
+                "verification_evidence": signature,
             }
             receipt = self._toolbox_template_materializer.materialize(
                 catalog_entry=entry,
@@ -1946,7 +1962,7 @@ class ToolboxTemplateCatalogMixin:
             published = self._toolbox_template_catalog.publish_inactive(
                 template=template,
                 artifacts=artifacts,
-                manifest_signature=signature,
+                verification_evidence=signature,
                 actor_id=owner_actor_id,
             )
             checkpoint("publication", "inactive_template_published", 1, 1, "The immutable template revision was published inactive.", False)

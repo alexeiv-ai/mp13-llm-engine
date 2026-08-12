@@ -108,7 +108,7 @@ def _service(tmp_path: Path, materializer) -> EngineHostService:
     published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template()),
         artifacts=(ToolboxTemplateArtifactReference.from_dict(_artifact()),),
-        manifest_signature=SIGNATURE,
+        verification_evidence=SIGNATURE,
         actor_id="admin:test",
     )
     service.toolbox_template_activate(

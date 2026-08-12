@@ -39,7 +39,7 @@ COMPUTE_DISTRIBUTIONS = tuple(
 @dataclass(frozen=True)
 class TestTemplateRelease:
     template: ToolboxEnvironmentTemplateSpec
-    manifest_signature: str
+    verification_evidence: str
     artifact: dict[str, object]
 
     def artifact_reference(self) -> dict[str, object]:
@@ -97,7 +97,7 @@ def _release(
         "sha256": identity_digest("hosting.toolbox.test.artifact.v1", template_id),
         "size_bytes": 1,
     }
-    return TestTemplateRelease(template=template, manifest_signature="s" * 64, artifact=artifact)
+    return TestTemplateRelease(template=template, verification_evidence="s" * 64, artifact=artifact)
 
 
 def realized_test_catalog() -> TestTemplateCatalog:
@@ -126,7 +126,7 @@ def publish_realized_test_catalog(service: Any) -> None:
         published = service._toolbox_template_catalog.publish_inactive(
             template=release.template,
             artifacts=(ToolboxTemplateArtifactReference.from_dict(release.artifact_reference()),),
-            manifest_signature=release.manifest_signature,
+            verification_evidence=release.verification_evidence,
             actor_id="test:realized-template-fixture",
         )
         service.toolbox_template_activate(

@@ -272,7 +272,7 @@ def _service_with_verified_closure(
                 "size_bytes": packaging_row["size_bytes"],
             }),
         ),
-        manifest_signature="s" * 64,
+        verification_evidence="s" * 64,
         actor_id="test:definition-resolution",
     )
     service.toolbox_template_activate(

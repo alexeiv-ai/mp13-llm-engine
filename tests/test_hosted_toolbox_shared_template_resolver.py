@@ -58,7 +58,7 @@ def _ready_service(tmp_path: Path) -> EngineHostService:
         published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
             template=release.template,
             artifacts=(ToolboxTemplateArtifactReference.from_dict(release.artifact_reference()),),
-            manifest_signature=release.manifest_signature,
+            verification_evidence=release.verification_evidence,
             actor_id="test:resolver-setup",
         )
         service.toolbox_template_activate(

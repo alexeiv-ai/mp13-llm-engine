@@ -60,6 +60,14 @@ def test_template_is_strict_immutable_and_canonical() -> None:
         template.template_id = "core"  # type: ignore[misc]
 
 
+def test_template_provenance_accepts_generic_evidence_without_verifier() -> None:
+    payload = _template_payload()
+    payload["provenance"]["verifier_id"] = None
+    template = ToolboxEnvironmentTemplateSpec.from_dict(payload)
+    assert template.provenance.verifier_id is None
+    assert template.to_dict()["provenance"]["evidence_digest"] == _digest("c")
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [

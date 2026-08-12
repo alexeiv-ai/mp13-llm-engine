@@ -273,7 +273,7 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(replacement),
         artifacts=(ToolboxTemplateArtifactReference.from_dict(release.artifact_reference()),),
-        manifest_signature=release.manifest_signature,
+        verification_evidence=release.verification_evidence,
         actor_id="admin:replacement-test",
     )
     expected = service._toolbox_template_catalog.read()["active"]["core"]  # noqa: SLF001

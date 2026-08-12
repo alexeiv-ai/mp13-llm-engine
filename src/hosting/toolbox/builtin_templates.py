@@ -15,7 +15,7 @@ from .target import ToolboxTargetIdentity
 class ResolvedBuiltinTemplateCandidate:
     template: ToolboxEnvironmentTemplateSpec
     artifact_references: tuple[dict[str, Any], ...]
-    manifest_signature: str
+    verification_evidence: str
     source_bundle_id: str
 
 
@@ -112,7 +112,7 @@ def resolved_builtin_template_candidate(
     return ResolvedBuiltinTemplateCandidate(
         template=template,
         artifact_references=references,
-        manifest_signature=authenticator,
+        verification_evidence=authenticator,
         source_bundle_id=revision,
     )
 

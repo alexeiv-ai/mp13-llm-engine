@@ -91,7 +91,7 @@ def _publish(
     published = repo.publish_inactive(
         template=ToolboxEnvironmentTemplateSpec.from_dict(payload or _template_payload()),
         artifacts=(artifact or _artifact(),),
-        manifest_signature=SIGNATURE,
+        verification_evidence=SIGNATURE,
         actor_id="admin:test",
     )
     if activate:
@@ -112,6 +112,21 @@ def _publish(
         )
         return {**published, **activated, "template_digest": published["template_digest"]}
     return published
+
+
+def test_catalog_publishes_generic_template_without_verification_evidence(
+    tmp_path: Path,
+) -> None:
+    payload = _template_payload()
+    payload["provenance"]["verifier_id"] = None
+    published = _repo(tmp_path).publish_inactive(
+        template=ToolboxEnvironmentTemplateSpec.from_dict(payload),
+        artifacts=(_artifact(),),
+        actor_id="admin:test",
+    )
+    entry = _repo(tmp_path).read()["entries"][0]
+    assert entry["template_digest"] == published["template_digest"]
+    assert entry["verification_evidence"] is None
 
 
 def test_artifact_reference_and_signature_are_strict() -> None:
@@ -197,7 +212,7 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
         artifacts=(_artifact(),),
-        manifest_signature=SIGNATURE,
+        verification_evidence=SIGNATURE,
         actor_id="admin:test",
     )
     svc.toolbox_template_activate(
@@ -211,7 +226,7 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
     for secret_field in [
         "locked_distributions",
         "artifacts",
-        "manifest_signature",
+        "verification_evidence",
         "published_by",
         "filename",
         "source_id",
@@ -236,7 +251,7 @@ def test_service_describe_requires_active_or_exact_revision(tmp_path: Path) -> N
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
         artifacts=(_artifact(),),
-        manifest_signature=SIGNATURE,
+        verification_evidence=SIGNATURE,
         actor_id="admin:test",
     )
     with pytest.raises(ValueError, match="active_revision_not_found"):
@@ -266,7 +281,7 @@ template = ToolboxEnvironmentTemplateSpec.from_dict({
  'provenance': {'source': 'test', 'revision': char, 'evidence_digest': digest(char), 'verifier_id': 'key-1'}})
 artifact = ToolboxTemplateArtifactReference(source_id='source', filename=name + '.whl', sha256=digest(char), size_bytes=10)
 repo = AtomicJsonToolboxTemplateCatalog(Path(state_path))
-published = repo.publish_inactive(template=template, artifacts=(artifact,), manifest_signature='A'*86, actor_id='admin:test')
+published = repo.publish_inactive(template=template, artifacts=(artifact,), verification_evidence='A'*86, actor_id='admin:test')
 repo.activate(template_id=name, template_digest=published['template_digest'], actor_id='admin:test')
 """
     processes = [
