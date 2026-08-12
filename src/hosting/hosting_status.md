@@ -718,6 +718,21 @@ the slice.
   states, selector-smuggling denials, role/channel projection, daemon dispatch,
   and SSH CLI routing
 
+### TEST-R6/R9C — generic template catalog public-surface cut
+
+- Date: 2026-08-12
+- Plan IDs: R6.1 and R9.1/R9.4 (partial); P1/P2; high expertise
+- Outcome: catalog channel, role, daemon, operation, and remote CLI acceptance
+  now uses only `environment-template-*` methods and exact v1 template payloads;
+  authenticated fixtures receive v3 policy without post-start mutation
+- Proof: `python -m pytest tests/test_hosted_toolbox_catalog_control.py -q
+  --maxfail=20` passed 13 tests, including exact channel payloads, lower-role
+  mutation denial, daemon/CLI routing, generic operation dispatch, and retained
+  internal catalog atomicity/redaction tests
+- Remaining: the retained toolbox-specific catalog repository/materializer is
+  still an internal R7 removal item and is not treated as completed by this
+  public-surface migration
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

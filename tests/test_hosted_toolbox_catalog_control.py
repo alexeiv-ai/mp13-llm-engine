@@ -18,6 +18,7 @@ from hosting.service.toolbox_catalog import (
     ToolboxTemplateArtifactReference,
 )
 from hosting.toolbox.catalog import ToolboxEnvironmentTemplateSpec
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,19 @@ def _artifact(char: str = "e") -> ToolboxTemplateArtifactReference:
         sha256=_digest(char),
         size_bytes=1234,
     )
+
+
+def _environment_template(revision: int = 1) -> dict[str, Any]:
+    return {
+        "contract": "hosting.environment_template.v1",
+        "template_id": "core",
+        "revision": revision,
+        "runtime_kind": "python",
+        "builder_id": "python-manifest-v1",
+        "package_lock_id": "core-lock",
+        "platforms": ["win_amd64"],
+        "state": "draft",
+    }
 
 
 def _repo(tmp_path: Path) -> AtomicJsonToolboxTemplateCatalog:
@@ -179,7 +193,7 @@ def test_corrupt_or_digest_mismatched_state_fails_closed(tmp_path: Path) -> None
 def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
@@ -219,7 +233,7 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
 def test_service_describe_requires_active_or_exact_revision(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
@@ -294,63 +308,53 @@ def test_channel_forwards_exact_catalog_payloads() -> None:
     channel = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
     channel._get_connection = lambda: connection  # type: ignore[method-assign]
     channel.set_session_token("token-1")
-    channel.toolbox_template_list()
-    channel.toolbox_template_describe(template_id="core", template_digest=_digest("a"))
-    channel.toolbox_template_construct(
-        template_id="custom",
-        base_template_digest=_digest("b"),
-        imports=["pandas"],
-        package_requirements=["pandas==2.3.1"],
-        request_id="construct-1",
-    )
-    channel.toolbox_template_activate(template_id="core", template_digest=_digest("a"))
-    channel.toolbox_template_replace(
-        template_id="core",
-        expected_active_digest=_digest("a"),
-        replacement_digest=_digest("b"),
-    )
-    channel.toolbox_template_deprecate(template_id="core", template_digest=_digest("a"))
-    channel.toolbox_template_revoke(template_id="core", template_digest=_digest("a"))
+    channel.environment_template_list()
+    channel.environment_template_describe(template_id="core", revision=1)
+    channel.environment_template_construct(template=_environment_template())
+    channel.environment_template_activate(template_id="core", revision=1)
+    channel.environment_template_replace(template=_environment_template(revision=2))
+    channel.environment_template_deprecate(template_id="core", revision=1)
+    channel.environment_template_revoke(template_id="core", revision=1)
     assert [item[0] for item in connection.calls] == [
-        "toolbox-template-list",
-        "toolbox-template-describe",
-        "op-start",
-        "toolbox-template-activate",
-        "toolbox-template-replace",
-        "toolbox-template-deprecate",
-        "toolbox-template-revoke",
+        "environment-template-list",
+        "environment-template-describe",
+        "environment-template-construct",
+        "environment-template-activate",
+        "environment-template-replace",
+        "environment-template-deprecate",
+        "environment-template-revoke",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
-    assert connection.calls[2][1]["command"] == "toolbox-template-construct"
+    assert connection.calls[2][1]["template"] == _environment_template()
 
 
 def test_role_separation_allows_consumer_reads_and_admin_mutation() -> None:
     for role in ["worker_user", "config_editor", "diagnostic_user"]:
         allowed = EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
-        assert {"toolbox-template-list", "toolbox-template-describe"} <= allowed
-        assert "toolbox-template-construct" not in allowed
-        assert "toolbox-template-activate" not in allowed
-        assert "toolbox-template-replace" not in allowed
-        assert "toolbox-template-deprecate" not in allowed
-        assert "toolbox-template-revoke" not in allowed
-        assert "toolbox-template-prewarm" not in allowed
+        assert {"environment-template-list", "environment-template-describe"} <= allowed
+        assert "environment-template-construct" not in allowed
+        assert "environment-template-activate" not in allowed
+        assert "environment-template-replace" not in allowed
+        assert "environment-template-deprecate" not in allowed
+        assert "environment-template-revoke" not in allowed
+        assert "environment-template-prewarm" not in allowed
     admin = EngineHostService._commands_allowed_for_role("admin")  # noqa: SLF001
     assert {
-        "toolbox-template-list",
-        "toolbox-template-describe",
-        "toolbox-template-construct",
-        "toolbox-template-activate",
-        "toolbox-template-replace",
-        "toolbox-template-deprecate",
-        "toolbox-template-revoke",
-        "toolbox-template-prewarm",
+        "environment-template-list",
+        "environment-template-describe",
+        "environment-template-construct",
+        "environment-template-activate",
+        "environment-template-replace",
+        "environment-template-deprecate",
+        "environment-template-revoke",
+        "environment-template-prewarm",
     } <= admin
 
 
 def test_authenticated_command_policy_enforces_catalog_role_separation(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path, require_auth=True),
     )
     svc.auth_upsert_key(
         key_id="admin", key_secret="admin-secret", role="admin", auth_method="shared_secret"
@@ -361,25 +365,21 @@ def test_authenticated_command_policy_enforces_catalog_role_separation(tmp_path:
         role="worker_user",
         auth_method="shared_secret",
     )
-    svc.set_control_config(
-        require_auth=True,
-        access_profile={"connectivity_mode": "local_only"},
-    )
     worker = svc.auth_issue_session(
         key_id="worker", key_secret="worker-secret", scope="control"
     )["token"]
     admin = svc.auth_issue_session(
         key_id="admin", key_secret="admin-secret", scope="control"
     )["token"]
-    svc.authorize_command("toolbox-template-list", {"session_token": worker})
-    svc.authorize_command("toolbox-template-describe", {"session_token": worker})
+    svc.authorize_command("environment-template-list", {"session_token": worker})
+    svc.authorize_command("environment-template-describe", {"session_token": worker})
     with pytest.raises(PermissionError, match="insufficient_role"):
-        svc.authorize_command("toolbox-template-construct", {"session_token": worker})
-    svc.authorize_command("toolbox-template-construct", {"session_token": admin})
-    svc.authorize_command("toolbox-template-activate", {"session_token": admin})
-    svc.authorize_command("toolbox-template-replace", {"session_token": admin})
-    svc.authorize_command("toolbox-template-deprecate", {"session_token": admin})
-    svc.authorize_command("toolbox-template-revoke", {"session_token": admin})
+        svc.authorize_command("environment-template-construct", {"session_token": worker})
+    svc.authorize_command("environment-template-construct", {"session_token": admin})
+    svc.authorize_command("environment-template-activate", {"session_token": admin})
+    svc.authorize_command("environment-template-replace", {"session_token": admin})
+    svc.authorize_command("environment-template-deprecate", {"session_token": admin})
+    svc.authorize_command("environment-template-revoke", {"session_token": admin})
 
 
 def test_daemon_dispatch_and_remote_cli_route_catalog_commands(
@@ -390,14 +390,14 @@ def test_daemon_dispatch_and_remote_cli_route_catalog_commands(
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     response = asyncio.run(
         daemon._dispatch(  # noqa: SLF001
             json.dumps(
                 {
                     "seq": 1,
-                    "cmd": "toolbox-template-list",
+                    "cmd": "environment-template-list",
                     "payload": {},
                 }
             ),
@@ -420,10 +420,10 @@ def test_daemon_dispatch_and_remote_cli_route_catalog_commands(
 
     monkeypatch.setattr("hosting.engine_host_channel.EngineHostControlChannel", FakeRemoteChannel)
     rc = engine_host_cli.main(
-        ["--ssh-target", "user@example.test", "toolbox-template-list"]
+        ["--ssh-target", "user@example.test", "environment-template-list"]
     )
     assert rc == 0
-    assert calls == [("toolbox-template-list", {})]
+    assert calls == [("environment-template-list", {})]
     assert '"ok": true' in capsys.readouterr().out
 
 
@@ -433,7 +433,7 @@ def test_daemon_op_start_routes_template_construction_to_canonical_service(
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     calls: list[dict[str, Any]] = []
 
@@ -441,7 +441,7 @@ def test_daemon_op_start_routes_template_construction_to_canonical_service(
         calls.append(dict(kwargs))
         return {"contract": "hosting.operation_status", "lifecycle": "queued"}
 
-    monkeypatch.setattr(daemon.svc, "toolbox_template_construct", construct)
+    monkeypatch.setattr(daemon.svc, "environment_template_construct", construct)
     response = asyncio.run(
         daemon._dispatch(  # noqa: SLF001
             json.dumps(
@@ -449,14 +449,8 @@ def test_daemon_op_start_routes_template_construction_to_canonical_service(
                     "seq": 1,
                     "cmd": "op-start",
                     "payload": {
-                        "command": "toolbox-template-construct",
-                        "payload": {
-                            "template_id": "team-core",
-                            "base_template_digest": _digest("a"),
-                            "imports": ["hosting"],
-                            "package_requirements": [],
-                            "request_id": "construct-1",
-                        },
+                        "command": "environment-template-construct",
+                        "payload": {"template": _environment_template()},
                     },
                 }
             ),
@@ -465,8 +459,7 @@ def test_daemon_op_start_routes_template_construction_to_canonical_service(
         )
     )
     assert response["ok"] is True
-    assert calls[0]["template_id"] == "team-core"
-    assert calls[0]["base_template_digest"] == _digest("a")
+    assert calls[0]["template"] == _environment_template()
 
 
 def test_activate_and_replace_are_exact_compare_and_swap_transitions(tmp_path: Path) -> None:
