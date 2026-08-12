@@ -7,6 +7,7 @@ import pytest
 
 from hosting.operation_contract import hosted_execution_fingerprint
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
     ToolboxBundleAutoTool,
@@ -100,7 +101,7 @@ def _draft(tool_name: str | None, character: str, expected_revision: str | None)
 def _service(tmp_path: Path) -> EngineHostService:
     service = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     service._require_toolbox_executor_registration = (  # type: ignore[method-assign]
         lambda engine_id, *, command_label: service.get_registration(engine_id)
@@ -140,6 +141,9 @@ class _FakeOrchestrator:
             assignment.materialization_reference_id = (
                 f"toolbox:{toolbox_id}:materialized:{definition_revision}:{self.spawned}"
             )
+            self.service._test_environment_references[  # type: ignore[attr-defined]
+                assignment.materialization_reference_id
+            ] = assignment.resolved_profile.environment_key
             builder = getattr(self.service, "_hermetic_toolbox_environment_builder", None)
             if isinstance(builder, _TrackingBuilder):
                 builder.add(
@@ -189,6 +193,19 @@ class _TrackingBuilder:
 
 def _install_fake_rollout(service: EngineHostService) -> _FakeOrchestrator:
     orchestrator = _FakeOrchestrator(service)
+    service._test_environment_references = {}  # type: ignore[attr-defined]
+
+    def release_reference(*, reference_id: str):
+        environment_key = service._test_environment_references.pop(reference_id, "")  # type: ignore[attr-defined]
+        builder = getattr(service, "_hermetic_toolbox_environment_builder", None)
+        if environment_key and isinstance(builder, _TrackingBuilder):
+            builder.release_reference(
+                environment_key=environment_key,
+                reference_id=reference_id,
+            )
+        return {"reference_id": reference_id, "state": "released"}
+
+    service._environment_manager.release = release_reference  # type: ignore[method-assign]
     service._toolbox_rollout_orchestrator_factory = lambda: orchestrator  # type: ignore[attr-defined]
     service._ensure_toolbox_assignments_ready = (  # type: ignore[method-assign]
         lambda assignments, timeout_seconds=8.0: {

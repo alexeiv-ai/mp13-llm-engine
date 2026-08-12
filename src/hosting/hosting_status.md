@@ -852,6 +852,20 @@ the slice.
 - Proof: `python -m pytest tests/test_hosting_python_runtime_base.py
   tests/test_hosting_r6_restart_healing.py -q --maxfail=20` passed all 21 tests
 
+### TEST-R7.1B — atomic rollout generic-reference fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2, R7.1/R7.2, and R9.3/R9.4 (partial); P1/P2; high expertise
+- Outcome: atomic toolbox rollout fixtures load v3 hosting configuration and
+  model materialization references through the generic environment manager's
+  release boundary after publication
+- Removal proof: the atomic-routing suite contains zero `control_state_file`
+  or `access_control.json` matches; displaced references remain present during
+  publication and are released afterward
+- Proof: `python -m pytest tests/test_hosting_toolbox_atomic_routing.py -q
+  --maxfail=20` passed all seven apply, reuse, cancel, continuous-routing,
+  in-flight retirement, and reference-release tests
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
