@@ -52,7 +52,6 @@ class EngineHostDaemon:
         *,
         port: int = DEFAULT_DAEMON_PORT,
         pid_file: Optional[Path] = None,
-        engines_state_file: Optional[Path] = None,
         mp13_config_file: Optional[Path] = None,
         runtime_profile: str = "foreground_terminal_bound",
     ):
@@ -62,10 +61,7 @@ class EngineHostDaemon:
         self.shutdown_token = secrets.token_urlsafe(24)
         local_transport = _daemon_local_ipc_endpoint(self.pid_file.path)
         self._local_transport = dict(local_transport)
-        self.svc = EngineHostService(
-            engines_state_file=engines_state_file,
-            hosting_configuration=hosting_configuration,
-        )
+        self.svc = EngineHostService(hosting_configuration=hosting_configuration)
         self.svc._toolbox_setup_diagnostic = {  # noqa: SLF001
             "code": "environment_template_missing",
             "summary": "No environment template has been activated.",

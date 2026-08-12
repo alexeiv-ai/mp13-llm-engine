@@ -1158,7 +1158,6 @@ class ToolboxWorkerStartupSpec:
     toolbox_revision: str
     manifest_path: str
     scratch_root: str
-    engines_state_file: Optional[str] = None
     venv_path: Optional[str] = None
     ipc_family: str = field(default_factory=lambda: "AF_PIPE" if os.name == "nt" else "AF_UNIX")
     ipc_address: str = ""
@@ -1175,7 +1174,6 @@ class ToolboxWorkerStartupSpec:
             "toolbox_revision": str(self.toolbox_revision or "").strip(),
             "manifest_path": str(self.manifest_path or "").strip(),
             "scratch_root": str(self.scratch_root or "").strip(),
-            "engines_state_file": str(self.engines_state_file or "").strip() or None,
             "venv_path": str(self.venv_path or "").strip() or None,
             "ipc_family": str(self.ipc_family or default_ipc_family).strip() or default_ipc_family,
             "ipc_address": str(self.ipc_address or "").strip(),
@@ -1190,7 +1188,7 @@ class ToolboxWorkerStartupSpec:
         row = dict(payload or {})
         allowed = {
             "worker_id", "sandbox_id", "toolbox_revision", "manifest_path",
-            "scratch_root", "engines_state_file", "venv_path", "ipc_family",
+            "scratch_root", "venv_path", "ipc_family",
             "ipc_address", "auth_token_env", "execution_contract",
             "callback_contract", "policy",
         }
@@ -1206,7 +1204,6 @@ class ToolboxWorkerStartupSpec:
             toolbox_revision=str(row.get("toolbox_revision") or "").strip(),
             manifest_path=str(row.get("manifest_path") or "").strip(),
             scratch_root=str(row.get("scratch_root") or "").strip(),
-            engines_state_file=str(row.get("engines_state_file") or "").strip() or None,
             venv_path=str(row.get("venv_path") or "").strip() or None,
             ipc_family=str(row.get("ipc_family") or default_ipc_family).strip() or default_ipc_family,
             ipc_address=str(row.get("ipc_address") or "").strip(),

@@ -68,7 +68,6 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
     def __init__(
         self,
         *,
-        engines_state_file: Optional[Path] = None,
         hosting_configuration: HostingConfiguration,
         operation_retention_seconds: Optional[float] = None,
         operation_tombstone_seconds: Optional[float] = None,
@@ -87,8 +86,8 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self.hosting_root = Path(hosting_configuration.resolved_paths["scratch_root"]).parent.resolve()
         self.control_state_file = self.hosting_root / "state" / "control_state.json"
         self.engines_state_file = (
-            engines_state_file or self.hosting_root / "state" / DEFAULT_ENGINES_STATE_FILE.name
-        ).expanduser().resolve()
+            self.hosting_root / "state" / DEFAULT_ENGINES_STATE_FILE.name
+        ).resolve()
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
         self._toolbox_artifact_sources: Dict[str, Path] = {}

@@ -20,7 +20,6 @@ def start_daemon_background(
     port: int = DEFAULT_DAEMON_PORT,
     pid_file: Optional[Path] = None,
     log_file: Optional[Path] = None,
-    engines_state_file: Optional[Path] = None,
     mp13_config_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
 ) -> Dict[str, Any]:
@@ -115,8 +114,6 @@ def start_daemon_background(
         argv += ["--log-file", str(log_file)]
     if pid_file:
         argv += ["--pid-file", str(pid_file)]
-    if engines_state_file:
-        argv += ["--engines-state-file", str(engines_state_file)]
     if mp13_config_file:
         argv += ["--mp13-config-file", str(mp13_config_file)]
 
@@ -198,7 +195,6 @@ def start_http_ingress_background(
     port: int = DEFAULT_HTTP_INGRESS_PORT,
     pid_file: Optional[Path] = None,
     log_file: Optional[Path] = None,
-    engines_state_file: Optional[Path] = None,
     mp13_config_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
 ) -> Dict[str, Any]:
@@ -219,8 +215,6 @@ def start_http_ingress_background(
         argv += ["--log-file", str(log_file)]
     if pid_file:
         argv += ["--pid-file", str(pid_file)]
-    if engines_state_file:
-        argv += ["--engines-state-file", str(engines_state_file)]
     if mp13_config_file:
         argv += ["--mp13-config-file", str(mp13_config_file)]
 

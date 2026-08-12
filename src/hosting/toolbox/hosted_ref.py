@@ -136,8 +136,7 @@ class HostedToolBoxRef:
             descriptor["kind"] = "control_channel"
             descriptor["control_settings"] = dict(getattr(host, "control_settings", {}) or {})
             return descriptor
-        engines_state_file = getattr(host, "engines_state_file", None)
-        if engines_state_file is not None:
+        if hasattr(host, "hosting_configuration"):
             descriptor["kind"] = "service"
             return descriptor
         descriptor["kind"] = "opaque"

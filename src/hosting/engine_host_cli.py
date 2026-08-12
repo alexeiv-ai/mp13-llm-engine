@@ -42,7 +42,6 @@ from .service.host_service import EngineHostService
 EXAMPLES_BY_COMMAND = {
     "discover-running": [
         "python -m hosting.engine_host_cli discover-running",
-        "python -m hosting.engine_host_cli --engines-state-file C:\\tmp\\managed_engines.json discover-running",
     ],
     "spawn": [
         "@'{\"engine_id\":\"worker1\",\"command\":[\"python\",\"-m\",\"hosting.engine_worker_ipc\"]}'@ | python -m hosting.engine_host_cli --payload-stdin spawn",
@@ -632,7 +631,6 @@ def _ensure_relay_daemon_ready(
     pid_file: Optional[Path],
     port: int,
     mp13_config_file: Optional[Path],
-    engines_state_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
     log_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -648,7 +646,6 @@ def _ensure_relay_daemon_ready(
                 port=resolved_port,
                 pid_file=pid_file,
                 log_file=log_file,
-                engines_state_file=engines_state_file,
                 mp13_config_file=mp13_config_file,
                 wait_ready_seconds=float(wait_ready_seconds or 8.0),
             )
@@ -670,7 +667,6 @@ def _run_relay_wrapper(
     pid_file: Optional[Path],
     port: int,
     mp13_config_file: Optional[Path] = None,
-    engines_state_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
     log_file: Optional[Path] = None,
 ) -> None:
@@ -679,7 +675,6 @@ def _run_relay_wrapper(
             pid_file=pid_file,
             port=port,
             mp13_config_file=mp13_config_file,
-            engines_state_file=engines_state_file,
             wait_ready_seconds=wait_ready_seconds,
             log_file=log_file,
         )
@@ -733,7 +728,6 @@ def _channel_settings_from_args(args: argparse.Namespace, *, auto_bootstrap: boo
     settings: Dict[str, Any] = {
         "engine_host_daemon_auto_bootstrap": bool(auto_bootstrap),
         "engine_host_daemon_pid_file": str(getattr(args, "pid_file", "") or "") or None,
-        "engine_host_state_file": str(getattr(args, "engines_state_file", "") or "") or None,
         "engine_host_mp13_config_file": str(getattr(args, "mp13_config_file", "") or "") or None,
     }
     for attr in (
@@ -785,7 +779,6 @@ def _payload_with_cli_selectors(args: argparse.Namespace, payload: Dict[str, Any
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Engine host control CLI")
-    p.add_argument("--engines-state-file", type=Path, default=None)
     p.add_argument("--mp13-config-file", type=Path, default=None)
     p.add_argument("--pid-file", type=Path, default=None, help="Daemon PID file path (for daemon client mode)")
     p.add_argument(
@@ -1022,7 +1015,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:  # noqa: C901
     argv = list(argv) if argv is not None else list(sys.argv[1:])
-    removed_startup_flags = {"--control-state-file", "--toolbox-config-file"}
+    removed_startup_flags = {
+        "--control-state-file",
+        "--engines-state-file",
+        "--toolbox-config-file",
+    }
     rejected_startup_flags = sorted(removed_startup_flags.intersection(argv))
     if rejected_startup_flags:
         _print_error(
@@ -1047,7 +1044,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         port = _extract_int_arg(argv, "--port", DEFAULT_DAEMON_PORT)
         runtime_profile = _extract_str_arg(argv, "--runtime-profile", "foreground_terminal_bound")
         pid_file = _extract_path_arg(argv, "--pid-file", None)
-        engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         mp13_config_file = _extract_path_arg(argv, "--mp13-config-file", None)
         background = "--background" in argv
         log_file_str = _extract_str_arg(argv, "--log-file", None)
@@ -1065,7 +1061,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     port=port,
                     pid_file=pid_file,
                     log_file=Path(log_file_str) if log_file_str else None,
-                    engines_state_file=engines_state,
                     mp13_config_file=mp13_config_file,
                 )
                 _print_ok(result)
@@ -1077,7 +1072,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             run_daemon_foreground(
                 port=port,
                 pid_file=pid_file,
-                engines_state_file=engines_state,
                 mp13_config_file=mp13_config_file,
                 runtime_profile=str(runtime_profile or "foreground_terminal_bound"),
             )
@@ -1095,7 +1089,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
 
         port = _extract_int_arg(argv, "--http-port", DEFAULT_HTTP_INGRESS_PORT)
         pid_file = _extract_path_arg(argv, "--pid-file", None)
-        engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         mp13_config_file = _extract_path_arg(argv, "--mp13-config-file", None)
         background = "--background" in argv
         log_file_str = _extract_str_arg(argv, "--log-file", None)
@@ -1113,7 +1106,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     port=port,
                     pid_file=pid_file,
                     log_file=Path(log_file_str) if log_file_str else None,
-                    engines_state_file=engines_state,
                     mp13_config_file=mp13_config_file,
                 )
                 _print_ok(result)
@@ -1125,7 +1117,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             run_http_ingress_foreground(
                 port=port,
                 pid_file=pid_file,
-                engines_state_file=engines_state,
                 mp13_config_file=mp13_config_file,
             )
             return 0
@@ -1136,7 +1127,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     if "--relay-wrapper" in argv:
         port = _extract_int_arg(argv, "--port", 0)
         pid_file = _extract_path_arg(argv, "--pid-file", None)
-        engines_state = _extract_path_arg(argv, "--engines-state-file", None)
         mp13_config_file = _extract_path_arg(argv, "--mp13-config-file", None)
         log_file = _extract_path_arg(argv, "--log-file", None)
         wait_raw = _extract_str_arg(argv, "--wait-ready-seconds", "8.0")
@@ -1148,7 +1138,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _run_relay_wrapper(
                 pid_file=pid_file,
                 port=port,
-                engines_state_file=engines_state,
                 mp13_config_file=mp13_config_file,
                 wait_ready_seconds=wait_ready_seconds,
                 log_file=log_file,
@@ -1316,8 +1305,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     from .hosting_configuration import load_hosting_configuration
 
     svc = EngineHostService(
-        engines_state_file=args.engines_state_file,
-        hosting_configuration=load_hosting_configuration(args.mp13_config_file),
+        hosting_configuration=load_hosting_configuration(args.mp13_config_file)
     )
     try:
         cmd = str(args.command or "").strip()

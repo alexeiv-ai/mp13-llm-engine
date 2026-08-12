@@ -68,14 +68,8 @@ def _host_service():
     from .service.host_service import EngineHostService
 
     spec = _startup_spec_or_none()
-    engines_state_file = (
-        str(spec.engines_state_file or "").strip()
-        if spec is not None
-        else str(os.environ.get("MP13_HOSTING_ENGINES_STATE_FILE") or "").strip()
-    )
     mp13_config_file = str(os.environ.get("MP13_CONFIG_FILE") or "").strip()
     svc = EngineHostService(
-        engines_state_file=Path(engines_state_file).expanduser().resolve() if engines_state_file else None,
         hosting_configuration=load_hosting_configuration(
             Path(mp13_config_file).expanduser().resolve() if mp13_config_file else None
         ),

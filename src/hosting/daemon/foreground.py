@@ -15,7 +15,6 @@ def run_daemon_foreground(
     *,
     port: int = DEFAULT_DAEMON_PORT,
     pid_file: Optional[Path] = None,
-    engines_state_file: Optional[Path] = None,
     mp13_config_file: Optional[Path] = None,
     runtime_profile: str = "foreground_terminal_bound",
 ) -> None:
@@ -23,7 +22,6 @@ def run_daemon_foreground(
     daemon = EngineHostDaemon(
         port=port,
         pid_file=pid_file,
-        engines_state_file=engines_state_file,
         mp13_config_file=mp13_config_file,
         runtime_profile=runtime_profile,
     )
@@ -34,14 +32,12 @@ def run_http_ingress_foreground(
     *,
     port: int = DEFAULT_HTTP_INGRESS_PORT,
     pid_file: Optional[Path] = None,
-    engines_state_file: Optional[Path] = None,
     mp13_config_file: Optional[Path] = None,
 ) -> None:
     """Start HTTP ingress daemon in the foreground (blocks until stopped)."""
     daemon = EngineHostHttpIngressDaemon(
         port=port,
         pid_file=pid_file,
-        engines_state_file=engines_state_file,
         mp13_config_file=mp13_config_file,
     )
     daemon.run()

@@ -56,8 +56,7 @@ class EngineHostService(_EngineHostService):
 
     def __init__(self, *args, hosting_configuration=None, **kwargs):
         if hosting_configuration is None:
-            state_file = Path(kwargs.get("engines_state_file") or "managed_engines.json")
-            hosting_configuration = v3_hosting_configuration(state_file.resolve().parent)
+            hosting_configuration = v3_hosting_configuration(Path.cwd())
         super().__init__(*args, hosting_configuration=hosting_configuration, **kwargs)
 
     @staticmethod
@@ -1772,7 +1771,7 @@ def test_toolbox_sandbox_orchestrator_groups_requests_by_profile() -> None:
     root = _scratch_dir("orchestrator-group-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         orchestrator = ToolboxSandboxOrchestrator(
             service=svc,
@@ -1850,7 +1849,7 @@ def test_toolbox_runtime_base_adds_shared_environment_identity() -> None:
 def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     root = _scratch_dir("toolbox-hosted-pool-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     reg = svc.spawn(
         engine_id="toolbox-hosted-pool",
@@ -1901,7 +1900,7 @@ def test_routed_toolbox_execute_honors_bounded_caller_readiness_timeout(
 ) -> None:
     root = _scratch_dir("toolbox-routed-ready-timeout-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     registration = svc.register_spawned(
         engine_id="toolbox-routed-ready-timeout",
@@ -1951,7 +1950,7 @@ def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pyte
     root = _scratch_dir("toolbox-all-settled-error-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox-all-settled-error",
@@ -1991,7 +1990,7 @@ def test_toolbox_cancel_marks_recycled_sibling_requests_explicitly(monkeypatch: 
     root = _scratch_dir("toolbox-sandbox-recycled-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox-sandbox-recycled",
@@ -2043,7 +2042,7 @@ def test_toolbox_cancel_marks_recycled_sibling_requests_explicitly(monkeypatch: 
 def test_toolbox_execute_forwards_host_api_approval_to_worker_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
     root = _scratch_dir("toolbox-host-api-approval-forward-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     reg = svc.spawn(
         engine_id="toolbox-host-api-approval-forward",
@@ -2080,7 +2079,7 @@ def test_toolbox_execute_forwards_host_api_approval_to_worker_rpc(monkeypatch: p
 def test_toolbox_cancel_marks_shared_hosted_pool_request_canceled() -> None:
     root = _scratch_dir("toolbox-hosted-cancel-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     svc.spawn(
         engine_id="toolbox-hosted-cancel",
@@ -2214,10 +2213,11 @@ def test_toolbox_worker_startup_spec_defaults_platform_ipc_family() -> None:
     assert spec.ipc_family == expected
     assert payload["ipc_family"] == expected
     assert restored.ipc_family == expected
-    with pytest.raises(
-        ValueError, match="toolbox_worker_startup_spec_unknown_fields:control_state_file"
-    ):
-        ToolboxWorkerStartupSpec.from_dict({**payload, "control_state_file": "legacy.json"})
+    for field in ("control_state_file", "engines_state_file"):
+        with pytest.raises(
+            ValueError, match=f"toolbox_worker_startup_spec_unknown_fields:{field}"
+        ):
+            ToolboxWorkerStartupSpec.from_dict({**payload, field: "legacy.json"})
 
 
 def test_engine_host_service_allocate_ipc_address_uses_unix_socket_on_posix(monkeypatch) -> None:
@@ -2256,7 +2256,7 @@ def test_toolbox_execute_denies_unknown_tool_before_worker_call(monkeypatch) -> 
     root = _scratch_dir("service-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2290,7 +2290,7 @@ def test_toolbox_execute_denies_blocked_in_scope_before_worker_call(monkeypatch)
     root = _scratch_dir("service-scope-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2333,7 +2333,7 @@ def test_toolbox_execute_denies_gated_requires_confirmation_before_worker_call(m
     root = _scratch_dir("service-gated-exec-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2378,7 +2378,7 @@ def test_toolbox_cancel_returns_noop_when_target_is_missing() -> None:
     root = _scratch_dir("service-cancel-missing-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
 
         terminal = svc._test_cancel_toolbox(toolbox_id="missing-box", request_id="cancel-missing")
@@ -2429,7 +2429,7 @@ def test_toolbox_gate_reports_denied_and_allowed_outcomes() -> None:
     root.mkdir(parents=True, exist_ok=True)
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2459,7 +2459,7 @@ def test_toolbox_gate_respects_request_scoped_tools_view() -> None:
     root = _scratch_dir("service-gate-view-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2501,7 +2501,7 @@ def test_toolbox_gate_reports_gated_requires_confirmation_from_request_view() ->
     root = _scratch_dir("service-gate-gated-")
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2912,7 +2912,7 @@ def test_hosted_toolbox_ref_serializes_and_deserializes_with_service() -> None:
     root.mkdir(parents=True, exist_ok=True)
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         ref = HostedToolBoxRef(
             toolbox_id="service-ref",
@@ -3038,7 +3038,7 @@ def test_toolbox_execute_dispatches_host_capability_in_parent_and_audits(monkeyp
     project_root.mkdir(parents=True, exist_ok=True)
     (project_root / "a.txt").write_text("parent-owned", encoding="utf-8")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     svc.register_spawned(
         engine_id="toolbox-parent-host-api",
@@ -3160,7 +3160,7 @@ def test_sandboxed_toolbox_facade_execute_does_not_serialize_callback_user_conte
 def test_ensure_toolbox_assignments_ready_returns_rollout_metadata(monkeypatch) -> None:
     root = _scratch_dir("ready-rollout-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     monkeypatch.setattr(
         svc,
@@ -3218,7 +3218,7 @@ def test_ensure_toolbox_assignments_ready_returns_rollout_metadata(monkeypatch) 
 def test_ensure_toolbox_assignments_ready_requires_verified_install_receipt(monkeypatch) -> None:
     root = _scratch_dir("ready-rollout-receipt-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     monkeypatch.setattr(
         svc,
@@ -3278,7 +3278,7 @@ def test_wait_for_toolbox_executor_ready_requires_inventory_match(monkeypatch) -
     root.mkdir(parents=True, exist_ok=True)
     try:
         svc = EngineHostService(
-            engines_state_file=root / "managed_engines.json",
+            hosting_configuration=v3_hosting_configuration(root),
         )
         svc.register_spawned(
             engine_id="toolbox-mismatch",
@@ -3347,7 +3347,7 @@ def test_toolbox_executor_manifest_path_prefers_startup_spec(monkeypatch) -> Non
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_toolbox_executor_host_service_prefers_startup_spec_metadata(monkeypatch) -> None:
+def test_toolbox_executor_host_service_uses_v3_configuration_authority(monkeypatch) -> None:
     root = _scratch_dir("spec-hosting-")
     try:
         stager = ToolboxBundleStager(root)
@@ -3358,28 +3358,23 @@ def test_toolbox_executor_host_service_prefers_startup_spec_metadata(monkeypatch
                 tools=[ToolboxBundleTool(definition=_tool_definition("hello_tool"), entrypoint="demo_tools:hello")],
             )
         )
-        engines_state = (root / "engines.json").resolve()
         env = staged.worker_env_with_startup_spec(
             worker_id="toolbox-spec-hosting",
-            engines_state_file=engines_state,
         )
         config_file = write_hosting_configuration(root)
         monkeypatch.setenv("MP13_TOOLBOX_WORKER_SPEC_PATH", env["MP13_TOOLBOX_WORKER_SPEC_PATH"])
-        monkeypatch.setenv("MP13_HOSTING_ENGINES_STATE_FILE", str((root / "wrong-engines.json").resolve()))
         monkeypatch.setenv("MP13_CONFIG_FILE", str(config_file))
         monkeypatch.setattr(toolbox_executor_ipc, "_startup_spec", None)
 
         captured: dict[str, object] = {}
 
         class _FakeService:
-            def __init__(self, *, engines_state_file=None, hosting_configuration=None, **_kwargs):
-                captured["engines_state_file"] = engines_state_file
+            def __init__(self, *, hosting_configuration=None, **_kwargs):
                 captured["hosting_configuration"] = hosting_configuration
 
         monkeypatch.setattr("hosting.service.host_service.EngineHostService", _FakeService)
         _ = toolbox_executor_ipc._host_service()
 
-        assert captured["engines_state_file"] == engines_state
         assert captured["hosting_configuration"].contract == "hosting.configuration.v3"
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -3388,7 +3383,7 @@ def test_toolbox_executor_host_service_prefers_startup_spec_metadata(monkeypatch
 def test_toolbox_executor_ipc_end_to_end() -> None:
     root = _scratch_dir("live-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     stager = ToolboxBundleStager(root)
     staged = stager.stage_bundle(
@@ -3455,7 +3450,7 @@ def test_toolbox_executor_ipc_end_to_end() -> None:
 def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
     root = _scratch_dir("live-callback-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     data_root = root / "sandbox-data"
     data_root.mkdir(parents=True, exist_ok=True)
@@ -3648,7 +3643,7 @@ def test_hosted_toolbox_execution_harness_forwards_callback_processor() -> None:
 def test_toolbox_executor_ipc_end_to_end_with_intrinsic_tools_only() -> None:
     root = _scratch_dir("live-intrinsic-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     stager = ToolboxBundleStager(root)
     staged = stager.stage_bundle(
@@ -3712,7 +3707,7 @@ def test_toolbox_executor_ipc_end_to_end_with_intrinsic_tools_only() -> None:
 def test_toolbox_executor_ipc_end_to_end_with_auto_callable_discovery() -> None:
     root = _scratch_dir("live-auto-")
     svc = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=v3_hosting_configuration(root),
     )
     stager = ToolboxBundleStager(root)
     staged = stager.stage_bundle(

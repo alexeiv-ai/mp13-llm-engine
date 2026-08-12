@@ -100,7 +100,6 @@ class EngineHostControlChannel:
     def __init__(self, control_settings: Optional[Dict[str, Any]] = None):
         self.control_settings: Dict[str, Any] = resolve_client_profile_control_settings(control_settings)
         self._base_cmd: List[str] = []
-        self._engines_state_file = self.control_settings.get("engine_host_state_file")
         self._mp13_config_file = self.control_settings.get("engine_host_mp13_config_file")
         self._timeout = float(self.control_settings.get("engine_host_timeout_seconds") or 15.0)
         self._session_token: Optional[str] = str(
@@ -295,7 +294,6 @@ class EngineHostControlChannel:
         ssh_key: Optional[str] = None,
         remote_cmd: Optional[str] = None,
         engine_host_cmd: Optional[List[str]] = None,
-        engine_host_state_file: Optional[str] = None,
         engine_host_mp13_config_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         m = str(mode or "local").strip().lower()
@@ -318,11 +316,8 @@ class EngineHostControlChannel:
             self.control_settings["engine_host_remote_cmd"] = str(remote_cmd).strip() or None
         if engine_host_cmd is not None:
             self.control_settings["engine_host_cmd"] = [str(x) for x in list(engine_host_cmd or [])] or None
-        if engine_host_state_file is not None:
-            self.control_settings["engine_host_state_file"] = str(engine_host_state_file).strip() or None
         if engine_host_mp13_config_file is not None:
             self.control_settings["engine_host_mp13_config_file"] = str(engine_host_mp13_config_file).strip() or None
-        self._engines_state_file = self.control_settings.get("engine_host_state_file")
         self._mp13_config_file = self.control_settings.get("engine_host_mp13_config_file")
         self._refresh_base_cmd()
         # Reset persistent connection: target has changed
@@ -576,7 +571,6 @@ class EngineHostControlChannel:
                             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
                             pid_file=pid_path,
                             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
-                            engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
                             mp13_config_file=Path(self._mp13_config_file) if self._mp13_config_file else None,
                             wait_ready_seconds=wait,
                         )
@@ -645,8 +639,6 @@ class EngineHostControlChannel:
             )
         self._ensure_ssh_key_policy()
         argv = list(self._base_cmd) + ["--payload-stdin"]
-        if self._engines_state_file:
-            argv += ["--engines-state-file", str(self._engines_state_file)]
         if self._mp13_config_file:
             argv += ["--mp13-config-file", str(self._mp13_config_file)]
         argv += [str(command)]
@@ -867,7 +859,6 @@ class EngineHostControlChannel:
         binding = self._current_ssh_session_binding() or {}
         payload = {
             "mp13_config_file": str(self._mp13_config_file or ""),
-            "engine_state_file": str(self._engines_state_file or ""),
             "key_id": str(self._key_id or ""),
             "scope": str(self._session_scope or ""),
             "target": self.get_target(),
@@ -935,7 +926,6 @@ class EngineHostControlChannel:
         payload = {
             "auth_method": "public_key",
             "mp13_config_file": str(self._mp13_config_file or ""),
-            "engine_state_file": str(self._engines_state_file or ""),
             "key_id": str(key_id or "").strip(),
             "scope": str(scope or "control").strip().lower() or "control",
             "config_paths": sorted([str(item or "").strip() for item in list(config_paths or []) if str(item or "").strip()]),
@@ -1203,7 +1193,6 @@ class EngineHostControlChannel:
             port=self._daemon_port_override or DEFAULT_DAEMON_PORT,
             pid_file=pid_path,
             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
-            engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
             mp13_config_file=Path(self._mp13_config_file) if self._mp13_config_file else None,
             wait_ready_seconds=wait_ready_seconds,
         )
@@ -1381,8 +1370,7 @@ class EngineHostControlChannel:
             from .hosting_configuration import load_hosting_configuration
 
             svc = EngineHostService(
-                engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
-                hosting_configuration=load_hosting_configuration(self._local_mp13_config_path()),
+                hosting_configuration=load_hosting_configuration(self._local_mp13_config_path())
             )
             try:
                 rows = svc.discover_running(

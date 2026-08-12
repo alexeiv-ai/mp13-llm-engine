@@ -112,7 +112,6 @@ def test_daemon_startup_recovery_stops_foreign_owner_registrations(
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "managed_engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.svc.register_spawned(
@@ -162,7 +161,6 @@ def test_normal_daemon_wires_generic_package_sources_and_policy(tmp_path: Path) 
     )
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=mp13_config,
     )
 
@@ -236,7 +234,6 @@ def test_foreground_production_launcher_uses_configuration_path_without_loading_
 def test_missing_package_source_and_environment_template_are_bounded(tmp_path: Path) -> None:
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     readiness = {row["subsystem"]: row for row in daemon.svc.hosting_setup_summary()["readiness"]}

@@ -22,6 +22,7 @@ VALID_SECRET_RECORD_ENCRYPTION = {"none"}
 _REMOVED_CLIENT_CONTROL_SETTINGS = frozenset(
     {
         "engine_host_control_state_file",
+        "engine_host_state_file",
         "engine_host_toolbox_config_file",
     }
 )

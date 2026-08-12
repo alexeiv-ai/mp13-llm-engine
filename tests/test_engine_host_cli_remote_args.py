@@ -40,7 +40,10 @@ def test_daemon_cli_forwards_mp13_configuration_to_production_launcher(
     assert "toolbox_config_file" not in captured
 
 
-@pytest.mark.parametrize("removed", ["--control-state-file", "--toolbox-config-file"])
+@pytest.mark.parametrize(
+    "removed",
+    ["--control-state-file", "--engines-state-file", "--toolbox-config-file"],
+)
 def test_daemon_cli_rejects_removed_configuration_flags(
     removed: str,
     capsys: pytest.CaptureFixture[str],

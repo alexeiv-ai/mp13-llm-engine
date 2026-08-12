@@ -664,7 +664,11 @@ def test_resolve_client_profile_control_settings_preserves_explicit_overrides() 
 
 @pytest.mark.parametrize(
     "removed_setting",
-    ["engine_host_control_state_file", "engine_host_toolbox_config_file"],
+    [
+        "engine_host_control_state_file",
+        "engine_host_state_file",
+        "engine_host_toolbox_config_file",
+    ],
 )
 def test_resolve_client_profile_control_settings_rejects_removed_startup_settings(
     removed_setting: str,
