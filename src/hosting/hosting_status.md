@@ -691,6 +691,21 @@ the slice.
   passed 10 tests, including key/status persistence and remote shared-secret
   denial guidance
 
+### TEST-R4.1D — channel bootstrap and recovery fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2 and R9.3/R9.4 (partial); P0/P2; high expertise
+- Outcome: channel bootstrap forwards only the MP13 configuration path; its
+  unconfigured-host probe is observational and preserves immutable v3 auth
+  policy, while reset and force-stop helpers construct services from the same
+  v3 authority
+- Proof: `python -m pytest tests/test_engine_host_channel.py -q --maxfail=20`
+  passed 43 tests, including exact one-path background startup, no toolbox
+  launcher kwargs, v3 shared/no-auth snapshots, local-only reset, registered
+  worker shutdown, and orphan worker termination
+- Remaining: broader channel command removal and public-surface alignment remain
+  open under R9.1/R9.4
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

@@ -9,6 +9,7 @@ import hosting.engine_host_channel as channel_module
 from hosting.client_realm import FileSecretStore, write_client_profile
 from hosting.engine_host_connection import CommandError
 from hosting.engine_host_channel import EngineHostControlChannel
+from tests.hosting_v3_fixtures import write_hosting_configuration
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +67,7 @@ def test_auto_session_is_reused_across_channels_in_process() -> None:
         "engine_host_key_secret": "secret-1",
         "engine_host_session_scope": "control",
         "engine_host_daemon_auto_bootstrap": False,
-        "engine_host_control_state_file": "C:/state/access_control.json",
+        "engine_host_mp13_config_file": "C:/config/mp13_config.json",
     }
     first = _FakeConn()
     ch1 = EngineHostControlChannel(settings)
@@ -152,7 +153,7 @@ def test_public_key_session_reuses_non_control_token_on_same_channel() -> None:
 def test_public_key_session_cache_reuses_non_control_token_across_channels() -> None:
     settings = {
         "engine_host_daemon_auto_bootstrap": False,
-        "engine_host_control_state_file": "C:/state/access_control.json",
+        "engine_host_mp13_config_file": "C:/config/mp13_config.json",
     }
 
     class _PublicKeyConn(_FakeConn):
@@ -1543,13 +1544,9 @@ def test_bootstrap_daemon_forwards_custom_pid_file(monkeypatch) -> None:
     }
 
 
-def test_bootstrap_daemon_forwards_all_toolbox_launcher_inputs(monkeypatch, tmp_path: Path) -> None:
+def test_bootstrap_daemon_forwards_only_mp13_configuration(monkeypatch, tmp_path: Path) -> None:
     captured: Dict[str, Any] = {}
-    configuration = {"revision": "config-r1"}
-    artifact_sources = {"release": tmp_path / "artifacts"}
-    trust_keys = {"release-key": "public-value"}
-    credentials = {"credential:index": "Bearer secret-value"}
-    policy = {"revision": "policy-r1"}
+    mp13_config = write_hosting_configuration(tmp_path)
 
     class _FakePidFile:
         path = tmp_path / "daemon.pid"
@@ -1574,22 +1571,15 @@ def test_bootstrap_daemon_forwards_all_toolbox_launcher_inputs(monkeypatch, tmp_
 
     channel = EngineHostControlChannel(
         {
-            "toolbox_host_project_configuration": configuration,
-            "toolbox_artifact_sources": artifact_sources,
-            "toolbox_trust_public_keys": trust_keys,
-            "toolbox_source_credentials": credentials,
-            "toolbox_dependency_policy": policy,
+            "engine_host_mp13_config_file": str(mp13_config),
         }
     )
     channel.get_daemon_status = lambda: {"alive": True, "port": 19876}  # type: ignore[method-assign]
 
     channel.bootstrap_daemon(wait_ready_seconds=1.0)
 
-    assert captured["toolbox_host_project_configuration"] == configuration
-    assert captured["toolbox_artifact_sources"] == artifact_sources
-    assert captured["toolbox_trust_public_keys"] == trust_keys
-    assert captured["toolbox_source_credentials"] == credentials
-    assert captured["toolbox_dependency_policy"] == policy
+    assert captured["mp13_config_file"] == mp13_config
+    assert not any(key.startswith("toolbox_") for key in captured)
 
 
 def test_get_connection_auto_bootstrap_forwards_custom_pid_file(monkeypatch) -> None:
@@ -1862,23 +1852,15 @@ def test_daemon_status_reports_shutting_down_diagnostics(monkeypatch, tmp_path: 
     assert "daemon-crash.log" in str(diag["daemon_report_path"])
 
 
-def test_prepare_local_unconfigured_bootstrap_forces_no_auth_exclusive(monkeypatch) -> None:
+def test_prepare_local_unconfigured_bootstrap_reads_immutable_v3_snapshot(monkeypatch, tmp_path: Path) -> None:
     captured: Dict[str, Any] = {}
-    control_state_path = Path("X:/tmp/access_control.json")
+    mp13_config = write_hosting_configuration(tmp_path)
 
     class _FakeSvc:
-        def __init__(self, *, control_state_file: Optional[Path] = None, **_kwargs: Any):
-            captured["control_state_file"] = control_state_file
+        def __init__(self, *, hosting_configuration: Any, **_kwargs: Any):
+            captured["configuration_contract"] = hosting_configuration.contract
 
         def get_control_config(self) -> Dict[str, Any]:
-            return {
-                "require_auth": True,
-                "keys_count": 0,
-                "endpoint_mode_default": "shared",
-            }
-
-        def set_control_config(self, **kwargs: Any) -> Dict[str, Any]:
-            captured["set_control_config"] = dict(kwargs)
             return {
                 "require_auth": False,
                 "keys_count": 0,
@@ -1890,18 +1872,13 @@ def test_prepare_local_unconfigured_bootstrap_forces_no_auth_exclusive(monkeypat
 
     ch = EngineHostControlChannel(
         {
-            "engine_host_control_state_file": str(control_state_path),
+            "engine_host_mp13_config_file": str(mp13_config),
             "engine_host_daemon_auto_bootstrap": False,
         }
     )
     out = ch._prepare_local_unconfigured_bootstrap()
 
-    assert captured["control_state_file"] == control_state_path
-    assert captured["set_control_config"] == {
-        "require_auth": False,
-        "access_profile": {"connectivity_mode": "local_only"},
-        "endpoint_mode_default": "exclusive",
-    }
+    assert captured["configuration_contract"] == "hosting.configuration.v3"
     assert out == {
         "require_auth": False,
         "keys_count": 0,
@@ -1910,27 +1887,19 @@ def test_prepare_local_unconfigured_bootstrap_forces_no_auth_exclusive(monkeypat
     }
 
 
-def test_prepare_local_unconfigured_bootstrap_rejects_legacy_backend_root_when_hosting_access_exists(tmp_path: Path) -> None:
-    from hosting.service.host_service import EngineHostService
-
-    configured = tmp_path / "hosting" / "access_control.json"
-    svc = EngineHostService(control_state_file=configured)
-    svc.auth_upsert_key(key_id="admin-main", key_secret="secret", role="admin")
-    svc.set_control_config(
-        require_auth=True,
-        access_profile={"connectivity_mode": "local_only"},
-        endpoint_mode_default="shared",
-    )
-
+def test_prepare_local_unconfigured_bootstrap_preserves_v3_auth_policy(tmp_path: Path) -> None:
+    mp13_config = write_hosting_configuration(tmp_path, require_auth=True, endpoint_mode="shared")
     ch = EngineHostControlChannel(
         {
-            "engine_host_control_state_file": str(tmp_path / "backend" / "engine_host_control.json"),
+            "engine_host_mp13_config_file": str(mp13_config),
             "engine_host_daemon_auto_bootstrap": False,
         }
     )
 
-    with pytest.raises(RuntimeError, match="Refusing temporary no-auth local daemon bootstrap"):
-        ch._prepare_local_unconfigured_bootstrap()
+    snapshot = ch._prepare_local_unconfigured_bootstrap()
+    assert snapshot is not None
+    assert snapshot["require_auth"] is True
+    assert snapshot["endpoint_mode_default"] == "shared"
 
 
 def test_daemon_status_emits_event_when_pid_file_disappears(monkeypatch) -> None:
@@ -1986,6 +1955,7 @@ def test_daemon_status_emits_event_when_pid_file_disappears(monkeypatch) -> None
 
 def test_reset_hosting_access_is_local_helper_only(monkeypatch, tmp_path: Path) -> None:
     captured: Dict[str, Any] = {}
+    mp13_config = write_hosting_configuration(tmp_path, require_auth=True)
 
     class _FakePidFile:
         def __init__(self, _path: Optional[str] = None):
@@ -2001,8 +1971,8 @@ def test_reset_hosting_access_is_local_helper_only(monkeypatch, tmp_path: Path) 
             captured["pid_removed"] = True
 
     class _FakeSvc:
-        def __init__(self, *, control_state_file: Optional[Path] = None, **_kwargs: Any):
-            captured["control_state_file"] = control_state_file
+        def __init__(self, *, hosting_configuration: Any, **_kwargs: Any):
+            captured["configuration_contract"] = hosting_configuration.contract
 
         def reset_hosting_access(self) -> Dict[str, Any]:
             return {"status": "ok", "cleared_keys": 1, "cleared_sessions": 0, "cleared_challenges": 0}
@@ -2015,7 +1985,7 @@ def test_reset_hosting_access_is_local_helper_only(monkeypatch, tmp_path: Path) 
 
     ch = EngineHostControlChannel(
         {
-            "engine_host_control_state_file": str(tmp_path / "access_control.json"),
+            "engine_host_mp13_config_file": str(mp13_config),
             "engine_host_daemon_auto_bootstrap": False,
         }
     )
@@ -2025,6 +1995,7 @@ def test_reset_hosting_access_is_local_helper_only(monkeypatch, tmp_path: Path) 
     assert out["local_helper_only"] is True
     assert out["rpc_accessible"] is False
     assert out["daemon_stop"]["status"] == "not_running"
+    assert captured["configuration_contract"] == "hosting.configuration.v3"
 
 
 def test_force_stop_daemon_stops_registered_workers_before_daemon_pid(monkeypatch, tmp_path: Path) -> None:
@@ -2070,7 +2041,12 @@ def test_force_stop_daemon_stops_registered_workers_before_daemon_pid(monkeypatc
     monkeypatch.setattr("hosting.engine_host_channel.os.kill", _fake_kill)
     monkeypatch.setattr("hosting.engine_host_channel.time.sleep", lambda _sec: None)
 
-    ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(pid_file)})
+    ch = EngineHostControlChannel(
+        {
+            "engine_host_daemon_pid_file": str(pid_file),
+            "engine_host_mp13_config_file": str(write_hosting_configuration(tmp_path)),
+        }
+    )
     out = ch.force_stop_daemon(stop_workers=True)
 
     assert out["status"] == "ok"
@@ -2163,7 +2139,12 @@ def test_force_stop_daemon_kills_orphan_engine_worker_processes(monkeypatch, tmp
     monkeypatch.setattr("hosting.engine_host_channel.os.kill", _fake_kill)
     monkeypatch.setattr("hosting.engine_host_channel.time.sleep", lambda _sec: None)
 
-    ch = EngineHostControlChannel({"engine_host_daemon_pid_file": str(tmp_path / "daemon.pid")})
+    ch = EngineHostControlChannel(
+        {
+            "engine_host_daemon_pid_file": str(tmp_path / "daemon.pid"),
+            "engine_host_mp13_config_file": str(write_hosting_configuration(tmp_path)),
+        }
+    )
     out = ch.force_stop_daemon(stop_workers=True)
 
     assert out["worker_shutdown"]["orphan_attempted"] == 1
