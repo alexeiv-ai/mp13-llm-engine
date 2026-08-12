@@ -159,7 +159,6 @@ def _recover_root_update(config_file: Path) -> Optional[str]:
     journal = _read_mapping(journal_path)
     phase = str(journal.get("phase") or "")
     top_path = Path(str(journal.get("top_path") or config_file)).resolve()
-    hosting_path = Path(str(journal.get("hosting_path") or _hosting_configuration_file(config_file))).resolve()
     previous_top = dict(journal.get("previous_top") or {})
     previous_hosting = dict(journal.get("previous_hosting") or {})
     target_top = dict(journal.get("target_top") or {})

@@ -21,6 +21,7 @@ import signal
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -1627,8 +1628,6 @@ class EngineHostControlChannel:
         Only valid in SSH mode.  Raises ValueError if called on a local channel.
         Returns {"started": bool, "error": Optional[str]}.
         """
-        import time as _time
-
         target = self.get_target()
         if str(target.get("mode") or "local") != "ssh":
             raise ValueError("restart_remote_daemon is only valid in SSH mode")
@@ -1654,14 +1653,15 @@ class EngineHostControlChannel:
         if not known_hosts_line:
             raise RuntimeError("ssh_known_hosts_line is required for restart_remote_daemon in SSH mode")
         if known_hosts_line:
-            import tempfile as _tempfile, os as _os
             try:
-                fd, tmppath = _tempfile.mkstemp(prefix="mp13_kh_", suffix=".txt")
-                with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                fd, tmppath = tempfile.mkstemp(prefix="mp13_kh_", suffix=".txt")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(known_hosts_line + "\n")
                 argv += ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={tmppath}"]
-            except Exception:
-                raise RuntimeError("strict SSH host-key verification requires writable temporary known_hosts file")
+            except Exception as exc:
+                raise RuntimeError(
+                    "strict SSH host-key verification requires writable temporary known_hosts file"
+                ) from exc
         if ssh_key:
             argv += ["-i", ssh_key]
         argv.append(ssh_target)
@@ -1683,7 +1683,7 @@ class EngineHostControlChannel:
             logger.warning("restart_remote_daemon failed: %s", exc)
             return {"started": False, "error": str(exc)}
 
-        _time.sleep(float(wait_seconds))
+        time.sleep(float(wait_seconds))
         return {"started": True, "error": None}
 
     def discover_running(self) -> List[Dict[str, Any]]:
@@ -4171,6 +4171,7 @@ class EngineHostControlChannel:
                 "offset": int(offset),
             },
         )
+        return dict(res or {})
 
     def auth_validate_session(
         self,
@@ -4262,6 +4263,7 @@ class EngineHostControlChannel:
 
     def auth_revoke_key(self, key_id: str) -> Dict[str, Any]:
         res = self._invoke("auth-revoke-key", {"key_id": str(key_id or "")})
+        return dict(res or {})
 
     def auth_issue_session(
         self,

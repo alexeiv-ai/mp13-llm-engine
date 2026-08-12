@@ -33,10 +33,10 @@ def wait_for_child_ipc_connection(
             raise RuntimeError(timeout_error)
         try:
             return accept_queue.get(timeout=min(interval, remaining))
-        except queue.Empty:
+        except queue.Empty as exc:
             return_code = process.poll()
             if return_code is not None:
-                raise RuntimeError(f"{exited_error}:{int(return_code)}")
+                raise RuntimeError(f"{exited_error}:{int(return_code)}") from exc
 
 
 class HostedChildRuntime(Protocol):

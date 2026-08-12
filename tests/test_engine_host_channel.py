@@ -39,6 +39,25 @@ class _FakeConn:
         return
 
 
+def test_auth_audit_and_revoke_wrappers_return_daemon_results() -> None:
+    channel = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
+    calls: list[tuple[str, Dict[str, Any]]] = []
+
+    def invoke(command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        calls.append((command, dict(payload)))
+        return {"status": "ok", "command": command}
+
+    channel._invoke = invoke  # type: ignore[method-assign]
+
+    audit = channel.auth_list_audit_events(event_type="auth_revoke_key", limit=5)
+    revoked = channel.auth_revoke_key("worker-key")
+
+    assert audit == {"status": "ok", "command": "auth-audit-list"}
+    assert revoked == {"status": "ok", "command": "auth-revoke-key"}
+    assert calls[0][1]["event_type"] == "auth_revoke_key"
+    assert calls[1][1] == {"key_id": "worker-key"}
+
+
 def test_auto_session_from_key_credentials() -> None:
     fake = _FakeConn()
     ch = EngineHostControlChannel(

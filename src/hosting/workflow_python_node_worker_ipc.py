@@ -143,7 +143,12 @@ def _make_artifact_open(inputs: Dict[str, str], outputs: Dict[str, str]):
                 raise PermissionError(f"artifact output path not allowed: {path}")
         elif not under_any(target, readable) and not under_any(target, writable):
             raise PermissionError(f"artifact input path not allowed: {path}")
-        return builtins.open(target, mode, *args, **kwargs)
+        if "b" in str(mode or ""):
+            return builtins.open(  # pylint: disable=unspecified-encoding
+                target, mode, *args, **kwargs
+            )
+        encoding = kwargs.pop("encoding", "utf-8")
+        return builtins.open(target, mode, *args, encoding=encoding, **kwargs)
 
     return guarded_open
 

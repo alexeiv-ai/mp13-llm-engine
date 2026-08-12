@@ -993,8 +993,8 @@ def _obtain_session_token(
                     pk_text = pk_text.replace('\\n', '\n')
                 is_json = True
             else:
-                 print(_c('bad', "JSON provided does not look like a valid SecretRecord (missing 'payload' or 'secret_id')."))
-                 return None
+                print(_c('bad', "JSON provided does not look like a valid SecretRecord (missing 'payload' or 'secret_id')."))
+                return None
         except json.JSONDecodeError:
             # Not JSON, assume it's raw key text
             pass
@@ -1061,8 +1061,8 @@ def _obtain_session_token(
             
         sig_file = tmpdir / "challenge.txt.sig"
         if not sig_file.exists():
-             print(_c('bad', "Signature file was not created."))
-             return None
+            print(_c('bad', "Signature file was not created."))
+            return None
              
         sig_text = sig_file.read_text(encoding="utf-8")
         
@@ -1632,7 +1632,7 @@ def _get_engines_dict(res: Any) -> Dict[str, dict]:
             # Verify it's a dict of dicts
             return {k: v for k, v in engines_data.items() if isinstance(v, dict)}
         elif isinstance(engines_data, list):
-             return {str(e.get("engine_id", f"unknown-{i}")): e for i, e in enumerate(engines_data) if isinstance(e, dict)}
+            return {str(e.get("engine_id", f"unknown-{i}")): e for i, e in enumerate(engines_data) if isinstance(e, dict)}
     elif isinstance(res, list):
         return {str(e.get("engine_id", f"unknown-{i}")): e for i, e in enumerate(res) if isinstance(e, dict)}
     return {}
@@ -2735,7 +2735,7 @@ def _kill_resource(args: argparse.Namespace, session_token: Optional[str]) -> Op
                 sch = _prompt_menu("Select Session Preview", sopts, "b", allow_back=True, allow_changes=False)
                 if sch in ("b", "back"): continue
                 
-                print(f"Revoking session...")
+                print("Revoking session...")
                 # Pass the token_preview. The API auth_revoke_session needs to support matching by preview.
                 _api_invoke(args, "auth-revoke-session", {"token": sch}, session_token=session_token)
                 print(_c('good', "Session revoked."))

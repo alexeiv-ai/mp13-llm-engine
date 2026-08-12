@@ -527,7 +527,6 @@ def _manifest_tool_names(manifest: Dict[str, Any]) -> list[str]:
 
 
 async def _handle_hello(_payload: Dict[str, Any]) -> Dict[str, Any]:
-    import json
     try:
         manifest = json.loads(_manifest_path().read_text(encoding="utf-8"))
     except Exception:

@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -31,7 +30,7 @@ from ._process_utils import hidden_subprocess_kwargs
 logger = logging.getLogger(__name__)
 
 
-class ConnectionError(Exception):  # noqa: A001
+class ConnectionError(Exception):  # noqa: A001  # pylint: disable=redefined-builtin
     """Raised when a connection to the daemon cannot be established or is lost."""
 
 
@@ -238,8 +237,10 @@ class SSHRelayConnection(BaseConnection):
                     "-o", "StrictHostKeyChecking=yes",
                     "-o", f"UserKnownHostsFile={tmppath}",
                 ]
-            except Exception:
-                raise RuntimeError("strict SSH host-key verification requires writable temporary known_hosts file")
+            except Exception as exc:
+                raise RuntimeError(
+                    "strict SSH host-key verification requires writable temporary known_hosts file"
+                ) from exc
         else:
             raise RuntimeError("ssh_known_hosts_line is required for SSH relay connections")
         if self._ssh_key:

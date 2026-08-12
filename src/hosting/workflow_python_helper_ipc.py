@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Temporary workflow Python helper compatibility worker.
 
 New host-facing integrations should enter through the `workflow-python-*`
@@ -7,6 +5,8 @@ facade commands. This worker remains only as the current helper-profile process
 implementation and is marked for removal or reduction to a thin entrypoint once
 dependent callers migrate.
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -386,12 +386,14 @@ class _HotPythonRuntime:
                         raise TimeoutError("workflow_sandbox_timeout")
                     try:
                         response = self._responses.get(timeout=min(remaining, 0.25))
-                    except queue.Empty:
+                    except queue.Empty as exc:
                         if not self.alive():
                             if request_id in self._canceled_request_ids:
                                 self._canceled_request_ids.discard(request_id)
-                                raise _WorkflowPythonHelperRequestCanceled("workflow_sandbox_canceled")
-                            raise RuntimeError("python_runtime_exited")
+                                raise _WorkflowPythonHelperRequestCanceled(
+                                    "workflow_sandbox_canceled"
+                                ) from exc
+                            raise RuntimeError("python_runtime_exited") from exc
                         continue
                     if str(response.get("request_id") or "") in {"", request_id}:
                         if request_id in self._canceled_request_ids:
@@ -494,7 +496,6 @@ class _HotPythonRuntimePool:
         with self._lock:
             self._prune_locked()
             processes = [rt.snapshot() for rt in self._all]
-            capacity = int(self.capacity)
         active = len([row for row in processes if bool(row.get("busy"))])
         alive = len([row for row in processes if bool(row.get("alive"))])
         return {

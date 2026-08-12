@@ -504,7 +504,6 @@ def revise_toolbox_definition_plan(
         or set(analysis_by_id) != set(change_by_id)
     ):
         raise ValueError("tool_change_decisions_incomplete")
-    decision_by_id = {item.change_id: item for item in parsed}
     for decision in parsed:
         evidenced = {item.import_root for item in analysis_by_id[decision.change_id].imports}
         if not set(decision.denied_import_roots) <= evidenced:

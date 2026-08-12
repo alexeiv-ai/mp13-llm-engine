@@ -113,7 +113,7 @@ class ToolboxLockedDistributionSpec:
             self.extras,
             label="locked_distribution_extras",
             maximum=32,
-            normalizer=lambda item: normalize_distribution_name(item),
+            normalizer=normalize_distribution_name,
         )
         object.__setattr__(self, "extras", extras)
 
@@ -375,7 +375,7 @@ class ReviewedImportDistributionRule:
             self.extras,
             label="catalog_extras",
             maximum=32,
-            normalizer=lambda item: normalize_distribution_name(item),
+            normalizer=normalize_distribution_name,
         )
         object.__setattr__(self, "extras", extras)
         object.__setattr__(self, "version_constraint", normalize_version_constraint(self.version_constraint))

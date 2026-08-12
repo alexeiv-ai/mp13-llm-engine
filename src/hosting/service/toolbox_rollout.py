@@ -98,7 +98,6 @@ class ToolboxDefinitionRolloutCoordinator:
         environment_references: list[str] = []
         for assignment in assignments:
             profile = assignment.resolved_profile
-            manifest = assignment.bundle_spec.manifest_payload()
             active: dict[str, Any] = {}
             if assignment.classification == "reused":
                 source_id = str(assignment.active_profile_id or profile.profile_id)

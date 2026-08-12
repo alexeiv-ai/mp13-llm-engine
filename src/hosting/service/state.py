@@ -350,7 +350,6 @@ class StateMixin:
         return summary
 
     def _read_control(self) -> Dict[str, Any]:
-        default_payload = self._default_control_payload()
         layout = self._control_layout()
         access_default = self._static_control_config()
         runtime_payload = self._read_json(

@@ -27,7 +27,6 @@ class EnvironmentRuntimeAdapter:
         self.environments_root = self.toolbox_environments_root
 
     def environment_root(self, *, root_kind: Optional[str] = None, consumer_kind: Optional[str] = None) -> Path:
-        kind = str(root_kind or "").strip()
         consumer = str(consumer_kind or "").strip()
         if consumer in {"workflow_python_helper", "workflow_js_node"}:
             return self.runtime_environments_root

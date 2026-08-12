@@ -7,7 +7,6 @@ import importlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -67,9 +66,9 @@ def _environment_process_lock(path: Path, *, timeout_seconds: float = 120.0) -> 
                     try:
                         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                         break
-                    except OSError:
+                    except OSError as exc:
                         if time.monotonic() >= deadline:
-                            raise TimeoutError("toolbox_environment_lock_timeout")
+                            raise TimeoutError("toolbox_environment_lock_timeout") from exc
                         time.sleep(0.05)
             else:
                 fcntl = importlib.import_module("fcntl")

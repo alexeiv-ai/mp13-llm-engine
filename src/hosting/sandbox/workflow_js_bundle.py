@@ -356,7 +356,6 @@ def _import_matches(source: str) -> List[Dict[str, Any]]:
         )
         occupied.append(range(match.start("statement"), match.end("statement")))
     for match in _SIDE_EFFECT_IMPORT_RE.finditer(source):
-        span = range(match.start("statement"), match.end("statement"))
         if any(match.start("statement") in item or (match.end("statement") - 1) in item for item in occupied):
             continue
         matches.append(

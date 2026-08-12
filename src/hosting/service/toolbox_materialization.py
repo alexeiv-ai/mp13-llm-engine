@@ -249,12 +249,10 @@ class HermeticToolboxTemplateMaterializer:
         try:
             resolved = self._resolved_input(catalog_entry, python_abi=python_abi, platform=platform)
             progress("environment_build", "hermetic_environment_building", 0, 1, "The independent environment is being built and verified.", True)
-            spec = self.builder.materialize_environment(
+            self.builder.materialize_environment(
                 resolved,
             )
             progress("environment_build", "hermetic_environment_verified", 1, 1, "The independent environment passed lock and import verification.", False)
-        except ToolboxTemplateMaterializationError:
-            raise
         except HermeticToolboxEnvironmentBuildError as exc:
             raise ToolboxTemplateMaterializationError(exc.code, exc.summary) from exc
         artifact_digests = tuple(sorted(item.sha256 for item in resolved.locked_artifacts))

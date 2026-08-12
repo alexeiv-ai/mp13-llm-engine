@@ -118,12 +118,11 @@ def start_daemon_background(
         argv += ["--mp13-config-file", str(mp13_config_file)]
 
     # Build environment with src dir on PYTHONPATH so connectors package is found
-    import os as _os
-    env = dict(_os.environ)
+    env = dict(os.environ)
     src_root = str(Path(__file__).resolve().parents[2])
     py_path = str(env.get("PYTHONPATH") or "")
-    if src_root not in py_path.split(_os.pathsep):
-        env["PYTHONPATH"] = src_root if not py_path else f"{src_root}{_os.pathsep}{py_path}"
+    if src_root not in py_path.split(os.pathsep):
+        env["PYTHONPATH"] = src_root if not py_path else f"{src_root}{os.pathsep}{py_path}"
 
     kwargs: Dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
@@ -218,13 +217,11 @@ def start_http_ingress_background(
     if mp13_config_file:
         argv += ["--mp13-config-file", str(mp13_config_file)]
 
-    import os as _os
-
-    env = dict(_os.environ)
+    env = dict(os.environ)
     src_root = str(Path(__file__).resolve().parents[2])
     py_path = str(env.get("PYTHONPATH") or "")
-    if src_root not in py_path.split(_os.pathsep):
-        env["PYTHONPATH"] = src_root if not py_path else f"{src_root}{_os.pathsep}{py_path}"
+    if src_root not in py_path.split(os.pathsep):
+        env["PYTHONPATH"] = src_root if not py_path else f"{src_root}{os.pathsep}{py_path}"
 
     kwargs: Dict[str, Any] = {
         "stdin": subprocess.DEVNULL,

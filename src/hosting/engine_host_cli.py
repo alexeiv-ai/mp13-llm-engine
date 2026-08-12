@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -34,7 +33,7 @@ if __package__ in {None, ""}:
     _SRC_ROOT = Path(__file__).resolve().parents[1]
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
-    __package__ = "hosting"
+    __package__ = "hosting"  # pylint: disable=redefined-builtin
 
 from .service.host_service import EngineHostService
 

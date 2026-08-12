@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import secrets
-import signal
 import subprocess
 import time
 from threading import Lock
@@ -50,8 +49,8 @@ class EngineProcessSupervisor:
                 data = json.load(f) or {}
             items = data.get("engines") if isinstance(data, dict) else []
             return items if isinstance(items, list) else []
-        except Exception as e:
-            logger.warning(f"Failed to read managed engine state file: {e}")
+        except Exception as exc:
+            logger.warning("Failed to read managed engine state file: %s", exc)
             return []
 
     def _write_state(self, entries: List[Dict[str, Any]]) -> None:

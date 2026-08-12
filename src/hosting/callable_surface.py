@@ -6,7 +6,7 @@ import inspect
 import json
 import re
 import threading
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from .sandbox.host_capabilities import (
     HOST_CAPABILITY_APPROVAL_CONTRACT,

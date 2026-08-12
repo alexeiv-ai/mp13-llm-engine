@@ -68,7 +68,7 @@ def _project_entry_to_path(spec: str, *, parent_id: str = "") -> str:
     raw = raw.lstrip("/")
     if raw.endswith("/"):
         raw += "index.js"
-    root, ext = os.path.splitext(raw)
+    _, ext = os.path.splitext(raw)
     if not ext:
         raw = raw + ".js"
     return os.path.normpath(raw).replace("\\", "/")

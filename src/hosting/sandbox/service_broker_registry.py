@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Static daemon-owned host API method registry.
 
 The registry is intentionally development-time static: clients may choose which
@@ -7,11 +5,13 @@ registered methods to expose for a sandbox scope, but they do not define new
 daemon-local implementations at runtime.
 """
 
+from __future__ import annotations
+
 import inspect
 import re
 from dataclasses import dataclass, field
 from types import UnionType
-from typing import Any, Callable, Dict, Iterable, Optional, Union, get_args, get_origin
+from typing import Any, Callable, Dict, Optional, Union, get_args, get_origin
 
 from .host_capabilities import (
     HostCapabilityDescriptor,

@@ -755,7 +755,7 @@ def write_client_profile(
     *,
     realm: str = "default",
 ) -> Path:
-    layout = ensure_client_realm_dirs(root)
+    ensure_client_realm_dirs(root)
     out = {
         "version": 1,
         "realm": str(realm or "default").strip() or "default",

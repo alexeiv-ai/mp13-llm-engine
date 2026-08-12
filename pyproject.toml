@@ -126,3 +126,24 @@ filterwarnings = [
   "ignore:Importing (from )?torchao\\.dtypes.* is deprecated.*:DeprecationWarning",
   "ignore:Importing BlockSparseLayout from torchao\\.dtypes is deprecated.*:DeprecationWarning",
 ]
+
+[tool.pylint.messages_control]
+# Hosting intentionally uses dynamic mixins, process-boundary imports, broad
+# exception normalization, and schema-heavy functions. Keep fatal/error and
+# actionable warning checks as the repository lint contract; formatting,
+# documentation, and complexity are covered by review and focused tests.
+disable = [
+  "C",
+  "R",
+  "attribute-defined-outside-init",
+  "broad-exception-caught",
+  "exec-used",
+  "global-statement",
+  "import-outside-toplevel",
+  "arguments-differ",
+  "keyword-arg-before-vararg",
+  "protected-access",
+  "redefined-builtin",
+  "redefined-outer-name",
+  "unused-argument",
+]

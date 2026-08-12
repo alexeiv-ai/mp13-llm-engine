@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Generator, Mapping, Optional, Protocol, Sequence
 
 from ..operation_contract import (
-    HOSTED_OPERATION_REF_CONTRACT,
     MAX_INLINE_RESULT_BYTES,
     HostedExecutionKind,
     HostedOperationLifecycle,
@@ -155,9 +154,11 @@ def _exclusive_process_file_lock(
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                     locked = True
                     break
-                except OSError:
+                except OSError as exc:
                     if time.monotonic() >= deadline:
-                        raise TimeoutError(f"timed out acquiring hosted operation repository lock: {path}")
+                        raise TimeoutError(
+                            f"timed out acquiring hosted operation repository lock: {path}"
+                        ) from exc
                     time.sleep(0.05)
         else:
             fcntl = importlib.import_module("fcntl")
